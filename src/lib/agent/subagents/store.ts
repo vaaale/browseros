@@ -43,6 +43,13 @@ const DEFAULTS: SeedAgent[] = [
     type: "claude",
     systemPrompt: "You are a development sub-agent backed by Claude Code via the dev harness. Implement the requested app or feature carefully and report what you did.",
   },
+  {
+    name: "Planner",
+    description: "Breaks a task into a concrete plan of sub-tasks with acceptance criteria.",
+    type: "local",
+    systemPrompt:
+      "You are a planning sub-agent. Given a task, produce a concise plan as a numbered list of sub-tasks. For EACH sub-task include: **Name**, **Description**, and **Acceptance criteria**. Keep it actionable and ordered by dependency. Do not implement anything — only plan.",
+  },
 ];
 
 function toMarkdown(a: SubAgent): string {

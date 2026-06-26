@@ -6,6 +6,12 @@ Below is a description of the initial requirements of the Browser OS (BOS from h
 The os must have a file browser and web browser.
 It must be possible to change the wallpaper
 
+The web browser renders external pages through a **same-origin, path-based rewriting proxy** (e.g. `/api/proxy/<scheme>/<host>/<path>`) so pages load inside the OS without cross-origin (CORS) errors or module MIME errors:
+- Use a path-based proxy URL (not a `?url=` query) so the browser's own relative-URL resolution — including ES module imports — maps back onto the proxy instead of the OS origin.
+- Rewrite HTML (`src`/`href`/`action`/`poster`), CSS (`url()`/`@import`), and inject a small runtime shim that re-routes the page's dynamic `fetch`/XHR through the proxy. Strip page CSP/`<base>`.
+- Disable trailing-slash redirects for proxy paths (a redirect that strips the slash breaks the relative base).
+- Out of scope: DRM/streaming media (e.g. video sites) and WebSockets.
+
 # Agentic behavior and automation
 The os must have a built-in chat to talk to the BOS agent.
 The agent must support MCP servers
@@ -18,7 +24,13 @@ This should also be exposed as tools to the assistant automatically.
 
 ## Configuring models and providers
 It must be possible to configure the AI providers such as OpenAI, OpenAI Codex, Anthropic and Local models as OpenAI Compatible.
-It must be possible to configure the model, api keys, api base url.
+It must be possible to configure the model, api keys, api base url, **max output tokens**, and **context window (max input tokens)**.
+The API key must never be returned to the client in plaintext (masked in the config API).
+
+Reasoning / "thinking" models (e.g. DeepSeek/Qwen-style) must be supported:
+- The configured max output tokens must be large enough that the model can finish its hidden reasoning and still emit a final answer (a small cap yields an empty response). Server-side agent loops must use the configured budget, not a small hardcoded value.
+- For OpenAI-compatible providers the chat MUST use the Chat Completions API, not the Responses API — many local servers don't implement Responses, which otherwise produces a broken/empty stream.
+- A model's `reasoning_content` (reasoning tokens that arrive separately from `content`) must be surfaced to the UI as "thinking", not dropped — otherwise the chat sees no content during the reasoning phase and aborts.
 
 # Assistant
 BOS must support multiple profiles / personalities.
@@ -26,6 +38,7 @@ The "Assistant" app must have a way for the user to select which profile he want
 The Assistant must be able to do basically anything in BOS. This includes building new apps or BOS features, configuring settings, opening apps, etc.
 The assistant must always delegate tasks to a sub agent. If an appropriate sub-agent does not exist, the assistant must create one. See Sub agents below.
 When the assistant is working, events such as reasoning / thinking, tool calls / tool responses, etc. must be shown in the UI. The events must be rendered using an appropriate card. The cards must be collapsible. When an event is received, the corresponding card should be shown expanded. After a certain amount of time or when a new event is received, the card should collapse so that only the heading of the event is visible in the UI. The heading should be derived from the type of event.
+Events must be **streamed live as they occur** (not batched and shown only when the task finishes) — this includes events produced by sub-agents during delegation. The collapse state and its timer must live outside the per-card React lifecycle (e.g. a module-level store), because the chat re-renders/remounts cards while streaming; a per-component timer would be cleared on unmount and never fire. Cards must remain manually toggleable (use a native disclosure so clicks are reliable).
 There should be some kind of indicator showing that the agent is working / busy. When the task is complete, the indicator should change so that the user understands that the assistant is done with the task.
 
 ## Memory system
@@ -85,8 +98,9 @@ Here are some key-points:
 ## User interface
 The chat must support streaming by default.
 It must support receiving and rendering events like reasoning, tool calls / responses, etc.
-It must support rendering in-line code blocks, markdown, html, etc.
-It must support MCP Apps / MCP-UI
+It must support rendering in-line code blocks, markdown, html, etc. (HTML is rendered in a sandboxed iframe).
+It must support MCP Apps / MCP-UI (interactive HTML resources returned by MCP tools, rendered in a sandboxed iframe).
+Text content in apps (chat, editors, docs) must be **selectable** with the mouse. Do not disable text selection globally; only the desktop chrome (icons, dock, top bar, window title bars) opts out of selection.
 
 ## Planner agent
 The planner agent is responsible for creating a plan for how to solve a given task.
@@ -122,6 +136,8 @@ Whenever a new app of feature is created, added, modified, or removed, the docum
 
 # Using the Claude MCP
 When creating an agent, "agent_type" must be specified. The value of "agent_type" should reflect the type of agent begin created. For example: developer, tester, ui_expert, etc.
+The agent_type is **generated by the assistant per role** (derived from the sub-agent's name/role) — it must not be a single hardcoded/configured value. Note: the Claude MCP harness only exposes agent types that were registered at its startup, so a generated type only runs if the harness has a matching agent.
+Delegating to a Claude sub-agent must stream the harness's progress where possible; the harness `Agent` tool runs opaquely, so at minimum show that the Claude agent is running and surface its final result.
 
 # On first startup
 The first time the user opens BOS, a configuration wizzard should appear where the user can configure the AI models to use, as well as configure

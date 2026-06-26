@@ -13,10 +13,14 @@ import { SkillsActions } from "./SkillsActions";
 import { SelfImprovementActions } from "./SelfImprovementActions";
 import { DocsActions } from "./DocsActions";
 import { GitActions } from "./GitActions";
+import { useActiveConversationId } from "@/lib/agent/conversations";
 
 export function CopilotProvider({ children }: { children: ReactNode }) {
+  // Scope the chat to the active conversation; switching conversations switches
+  // the CopilotKit thread.
+  const threadId = useActiveConversationId();
   return (
-    <CopilotKit runtimeUrl="/api/copilotkit">
+    <CopilotKit runtimeUrl="/api/copilotkit" threadId={threadId}>
       <OSActions />
       <McpActions />
       <SubAgentActions />
