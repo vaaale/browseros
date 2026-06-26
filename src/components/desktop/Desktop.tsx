@@ -20,7 +20,7 @@ export function Desktop() {
     >
       <Topbar />
 
-      <div className="absolute left-3 top-11 flex flex-col gap-3">
+      <div className="absolute left-3 top-11 flex select-none flex-col gap-3">
         {apps.map((app) => (
           <button
             key={app.id}

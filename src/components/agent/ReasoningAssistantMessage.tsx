@@ -53,7 +53,10 @@ export function ReasoningAssistantMessage(props: AssistantMessageProps) {
           </div>
         </details>
       )}
-      {(answer || !reasoning) && <AssistantMessage {...props} message={answerMessage} />}
+      {/* Always render the default message so its subComponent (tool-call /
+          generative UI) shows — even on tool-calling turns that have reasoning
+          but no final answer text. */}
+      <AssistantMessage {...props} message={answerMessage} />
     </div>
   );
 }

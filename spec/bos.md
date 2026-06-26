@@ -1,4 +1,3 @@
-# BOS (Browser OS)
 We are going to write a single-page BrowserOS using nodejs and nextjs. The os must use server-side rendering.
 We will use gitlab which is already configured (cloned).
 Below is a description of the initial requirements of the Browser OS (BOS from here on):
@@ -22,11 +21,19 @@ It must be possible to configure the AI providers such as OpenAI, OpenAI Codex, 
 It must be possible to configure the model, api keys, api base url.
 
 # Assistant
-BOS must support multiple profiles / personalitiers.
+BOS must support multiple profiles / personalities.
+The "Assistant" app must have a way for the user to select which profile he wants to use.
 The Assistant must be able to do basically anything in BOS. This includes building new apps or BOS features, configuring settings, opening apps, etc.
 The assistant must always delegate tasks to a sub agent. If an appropriate sub-agent does not exist, the assistant must create one. See Sub agents below.
 When the assistant is working, events such as reasoning / thinking, tool calls / tool responses, etc. must be shown in the UI. The events must be rendered using an appropriate card. The cards must be collapsible. When an event is received, the corresponding card should be shown expanded. After a certain amount of time or when a new event is received, the card should collapse so that only the heading of the event is visible in the UI. The heading should be derived from the type of event.
 There should be some kind of indicator showing that the agent is working / busy. When the task is complete, the indicator should change so that the user understands that the assistant is done with the task.
+
+## Memory system
+The agent must have a self-improving memory system similar to Hermes-Agent.
+
+## Skills
+The assistant must have a library of skills. You can take a look at Hermes-Agent for inspiraction.
+Any agent must be configurable using the Settings app.
 
 ## Profiles and personalities
 The files making up an agents personality or profile must be stored in a directory structure of markdown files.
@@ -42,15 +49,31 @@ For any other task, the default must be to use a Local sub-agent.
 If the assistant want to use a Claude Code agent for a none-coding task, it must ask the user for permission before doing so. An elisitation card should
 show up if the assistants want's to ask this question with the choices: Allow Claude Agent once, Allow Claude Agent this session, Use Local.
 
-### UI
-Events such as tool calls / tool responses, reasoning, etc. must be shown in a nested structure in the assistant UI
+## UI
+Events such as tool calls / tool responses, reasoning, etc. must be shown in the UI. This also includes events from sub-agents. Such events must be shown in a nested structure. The nesting should happen on an agent level. For example something like this:
+Assistant:
+  |-Thinking
+  |-Tool call - delegate_to: Researcher
+  |-Researcher
+  	|-Thinking
+  	|-Tool call - web-search
+  	|-Tool response
+  	|- .......
+  	|- .......
+  	|-Responding
+  |-Responding
+(The example above is just for illustrating what is ment by "nesting". The point is that this will help the user understand what is going on)
 
-## Memory system
-The agent must have a self-improving memory system similar to Hermes-Agent.
 
-# Skills
-The assistant must have a library of skills. You can take a look at Hermes-Agent for inspiraction.
-Any agent must be configurable using the Settings app.
+### Right Sidepanel
+The "Assistant" app must have a tabbed side panel:
+- A tab showing the tools available to the current agent
+- A tab showing the the skills that the agent has available
+- A tab showing the MCP servers the agent has available, and the state of each MCP server. (Connected / Disconnected)
+
+### Left Sidepanel
+The left sidepanel is used for conversation management.
+Start a new conversation, delete a conversation, or select and resume a conversation by clicking on it.
 
 ## Agent self improvement
 The agent must be self improving similar to how Hermes-Agent does it.
@@ -60,10 +83,22 @@ Here are some key-points:
 - Use GEPA to improve any skill over time based on feedback from the user or self-reflection
 
 ## User interface
-The chat must stupport streaming by default.
+The chat must support streaming by default.
 It must support receiving and rendering events like reasoning, tool calls / responses, etc.
 It must support rendering in-line code blocks, markdown, html, etc.
-It must support MCP Appps / MCP-UI
+It must support MCP Apps / MCP-UI
+
+## Planner agent
+The planner agent is responsible for creating a plan for how to solve a given task.
+A plan consists of a set of tasks:
+- Name
+- Description
+- Acceptance criteria
+
+## Developer sub-agent
+BOS must have an out-of-the-box Developer agent.
+This agent MUST use the Claude Code MCP server for all its tasks.
+
 
 # Extensibility
 As with any real operating system, bos must provide api's for extending the os with new apps and functionality.

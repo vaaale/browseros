@@ -18,9 +18,10 @@ body {
   margin: 0;
   font-family: var(--font-geist-sans), system-ui, sans-serif;
   overscroll-behavior: none;
-  -webkit-user-select: none;
-  user-select: none;
 }
+
+/* Desktop chrome (icons, dock, topbar, window titlebars) opts out of selection
+   via the `select-none` utility; app content stays selectable by default. */
 
 /* Thin, unobtrusive scrollbars inside OS windows. */
 * {

@@ -1,12 +1,31 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isBlockedHost } from "@/lib/net";
+import { rewriteHtml, rewriteCss } from "@/lib/proxy-rewrite";
+import { PROXY_PREFIX } from "@/lib/proxy-path";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 60;
 
 const MAX_BYTES = 6 * 1024 * 1024;
 
+// Reconstruct the target from the pathname (preserving trailing slash, which
+// matters for relative URL resolution) or the legacy ?url= query.
+function resolveTarget(req: NextRequest): string | null {
+  const url = new URL(req.url);
+  if (url.pathname.length > PROXY_PREFIX.length && url.pathname.startsWith(PROXY_PREFIX)) {
+    const rest = url.pathname.slice(PROXY_PREFIX.length); // e.g. "https/host/a/b/"
+    const slash = rest.indexOf("/");
+    if (slash > 0) {
+      const scheme = rest.slice(0, slash);
+      const hostAndPath = rest.slice(slash + 1);
+      if (scheme === "http" || scheme === "https") return `${scheme}://${hostAndPath}${url.search}`;
+    }
+  }
+  return url.searchParams.get("url");
+}
+
 export async function GET(req: NextRequest) {
-  const raw = new URL(req.url).searchParams.get("url");
+  const raw = resolveTarget(req);
   if (!raw) return new NextResponse("Missing url", { status: 400 });
 
   let target: URL;
@@ -41,12 +60,15 @@ export async function GET(req: NextRequest) {
   if (contentType.includes("text/html")) {
     let html = await upstream.text();
     if (html.length > MAX_BYTES) html = html.slice(0, MAX_BYTES);
-    const baseTag = `<base href="${upstream.url}">`;
-    html = /<head[^>]*>/i.test(html)
-      ? html.replace(/<head[^>]*>/i, (m) => `${m}${baseTag}`)
-      : `${baseTag}${html}`;
-    return new NextResponse(html, {
+    return new NextResponse(rewriteHtml(html, upstream.url), {
       headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
+    });
+  }
+
+  if (contentType.includes("text/css")) {
+    const css = await upstream.text();
+    return new NextResponse(rewriteCss(css, upstream.url), {
+      headers: { "Content-Type": "text/css; charset=utf-8", "Cache-Control": "no-store" },
     });
   }
 

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, ArrowRight, RotateCw, Home, ExternalLink } from "lucide-react";
 import { useOSStore } from "@/store/os-provider";
+import { toProxyPath } from "@/lib/proxy-path";
 import type { AppProps } from "./types";
 
 const HOME = "https://example.com";
@@ -17,7 +18,7 @@ function normalizeUrl(input: string): string {
 }
 
 function proxied(url: string): string {
-  return `/api/proxy?url=${encodeURIComponent(url)}`;
+  return toProxyPath(url);
 }
 
 export function WebBrowser({ windowId, params }: AppProps) {

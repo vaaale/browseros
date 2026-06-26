@@ -7,36 +7,57 @@ import type { SubAgent } from "@/lib/agent/subagents/types";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
+// Streams the sub-agent run as NDJSON: one {type:"tool"} line per tool call as
+// it happens, then a final {type:"done"|"error"} line. This lets the chat show
+// the sub-agent's events live instead of all at once when it finishes.
 export async function POST(req: NextRequest) {
+  let body: Record<string, unknown>;
   try {
-    const body = await req.json();
-    const task = String(body.task ?? "");
-    if (!task) return NextResponse.json({ error: "task is required" }, { status: 400 });
-
-    let def: SubAgent | undefined;
-    if (body.ephemeral && body.ephemeral.name && body.ephemeral.systemPrompt) {
-      // Create-and-run an ephemeral agent that is not persisted to disk.
-      const e = body.ephemeral;
-      def = {
-        id: String(e.name).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "ephemeral",
-        name: String(e.name),
-        description: String(e.description ?? ""),
-        type: e.type === "claude" ? "claude" : "local",
-        systemPrompt: String(e.systemPrompt),
-        tools: Array.isArray(e.tools) ? e.tools.map(String) : undefined,
-        subagentType: e.subagentType ? String(e.subagentType) : undefined,
-        ephemeral: true,
-      };
-    } else if (body.agent) {
-      def = await getSubAgent(String(body.agent));
-    }
-
-    if (!def) return NextResponse.json({ error: `No sub-agent "${body.agent}" and no ephemeral spec provided` }, { status: 404 });
-
-    const result = await runSubAgent(def, task);
-    void recordDelegation(result).catch(() => {});
-    return NextResponse.json({ result });
-  } catch (err) {
-    return NextResponse.json({ error: (err as Error).message }, { status: 400 });
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
+  const task = String(body.task ?? "");
+  if (!task) return NextResponse.json({ error: "task is required" }, { status: 400 });
+
+  let def: SubAgent | undefined;
+  const e = body.ephemeral as Record<string, unknown> | undefined;
+  if (e && e.name && e.systemPrompt) {
+    def = {
+      id: String(e.name).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "ephemeral",
+      name: String(e.name),
+      description: String(e.description ?? ""),
+      type: e.type === "claude" ? "claude" : "local",
+      systemPrompt: String(e.systemPrompt),
+      tools: Array.isArray(e.tools) ? e.tools.map(String) : undefined,
+      subagentType: e.subagentType ? String(e.subagentType) : undefined,
+      ephemeral: true,
+    };
+  } else if (body.agent) {
+    def = await getSubAgent(String(body.agent));
+  }
+
+  if (!def) {
+    return NextResponse.json({ error: `No sub-agent "${body.agent}" and no ephemeral spec provided` }, { status: 404 });
+  }
+  const agent = def;
+
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const enc = new TextEncoder();
+      const emit = (obj: unknown) => controller.enqueue(enc.encode(JSON.stringify(obj) + "\n"));
+      try {
+        const result = await runSubAgent(agent, task, { onEvent: (ev) => emit({ type: "tool", ...ev }) });
+        void recordDelegation(result).catch(() => {});
+        emit({ type: "done", result });
+      } catch (err) {
+        emit({ type: "error", error: (err as Error).message });
+      }
+      controller.close();
+    },
+  });
+
+  return new NextResponse(stream, {
+    headers: { "Content-Type": "application/x-ndjson; charset=utf-8", "Cache-Control": "no-store" },
+  });
 }

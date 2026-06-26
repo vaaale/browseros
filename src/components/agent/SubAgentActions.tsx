@@ -2,8 +2,18 @@
 
 import { useCopilotAction } from "@copilotkit/react-core";
 import { encodeNested } from "@/lib/agent/nested-events";
+import { startDelegation, pushDelegationEvent, finishDelegation } from "@/lib/agent/subagent-events";
 
 type Choice = "once" | "session" | "local";
+
+interface DelegateResult {
+  agent: string;
+  type: string;
+  steps: number;
+  output?: string;
+  error?: string;
+  toolCalls?: { tool: string; input?: unknown }[];
+}
 
 // Sub-agent delegation: list/create agents, delegate (existing or ephemeral),
 // and an elicitation card to approve a Claude agent for a non-dev task.
@@ -61,19 +71,51 @@ export function SubAgentActions() {
       const ephemeral = ephemeralName && ephemeralSystemPrompt
         ? { name: ephemeralName, type: ephemeralType === "claude" ? "claude" : "local", systemPrompt: ephemeralSystemPrompt, subagentType: ephemeralSubagentType }
         : undefined;
-      const res = await fetch("/api/subagents/delegate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ agent, task, ephemeral }),
-      }).then((r) => r.json());
-      if (res.error) return `Error: ${res.error}`;
-      const r = res.result;
+      const key = String(task ?? "");
+      startDelegation(key);
+      // Read the NDJSON stream so sub-agent tool events render live.
+      let result: DelegateResult | null = null;
+      try {
+        const res = await fetch("/api/subagents/delegate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ agent, task, ephemeral }),
+        });
+        if (!res.ok) {
+          finishDelegation(key, "");
+          const j = await res.json().catch(() => ({}));
+          return `Error: ${j.error ?? res.statusText}`;
+        }
+        if (!res.body) throw new Error("No response stream");
+        const reader = res.body.getReader();
+        const dec = new TextDecoder();
+        let buf = "";
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += dec.decode(value, { stream: true });
+          const lines = buf.split("\n");
+          buf = lines.pop() ?? "";
+          for (const line of lines) {
+            const s = line.trim();
+            if (!s) continue;
+            let ev: { type: string; tool?: string; input?: unknown; result?: DelegateResult; error?: string };
+            try { ev = JSON.parse(s); } catch { continue; }
+            if (ev.type === "tool") pushDelegationEvent(key, { tool: ev.tool ?? "tool", input: ev.input });
+            else if (ev.type === "done") result = ev.result ?? null;
+            else if (ev.type === "error") return `Error: ${ev.error}`;
+          }
+        }
+      } catch (err) {
+        finishDelegation(key, "");
+        return `Error: ${(err as Error).message}`;
+      }
+      const r = result ?? { agent: String(agent ?? ephemeral?.name ?? ""), type: "local", steps: 0, toolCalls: [], output: "" };
       const output = r.output || r.error || "";
+      finishDelegation(key, output);
       const summary = `[${r.agent} · ${r.type}] ${r.steps} step(s)\n\n${output}`;
-      // Append nested sub-agent events so the chat can render them nested under
-      // this delegation card; the summary above is what the model reads.
       return summary + encodeNested({
-        events: (r.toolCalls ?? []).map((t: { tool: string; input?: unknown }) => ({ tool: t.tool, input: t.input })),
+        events: (r.toolCalls ?? []).map((t) => ({ tool: t.tool, input: t.input })),
         output,
       });
     },

@@ -17,6 +17,8 @@ export interface ToolLoopResult {
   toolCalls: { tool: string; input: unknown }[];
 }
 
+export type ToolEvent = { tool: string; input: unknown };
+
 const MAX_STEPS = 8;
 
 function anthropicClient(c: ProviderConfig): Anthropic {
@@ -63,6 +65,7 @@ async function anthropicToolLoop(
   prompt: string,
   tools: Record<string, LlmTool>,
   maxSteps: number,
+  onEvent?: (e: ToolEvent) => void,
 ): Promise<ToolLoopResult> {
   const client = anthropicClient(c);
   const toolSchemas: Anthropic.Tool[] = Object.entries(tools).map(([name, t]) => ({
@@ -85,6 +88,7 @@ async function anthropicToolLoop(
       const results: Anthropic.ToolResultBlockParam[] = [];
       for (const block of res.content) {
         if (block.type !== "tool_use") continue;
+        onEvent?.({ tool: block.name, input: block.input });
         const t = tools[block.name];
         let out: string;
         try {
@@ -111,6 +115,7 @@ async function openaiToolLoop(
   prompt: string,
   tools: Record<string, LlmTool>,
   maxSteps: number,
+  onEvent?: (e: ToolEvent) => void,
 ): Promise<ToolLoopResult> {
   const client = openaiClient(c);
   const toolSchemas: OpenAI.Chat.Completions.ChatCompletionTool[] = Object.entries(tools).map(([name, t]) => ({
@@ -142,6 +147,7 @@ async function openaiToolLoop(
         } catch {
           /* leave empty */
         }
+        onEvent?.({ tool: name, input });
         const t = tools[name];
         let out: string;
         try {
@@ -165,10 +171,11 @@ export async function runToolLoop(opts: {
   prompt: string;
   tools: Record<string, LlmTool>;
   maxSteps?: number;
+  onEvent?: (e: ToolEvent) => void;
 }): Promise<ToolLoopResult> {
   const c = await getProviderConfig();
   const maxSteps = opts.maxSteps ?? MAX_STEPS;
   return familyOf(c.provider) === "anthropic"
-    ? anthropicToolLoop(c, opts.system, opts.prompt, opts.tools, maxSteps)
-    : openaiToolLoop(c, opts.system, opts.prompt, opts.tools, maxSteps);
+    ? anthropicToolLoop(c, opts.system, opts.prompt, opts.tools, maxSteps, opts.onEvent)
+    : openaiToolLoop(c, opts.system, opts.prompt, opts.tools, maxSteps, opts.onEvent);
 }
