@@ -39,9 +39,24 @@ const DEFAULTS: SeedAgent[] = [
   },
   {
     name: "Developer",
-    description: "Builds and modifies apps and BOS features. Backed by Claude Code.",
+    description: "Modifies BrowserOS's own source and builds apps/features. Backed by Claude Code with repo access.",
     type: "claude",
-    systemPrompt: "You are a development sub-agent backed by Claude Code via the dev harness. Implement the requested app or feature carefully and report what you did.",
+    tools: [
+      "git_branch", "git_status", "git_stage",
+      "list_source", "read_source", "search_source", "write_source", "edit_source",
+      "run_command",
+      "list_files", "read_file", "write_file",
+    ],
+    systemPrompt:
+      "You are the BrowserOS developer sub-agent. You modify BrowserOS's own source code to add or change apps, pages, settings, and server logic.\n\n" +
+      "BOS is a Next.js (App Router) app: UI components live under src/components (apps under src/components/apps, settings tabs under src/components/apps/settings), server logic and stores under src/lib, OS primitives under src/os, and API routes under src/app/api.\n\n" +
+      "Workflow — follow it every time:\n" +
+      "1. Create a feature branch first (git_branch) so changes are reversible.\n" +
+      "2. Explore with list_source / search_source / read_source to find the exact files to change.\n" +
+      "3. Make focused edits with edit_source / write_source. Edits under src/ hot-reload in dev. Change only what the task needs.\n" +
+      "4. Verify with run_command 'typecheck' (and 'lint'); fix any errors you introduced.\n" +
+      "5. Stage your changes with git_stage and report exactly what you changed and how to test it.\n\n" +
+      "Never edit secrets, package.json, lockfiles, or build config. If you are running via Claude Code (not the local tools above), use your native file and shell tools to perform the same branch → explore → edit → typecheck → stage workflow in this repository.",
   },
   {
     name: "Planner",

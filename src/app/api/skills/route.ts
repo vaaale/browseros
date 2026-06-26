@@ -1,7 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
-import { listSkills, getSkill, saveSkill, removeSkill } from "@/lib/agent/skills/store";
+import { listSkills, getSkill, saveSkill, removeSkill, type SkillAsset } from "@/lib/agent/skills/store";
 
 export const dynamic = "force-dynamic";
+
+function normalizeAssets(input: unknown): SkillAsset[] | undefined {
+  if (input === undefined || input === null) return undefined;
+  if (!Array.isArray(input)) throw new Error("scripts/references must be an array");
+  const out: SkillAsset[] = [];
+  for (const raw of input) {
+    if (!raw || typeof raw !== "object") continue;
+    const name = String((raw as { name?: unknown }).name ?? "").trim();
+    if (!name) continue;
+    const content = String((raw as { content?: unknown }).content ?? "");
+    out.push({ name, content });
+  }
+  return out;
+}
 
 export async function GET(req: NextRequest) {
   const id = new URL(req.url).searchParams.get("id");
@@ -18,6 +32,9 @@ export async function POST(req: NextRequest) {
       description: String(body.description ?? ""),
       content: String(body.content),
       whenToUse: body.whenToUse ? String(body.whenToUse) : undefined,
+      scripts: normalizeAssets(body.scripts),
+      references: normalizeAssets(body.references),
+      previousId: body.previousId ? String(body.previousId) : undefined,
     });
     return NextResponse.json({ skill });
   } catch (err) {

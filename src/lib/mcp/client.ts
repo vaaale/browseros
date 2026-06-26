@@ -2,6 +2,8 @@ import "server-only";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
+import { StdioClientTransport, getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
+import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { McpServerConfig, McpProbeResult } from "./types";
 import { encodeMcpUi } from "./ui";
 
@@ -17,6 +19,8 @@ export interface CopilotMcpClient {
 }
 
 const CONNECT_TIMEOUT_MS = 8000;
+// Spawning a stdio server (e.g. `claude mcp serve`) can take longer to boot.
+const STDIO_CONNECT_TIMEOUT_MS = 30_000;
 
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   return Promise.race([
@@ -25,15 +29,34 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   ]);
 }
 
-async function connect(cfg: McpServerConfig): Promise<Client> {
+function stdioTransport(cfg: McpServerConfig): Transport {
+  const parts = cfg.endpoint.trim().split(/\s+/).filter(Boolean);
+  const command = parts[0];
+  if (!command) throw new Error("stdio transport requires a command (e.g. \"claude mcp serve\")");
+  return new StdioClientTransport({
+    command,
+    args: parts.slice(1),
+    cwd: cfg.cwd || process.cwd(),
+    env: { ...getDefaultEnvironment(), ...(cfg.env ?? {}) },
+  });
+}
+
+export async function connectMcpClient(cfg: McpServerConfig): Promise<Client> {
   const client = new Client({ name: "browseros", version: "0.1.0" }, { capabilities: {} });
-  const url = new URL(cfg.endpoint);
-  const headers = cfg.apiKey ? { Authorization: `Bearer ${cfg.apiKey}` } : undefined;
-  const transport =
-    cfg.transport === "sse"
-      ? new SSEClientTransport(url, { requestInit: headers ? { headers } : undefined })
-      : new StreamableHTTPClientTransport(url, { requestInit: headers ? { headers } : undefined });
-  await withTimeout(client.connect(transport), CONNECT_TIMEOUT_MS, `MCP connect to ${cfg.endpoint}`);
+  let transport: Transport;
+  let timeout = CONNECT_TIMEOUT_MS;
+  if (cfg.transport === "stdio") {
+    transport = stdioTransport(cfg);
+    timeout = STDIO_CONNECT_TIMEOUT_MS;
+  } else {
+    const url = new URL(cfg.endpoint);
+    const headers = cfg.apiKey ? { Authorization: `Bearer ${cfg.apiKey}` } : undefined;
+    transport =
+      cfg.transport === "sse"
+        ? new SSEClientTransport(url, { requestInit: headers ? { headers } : undefined })
+        : new StreamableHTTPClientTransport(url, { requestInit: headers ? { headers } : undefined });
+  }
+  await withTimeout(client.connect(transport), timeout, `MCP connect to ${cfg.endpoint}`);
   return client;
 }
 
@@ -43,7 +66,7 @@ interface ContentItem {
   resource?: { uri?: string; mimeType?: string; text?: string };
 }
 
-function extractText(result: unknown): string {
+export function extractText(result: unknown): string {
   const r = result as { content?: ContentItem[]; structuredContent?: unknown };
   if (Array.isArray(r?.content)) {
     // MCP-UI: surface an interactive HTML resource for iframe rendering.
@@ -71,7 +94,7 @@ function extractText(result: unknown): string {
 export async function createBosMcpClient(cfg: McpServerConfig): Promise<CopilotMcpClient> {
   let client: Client;
   try {
-    client = await connect(cfg);
+    client = await connectMcpClient(cfg);
   } catch (err) {
     console.warn(`[BOS][MCP] ${cfg.endpoint} unavailable: ${(err as Error).message}`);
     return { async tools() { return {}; } };
@@ -119,7 +142,7 @@ export async function createBosMcpClient(cfg: McpServerConfig): Promise<CopilotM
 export async function probeMcpServer(cfg: McpServerConfig): Promise<McpProbeResult> {
   let client: Client;
   try {
-    client = await connect(cfg);
+    client = await connectMcpClient(cfg);
   } catch (err) {
     return { ok: false, error: (err as Error).message };
   }

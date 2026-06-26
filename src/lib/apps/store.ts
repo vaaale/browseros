@@ -6,6 +6,8 @@ import type { AppManifest } from "@/os/types";
 
 const FILE = path.join(process.cwd(), "data", "installed-apps.json");
 
+export type AppStatus = "installed" | "uninstalled";
+
 export interface InstalledApp {
   id: string;
   name: string;
@@ -13,6 +15,12 @@ export interface InstalledApp {
   createdAt: number;
   /** VFS directory holding the app, e.g. /Apps/<id>. */
   dir: string;
+  /**
+   * "installed" apps appear on the desktop. "uninstalled" apps are hidden but
+   * keep their files so they can be restored; purgeApp removes the files.
+   */
+  status: AppStatus;
+  uninstalledAt?: number;
 }
 
 function slugify(name: string): string {
@@ -50,7 +58,9 @@ export function pickIcon(name: string, spec = ""): string {
 
 async function readAll(): Promise<InstalledApp[]> {
   try {
-    return JSON.parse(await fs.readFile(FILE, "utf8")) as InstalledApp[];
+    const apps = JSON.parse(await fs.readFile(FILE, "utf8")) as InstalledApp[];
+    // Records written before soft-uninstall existed have no status; treat as installed.
+    return apps.map((a) => ({ ...a, status: a.status ?? "installed" }));
   } catch {
     return [];
   }
@@ -80,8 +90,9 @@ export async function listInstalledApps(): Promise<InstalledApp[]> {
   return readAll();
 }
 
+/** Manifests for the desktop — only currently-installed apps (uninstalled ones are hidden). */
 export async function listInstalledManifests(): Promise<AppManifest[]> {
-  return (await readAll()).map(toManifest);
+  return (await readAll()).filter((a) => a.status === "installed").map(toManifest);
 }
 
 /**
@@ -103,12 +114,32 @@ export async function installApp(input: {
     await vfs.writeText(`${dir}/${rel}`, content);
   }
 
-  const app: InstalledApp = { id, name: input.name, icon: input.icon || "Puzzle", createdAt: Date.now(), dir };
+  const app: InstalledApp = { id, name: input.name, icon: input.icon || "Puzzle", createdAt: Date.now(), dir, status: "installed" };
   await writeAll([...apps.filter((a) => a.id !== id), app]);
   return toManifest(app);
 }
 
+/** Soft uninstall: hide the app from the desktop but keep its files for restore. */
 export async function uninstallApp(id: string): Promise<InstalledApp[]> {
+  const next = (await readAll()).map((a) =>
+    a.id === id ? { ...a, status: "uninstalled" as AppStatus, uninstalledAt: Date.now() } : a,
+  );
+  await writeAll(next);
+  return next;
+}
+
+/** Restore a previously uninstalled app (its files were kept). */
+export async function restoreApp(id: string): Promise<AppManifest | undefined> {
+  const apps = await readAll();
+  const app = apps.find((a) => a.id === id);
+  if (!app) return undefined;
+  const restored: InstalledApp = { ...app, status: "installed", uninstalledAt: undefined };
+  await writeAll(apps.map((a) => (a.id === id ? restored : a)));
+  return toManifest(restored);
+}
+
+/** Permanently delete an app's record and its files. */
+export async function purgeApp(id: string): Promise<InstalledApp[]> {
   const next = (await readAll()).filter((a) => a.id !== id);
   await writeAll(next);
   await vfs.remove(`/Apps/${id}`).catch(() => {});

@@ -6,7 +6,6 @@ import { WebBrowser } from "./WebBrowser";
 import { SettingsApp } from "./SettingsApp";
 import { ChatApp } from "./ChatApp";
 import { MemoryApp } from "./MemoryApp";
-import { DevStudio } from "./DevStudio";
 import { DocsApp } from "./DocsApp";
 
 // Maps an app id to the client component that renders inside its window.
@@ -17,7 +16,6 @@ const REGISTRY = new Map<string, AppComponent>([
   ["settings", SettingsApp],
   ["chat", ChatApp],
   ["memory", MemoryApp],
-  ["devstudio", DevStudio],
   ["docs", DocsApp],
 ]);
 

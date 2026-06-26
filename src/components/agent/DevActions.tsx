@@ -4,31 +4,34 @@ import { useCopilotAction } from "@copilotkit/react-core";
 import { useOSStoreApi } from "@/store/os-provider";
 import type { AppManifest } from "@/os/types";
 
-// Extensibility + self-improvement actions: build/install apps via the dev
-// harness, and let the agent edit its own instructions and skills.
+// Extensibility + self-improvement actions: install apps from generated HTML,
+// and let the agent edit its own instructions and skills. There is no dedicated
+// "build" tool — building an app is a development task that goes through the
+// standard delegateToSubAgent (Claude developer sub-agent) + installApp flow
+// (see the "Build App" skill).
 export function DevActions() {
   const store = useOSStoreApi();
 
   useCopilotAction({
-    name: "buildApp",
+    name: "installApp",
     description:
-      "Build and install a new BrowserOS app from a natural-language spec using the development harness. The app is installed, added to the dock, and opened.",
+      "Install a BrowserOS app from a single self-contained index.html document, then add it to the dock and open it. Use this AFTER delegating the build to a Claude developer sub-agent (development tasks must not be hand-written). Pass the HTML the sub-agent produced.",
     parameters: [
-      { name: "spec", type: "string", description: "What the app should do", required: true },
-      { name: "name", type: "string", description: "Optional app name", required: false },
+      { name: "name", type: "string", description: "App name", required: true },
+      { name: "html", type: "string", description: "The complete index.html document (all CSS/JS inline, no external dependencies)", required: true },
       { name: "icon", type: "string", description: "Optional lucide icon name (e.g. Clock, Calculator, Music, ListTodo); auto-chosen if omitted", required: false },
     ],
-    handler: async ({ spec, name, icon }) => {
-      const res = await fetch("/api/devstudio", {
+    handler: async ({ name, html, icon }) => {
+      const res = await fetch("/api/apps", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ spec, name, icon }),
+        body: JSON.stringify({ name, html, icon }),
       }).then((r) => r.json());
       if (res.error) return `Error: ${res.error}`;
       const app = res.app as AppManifest;
       store.getState().registerApp(app);
       store.getState().launch(app.id);
-      return `Built and installed "${app.name}" (backend: ${res.source}${res.note ? `, ${res.note}` : ""}). It is now in your dock.`;
+      return `Installed "${app.name}". It is now in your dock and open.`;
     },
   });
 
@@ -38,18 +41,21 @@ export function DevActions() {
     parameters: [],
     handler: async () => {
       const res = await fetch("/api/apps").then((r) => r.json());
-      return JSON.stringify((res.apps ?? []).map((a: { id: string; name: string }) => ({ id: a.id, name: a.name })));
+      return JSON.stringify(
+        (res.apps ?? []).map((a: { id: string; name: string; status?: string }) => ({ id: a.id, name: a.name, status: a.status ?? "installed" })),
+      );
     },
   });
 
   useCopilotAction({
     name: "uninstallApp",
-    description: "Uninstall a runtime-installed app by id.",
+    description:
+      "Uninstall a runtime-installed app by id. This hides it from the desktop but keeps its files, so the user can restore it from Settings → Apps (or permanently delete it there with Purge).",
     parameters: [{ name: "id", type: "string", description: "App id", required: true }],
     handler: async ({ id }) => {
       await fetch(`/api/apps?id=${encodeURIComponent(id as string)}`, { method: "DELETE" });
       store.getState().unregisterApp(id as string); // live desktop/dock refresh
-      return `Uninstalled ${id} and removed it from the desktop.`;
+      return `Uninstalled ${id} (hidden from the desktop; files kept and restorable in Settings → Apps).`;
     },
   });
 

@@ -10,6 +10,8 @@ export function FirstRunWizard() {
   const [model, setModel] = useState(PROVIDERS.anthropic.defaultModel);
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
+  const [harnessTransport, setHarnessTransport] = useState<"cli" | "stdio" | "http" | "sse">("cli");
+  const [harnessCommand, setHarnessCommand] = useState("claude mcp serve");
   const [harnessUrl, setHarnessUrl] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -22,7 +24,11 @@ export function FirstRunWizard() {
       .then((r) => r.json())
       .then((d) => {
         const harness = (d.schemas ?? []).find((s: { namespace: string }) => s.namespace === "dev-harness");
-        if (harness) setHarnessUrl(String(harness.values.url ?? ""));
+        if (harness) {
+          setHarnessTransport((harness.values.transport as "cli" | "stdio" | "http" | "sse") ?? "cli");
+          setHarnessCommand(String(harness.values.command ?? "claude mcp serve"));
+          setHarnessUrl(String(harness.values.url ?? ""));
+        }
       })
       .catch(() => {});
   }, []);
@@ -44,7 +50,10 @@ export function FirstRunWizard() {
       await fetch("/api/config", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ namespace: "dev-harness", values: { url: harnessUrl } }),
+        body: JSON.stringify({
+          namespace: "dev-harness",
+          values: { transport: harnessTransport, command: harnessCommand, url: harnessUrl },
+        }),
       });
       await fetch("/api/system/setup", { method: "POST" });
       setOpen(false);
@@ -83,8 +92,25 @@ export function FirstRunWizard() {
 
           <h3 className="pt-1 text-xs font-semibold uppercase tracking-wide text-white/50">Claude Dev Harness (optional)</h3>
           <div className="grid grid-cols-[110px_1fr] items-center gap-2">
-            <label className="text-xs text-white/60">Harness URL</label>
-            <input value={harnessUrl} onChange={(e) => setHarnessUrl(e.target.value)} placeholder="http://host:7272/mcp" className="rounded border border-white/10 bg-black/30 px-2 py-1.5 text-xs outline-none" />
+            <label className="text-xs text-white/60">Mode</label>
+            <select value={harnessTransport} onChange={(e) => setHarnessTransport(e.target.value as "cli" | "stdio" | "http" | "sse")} className="rounded border border-white/10 bg-black/30 px-2 py-1.5 text-xs outline-none">
+              <option value="cli">Claude CLI (headless, recommended)</option>
+              <option value="stdio">MCP stdio (claude mcp serve)</option>
+              <option value="http">MCP HTTP (remote)</option>
+              <option value="sse">MCP SSE (remote)</option>
+            </select>
+            {harnessTransport === "stdio" && (
+              <>
+                <label className="text-xs text-white/60">Command</label>
+                <input value={harnessCommand} onChange={(e) => setHarnessCommand(e.target.value)} placeholder="claude mcp serve" className="rounded border border-white/10 bg-black/30 px-2 py-1.5 text-xs outline-none" />
+              </>
+            )}
+            {(harnessTransport === "http" || harnessTransport === "sse") && (
+              <>
+                <label className="text-xs text-white/60">Harness URL</label>
+                <input value={harnessUrl} onChange={(e) => setHarnessUrl(e.target.value)} placeholder="http://host:7272/mcp" className="rounded border border-white/10 bg-black/30 px-2 py-1.5 text-xs outline-none" />
+              </>
+            )}
           </div>
         </div>
 

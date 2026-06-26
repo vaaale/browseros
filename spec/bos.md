@@ -22,6 +22,14 @@ BOS must provide functionality that apps and features can use to hook into the c
 For example, an app should be able to add a tab / page to the configuration app for the user to configure itself.
 This should also be exposed as tools to the assistant automatically.
 
+The Settings app renders one tab per registered configuration namespace. A feature/app registers a tab by adding a config schema (fields, or a custom component); the same schema is auto-exposed to the assistant as configuration tools. Built-in tabs:
+- **Assistant** — select the active personality / profile.
+- **Skills** — browse and edit the assistant's skill library (see Skills).
+- **Apps** — manage runtime-installed apps: uninstall (hides the app but keeps its files), restore an uninstalled app, or purge (permanently delete its files).
+- **Appearance** — wallpaper and accent color.
+- **AI Provider** — provider, model, API key (masked), base URL, max output tokens, context window.
+- **Dev Harness** — how the developer sub-agent runs Claude Code (see Developer sub-agent).
+
 ## Configuring models and providers
 It must be possible to configure the AI providers such as OpenAI, OpenAI Codex, Anthropic and Local models as OpenAI Compatible.
 It must be possible to configure the model, api keys, api base url, **max output tokens**, and **context window (max input tokens)**.
@@ -45,7 +53,11 @@ There should be some kind of indicator showing that the agent is working / busy.
 The agent must have a self-improving memory system similar to Hermes-Agent.
 
 ## Skills
-The assistant must have a library of skills. You can take a look at Hermes-Agent for inspiraction.
+The assistant must have a library of skills (named, on-demand procedures), inspired by Hermes-Agent.
+- Each skill is stored as markdown under `data/skills`: either a flat `<id>.md`, or a directory `<id>/` containing `SKILL.md` plus optional `scripts/` and `references/` subdirectories holding asset files. The skill file has frontmatter (name, description, when-to-use, optimizer score) and an instruction body.
+- Skills are advertised to the assistant as an index (name + when-to-use); the assistant loads a skill's full body (and may consult its scripts/references) on demand before following it.
+- The **Settings → Skills** tab is a full editor: it lists all skills; clicking a skill opens a detail page to edit the main skill file (name / description / when-to-use / content) and to add, edit, rename, or remove its scripts and references. Skills can also be created and deleted.
+- Out-of-the-box skills include **Build App** (build and install a new standalone app) and **Modify BrowserOS** (change BOS itself) — both delegate to the Developer sub-agent (see below).
 Any agent must be configurable using the Settings app.
 
 ## Profiles and personalities
@@ -110,16 +122,29 @@ A plan consists of a set of tasks:
 - Acceptance criteria
 
 ## Developer sub-agent
-BOS must have an out-of-the-box Developer agent.
-This agent MUST use the Claude Code MCP server for all its tasks.
+BOS must have an out-of-the-box **Developer** sub-agent. All development/coding tasks are performed by Claude — never the local provider.
+
+The Developer can modify BOS itself — its built-in apps, Settings pages, and server logic, i.e. the Next.js source under `src/`. This is distinct from building a standalone app:
+- **Standalone app**: delegate to the Developer to produce a single self-contained `index.html`, then install it with `installApp` (the "Build App" skill). There is no dedicated build tool and no separate "Dev Studio" app.
+- **Modifying BOS itself**: delegate the whole request to the Developer, which has repo-scoped access to BOS's own source. It works on a git feature branch, finds and edits the relevant files, typechecks, and stages the changes; edits under `src/` hot-reload in dev (the "Modify BrowserOS" skill encodes this).
+
+The virtual file system (the file browser and the `listFiles`/`readFile`/`writeFile` tools) is the user's sandboxed data and does NOT contain BOS source. The assistant must never hunt for or edit BOS code through the VFS — it must delegate source changes to the Developer.
+
+### How the Developer runs Claude Code
+Configurable in **Settings → Dev Harness**:
+- **Claude CLI (headless)** — the default and recommended mode. BOS spawns Claude Code non-interactively (`claude -p <task> --append-system-prompt <agent prompt> --output-format stream-json --dangerously-skip-permissions`) with the repo as the working directory. Claude itself is the autonomous coding agent (using its own Read/Edit/Write/Bash); BOS parses the stream-json output to surface tool calls live and capture the final result. Permissions are skipped for non-interactive use, so this is intended to run sandboxed (e.g. Docker); changes are confined to a feature branch.
+- **MCP harness** — alternative: connect to a Claude Code MCP server (local stdio `claude mcp serve`, or remote HTTP/SSE) and drive its `Agent` tool. The `Agent` tool only runs a sub-agent whose `subagent_type` was registered on that harness at startup; if none match it cannot spawn. The headless CLI is preferred because it reliably runs Claude as the coder.
+
+Repo-scoped tooling also exists for local sub-agents that opt in: read / list / search / write / edit source confined to the repo root (never secrets, `.git`, `node_modules`, lockfiles, or build config), an allowlisted command runner (typecheck / lint / build), and git branch/stage helpers. These tools are gated — the default sub-agent tool set is VFS-only.
 
 
 # Extensibility
-As with any real operating system, bos must provide api's for extending the os with new apps and functionality.
-We will use this functionality to build applications from within the OS.
-BOS must have a built-in development harness using Claude MCP. Claude MCP is running on http://wingman.akhbar.lan:7272/mcp using streamable-http transport.
-When a new app is created, an appropriate icon should be associated with the app. The desktop should be refreshed so that the new icon appears.
-If an app is removed, the icon must be removed from the desktop (Refreshed)
+As with any real operating system, BOS provides APIs for extending the OS with new apps and functionality — used both by the assistant and to build apps from within the OS.
+- **Installing apps**: an installed app is a set of files (entry `index.html`) written into the VFS and served same-origin at `/apps/<id>`, rendered in a window as an iframe. The assistant installs apps with `installApp` after the Developer builds them (the "Build App" skill). On install the app gets an appropriate icon and the desktop refreshes so the icon appears.
+- **Removing apps** is two-phase: *uninstalling* hides an app from the desktop/dock (refreshed) but keeps its files so it can be restored; *purging* permanently deletes its files. Both are available in Settings → Apps and as assistant tools.
+- **Development harness**: BOS runs Claude Code to build/modify apps and BOS itself — by default the headless Claude CLI in the repo, or a Claude Code MCP server (local `claude mcp serve` over stdio, or remote streamable-HTTP/SSE, e.g. http://wingman.akhbar.lan:7272/mcp). See the Developer sub-agent.
+
+There is no separate "Dev Studio" app and no dedicated build tool; app creation goes through the Developer sub-agent plus `installApp`.
 
 # BOS Self improvement
 If the user asks the assistant to implement a new app or feature, BOS must evaluate if the implementation:
@@ -127,18 +152,19 @@ If the user asks the assistant to implement a new app or feature, BOS must evalu
 2) Architectural changes should be made to better the quality of BOS
 
 # Minimizing blas radius
-Whenever changes are made to BOS, the changes MUST developed using a feature branch so that it can be rolle back if BOS breaks.
+Whenever changes are made to BOS, the changes MUST developed using a feature branch so that it can be rolled back if BOS breaks.
 It's important that the agent adds new / stages files when during such work.
 
 # Documentation
 BOS must have a documentation hub containing user-friendly documentation for how to use BOS.
 Whenever a new app of feature is created, added, modified, or removed, the documentation MUST be updated.
 
-# Using the Claude MCP
-When creating an agent, "agent_type" must be specified. The value of "agent_type" should reflect the type of agent begin created. For example: developer, tester, ui_expert, etc.
-The agent_type is **generated by the assistant per role** (derived from the sub-agent's name/role) — it must not be a single hardcoded/configured value. Note: the Claude MCP harness only exposes agent types that were registered at its startup, so a generated type only runs if the harness has a matching agent.
-Delegating to a Claude sub-agent must stream the harness's progress where possible; the harness `Agent` tool runs opaquely, so at minimum show that the Claude agent is running and surface its final result.
+# Running Claude Code
+The Developer (and any Claude sub-agent) runs Claude Code one of two ways (Settings → Dev Harness):
+- **Headless CLI (default)**: spawn `claude -p` in the repo with stream-json output. Claude runs autonomously with its own tools; BOS streams its tool calls live and returns the final result. It runs with `--dangerously-skip-permissions` so it is non-interactive (intended to be sandboxed, e.g. Docker). No `agent_type` is involved — the sub-agent's instructions are passed as the appended system prompt.
+- **MCP harness**: drive a Claude Code MCP server's `Agent` tool. Here an `agent_type` / `subagent_type` must be specified; it is **generated by the assistant per role** (developer, tester, ui_expert, …), not a single hardcoded/configured value. The harness only exposes agent types registered at its startup, so a generated type only runs if the harness has a matching agent; otherwise the `Agent` tool cannot spawn. The `Agent` tool runs opaquely, so at minimum show that the Claude agent is running and surface its result.
+
+Either way, delegating to a Claude sub-agent must stream progress where possible.
 
 # On first startup
-The first time the user opens BOS, a configuration wizzard should appear where the user can configure the AI models to use, as well as configure
-the Claude Code MCP server.
+The first time the user opens BOS, a configuration wizard appears where the user configures the AI provider/model and the Dev Harness — i.e. how Claude Code runs for the Developer sub-agent (headless Claude CLI by default, or an MCP harness).

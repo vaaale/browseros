@@ -5,6 +5,8 @@ import type { ConfigSchemaView } from "@/lib/config/types";
 import { AppearanceTab } from "./settings/AppearanceTab";
 import { AssistantTab } from "./settings/AssistantTab";
 import { SkillsTab } from "./settings/SkillsTab";
+import { AppsTab } from "./settings/AppsTab";
+import { DevHarnessTab } from "./settings/DevHarnessTab";
 import { ConfigForm } from "./settings/ConfigForm";
 import { ProviderSettings } from "./ProviderSettings";
 import type { AppProps } from "./types";
@@ -15,6 +17,8 @@ const CUSTOM_TABS: Record<string, React.ComponentType> = {
   "ai-provider": ProviderSettings,
   assistant: AssistantTab,
   skills: SkillsTab,
+  apps: AppsTab,
+  "dev-harness": DevHarnessTab,
 };
 
 export function SettingsApp(_props: AppProps) {

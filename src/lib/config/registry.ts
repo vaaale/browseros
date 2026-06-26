@@ -11,7 +11,8 @@ export interface ConfigRegistration {
   save: (patch: Record<string, unknown>) => Promise<void>;
 }
 
-const HARNESS_DEFAULT_URL = process.env.BOS_DEV_HARNESS_URL || "http://wingman.akhbar.home:7272/mcp";
+const HARNESS_DEFAULT_URL = process.env.BOS_DEV_HARNESS_URL || "http://wingman.akhbar.lan:7272/mcp";
+const HARNESS_DEFAULT_COMMAND = "claude mcp serve";
 
 const REGISTRATIONS: ConfigRegistration[] = [
   {
@@ -33,6 +34,18 @@ const REGISTRATIONS: ConfigRegistration[] = [
       description: "The assistant's reusable skill library.",
       order: 6,
       customComponent: "skills",
+      fields: [],
+    },
+    load: async () => ({}),
+    save: async () => {},
+  },
+  {
+    schema: {
+      namespace: "apps",
+      title: "Apps",
+      description: "Manage installed apps. Uninstall keeps an app's files so it can be restored; purge deletes them.",
+      order: 8,
+      customComponent: "apps",
       fields: [],
     },
     load: async () => ({}),
@@ -89,13 +102,36 @@ const REGISTRATIONS: ConfigRegistration[] = [
     schema: {
       namespace: "dev-harness",
       title: "Dev Harness",
-      description: "Claude Code MCP server used by the dev studio and Claude sub-agents. The agent type is generated per sub-agent (from its name), not configured here.",
+      description:
+        "How the Claude developer sub-agent runs. 'Claude CLI' spawns Claude Code headless (`claude -p`) inside this repo so Claude itself edits BOS source — recommended. The MCP modes connect to a `claude mcp serve` (stdio) or a remote harness instead.",
       order: 30,
-      fields: [{ key: "url", label: "Harness URL", type: "text", placeholder: HARNESS_DEFAULT_URL }],
+      customComponent: "dev-harness",
+      fields: [
+        {
+          key: "transport",
+          label: "Mode",
+          type: "select",
+          description: "Claude CLI runs Claude Code headless in the repo; the MCP modes drive a harness's Agent tool.",
+          options: [
+            { value: "cli", label: "Claude CLI (headless, recommended)" },
+            { value: "stdio", label: "MCP stdio (claude mcp serve)" },
+            { value: "http", label: "MCP HTTP (remote)" },
+            { value: "sse", label: "MCP SSE (remote)" },
+          ],
+        },
+        { key: "cwd", label: "Working directory", type: "text", placeholder: process.cwd() },
+        { key: "command", label: "MCP stdio command", type: "text", placeholder: HARNESS_DEFAULT_COMMAND },
+        { key: "url", label: "MCP harness URL", type: "text", placeholder: HARNESS_DEFAULT_URL },
+      ],
     },
     load: async () => {
       const stored = await readNamespace("dev-harness");
-      return { url: (stored.url as string) || HARNESS_DEFAULT_URL };
+      return {
+        transport: (stored.transport as string) || "cli",
+        command: (stored.command as string) || HARNESS_DEFAULT_COMMAND,
+        cwd: (stored.cwd as string) || process.cwd(),
+        url: (stored.url as string) || HARNESS_DEFAULT_URL,
+      };
     },
     save: async (patch) => {
       await patchNamespace("dev-harness", patch);

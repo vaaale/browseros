@@ -106,7 +106,11 @@ async function anthropicToolLoop(
     const text = res.content.filter((b): b is Anthropic.TextBlock => b.type === "text").map((b) => b.text).join("\n").trim();
     return { text, steps: step + 1, toolCalls };
   }
-  return { text: "Reached the step limit before finishing.", steps: maxSteps, toolCalls };
+  return {
+    text: `Reached the step limit (${maxSteps} steps) before finishing. Partial changes may already be applied — review what was done and delegate a focused follow-up to continue, rather than restarting from scratch.`,
+    steps: maxSteps,
+    toolCalls,
+  };
 }
 
 async function openaiToolLoop(
@@ -162,7 +166,11 @@ async function openaiToolLoop(
     }
     return { text: messageText(msg).trim(), steps: step + 1, toolCalls };
   }
-  return { text: "Reached the step limit before finishing.", steps: maxSteps, toolCalls };
+  return {
+    text: `Reached the step limit (${maxSteps} steps) before finishing. Partial changes may already be applied — review what was done and delegate a focused follow-up to continue, rather than restarting from scratch.`,
+    steps: maxSteps,
+    toolCalls,
+  };
 }
 
 /** Provider-agnostic bounded tool-use loop. */

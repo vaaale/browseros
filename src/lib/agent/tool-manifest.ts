@@ -42,7 +42,7 @@ export const ASSISTANT_TOOLS: ToolInfo[] = [
   { group: "MCP", name: "removeMcpServer", description: "Disconnect an MCP server." },
   { group: "MCP", name: "probeMcpServer", description: "Test an MCP server and list its tools." },
 
-  { group: "Dev", name: "buildApp", description: "Build and install a new app." },
+  { group: "Dev", name: "installApp", description: "Install an app from generated HTML (adds it to the dock and opens it)." },
   { group: "Dev", name: "listInstalledApps", description: "List runtime-installed apps." },
   { group: "Dev", name: "uninstallApp", description: "Uninstall an app." },
   { group: "Dev", name: "startFeatureBranch", description: "Start a git feature branch before BOS changes." },

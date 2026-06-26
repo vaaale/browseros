@@ -76,7 +76,8 @@ export function OSActions() {
 
   useCopilotAction({
     name: "listFiles",
-    description: "List entries in a virtual file system directory.",
+    description:
+      "List entries in the USER'S virtual file system (their Documents, Pictures, Desktop, etc.). This is sandboxed user data — it does NOT contain BrowserOS's own source code, apps, or Settings pages. To change BrowserOS itself, delegate to the developer sub-agent (see the 'Modify BrowserOS' skill); do not hunt for source here.",
     parameters: [{ name: "path", type: "string", description: 'Directory path, defaults to "/"', required: false }],
     handler: async ({ path }) => {
       try {
@@ -90,7 +91,7 @@ export function OSActions() {
 
   useCopilotAction({
     name: "readFile",
-    description: "Read a text file from the virtual file system.",
+    description: "Read a text file from the user's virtual file system (sandboxed user data, NOT BrowserOS source code).",
     parameters: [{ name: "path", type: "string", description: "File path", required: true }],
     handler: async ({ path }) => {
       try {
@@ -103,7 +104,8 @@ export function OSActions() {
 
   useCopilotAction({
     name: "writeFile",
-    description: "Create or overwrite a text file in the virtual file system.",
+    description:
+      "Create or overwrite a text file in the user's virtual file system (sandboxed user data, NOT BrowserOS source code). To modify BrowserOS itself, delegate to the developer sub-agent instead.",
     parameters: [
       { name: "path", type: "string", description: "File path", required: true },
       { name: "content", type: "string", description: "File contents", required: true },

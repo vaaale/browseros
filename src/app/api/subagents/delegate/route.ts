@@ -5,7 +5,9 @@ import { recordDelegation } from "@/lib/agent/memory/reflect";
 import type { SubAgent } from "@/lib/agent/subagents/types";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 300;
+// A local dev tool-loop can run many steps; the NDJSON stream keeps the
+// connection alive, but give the route generous headroom.
+export const maxDuration = 600;
 
 // Streams the sub-agent run as NDJSON: one {type:"tool"} line per tool call as
 // it happens, then a final {type:"done"|"error"} line. This lets the chat show
