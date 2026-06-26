@@ -16,12 +16,13 @@ export function DevActions() {
     parameters: [
       { name: "spec", type: "string", description: "What the app should do", required: true },
       { name: "name", type: "string", description: "Optional app name", required: false },
+      { name: "icon", type: "string", description: "Optional lucide icon name (e.g. Clock, Calculator, Music, ListTodo); auto-chosen if omitted", required: false },
     ],
-    handler: async ({ spec, name }) => {
+    handler: async ({ spec, name, icon }) => {
       const res = await fetch("/api/devstudio", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ spec, name }),
+        body: JSON.stringify({ spec, name, icon }),
       }).then((r) => r.json());
       if (res.error) return `Error: ${res.error}`;
       const app = res.app as AppManifest;
@@ -47,50 +48,33 @@ export function DevActions() {
     parameters: [{ name: "id", type: "string", description: "App id", required: true }],
     handler: async ({ id }) => {
       await fetch(`/api/apps?id=${encodeURIComponent(id as string)}`, { method: "DELETE" });
-      return `Uninstalled ${id}. Reload to remove it from the dock.`;
+      store.getState().unregisterApp(id as string); // live desktop/dock refresh
+      return `Uninstalled ${id} and removed it from the desktop.`;
     },
   });
 
   useCopilotAction({
     name: "getMyInstructions",
-    description: "Read your own current system instructions and learned skills.",
+    description: "Read your own current composed system instructions (active profile + skills).",
     parameters: [],
     handler: async () => {
-      const res = await fetch("/api/agent/profile").then((r) => r.json());
-      return JSON.stringify(res.profile ?? {});
+      const res = await fetch("/api/assistant/profile").then((r) => r.json());
+      return String(res.composed ?? "");
     },
   });
 
   useCopilotAction({
     name: "updateMyInstructions",
     description:
-      "Rewrite your own base system instructions to improve future behavior. Use sparingly and preserve important existing guidance.",
-    parameters: [{ name: "instructions", type: "string", description: "The new full instructions", required: true }],
+      "Rewrite the active profile's base instructions to improve future behavior. Use sparingly and preserve important existing guidance.",
+    parameters: [{ name: "instructions", type: "string", description: "The new full profile instructions", required: true }],
     handler: async ({ instructions }) => {
-      const res = await fetch("/api/agent/profile", {
+      const res = await fetch("/api/assistant/profile", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ instructions }),
+        body: JSON.stringify({ body: instructions }),
       }).then((r) => r.json());
-      return res.error ? `Error: ${res.error}` : "Updated my instructions. They take effect in the next chat session.";
-    },
-  });
-
-  useCopilotAction({
-    name: "addSkill",
-    description:
-      "Save a reusable skill (a named procedure or playbook) that augments your instructions for future sessions.",
-    parameters: [
-      { name: "name", type: "string", description: "Skill name", required: true },
-      { name: "content", type: "string", description: "The skill instructions", required: true },
-    ],
-    handler: async ({ name, content }) => {
-      const res = await fetch("/api/agent/profile", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, content }),
-      }).then((r) => r.json());
-      return res.error ? `Error: ${res.error}` : `Saved skill "${name}".`;
+      return res.error ? `Error: ${res.error}` : "Updated the active profile. It takes effect in the next chat session.";
     },
   });
 

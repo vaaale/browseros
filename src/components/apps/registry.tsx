@@ -7,6 +7,7 @@ import { SettingsApp } from "./SettingsApp";
 import { ChatApp } from "./ChatApp";
 import { MemoryApp } from "./MemoryApp";
 import { DevStudio } from "./DevStudio";
+import { DocsApp } from "./DocsApp";
 
 // Maps an app id to the client component that renders inside its window.
 // Runtime-installed apps register here via registerAppComponent().
@@ -17,6 +18,7 @@ const REGISTRY = new Map<string, AppComponent>([
   ["chat", ChatApp],
   ["memory", MemoryApp],
   ["devstudio", DevStudio],
+  ["docs", DocsApp],
 ]);
 
 export function getAppComponent(appId: string): AppComponent | undefined {

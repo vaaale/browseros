@@ -1,7 +1,8 @@
 import "server-only";
-import Anthropic from "@anthropic-ai/sdk";
-import { AGENT_MODEL } from "@/lib/agent/config";
-import { createBosMcpClient } from "@/lib/mcp/client";
+import { complete } from "@/lib/agent/llm";
+import { hasCredentials } from "@/lib/agent/provider";
+import { getSubAgent } from "@/lib/agent/subagents/store";
+import { runClaudeAgent } from "@/lib/agent/subagents/claude-runner";
 
 export interface GeneratedApp {
   name: string;
@@ -10,10 +11,8 @@ export interface GeneratedApp {
   note?: string;
 }
 
-const HARNESS_URL = process.env.BOS_DEV_HARNESS_URL || "http://wingman.akhbar.home:7272/mcp";
-
 const CODEGEN_PROMPT = (spec: string) =>
-  `Build a single, self-contained index.html web app (all CSS and JS inline, no external dependencies or network calls) that implements:\n\n${spec}\n\nReturn ONLY the HTML document, starting with <!doctype html>.`;
+  `Build a single, self-contained index.html web app (all CSS and JS inline, no external dependencies or network calls) that implements:\n\n${spec}\n\nOutput the HTML directly as your final response — do NOT create or write any files. Return ONLY the HTML document, starting with <!doctype html>.`;
 
 function extractHtml(text: string): string | null {
   const start = text.search(/<!doctype html|<html[\s>]/i);
@@ -27,40 +26,22 @@ function extractHtml(text: string): string | null {
   return end === -1 ? text.slice(start) : text.slice(start, end + 7);
 }
 
-// Best-effort: pick a likely text-generation tool from an unknown MCP server and
-// fill its most probable text parameter with our prompt.
+// Build via the Claude dev harness by delegating to the "developer" Claude
+// sub-agent. Its generated subagent_type (its id, or an explicit one) drives
+// the harness Agent tool — no hardcoded agent type.
 async function tryHarness(spec: string): Promise<GeneratedApp | null> {
-  const client = await createBosMcpClient({ name: "dev-harness", endpoint: HARNESS_URL });
-  try {
-    const tools = await client.tools();
-    const names = Object.keys(tools);
-    if (names.length === 0) return null;
-    const pick =
-      names.find((n) => /generate|code|complete|prompt|chat|message|ask|claude|sample/i.test(n)) ?? names[0];
-    const tool = tools[pick];
-    const props = tool.schema?.parameters?.properties ?? {};
-    const textKey =
-      Object.keys(props).find((k) => /prompt|message|input|query|text|content|task/i.test(k)) ?? "prompt";
-    const args: Record<string, unknown> = { [textKey]: CODEGEN_PROMPT(spec) };
-    const result = await tool.execute(args);
-    const html = extractHtml(typeof result === "string" ? result : JSON.stringify(result));
-    return html ? { name: "", html, source: "harness", note: `via MCP tool "${pick}"` } : null;
-  } catch {
-    return null;
-  } finally {
-    await client.close?.().catch(() => {});
-  }
+  const dev = await getSubAgent("developer");
+  if (!dev || dev.type !== "claude") return null;
+  const result = await runClaudeAgent(dev, CODEGEN_PROMPT(spec));
+  if (result.error) return null;
+  const html = extractHtml(result.output);
+  return html ? { name: "", html, source: "harness", note: `via Claude agent "${dev.subagentType || dev.id}"` } : null;
 }
 
 async function tryLocal(spec: string): Promise<GeneratedApp | null> {
-  if (!process.env.ANTHROPIC_API_KEY) return null;
+  if (!(await hasCredentials())) return null;
   try {
-    const res = await new Anthropic().messages.create({
-      model: AGENT_MODEL,
-      max_tokens: 4096,
-      messages: [{ role: "user", content: CODEGEN_PROMPT(spec) }],
-    });
-    const text = res.content.filter((b): b is Anthropic.TextBlock => b.type === "text").map((b) => b.text).join("");
+    const text = await complete({ prompt: CODEGEN_PROMPT(spec), maxTokens: 4096 });
     const html = extractHtml(text);
     return html ? { name: "", html, source: "local" } : null;
   } catch {

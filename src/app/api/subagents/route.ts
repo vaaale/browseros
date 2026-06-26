@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { listSubAgents, createSubAgent, removeSubAgent } from "@/lib/agent/subagents/store";
+import type { SubAgentType } from "@/lib/agent/subagents/types";
 
 export const dynamic = "force-dynamic";
 
@@ -16,8 +17,11 @@ export async function POST(req: NextRequest) {
     const agent = await createSubAgent({
       name: String(body.name),
       description: String(body.description ?? ""),
+      type: body.type === "claude" ? "claude" : ("local" as SubAgentType),
       systemPrompt: String(body.systemPrompt),
       tools: Array.isArray(body.tools) ? body.tools.map(String) : undefined,
+      model: body.model ? String(body.model) : undefined,
+      subagentType: body.subagentType ? String(body.subagentType) : undefined,
     });
     return NextResponse.json({ subAgent: agent });
   } catch (err) {
@@ -28,5 +32,6 @@ export async function POST(req: NextRequest) {
 export async function DELETE(req: NextRequest) {
   const id = new URL(req.url).searchParams.get("id");
   if (!id) return NextResponse.json({ error: "id query param required" }, { status: 400 });
-  return NextResponse.json({ subAgents: await removeSubAgent(id) });
+  await removeSubAgent(id);
+  return NextResponse.json({ subAgents: await listSubAgents() });
 }

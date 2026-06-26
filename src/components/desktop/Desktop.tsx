@@ -5,6 +5,7 @@ import { wallpaperToCss } from "@/os/wallpapers";
 import { Topbar } from "./Topbar";
 import { Dock } from "./Dock";
 import { WindowManager } from "./WindowManager";
+import { FirstRunWizard } from "./FirstRunWizard";
 import { AppIcon } from "./icons";
 
 export function Desktop() {
@@ -36,6 +37,7 @@ export function Desktop() {
 
       <WindowManager />
       <Dock />
+      <FirstRunWizard />
     </div>
   );
 }

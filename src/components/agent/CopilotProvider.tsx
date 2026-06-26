@@ -7,6 +7,12 @@ import { McpActions } from "./McpActions";
 import { SubAgentActions } from "./SubAgentActions";
 import { MemoryActions } from "./MemoryActions";
 import { DevActions } from "./DevActions";
+import { ConfigActions } from "./ConfigActions";
+import { AssistantActions } from "./AssistantActions";
+import { SkillsActions } from "./SkillsActions";
+import { SelfImprovementActions } from "./SelfImprovementActions";
+import { DocsActions } from "./DocsActions";
+import { GitActions } from "./GitActions";
 
 export function CopilotProvider({ children }: { children: ReactNode }) {
   return (
@@ -16,6 +22,12 @@ export function CopilotProvider({ children }: { children: ReactNode }) {
       <SubAgentActions />
       <MemoryActions />
       <DevActions />
+      <ConfigActions />
+      <AssistantActions />
+      <SkillsActions />
+      <SelfImprovementActions />
+      <DocsActions />
+      <GitActions />
       {children}
     </CopilotKit>
   );

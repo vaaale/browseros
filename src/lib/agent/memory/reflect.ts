@@ -1,6 +1,6 @@
 import "server-only";
-import Anthropic from "@anthropic-ai/sdk";
-import { AGENT_MODEL } from "@/lib/agent/config";
+import { complete } from "@/lib/agent/llm";
+import { hasCredentials } from "@/lib/agent/provider";
 import { addMemory } from "./store";
 import type { Memory, MemoryType } from "./types";
 import type { SubAgentRunResult } from "@/lib/agent/subagents/types";
@@ -29,23 +29,14 @@ const REFLECT_SYSTEM =
   "Keep each content to one sentence. Capture only what will help in future, unrelated sessions. " +
   "If nothing is worth remembering, return [].";
 
-let client: Anthropic | null = null;
-
 /**
  * LLM-based reflection: extract durable lessons from an interaction transcript.
- * No-ops gracefully when no API key is configured.
+ * No-ops gracefully when no provider credentials are configured.
  */
 export async function reflect(transcript: string): Promise<Memory[]> {
-  if (!process.env.ANTHROPIC_API_KEY) return [];
+  if (!(await hasCredentials())) return [];
   try {
-    client ??= new Anthropic();
-    const res = await client.messages.create({
-      model: AGENT_MODEL,
-      max_tokens: 1024,
-      system: [{ type: "text", text: REFLECT_SYSTEM, cache_control: { type: "ephemeral" } }],
-      messages: [{ role: "user", content: transcript }],
-    });
-    const text = res.content.filter((b): b is Anthropic.TextBlock => b.type === "text").map((b) => b.text).join("");
+    const text = await complete({ system: REFLECT_SYSTEM, prompt: transcript });
     const json = text.slice(text.indexOf("["), text.lastIndexOf("]") + 1);
     const items = JSON.parse(json) as { type: MemoryType; content: string; tags?: string[] }[];
     const stored: Memory[] = [];

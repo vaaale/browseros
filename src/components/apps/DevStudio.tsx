@@ -60,6 +60,7 @@ export function DevStudio(_props: AppProps) {
 
   const uninstall = async (id: string) => {
     await fetch(`/api/apps?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+    store.getState().unregisterApp(id); // live desktop/dock refresh
     loadApps();
   };
 

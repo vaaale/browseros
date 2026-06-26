@@ -19,6 +19,7 @@ export interface OSState {
 
   applySettings: (patch: Partial<OSSettings>) => void;
   registerApp: (app: AppManifest) => void;
+  unregisterApp: (id: string) => void;
 }
 
 export interface OSInit {
@@ -156,6 +157,12 @@ export function createOSStore(init: OSInit) {
           ? { apps: s.apps.map((a) => (a.id === app.id ? app : a)) }
           : { apps: [...s.apps, app] },
       ),
+
+    unregisterApp: (id) =>
+      set((s) => ({
+        apps: s.apps.filter((a) => a.id !== id),
+        windows: s.windows.filter((w) => w.appId !== id),
+      })),
   }));
 }
 

@@ -19,6 +19,35 @@ function slugify(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || `app-${Date.now().toString(36)}`;
 }
 
+// Choose an appropriate lucide icon name from the app name/spec keywords.
+const ICON_RULES: [RegExp, string][] = [
+  [/timer|pomodoro|stopwatch/, "Timer"],
+  [/clock|time|alarm/, "Clock"],
+  [/calc|math/, "Calculator"],
+  [/todo|task|checklist/, "ListTodo"],
+  [/note|memo|scratch/, "StickyNote"],
+  [/calendar|schedule|agenda/, "Calendar"],
+  [/music|audio|sound|player/, "Music"],
+  [/image|photo|gallery|paint|draw|canvas/, "Image"],
+  [/mail|email|inbox/, "Mail"],
+  [/chat|message|messenger/, "MessageSquare"],
+  [/map|location|geo/, "Map"],
+  [/game|play|arcade/, "Gamepad2"],
+  [/weather|forecast|cloud/, "Cloud"],
+  [/news|feed|rss|article/, "Newspaper"],
+  [/doc|documentation|manual|guide|book/, "BookOpen"],
+  [/code|editor|terminal|dev/, "Code2"],
+  [/file|folder|explorer/, "Folder"],
+  [/web|browser|site|url/, "Globe"],
+  [/text|writer|word|markdown/, "FileText"],
+];
+
+export function pickIcon(name: string, spec = ""): string {
+  const hay = `${name} ${spec}`.toLowerCase();
+  for (const [re, icon] of ICON_RULES) if (re.test(hay)) return icon;
+  return "Puzzle";
+}
+
 async function readAll(): Promise<InstalledApp[]> {
   try {
     return JSON.parse(await fs.readFile(FILE, "utf8")) as InstalledApp[];

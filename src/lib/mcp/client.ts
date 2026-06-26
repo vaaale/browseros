@@ -3,6 +3,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import type { McpServerConfig, McpProbeResult } from "./types";
+import { encodeMcpUi } from "./ui";
 
 // CopilotKit's expected MCP client shape (see @copilotkit/runtime mcp-tools-utils).
 interface CopilotMcpTool {
@@ -36,9 +37,25 @@ async function connect(cfg: McpServerConfig): Promise<Client> {
   return client;
 }
 
+interface ContentItem {
+  type: string;
+  text?: string;
+  resource?: { uri?: string; mimeType?: string; text?: string };
+}
+
 function extractText(result: unknown): string {
-  const r = result as { content?: Array<{ type: string; text?: string }>; structuredContent?: unknown };
+  const r = result as { content?: ContentItem[]; structuredContent?: unknown };
   if (Array.isArray(r?.content)) {
+    // MCP-UI: surface an interactive HTML resource for iframe rendering.
+    for (const item of r.content) {
+      if (item?.type === "resource" && item.resource) {
+        const { uri = "", mimeType = "", text } = item.resource;
+        if (mimeType.includes("html") || uri.startsWith("ui://")) {
+          if (text) return encodeMcpUi({ html: text });
+          if (uri.startsWith("http")) return encodeMcpUi({ url: uri });
+        }
+      }
+    }
     const text = r.content.filter((c) => c.type === "text").map((c) => c.text ?? "").join("\n");
     if (text) return text;
   }
@@ -71,7 +88,13 @@ export async function createBosMcpClient(cfg: McpServerConfig): Promise<CopilotM
             description: t.description,
             schema: { parameters: { properties: schema?.properties, required: schema?.required, jsonSchema: t.inputSchema as Record<string, unknown> } },
             execute: async (params: unknown) => {
-              const res = await client.callTool({ name: t.name, arguments: (params as Record<string, unknown>) ?? {} });
+              // Generous timeout: harness tools like Claude Code's "Agent" run
+              // autonomously for a while; reset the clock on progress pings.
+              const res = await client.callTool(
+                { name: t.name, arguments: (params as Record<string, unknown>) ?? {} },
+                undefined,
+                { timeout: 280_000, resetTimeoutOnProgress: true },
+              );
               return extractText(res);
             },
           };
