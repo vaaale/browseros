@@ -2,14 +2,14 @@
 
 import { useCopilotAction } from "@copilotkit/react-core";
 
-// Self-improvement: reflect after a task (save memories + auto-create a skill),
-// and improve an existing skill from feedback (GEPA-lite).
+// Self-improvement: run the review after a task (updates memory + skills via a
+// restricted pass), improve a skill from feedback (GEPA), and run the Curator.
 export function SelfImprovementActions() {
   useCopilotAction({
     name: "reflectAndLearn",
     description:
-      "Call this after completing a task. Provide a short transcript/summary of the task and outcome. It records durable memories and, if the approach is reusable, saves a new skill.",
-    parameters: [{ name: "transcript", type: "string", description: "Summary of the task, what was done, and the outcome", required: true }],
+      "Call this after completing a non-trivial task. Provide a transcript/summary of the task and outcome. Runs the self-improvement review — a separate pass that may update persistent memory and patch/create skills based on what was learned.",
+    parameters: [{ name: "transcript", type: "string", description: "Summary of the task, what was done, corrections received, and the outcome", required: true }],
     handler: async ({ transcript }) => {
       const res = await fetch("/api/assistant/reflect", {
         method: "POST",
@@ -17,7 +17,19 @@ export function SelfImprovementActions() {
         body: JSON.stringify({ transcript }),
       }).then((r) => r.json());
       if (res.error) return `Error: ${res.error}`;
-      return `Reflected: ${res.memories?.length ?? 0} memory(ies)${res.skill ? `, new skill "${res.skill.name}"` : ""}.`;
+      return res.ran ? `Review (${res.steps} step(s)): ${res.summary}` : `Review skipped: ${res.summary}`;
+    },
+  });
+
+  useCopilotAction({
+    name: "runCurator",
+    description:
+      "Run the skill Curator: archives stale, agent-created, unpinned skills (never deletes — archived skills are restorable). Use occasionally to keep the skill library tidy.",
+    parameters: [],
+    handler: async () => {
+      const res = await fetch("/api/skills/curator", { method: "POST" }).then((r) => r.json());
+      if (res.error) return `Error: ${res.error}`;
+      return `Curator reviewed ${res.reviewed} skill(s); archived ${res.archived?.length ?? 0}${res.archived?.length ? `: ${res.archived.join(", ")}` : ""}.`;
     },
   });
 

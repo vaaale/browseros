@@ -25,6 +25,10 @@ export interface Skill {
   scripts?: SkillAsset[];
   /** Optional reference documents attached to the skill. */
   references?: SkillAsset[];
+  /** Provenance — governs the Curator lifecycle. Defaults to "agent". */
+  createdBy?: "agent" | "user" | "seed";
+  /** Pinned skills are exempt from Curator auto-archive/consolidation. */
+  pinned?: boolean;
 }
 
 function slugify(name: string): string {
@@ -103,12 +107,19 @@ async function ensureSeed(): Promise<void> {
   await fs.mkdir(DIR, { recursive: true });
   const existing = await listSkillIds();
   if (existing.length > 0) return;
-  for (const s of SEED) await writeSkill({ id: slugify(s.name), ...s });
+  for (const s of SEED) await writeSkill({ id: slugify(s.name), createdBy: "seed", ...s });
 }
 
 function toMarkdown(s: Skill): string {
   return buildFrontmatter(
-    { name: s.name, description: s.description, when_to_use: s.whenToUse, score: s.score?.toString() },
+    {
+      name: s.name,
+      description: s.description,
+      when_to_use: s.whenToUse,
+      score: s.score?.toString(),
+      created_by: s.createdBy,
+      pinned: s.pinned ? "true" : undefined,
+    },
     s.content,
   );
 }
@@ -122,6 +133,8 @@ function fromMarkdown(id: string, src: string, extras: Partial<Pick<Skill, "scri
     whenToUse: asString(meta.when_to_use),
     content: body,
     score: meta.score ? Number(asString(meta.score)) : undefined,
+    createdBy: (asString(meta.created_by) as Skill["createdBy"]) || undefined,
+    pinned: asString(meta.pinned) === "true",
     ...extras,
   };
 }
@@ -253,11 +266,15 @@ export async function saveSkill(input: {
   score?: number;
   scripts?: SkillAsset[];
   references?: SkillAsset[];
+  createdBy?: Skill["createdBy"];
+  pinned?: boolean;
   /** When renaming an existing skill, pass its current id so the old directory is removed. */
   previousId?: string;
 }): Promise<Skill> {
   await ensureSeed();
   const id = slugify(input.name);
+  // Preserve provenance/pin across edits unless explicitly overridden.
+  const prior = await readSkillById(input.previousId ?? id, false).catch(() => undefined);
   const skill: Skill = {
     id,
     name: input.name,
@@ -267,12 +284,79 @@ export async function saveSkill(input: {
     score: input.score,
     scripts: input.scripts,
     references: input.references,
+    createdBy: input.createdBy ?? prior?.createdBy ?? "agent",
+    pinned: input.pinned ?? prior?.pinned ?? false,
   };
   await writeSkill(skill);
   if (input.previousId && input.previousId !== id) {
     await removeSkill(input.previousId);
   }
   return skill;
+}
+
+const ARCHIVE_DIR = path.join(DIR, ".archive");
+
+/** Targeted edit: replace the first occurrence of `find` in the skill body. */
+export async function patchSkill(idOrName: string, find: string, replace: string): Promise<Skill | { error: string }> {
+  const skill = await getSkill(idOrName);
+  if (!skill) return { error: `No skill "${idOrName}".` };
+  if (!skill.content.includes(find)) return { error: `Search text not found in "${skill.name}".` };
+  return saveSkill({
+    name: skill.name,
+    description: skill.description,
+    whenToUse: skill.whenToUse,
+    content: skill.content.replace(find, replace),
+    score: skill.score,
+    scripts: skill.scripts,
+    references: skill.references,
+  });
+}
+
+export async function setSkillPinned(idOrName: string, pinned: boolean): Promise<Skill | undefined> {
+  const skill = await getSkill(idOrName);
+  if (!skill) return undefined;
+  return saveSkill({
+    name: skill.name,
+    description: skill.description,
+    whenToUse: skill.whenToUse,
+    content: skill.content,
+    score: skill.score,
+    scripts: skill.scripts,
+    references: skill.references,
+    pinned,
+  });
+}
+
+/** Archive (never delete) — moves the skill under data/skills/.archive/<id>. Restorable. */
+export async function archiveSkill(idOrName: string): Promise<boolean> {
+  const skill = await getSkill(idOrName);
+  if (!skill) return false;
+  await fs.mkdir(ARCHIVE_DIR, { recursive: true });
+  const to = path.join(ARCHIVE_DIR, skill.id);
+  await fs.rm(to, { recursive: true, force: true }).catch(() => {});
+  const dir = path.join(DIR, skill.id);
+  if (await pathExists(dir)) {
+    await fs.rename(dir, to);
+    return true;
+  }
+  const flat = path.join(DIR, `${skill.id}.md`);
+  if (await pathExists(flat)) {
+    await fs.mkdir(to, { recursive: true });
+    await fs.rename(flat, path.join(to, SKILL_FILE));
+    return true;
+  }
+  return false;
+}
+
+export async function restoreSkill(id: string): Promise<boolean> {
+  const from = path.join(ARCHIVE_DIR, id);
+  if (!(await pathExists(from))) return false;
+  await fs.rename(from, path.join(DIR, id));
+  return true;
+}
+
+export async function listArchivedIds(): Promise<string[]> {
+  return (await fs.readdir(ARCHIVE_DIR).catch(() => [])).filter((n) => !n.startsWith("."));
 }
 
 export async function removeSkill(idOrName: string): Promise<void> {

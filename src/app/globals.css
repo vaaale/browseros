@@ -36,3 +36,13 @@ body {
   background: rgba(255, 255, 255, 0.2);
   border-radius: 9999px;
 }
+
+/* CopilotKit chat: lighter blue links for readability on the dark theme.
+   `!important` overrides CopilotKit's hardcoded `color: blue` in markdown.css,
+   which has equal specificity but loads later in source order. */
+a.copilotKitMarkdownElement {
+  color: #7aa3ff !important;
+}
+a.copilotKitMarkdownElement:hover {
+  color: #a8c2ff !important;
+}

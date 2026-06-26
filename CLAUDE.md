@@ -1,0 +1,24 @@
+# CLAUDE.md — BrowserOS
+
+BrowserOS (BOS) is a single‑page, server‑side‑rendered "operating system in the browser" (Next.js App Router + React + Zustand + CopilotKit) with an agentic assistant that can operate and **modify BOS itself**.
+
+**Before changing anything, read `docs/DEVELOPMENT.md`** (architecture, data layout, API routes, extension recipes, gotchas). Requirements are in `spec/bos.md`. End‑user docs are `docs/USER_GUIDE.md`.
+
+## Working rules
+- Work on a **feature branch** (`git checkout -b bos/<short-name>`); make focused edits; **don't** touch secrets, `package.json`, lockfiles, or build config unless asked.
+- After editing: `npx tsc --noEmit` and `npm run lint`; fix what you broke. `src/` hot‑reloads under `npm run dev`. **Do not run `npm run build` while `next dev` is running** (shared `.next`).
+- Update `data/docs` (and `spec/bos.md` if architecture changed) when you add/modify/remove a feature.
+
+## Orientation
+- Server‑only code (`import "server-only"`, Node/`fs`/secrets) lives behind `src/app/api/**/route.ts`; clients talk over `fetch`. `src/os/types.ts` is framework‑free.
+- **The VFS (`data/vfs`, via `src/os/vfs.ts`) is the user's sandbox — NOT BOS source.** Edit `src/` to change BOS.
+- OS state: `src/store/os-store.ts` (+ `os-provider.tsx`), seeded SSR in `src/app/page.tsx`.
+- Apps: built‑in = React component in `src/components/apps/registry.tsx` + `BUILTIN_APPS` (`src/os/apps.ts`); installed = iframe served from the VFS by `src/app/apps/[...slug]/route.ts`.
+- Assistant: CopilotKit wiring in `src/components/agent/` (`*Actions.tsx` register tools; mirror new tools in `src/lib/agent/tool-manifest.ts`). Instructions = `src/lib/agent/config.ts` (CORE_POLICY) + profile + skills.
+- Settings tabs are pluggable config namespaces (`src/lib/config/registry.ts`) — adding one also exposes it to the assistant.
+- All runtime state persists as files under `./data` (gitignored).
+
+## Common locations
+- Settings → Skills page: `src/components/apps/settings/SkillsTab.tsx` + `src/lib/agent/skills/store.ts` + `src/app/api/skills/route.ts`.
+- Settings tabs: `src/components/apps/settings/` + `src/components/apps/SettingsApp.tsx`.
+- Sub‑agents / delegation: `src/lib/agent/subagents/`.

@@ -2,8 +2,6 @@ import "server-only";
 import { complete } from "@/lib/agent/llm";
 import { hasCredentials } from "@/lib/agent/provider";
 import { getSkill, saveSkill, type Skill } from "./store";
-import { reflect } from "@/lib/agent/memory/reflect";
-import type { Memory } from "@/lib/agent/memory/types";
 
 const PROPOSE_SYSTEM =
   "You decide whether a conversation revealed a GENERALLY reusable skill worth saving for future, unrelated tasks. " +
@@ -57,10 +55,4 @@ export async function improveSkill(idOrName: string, feedback: string): Promise<
   } catch {
     return null;
   }
-}
-
-/** Post-task reflection: extract durable memories and propose a skill if useful. */
-export async function reflectAndLearn(transcript: string): Promise<{ memories: Memory[]; skill: Skill | null }> {
-  const [memories, skill] = await Promise.all([reflect(transcript), proposeSkillFromConversation(transcript)]);
-  return { memories, skill };
 }

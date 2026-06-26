@@ -29,13 +29,14 @@ export const ASSISTANT_TOOLS: ToolInfo[] = [
   { group: "Sub-agents", name: "delegateToSubAgent", description: "Delegate a task to a sub-agent." },
   { group: "Sub-agents", name: "requestClaudeAgentPermission", description: "Ask to use a Claude agent for a non-dev task." },
 
-  { group: "Memory", name: "rememberThis", description: "Save a durable memory." },
-  { group: "Memory", name: "recallMemories", description: "Search long-term memory." },
+  { group: "Memory", name: "memory", description: "Save to persistent memory (user profile / agent notes)." },
+  { group: "Memory", name: "recallMemories", description: "Read live persistent memory entries." },
 
   { group: "Skills", name: "loadSkill", description: "Load a skill's full instructions." },
   { group: "Skills", name: "saveSkill", description: "Save a reusable skill." },
-  { group: "Skills", name: "reflectAndLearn", description: "Reflect after a task; record memories / skills." },
+  { group: "Skills", name: "reflectAndLearn", description: "Run the self-improvement review after a task." },
   { group: "Skills", name: "improveSkill", description: "Improve a skill from feedback (GEPA)." },
+  { group: "Skills", name: "runCurator", description: "Archive stale agent-created skills (recoverable)." },
 
   { group: "MCP", name: "listMcpServers", description: "List connected MCP servers." },
   { group: "MCP", name: "addMcpServer", description: "Connect an MCP server." },

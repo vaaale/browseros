@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSubAgent } from "@/lib/agent/subagents/store";
 import { runSubAgent } from "@/lib/agent/subagents/runner";
-import { recordDelegation } from "@/lib/agent/memory/reflect";
 import type { SubAgent } from "@/lib/agent/subagents/types";
 
 export const dynamic = "force-dynamic";
@@ -50,7 +49,6 @@ export async function POST(req: NextRequest) {
       const emit = (obj: unknown) => controller.enqueue(enc.encode(JSON.stringify(obj) + "\n"));
       try {
         const result = await runSubAgent(agent, task, { onEvent: (ev) => emit({ type: "tool", ...ev }) });
-        void recordDelegation(result).catch(() => {});
         emit({ type: "done", result });
       } catch (err) {
         emit({ type: "error", error: (err as Error).message });

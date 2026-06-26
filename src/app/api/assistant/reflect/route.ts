@@ -1,20 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
-import { reflectAndLearn } from "@/lib/agent/skills/improve";
+import { runReview } from "@/lib/agent/review";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 120;
+export const maxDuration = 300;
 
-// Post-task self-reflection: extract durable memories and, if warranted, save a
-// new reusable skill from the conversation.
+// Post-task self-improvement review: a separate, restricted pass (memory + skill
+// tools only) that inspects the conversation and saves/updates memory and skills.
 export async function POST(req: NextRequest) {
   try {
     const { transcript } = await req.json();
     if (!transcript) return NextResponse.json({ error: "transcript is required" }, { status: 400 });
-    const { memories, skill } = await reflectAndLearn(String(transcript));
-    return NextResponse.json({
-      memories: memories.map((m) => ({ type: m.type, content: m.content })),
-      skill: skill ? { id: skill.id, name: skill.name } : null,
-    });
+    return NextResponse.json(await runReview(String(transcript)));
   } catch (err) {
     return NextResponse.json({ error: (err as Error).message }, { status: 400 });
   }
