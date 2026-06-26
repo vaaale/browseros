@@ -12,7 +12,7 @@ import { ReasoningAssistantMessage } from "@/components/agent/ReasoningAssistant
 import { markdownRenderers } from "@/components/agent/MarkdownRenderers";
 import { ConversationPanel } from "./assistant/ConversationPanel";
 import { InfoPanel } from "./assistant/InfoPanel";
-import { ProfileSelector } from "./assistant/ProfileSelector";
+import { AgentSelector } from "./assistant/AgentSelector";
 import { useActiveConversationId } from "@/lib/agent/conversations";
 import type { AppProps } from "./types";
 
@@ -35,7 +35,7 @@ export function ChatApp(_props: AppProps) {
   const [showRight, setShowRight] = useState(true);
 
   useEffect(() => {
-    fetch("/api/assistant/profile")
+    fetch("/api/assistant/agent")
       .then((r) => r.json())
       .then((d) => d.composed && setInstructions(d.composed))
       .catch(() => {});
@@ -58,7 +58,7 @@ export function ChatApp(_props: AppProps) {
           <button onClick={() => setShowLeft((v) => !v)} title="Conversations" className="rounded p-1 text-white/50 hover:bg-white/10 hover:text-white">
             <PanelLeft size={14} />
           </button>
-          <ProfileSelector />
+          <AgentSelector />
           <span className="ml-auto flex items-center gap-1.5">
             {isLoading ? (
               <>

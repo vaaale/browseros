@@ -3,8 +3,12 @@ import { promises as fs } from "fs";
 import path from "path";
 import type { SubAgent, SubAgentType } from "./types";
 import { parseFrontmatter, buildFrontmatter, asString, asList } from "./markdown";
+import { readNamespace, patchNamespace } from "@/lib/config/store";
+import { DEFAULT_PERSONALITY } from "@/lib/agent/config";
 
 const DIR = path.join(process.cwd(), "data", "agents");
+// The agent whose system prompt is the main assistant's active personality.
+const DEFAULT_AGENT_ID = "assistant";
 
 function slugify(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || `agent-${Date.now().toString(36)}`;
@@ -19,6 +23,12 @@ interface SeedAgent {
 }
 
 const DEFAULTS: SeedAgent[] = [
+  {
+    name: "Assistant",
+    description: "The default BrowserOS assistant personality (used by the main chat).",
+    type: "local",
+    systemPrompt: DEFAULT_PERSONALITY,
+  },
   {
     name: "Researcher",
     description: "Researches topics by fetching web pages and summarizing findings.",
@@ -144,4 +154,34 @@ export async function createSubAgent(input: {
 export async function removeSubAgent(idOrName: string): Promise<void> {
   const agent = await getSubAgent(idOrName);
   if (agent) await fs.rm(path.join(DIR, agent.id), { recursive: true, force: true });
+}
+
+// --- The active assistant agent (the main chat's personality) ---
+// The main assistant adopts one agent's system prompt as its personality. It is
+// stored as an id in the "assistant" config namespace; the agents themselves
+// live alongside the delegatable sub-agents (there is no separate "profile").
+
+export async function getActiveAgentId(): Promise<string> {
+  const cfg = await readNamespace("assistant");
+  return (cfg.activeAgent as string) || DEFAULT_AGENT_ID;
+}
+
+export async function setActiveAgentId(id: string): Promise<void> {
+  await patchNamespace("assistant", { activeAgent: id });
+}
+
+/** The active agent's system prompt — used to compose the assistant's instructions. */
+export async function getActiveAgentBody(): Promise<string> {
+  await ensureSeed();
+  const agent = await getSubAgent(await getActiveAgentId());
+  return agent?.systemPrompt?.trim() || DEFAULT_PERSONALITY;
+}
+
+/** Replace an agent's system prompt (its instructions/personality), preserving its metadata. */
+export async function setAgentSystemPrompt(id: string, systemPrompt: string): Promise<SubAgent | undefined> {
+  const agent = await getSubAgent(id);
+  if (!agent) return undefined;
+  const updated: SubAgent = { ...agent, systemPrompt };
+  await fs.writeFile(path.join(DIR, agent.id, "AGENT.md"), toMarkdown(updated), "utf8");
+  return updated;
 }

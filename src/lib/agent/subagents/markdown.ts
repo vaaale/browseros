@@ -1,4 +1,4 @@
-// Minimal YAML-frontmatter parser/serializer for agent/profile/skill markdown.
+// Minimal YAML-frontmatter parser/serializer for agent/skill markdown.
 // Supports scalar values and simple lists ([a, b] inline or "- item" blocks).
 
 export interface Frontmatter {

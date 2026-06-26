@@ -61,10 +61,10 @@ export function DevActions() {
 
   useCopilotAction({
     name: "getMyInstructions",
-    description: "Read your own current composed system instructions (active profile + skills).",
+    description: "Read your own current composed system instructions (core policy + active agent personality + skills).",
     parameters: [],
     handler: async () => {
-      const res = await fetch("/api/assistant/profile").then((r) => r.json());
+      const res = await fetch("/api/assistant/agent").then((r) => r.json());
       return String(res.composed ?? "");
     },
   });
@@ -72,15 +72,15 @@ export function DevActions() {
   useCopilotAction({
     name: "updateMyInstructions",
     description:
-      "Rewrite the active profile's base instructions to improve future behavior. Use sparingly and preserve important existing guidance.",
-    parameters: [{ name: "instructions", type: "string", description: "The new full profile instructions", required: true }],
+      "Rewrite the active agent's base instructions (personality) to improve future behavior. Use sparingly and preserve important existing guidance.",
+    parameters: [{ name: "instructions", type: "string", description: "The new agent personality instructions", required: true }],
     handler: async ({ instructions }) => {
-      const res = await fetch("/api/assistant/profile", {
+      const res = await fetch("/api/assistant/agent", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ body: instructions }),
       }).then((r) => r.json());
-      return res.error ? `Error: ${res.error}` : "Updated the active profile. It takes effect in the next chat session.";
+      return res.error ? `Error: ${res.error}` : "Updated the active agent. It takes effect in the next chat session.";
     },
   });
 

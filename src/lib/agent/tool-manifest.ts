@@ -53,8 +53,7 @@ export const ASSISTANT_TOOLS: ToolInfo[] = [
   { group: "Docs", name: "readDoc", description: "Read a documentation page." },
   { group: "Docs", name: "writeDoc", description: "Create/update a documentation page." },
 
-  { group: "Assistant", name: "listProfiles", description: "List personality profiles." },
-  { group: "Assistant", name: "switchProfile", description: "Switch the active profile." },
-  { group: "Assistant", name: "getMyInstructions", description: "Read the active instructions." },
-  { group: "Assistant", name: "updateMyInstructions", description: "Rewrite the active profile instructions." },
+  { group: "Assistant", name: "switchAssistantAgent", description: "Switch the active assistant agent (personality)." },
+  { group: "Assistant", name: "getMyInstructions", description: "Read the active composed instructions." },
+  { group: "Assistant", name: "updateMyInstructions", description: "Rewrite the active agent's instructions." },
 ];

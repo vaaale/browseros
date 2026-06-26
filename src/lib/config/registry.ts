@@ -19,7 +19,7 @@ const REGISTRATIONS: ConfigRegistration[] = [
     schema: {
       namespace: "assistant",
       title: "Assistant",
-      description: "Personality profiles for the BOS assistant.",
+      description: "The assistant's agents and which one is the active personality.",
       order: 5,
       customComponent: "assistant",
       fields: [],

@@ -23,7 +23,7 @@ For example, an app should be able to add a tab / page to the configuration app 
 This should also be exposed as tools to the assistant automatically.
 
 The Settings app renders one tab per registered configuration namespace. A feature/app registers a tab by adding a config schema (fields, or a custom component); the same schema is auto-exposed to the assistant as configuration tools. Built-in tabs:
-- **Assistant** — select the active personality / profile.
+- **Assistant** — manage agents and select which one is the active personality.
 - **Skills** — browse and edit the assistant's skill library (see Skills).
 - **Apps** — manage runtime-installed apps: uninstall (hides the app but keeps its files), restore an uninstalled app, or purge (permanently delete its files).
 - **Appearance** — wallpaper and accent color.
@@ -41,8 +41,8 @@ Reasoning / "thinking" models (e.g. DeepSeek/Qwen-style) must be supported:
 - A model's `reasoning_content` (reasoning tokens that arrive separately from `content`) must be surfaced to the UI as "thinking", not dropped — otherwise the chat sees no content during the reasoning phase and aborts.
 
 # Assistant
-BOS must support multiple profiles / personalities.
-The "Assistant" app must have a way for the user to select which profile he wants to use.
+BOS must support multiple agents that can serve as the assistant's personality.
+The "Assistant" app must have a way for the user to select which agent (personality) he wants to use.
 The Assistant must be able to do basically anything in BOS. This includes building new apps or BOS features, configuring settings, opening apps, etc.
 The assistant must always delegate tasks to a sub agent. If an appropriate sub-agent does not exist, the assistant must create one. See Sub agents below.
 When the assistant is working, events such as reasoning / thinking, tool calls / tool responses, etc. must be shown in the UI. The events must be rendered using an appropriate card. The cards must be collapsible. When an event is received, the corresponding card should be shown expanded. After a certain amount of time or when a new event is received, the card should collapse so that only the heading of the event is visible in the UI. The heading should be derived from the type of event.
@@ -57,17 +57,18 @@ The assistant must have a library of skills (named, on-demand procedures), inspi
 - Each skill is stored as markdown under `data/skills`: either a flat `<id>.md`, or a directory `<id>/` containing `SKILL.md` plus optional `scripts/` and `references/` subdirectories holding asset files. The skill file has frontmatter (name, description, when-to-use, optimizer score) and an instruction body.
 - Skills are advertised to the assistant as an index (name + when-to-use); the assistant loads a skill's full body (and may consult its scripts/references) on demand before following it.
 - The **Settings → Skills** tab is a full editor: it lists all skills; clicking a skill opens a detail page to edit the main skill file (name / description / when-to-use / content) and to add, edit, rename, or remove its scripts and references. Skills can also be created and deleted.
-- Out-of-the-box skills include **Build App** (build and install a new standalone app) and **Modify BrowserOS** (change BOS itself) — both delegate to the Developer sub-agent (see below).
+- The out-of-the-box **Develop in BrowserOS** skill covers the two development use-cases via separate references: `building-apps.md` (build and install a new standalone app) and `modifying-bos-features.md` (change BOS itself). Both delegate to the Developer sub-agent (see below). This demonstrates the skill‑with‑references structure (a `SKILL.md` that triages, plus `references/` documents).
 Any agent must be configurable using the Settings app.
 
-## Profiles and personalities
-The files making up an agents personality or profile must be stored in a directory structure of markdown files.
+## Personalities (agents)
+There is a single concept of an **agent** — there is no separate "profile". The main assistant's personality is just one of the agents: it adopts the active agent's system prompt (composed with the core policy and the skills index) as its instructions. The user and the assistant can switch the active agent or create new ones. Agents are stored as a directory structure of markdown files under data/agents (see Sub agents); the default **Assistant** agent ships out of the box.
 
 ## Task delegation
 The agent must delegate to a sub-agent whenever an appropriate sub-agent exists.
 
 ## Sub agents
 Sub agents in BOS are defined as a set of markdown files located in a subdirectory of /agents. (In the data folder). The name of the foler is the agents name.
+These same agents also provide the main assistant's personality (the active agent) — there is no separate "profiles" store.
 BOS must support creating a sub-agent dynamically. Such agents will only live for the duration of the task execution.
 Sub-agents can be either a Local sub-agent, or a Claude sub-agent. Claude sub-agents must be used for any development task! This is important!
 For any other task, the default must be to use a Local sub-agent.
@@ -157,7 +158,13 @@ It's important that the agent adds new / stages files when during such work.
 
 # Documentation
 BOS must have a documentation hub containing user-friendly documentation for how to use BOS.
-Whenever a new app of feature is created, added, modified, or removed, the documentation MUST be updated.
+Whenever a new app or feature is created, added, modified, or removed, the documentation MUST be updated.
+
+The full project documentation must be built and kept in the repository, split into two documents:
+- **User documentation** (`docs/USER_GUIDE.md`) — how to use BOS: the desktop, the built-in apps, the Assistant, and Settings. The in-OS documentation hub (the Docs app, `data/docs`) presents this user-facing material to end users.
+- **Development documentation** (`docs/DEVELOPMENT.md`) — primarily for the Assistant/developer sub-agent. It MUST describe the architecture, the repository layout, the data layout under `data/`, the API routes, the assistant/sub-agent subsystem, and concrete extension recipes and design heuristics — i.e. everything an AI assistant needs to make good design choices when implementing new apps or modifying BOS features. A root `CLAUDE.md` should orient the developer agent and point to this document and to this spec.
+
+Both documents MUST be kept in sync with the codebase as features change; the development documentation MUST be updated whenever the architecture changes.
 
 # Running Claude Code
 The Developer (and any Claude sub-agent) runs Claude Code one of two ways (Settings → Dev Harness):
