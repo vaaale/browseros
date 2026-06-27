@@ -167,7 +167,7 @@ It's important that the agent adds new / stages files when during such work.
 Because BOS can edit its own source, applying a change to the very code paths that are executing the change can break the running instance. BOS MUST therefore run **multiple versions of itself concurrently** and apply self-modifications safely:
 - A stable **Supervisor** (control plane) — separate from, and never modified by, the BOS app it manages — owns version lifecycle, builds, health checks, routing, preview, promote, and rollback.
 - Each version is a **git worktree** built and run on its own port; the developer sub-agent edits an isolated `next` worktree, never the running tree.
-- The user can **preview** a candidate version (a per-session switch, with Topbar controls and a Supervisor-served fallback control surface), then **promote** it (code-only) or **discard** it; a promoted version can be **rolled back**.
+- The user can **preview** a candidate version (a per-session switch, with Topbar controls and a Supervisor-served fallback control surface), then **promote** it or **discard** it. Promote fast-forwards the feature branch into the base branch and creates a git **tag** (optionally pushed to GitLab); any previously promoted version can be **rolled back** to through the same mechanism.
 - A version being previewed gets an **isolated copy-on-write clone** of the data so testing never pollutes production state; promote is code-only (the clone is discarded and the canonical data carries forward).
 
 This is specified in full in `spec/self-modification/self-modification.md`, with the data-isolation layer in `spec/self-modification/datafs.md`.

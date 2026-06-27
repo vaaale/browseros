@@ -58,9 +58,9 @@ Each version is an ordinary BOS (Next.js) instance, launched by the Supervisor f
 - Named roles:
   - **active** — the promoted version that the Supervisor routes all traffic to by default.
   - **next** — the candidate the developer sub-agent edits and the user previews.
-  - **previous** — the prior `active`, retained after a promote so a rollback is instant.
+  - **previous** — the prior `active`, retained after a promote so a rollback is instant. Older promoted versions remain reachable as git **tags** (§6), so rollback is not limited to the immediately-prior version.
 - **Hard-coded worktree setup (MUST be deterministic, not agent-driven).** At the start of any self-modification task, the Supervisor MUST:
-  1. Ensure the `next` worktree exists and **reset it to `active`'s current commit** (a clean branch off the running version).
+  1. Ensure the `next` worktree exists and check out a **fresh feature branch reset to `active`'s current commit** — a clean branch off the running version, named with a stable scheme (e.g. `bos/feat-<id>`). The developer sub-agent commits all of its work on this branch (per the `spec/bos.md` feature-branch rule); this branch is what promote integrates and tags (§6).
   2. Provision an isolated data clone for `next` (see `spec/self-modification/datafs.md`).
   3. Point the developer harness's working directory at the `next` worktree.
   The developer sub-agent therefore edits **only** `next`; it is structurally incapable of editing the running tree, even by mistake. This setup MUST NOT be delegated to the LLM — it is a fixed routine the Supervisor performs.
@@ -99,8 +99,16 @@ For ergonomics, BOS's Topbar MUST surface the version controls: the current vers
 
 ## 6. Promote, rollback, discard, drain
 
-- **Promote (code-only).** Make `next` the new `active`; the prior `active` becomes `previous`; flip the default upstream. Promote is **code-only**: there is **no data merge** — the candidate's data clone is discarded and the canonical shared data carries forward unchanged (see §8 and `spec/self-modification/datafs.md`; promote-and-merge is explicitly out of scope).
-- **Rollback.** Flip the default upstream back to `previous`. Because `previous` is still running (or can be re-launched from its worktree), rollback is fast.
+- **Promote.** Promote performs coordinated git and runtime actions that MUST agree on what `active` is, in this order:
+  1. **Git integration (merge).** Fast-forward the candidate's feature branch into the **base branch that `active` tracks** (the branch the feature stems from, e.g. `main`), advancing it to the candidate's commit. Because `next` was reset to `active`'s exact HEAD at begin (§3), this is normally a clean **fast-forward** — linear history, no merge commit. Re-anchor `active` to the new HEAD; record the prior commit as `previous` (the immediate rollback target).
+  2. **Tagging (mandatory).** Every promote MUST create an **annotated git tag** on the promoted commit — a monotonic version marker (e.g. `bos/v<N>`) annotated with the feature summary, source branch, and timestamp. Tags are the durable, ordered record of every promoted version and the targets for tag-based rollback (below). Tagging is not disableable.
+  3. **Push (configurable).** Per the `pushMode` setting (§10): **`manual`** (default — nothing is pushed automatically) or **`auto-on-promote`** (push the base branch and the new tag to the configured GitLab remote).
+  4. **Routing flip.** Make `next` the new `active` and flip the default upstream (with drain, below).
+  Promote is **code-only at the data layer**: the candidate's data clone is discarded and the canonical shared data carries forward unchanged (§8, `spec/self-modification/datafs.md`; *data* promote-and-merge is explicitly out of scope — the merge above is of source, not data).
+- **Rollback.** Rollback restores a previously-good version and **reuses the same provision → validate → flip pipeline as promote**, sourced from a git tag instead of agent edits:
+  - **Fast rollback to `previous`.** If the immediately-prior version is still running, rollback is an instant drain-and-flip of the default upstream back to it.
+  - **Rollback to any earlier tag.** Provision a worktree **at the chosen tag**, run the build/health gate (§4) — the code was validated when first promoted, but its build artifacts may have been reaped — then flip. This is the *exact same mechanism* as promoting a candidate, with the tag as the source rather than a fresh edit.
+  - **Git reconciliation.** Rollback MUST keep the base branch and tag history accurate. If the base branch has **not** been pushed, its ref MAY simply be reset to the target tag's commit. Once history has been **pushed**, rollback MUST NOT rewrite published history — it is recorded append-only (a new promote of the target tag, or a `git revert`) so the remote stays consistent.
 - **Discard candidate.** Stop the `next` process, reset/remove its worktree, and delete its data clone. The system returns to a single `active` version.
 - **Drain.** On any flip, the version losing traffic MUST be kept alive until its in-flight requests finish — notably the streaming chat response that may have triggered the self-modification — and only then reaped. New navigations and requests go to the new `active`.
 - **Continuity across a flip.** Because data is canonical/shared (base), chats, memory, and skills written before the flip are visible to the new `active`. The conversation that requested the change completes on the old version (drain); the user's next message lands on the new one.
@@ -129,7 +137,7 @@ For ergonomics, BOS's Topbar MUST surface the version controls: the current vers
 - **edit**: the developer sub-agent edits `next` only.
 - **validate**: the build/health gate (§4) moves `next` to `ready` or `failed`.
 - **preview**: the user pins their session to `next` (§5.2), tests, and switches back at will.
-- **promote / discard / rollback**: per §6.
+- **promote / discard / rollback**: per §6 — promote fast-forwards the feature branch into the base branch and tags it; rollback targets `previous` (instant) or any earlier tag via the same provision → validate → flip pipeline.
 
 ---
 
@@ -151,14 +159,15 @@ The mechanism for producing the clone is pluggable and chosen by a capability pr
 - **Background work runs on `active`.** Automated/background jobs (workflows, scheduled tasks, the self-improvement review and Curator from `spec/self-improvement/self-improvement.md`) run on `active`, never on a preview. Preview is strictly interactive/foreground.
 - **Single-user preview assumption.** Preview pinning is per-session and intended for the operator testing a candidate.
 - **Sandboxed execution.** The developer harness runs non-interactively (`--dangerously-skip-permissions`, per `spec/bos.md`); combined with worktree isolation, candidates are edited and built without ever touching `active`. This is intended to run sandboxed (e.g. Docker).
+- **Serial promotes (fast-forward assumption).** The fast-forward on promote (§6) assumes the base branch did not move during the task — true under the single-active, serial-interactive model. If two candidates were ever in flight and the base advanced between begin and promote, integration becomes a rebase/merge that may conflict and MUST be re-validated (build/health) before it can be promoted. Concurrent candidates are otherwise out of scope.
 
 ---
 
 ## 10. UI & configuration
 
 - **Topbar** version controls (§5.4) and the **Supervisor control page** (§5.3).
-- A **Versions** view (a Settings tab and/or the control page) listing the versions (`active`/`next`/`previous`), their state, build logs, and history, with one-click promote / rollback / discard.
-- A **configuration namespace** (e.g. `self-modification`) MUST expose at least: the public port, the internal port range, the worktrees location, the retain-`previous` policy, and the build/health timeouts. Per the BOS configuration system this also exposes these to the assistant as tools.
+- A **Versions** view (a Settings tab and/or the control page) listing the versions (`active`/`next`/`previous`), their state and build logs, and the **tag history** of promoted versions, with one-click promote / rollback (to `previous` or any tag) / discard.
+- A **configuration namespace** (e.g. `self-modification`) MUST expose at least: the public port, the internal port range, the worktrees location, the **base branch**, the **`pushMode`** (`manual` | `auto-on-promote`) and the remote to push to, the **tag scheme/prefix** (tagging itself is mandatory and not disableable), the retain-`previous` policy, and the build/health timeouts. Per the BOS configuration system this also exposes these to the assistant as tools.
 - **First-run.** The first-startup wizard already configures the AI provider and Dev Harness (`spec/bos.md`); the data-isolation method it must also configure is specified in `spec/self-modification/datafs.md`.
 
 ---
