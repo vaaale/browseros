@@ -42,9 +42,19 @@ const log = (...a) => console.log("[supervisor]", ...a);
 /** @type {{active:Version|null, next:Version|null, previous:Version|null}} */
 const versions = { active: null, next: null, previous: null };
 
-function publicState() {
-  const pick = (v) => (v ? { role: v.role, branch: v.branch, port: v.port, state: v.state, commit: v.commit, tag: v.tag, tests: v.tests, reused: !!v.reused } : null);
-  return { active: pick(versions.active), next: pick(versions.next), previous: pick(versions.previous), pushMode: PUSH_MODE, baseBranch };
+// Resolve a version's branch live from its working dir so renames, merges, and
+// branch switches are reflected in the UI rather than the value captured when
+// the version was first registered. The reused active serves from the main repo
+// (no worktree); worktree-backed versions resolve from their own worktree.
+async function liveBranch(v) {
+  if (!v) return undefined;
+  return (await gitTry(["rev-parse", "--abbrev-ref", "HEAD"], v.worktree || REPO)) || v.branch;
+}
+async function publicState() {
+  const pick = async (v) =>
+    v ? { role: v.role, branch: await liveBranch(v), port: v.port, state: v.state, commit: v.commit, tag: v.tag, tests: v.tests, reused: !!v.reused } : null;
+  const [active, next, previous] = await Promise.all([pick(versions.active), pick(versions.next), pick(versions.previous)]);
+  return { active, next, previous, pushMode: PUSH_MODE, baseBranch };
 }
 
 // ---------------------------------------------------------------- git
@@ -298,7 +308,7 @@ function probeOnce(port) {
 async function handleControl(req, res, sub) {
   if (req.method === "GET" && (sub === "" || sub === "state")) {
     if (sub === "") { res.writeHead(200, { "Content-Type": "text/html" }); res.end(controlPage()); return; }
-    return sendJson(res, publicState());
+    return sendJson(res, await publicState());
   }
   const body = await readBody(req);
   try {
