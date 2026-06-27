@@ -81,7 +81,7 @@ src/
       openai-chat-adapter.ts    Forces OpenAI Chat Completions (not Responses)
       runtime.ts                CopilotRuntime options (wires MCP servers)
       tool-manifest.ts          Curated tool list shown in the Assistant's Tools panel
-      conversations.ts          Client localStorage thread store
+      conversations.ts          VFS-backed thread + message store (/Documents/Chats/<id>.json)
       card-collapse.ts          Event-card collapse store (timers OUTSIDE React)
       nested-events.ts          Encode/parse nested sub-agent event trees
       subagent-events.ts        Live delegation event store (keyed by task)
@@ -177,6 +177,7 @@ Each `src/components/agent/*Actions.tsx` registers tools with `useCopilotAction(
 | `SelfImprovementActions` | `reflectAndLearn, improveSkill` |
 | `DocsActions` | `listDocs, readDoc, writeDoc` |
 | `GitActions` | `gitStatus, startFeatureBranch, stageChanges` |
+| `WorkflowActions` | `createWorkflow, modifyWorkflow, runWorkflow, getStatus, cancelWorkflow, exportWorkflow, validateWorkflow` |
 
 The Tools panel in the chat is a curated mirror in `src/lib/agent/tool-manifest.ts` — **keep it in sync** when you add/remove an action.
 
@@ -238,7 +239,7 @@ The default tool set (`SUBAGENT_TOOLS`) is **VFS‑only**; dev tools are never h
 
 | Path | Contents |
 |---|---|
-| `data/vfs/` | User VFS (Documents, Pictures, Desktop, Apps). Installed apps at `data/vfs/Apps/<id>/`. |
+| `data/vfs/` | User VFS (Documents, Pictures, Desktop, Apps). Installed apps at `data/vfs/Apps/<id>/`. Chat history at `data/vfs/Documents/Chats/<id>.json`. |
 | `data/settings.json` | OS settings (wallpaper, accent, theme). |
 | `data/config/<ns>.json` | Generic per‑namespace config (e.g. `dev-harness`). |
 | `data/installed-apps.json` | Installed‑app registry (with `status`). |
@@ -278,6 +279,12 @@ The AI provider config (incl. the API key) persists via the provider store and i
 | `/api/system/setup` | GET, POST | First‑run flag |
 | `/api/dev-harness` | GET | Probe the configured harness (CLI version or MCP tools) |
 | `/api/proxy/[[...path]]` | GET | Web‑browser proxy |
+| `/api/workflows` | GET, POST, DELETE, PATCH | Workflow CRUD (+ merge‑patch) |
+| `/api/workflows/validate` | POST | Validate a workflow's DAG, agents, and dependencies |
+| `/api/workflows/run` | POST (NDJSON stream) | Execute a workflow, stream step events |
+| `/api/workflows/cancel` | POST | Cancel a running workflow |
+| `/api/workflows/status` | GET | Read current execution state + per‑step status |
+| `/api/workflows/generate` | POST | Generate a workflow JSON from a task description |
 
 ---
 

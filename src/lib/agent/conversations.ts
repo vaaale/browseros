@@ -1,6 +1,15 @@
 "use client";
 
 import { useSyncExternalStore } from "react";
+import { fsClient } from "@/lib/os-client";
+
+/**
+ * Conversations live as one JSON file per chat under the user's VFS at
+ * /Documents/Chats/<id>.json. Each file holds the metadata AND the message
+ * history, so opening the app surfaces every prior conversation from disk and
+ * messages survive reloads. The active conversation id is cached in
+ * localStorage so we can focus the right thread immediately on mount.
+ */
 
 export interface Conversation {
   id: string;
@@ -11,11 +20,16 @@ export interface Conversation {
 interface State {
   conversations: Conversation[];
   activeId: string;
+  loaded: boolean;
 }
 
-const KEY = "bos.conversations";
+export const CHATS_DIR = "/Documents/Chats";
 const ACTIVE_KEY = "bos.activeConversation";
-const SERVER_SNAPSHOT: State = { conversations: [{ id: "default", title: "Conversation", createdAt: 0 }], activeId: "default" };
+const SERVER_SNAPSHOT: State = {
+  conversations: [{ id: "default", title: "Conversation", createdAt: 0 }],
+  activeId: "default",
+  loaded: false,
+};
 
 function newId(): string {
   return "c-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -25,67 +39,211 @@ function freshConversation(): Conversation {
   return { id: newId(), title: "New conversation", createdAt: Date.now() };
 }
 
-let state: State | null = null;
-const listeners = new Set<() => void>();
+function chatPath(id: string): string {
+  return `${CHATS_DIR}/${id}.json`;
+}
 
-function load(): State {
+interface ConversationFile {
+  id: string;
+  title: string;
+  createdAt: number;
+  // Plain AG-UI message objects ({ id, role, content, toolCalls? }); loaded
+  // straight back into the chat agent by useChatPersistence.
+  messages: unknown[];
+}
+
+async function readConversationFile(id: string): Promise<ConversationFile | null> {
   try {
-    const conversations = JSON.parse(localStorage.getItem(KEY) || "[]") as Conversation[];
-    if (conversations.length === 0) return { conversations: [freshConversation()], activeId: "" } as State;
-    const activeId = localStorage.getItem(ACTIVE_KEY) || conversations[0].id;
-    return { conversations, activeId: conversations.some((c) => c.id === activeId) ? activeId : conversations[0].id };
+    const content = await fsClient.read(chatPath(id));
+    const parsed = JSON.parse(content) as ConversationFile;
+    if (!parsed || typeof parsed !== "object") return null;
+    return {
+      id: parsed.id ?? id,
+      title: typeof parsed.title === "string" ? parsed.title : "Conversation",
+      createdAt: typeof parsed.createdAt === "number" ? parsed.createdAt : 0,
+      messages: Array.isArray(parsed.messages) ? parsed.messages : [],
+    };
   } catch {
-    const c = freshConversation();
-    return { conversations: [c], activeId: c.id };
+    return null;
   }
 }
 
+async function writeConversationFile(file: ConversationFile): Promise<void> {
+  await fsClient.write(chatPath(file.id), JSON.stringify(file, null, 2));
+}
+
+let state: State | null = null;
+let loadPromise: Promise<void> | null = null;
+const listeners = new Set<() => void>();
+
+function notify(): void {
+  for (const l of listeners) l();
+}
+
+function readActiveId(): string | null {
+  try {
+    return localStorage.getItem(ACTIVE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function persistActiveId(id: string): void {
+  try {
+    localStorage.setItem(ACTIVE_KEY, id);
+  } catch {
+    /* ignore */
+  }
+}
+
+async function loadFromVfs(): Promise<void> {
+  let conversations: Conversation[] = [];
+  try {
+    await fsClient.mkdir(CHATS_DIR).catch(() => {});
+    const entries = await fsClient.list(CHATS_DIR);
+    const files = entries.filter((e) => e.type === "file" && e.name.endsWith(".json"));
+    const loaded = await Promise.all(
+      files.map(async (e) => {
+        const id = e.name.replace(/\.json$/, "");
+        const file = await readConversationFile(id);
+        if (!file) return null;
+        return { id: file.id, title: file.title, createdAt: file.createdAt };
+      }),
+    );
+    conversations = loaded.filter((c): c is Conversation => c !== null);
+    conversations.sort((a, b) => b.createdAt - a.createdAt);
+  } catch {
+    conversations = [];
+  }
+
+  if (conversations.length === 0) {
+    const seed = freshConversation();
+    conversations = [seed];
+    try {
+      await writeConversationFile({ ...seed, messages: [] });
+    } catch {
+      /* ignore — show the seed anyway, save will retry on next mutation */
+    }
+  }
+
+  const storedActive = readActiveId();
+  const activeId =
+    storedActive && conversations.some((c) => c.id === storedActive)
+      ? storedActive
+      : conversations[0].id;
+  persistActiveId(activeId);
+  state = { conversations, activeId, loaded: true };
+  notify();
+}
+
+function ensureLoading(): Promise<void> {
+  if (!loadPromise) loadPromise = loadFromVfs();
+  return loadPromise;
+}
+
 function get(): State {
+  if (typeof window === "undefined") return SERVER_SNAPSHOT;
   if (!state) {
-    state = typeof localStorage === "undefined" ? SERVER_SNAPSHOT : load();
-    if (!state.activeId && state.conversations[0]) state = { ...state, activeId: state.conversations[0].id };
+    void ensureLoading();
+    return SERVER_SNAPSHOT;
   }
   return state;
 }
 
-function set(next: State): void {
+function setState(next: State): void {
   state = next;
-  try {
-    localStorage.setItem(KEY, JSON.stringify(next.conversations));
-    localStorage.setItem(ACTIVE_KEY, next.activeId);
-  } catch {
-    /* ignore */
-  }
-  for (const l of listeners) l();
+  notify();
 }
 
-export function newConversation(): void {
-  const c = freshConversation();
-  const s = get();
-  set({ conversations: [c, ...s.conversations], activeId: c.id });
+export async function newConversation(): Promise<string> {
+  await ensureLoading();
+  const conv = freshConversation();
+  const current = state ?? { conversations: [], activeId: "", loaded: true };
+  persistActiveId(conv.id);
+  setState({ conversations: [conv, ...current.conversations], activeId: conv.id, loaded: true });
+  try {
+    await writeConversationFile({ ...conv, messages: [] });
+  } catch (err) {
+    console.error("Failed to persist new conversation", err);
+  }
+  return conv.id;
 }
 
 export function selectConversation(id: string): void {
-  set({ ...get(), activeId: id });
+  const current = get();
+  if (current.activeId === id) return;
+  persistActiveId(id);
+  setState({ ...current, activeId: id });
 }
 
-export function deleteConversation(id: string): void {
-  const s = get();
-  let conversations = s.conversations.filter((c) => c.id !== id);
-  if (conversations.length === 0) conversations = [freshConversation()];
-  const activeId = s.activeId === id ? conversations[0].id : s.activeId;
-  set({ conversations, activeId });
+export async function deleteConversation(id: string): Promise<void> {
+  await ensureLoading();
+  const current = state ?? get();
+  let conversations = current.conversations.filter((c) => c.id !== id);
+  let activeId = current.activeId;
+  if (conversations.length === 0) {
+    const seed = freshConversation();
+    conversations = [seed];
+    activeId = seed.id;
+    try {
+      await writeConversationFile({ ...seed, messages: [] });
+    } catch (err) {
+      console.error("Failed to seed replacement conversation", err);
+    }
+  } else if (activeId === id) {
+    activeId = conversations[0].id;
+  }
+  persistActiveId(activeId);
+  setState({ conversations, activeId, loaded: true });
+  try {
+    await fsClient.remove(chatPath(id));
+  } catch {
+    /* file may not exist yet — ignore */
+  }
 }
 
-export function renameConversation(id: string, title: string): void {
-  const s = get();
-  set({ ...s, conversations: s.conversations.map((c) => (c.id === id ? { ...c, title } : c)) });
+export async function renameConversation(id: string, title: string): Promise<void> {
+  const current = get();
+  const conv = current.conversations.find((c) => c.id === id);
+  if (!conv) return;
+  const next = { ...conv, title };
+  setState({
+    ...current,
+    conversations: current.conversations.map((c) => (c.id === id ? next : c)),
+  });
+  try {
+    const file = (await readConversationFile(id)) ?? { ...next, messages: [] };
+    await writeConversationFile({ ...file, title });
+  } catch (err) {
+    console.error("Failed to rename conversation file", err);
+  }
+}
+
+/** Load the persisted messages for a conversation (raw JSON; not yet rehydrated). */
+export async function loadConversationMessages(id: string): Promise<unknown[]> {
+  const file = await readConversationFile(id);
+  return file?.messages ?? [];
+}
+
+/** Persist the messages of a conversation, preserving its metadata. */
+export async function saveConversationMessages(id: string, messages: unknown[]): Promise<void> {
+  const current = state;
+  const meta = current?.conversations.find((c) => c.id === id);
+  const existing = await readConversationFile(id);
+  const file: ConversationFile = {
+    id,
+    title: existing?.title ?? meta?.title ?? "Conversation",
+    createdAt: existing?.createdAt ?? meta?.createdAt ?? Date.now(),
+    messages,
+  };
+  await writeConversationFile(file);
 }
 
 export function useConversations(): State {
   return useSyncExternalStore(
     (cb) => {
       listeners.add(cb);
+      void ensureLoading();
       return () => listeners.delete(cb);
     },
     () => get(),

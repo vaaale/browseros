@@ -57,4 +57,12 @@ export const ASSISTANT_TOOLS: ToolInfo[] = [
   { group: "Assistant", name: "switchAssistantAgent", description: "Switch the active assistant agent (personality)." },
   { group: "Assistant", name: "getMyInstructions", description: "Read the active composed instructions." },
   { group: "Assistant", name: "updateMyInstructions", description: "Rewrite the active agent's instructions." },
+
+  { group: "Workflows", name: "createWorkflow", description: "Generate a workflow from a natural-language task description." },
+  { group: "Workflows", name: "modifyWorkflow", description: "Apply a JSON-merge patch to an existing workflow." },
+  { group: "Workflows", name: "runWorkflow", description: "Execute a workflow and stream step events." },
+  { group: "Workflows", name: "getStatus", description: "Read a workflow's current execution state." },
+  { group: "Workflows", name: "cancelWorkflow", description: "Cancel a running workflow." },
+  { group: "Workflows", name: "exportWorkflow", description: "Return a workflow's full JSON." },
+  { group: "Workflows", name: "validateWorkflow", description: "Validate a workflow's DAG, agents, and dependencies." },
 ];

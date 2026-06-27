@@ -26,6 +26,8 @@ import {
   Gamepad2,
   Cloud,
   Newspaper,
+  Workflow,
+  GitBranch,
   HelpCircle,
   type LucideProps,
 } from "lucide-react";
@@ -57,6 +59,8 @@ const ICONS: Record<string, ComponentType<LucideProps>> = {
   Gamepad2,
   Cloud,
   Newspaper,
+  Workflow,
+  GitBranch,
 };
 
 export function AppIcon({ name, ...props }: { name: string } & LucideProps) {

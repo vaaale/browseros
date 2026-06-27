@@ -13,6 +13,8 @@ import { SkillsActions } from "./SkillsActions";
 import { SelfImprovementActions } from "./SelfImprovementActions";
 import { DocsActions } from "./DocsActions";
 import { GitActions } from "./GitActions";
+import { WorkflowActions } from "./WorkflowActions";
+import { ToolCallRetry } from "./ToolCallRetry";
 import { useActiveConversationId } from "@/lib/agent/conversations";
 
 export function CopilotProvider({ children }: { children: ReactNode }) {
@@ -32,6 +34,8 @@ export function CopilotProvider({ children }: { children: ReactNode }) {
       <SelfImprovementActions />
       <DocsActions />
       <GitActions />
+      <WorkflowActions />
+      <ToolCallRetry />
       {children}
     </CopilotKit>
   );

@@ -2,18 +2,17 @@
 
 import { useEffect, useState } from "react";
 import { CopilotChat } from "@copilotkit/react-ui";
-import { useCopilotChat } from "@copilotkit/react-core";
 import "@copilotkit/react-ui/styles.css";
 import { AlertTriangle, Loader2, CheckCircle2, PanelLeft, PanelRight } from "lucide-react";
 import { useOSStore } from "@/store/os-provider";
 import { PROVIDERS, type ProviderType } from "@/lib/agent/provider-meta";
 import { ChatToolRenderer } from "@/components/agent/ChatToolRenderer";
+import { useChatPersistence } from "@/components/agent/ChatPersistence";
 import { ReasoningAssistantMessage } from "@/components/agent/ReasoningAssistantMessage";
 import { markdownRenderers } from "@/components/agent/MarkdownRenderers";
 import { ConversationPanel } from "./assistant/ConversationPanel";
 import { InfoPanel } from "./assistant/InfoPanel";
 import { AgentSelector } from "./assistant/AgentSelector";
-import { useActiveConversationId } from "@/lib/agent/conversations";
 import type { AppProps } from "./types";
 
 const FALLBACK_INSTRUCTIONS =
@@ -27,8 +26,8 @@ const THEME_OVERRIDES: React.CSSProperties = {
 
 export function ChatApp(_props: AppProps) {
   const launch = useOSStore((s) => s.launch);
-  const { isLoading } = useCopilotChat();
-  const threadId = useActiveConversationId();
+  // Drives per-conversation load/save AND exposes the chat's loading state.
+  const { isLoading } = useChatPersistence();
   const [instructions, setInstructions] = useState(FALLBACK_INSTRUCTIONS);
   const [needsKey, setNeedsKey] = useState<{ provider: ProviderType } | null>(null);
   const [showLeft, setShowLeft] = useState(true);
@@ -90,9 +89,8 @@ export function ChatApp(_props: AppProps) {
         )}
 
         <div className="min-h-0 flex-1">
-          {/* Remount the chat when the conversation changes so it reflects the active thread. */}
+          {/* Messages are swapped per-conversation by useChatPersistence; no remount needed. */}
           <CopilotChat
-            key={threadId}
             className="h-full"
             AssistantMessage={ReasoningAssistantMessage}
             markdownTagRenderers={markdownRenderers}
