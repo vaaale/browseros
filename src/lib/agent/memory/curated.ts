@@ -1,6 +1,7 @@
 import "server-only";
 import { promises as fs } from "fs";
 import path from "path";
+import { dataDir } from "@/os/data-dir";
 
 // Curated, bounded, file-backed memory — the always-injected core (spec/memory.md).
 // Two surfaces:
@@ -10,7 +11,7 @@ import path from "path";
 // has a character budget (model-independent); writes that would overflow are
 // rejected so the agent must consolidate rather than grow without bound.
 
-const DIR = path.join(process.cwd(), "data", "memory");
+const DIR = path.join(dataDir(), "memory");
 const DELIM = "\n§\n";
 
 export type MemoryTarget = "user" | "memory";

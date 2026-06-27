@@ -1,9 +1,11 @@
 import "server-only";
 import { promises as fs } from "fs";
 import path from "path";
+import { dataDir } from "@/os/data-dir";
+import { writeFileAtomic } from "@/os/atomic-write";
 import type { McpServerConfig } from "./types";
 
-const FILE = path.join(process.cwd(), "data", "mcp-servers.json");
+const FILE = path.join(dataDir(), "mcp-servers.json");
 
 function fromEnv(): McpServerConfig[] {
   const raw = process.env.BOS_MCP_SERVERS;
@@ -28,8 +30,7 @@ export async function listMcpServers(): Promise<McpServerConfig[]> {
 }
 
 async function save(servers: McpServerConfig[]): Promise<void> {
-  await fs.mkdir(path.dirname(FILE), { recursive: true });
-  await fs.writeFile(FILE, JSON.stringify(servers, null, 2), "utf8");
+  await writeFileAtomic(FILE, JSON.stringify(servers, null, 2));
 }
 
 export async function addMcpServer(cfg: McpServerConfig): Promise<McpServerConfig[]> {

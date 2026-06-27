@@ -1,9 +1,11 @@
 import "server-only";
 import { promises as fs } from "fs";
 import path from "path";
+import { dataDir } from "./data-dir";
+import { writeFileAtomic } from "./atomic-write";
 import type { VfsEntry } from "./types";
 
-const VFS_ROOT = path.join(process.cwd(), "data", "vfs");
+const VFS_ROOT = path.join(dataDir(), "vfs");
 
 /** Resolve a POSIX-style VFS path to a real fs path, refusing escapes. */
 function resolveSafe(vfsPath: string): string {
@@ -39,10 +41,9 @@ async function ensureVfs(): Promise<void> {
   }
   const welcome = path.join(VFS_ROOT, "Documents", "welcome.txt");
   if (!(await exists(welcome))) {
-    await fs.writeFile(
+    await writeFileAtomic(
       welcome,
       "Welcome to BrowserOS.\n\nThis is your virtual file system. The OS agent can read and write here too.\n",
-      "utf8",
     );
   }
 }
@@ -96,15 +97,13 @@ export async function readBuffer(vfsPath: string): Promise<Buffer> {
 export async function writeText(vfsPath: string, content: string): Promise<void> {
   await ensureVfs();
   const real = resolveSafe(vfsPath);
-  await fs.mkdir(path.dirname(real), { recursive: true });
-  await fs.writeFile(real, content, "utf8");
+  await writeFileAtomic(real, content);
 }
 
 export async function writeBuffer(vfsPath: string, data: Buffer): Promise<void> {
   await ensureVfs();
   const real = resolveSafe(vfsPath);
-  await fs.mkdir(path.dirname(real), { recursive: true });
-  await fs.writeFile(real, data);
+  await writeFileAtomic(real, data);
 }
 
 export async function mkdir(vfsPath: string): Promise<void> {

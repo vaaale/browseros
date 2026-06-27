@@ -13,6 +13,9 @@ export function FirstRunWizard() {
   const [harnessTransport, setHarnessTransport] = useState<"cli" | "stdio" | "http" | "sse">("cli");
   const [harnessCommand, setHarnessCommand] = useState("claude mcp serve");
   const [harnessUrl, setHarnessUrl] = useState("");
+  const [dataFsMethod, setDataFsMethod] = useState("auto");
+  const [dataFsMethods, setDataFsMethods] = useState<string[]>([]);
+  const [dataFsRecommended, setDataFsRecommended] = useState("");
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -29,6 +32,13 @@ export function FirstRunWizard() {
           setHarnessCommand(String(harness.values.command ?? "claude mcp serve"));
           setHarnessUrl(String(harness.values.url ?? ""));
         }
+      })
+      .catch(() => {});
+    fetch("/api/datafs")
+      .then((r) => r.json())
+      .then((d) => {
+        setDataFsMethods((d.methods as string[]) ?? []);
+        setDataFsRecommended((d.recommended as string) ?? "");
       })
       .catch(() => {});
   }, []);
@@ -54,6 +64,11 @@ export function FirstRunWizard() {
           namespace: "dev-harness",
           values: { transport: harnessTransport, command: harnessCommand, url: harnessUrl },
         }),
+      });
+      await fetch("/api/config", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ namespace: "datafs", values: { method: dataFsMethod } }),
       });
       await fetch("/api/system/setup", { method: "POST" });
       setOpen(false);
@@ -111,6 +126,15 @@ export function FirstRunWizard() {
                 <input value={harnessUrl} onChange={(e) => setHarnessUrl(e.target.value)} placeholder="http://host:7272/mcp" className="rounded border border-white/10 bg-black/30 px-2 py-1.5 text-xs outline-none" />
               </>
             )}
+          </div>
+
+          <h3 className="pt-1 text-xs font-semibold uppercase tracking-wide text-white/50">Data Isolation</h3>
+          <div className="grid grid-cols-[110px_1fr] items-center gap-2">
+            <label className="text-xs text-white/60">Method</label>
+            <select value={dataFsMethod} onChange={(e) => setDataFsMethod(e.target.value)} className="rounded border border-white/10 bg-black/30 px-2 py-1.5 text-xs outline-none">
+              <option value="auto">Auto{dataFsRecommended ? ` (uses ${dataFsRecommended})` : ""}</option>
+              {dataFsMethods.map((m) => <option key={m} value={m}>{m}</option>)}
+            </select>
           </div>
         </div>
 

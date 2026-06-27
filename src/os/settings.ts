@@ -1,10 +1,12 @@
 import "server-only";
 import { promises as fs } from "fs";
 import path from "path";
+import { dataDir } from "./data-dir";
+import { writeFileAtomic } from "./atomic-write";
 import type { OSSettings } from "./types";
 import { DEFAULT_WALLPAPER } from "./wallpapers";
 
-const DATA_DIR = path.join(process.cwd(), "data");
+const DATA_DIR = dataDir();
 const SETTINGS_FILE = path.join(DATA_DIR, "settings.json");
 
 export const DEFAULT_SETTINGS: OSSettings = {
@@ -25,7 +27,6 @@ export async function getSettings(): Promise<OSSettings> {
 
 export async function updateSettings(patch: Partial<OSSettings>): Promise<OSSettings> {
   const next = { ...(await getSettings()), ...patch };
-  await fs.mkdir(DATA_DIR, { recursive: true });
-  await fs.writeFile(SETTINGS_FILE, JSON.stringify(next, null, 2), "utf8");
+  await writeFileAtomic(SETTINGS_FILE, JSON.stringify(next, null, 2));
   return next;
 }

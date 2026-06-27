@@ -1,10 +1,12 @@
 import "server-only";
 import { promises as fs } from "fs";
 import path from "path";
+import { dataDir } from "@/os/data-dir";
+import { writeFileAtomic } from "@/os/atomic-write";
 import * as vfs from "@/os/vfs";
 import type { AppManifest } from "@/os/types";
 
-const FILE = path.join(process.cwd(), "data", "installed-apps.json");
+const FILE = path.join(dataDir(), "installed-apps.json");
 
 export type AppStatus = "installed" | "uninstalled";
 
@@ -68,7 +70,7 @@ async function readAll(): Promise<InstalledApp[]> {
 
 async function writeAll(apps: InstalledApp[]): Promise<void> {
   await fs.mkdir(path.dirname(FILE), { recursive: true });
-  await fs.writeFile(FILE, JSON.stringify(apps, null, 2), "utf8");
+  await writeFileAtomic(FILE, JSON.stringify(apps, null, 2));
 }
 
 /** Convert an installed app into an OS app manifest (rendered as an iframe). */

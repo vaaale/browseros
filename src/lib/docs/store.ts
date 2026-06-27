@@ -1,9 +1,11 @@
 import "server-only";
 import { promises as fs } from "fs";
 import path from "path";
+import { dataDir } from "@/os/data-dir";
+import { writeFileAtomic } from "@/os/atomic-write";
 import { parseFrontmatter, buildFrontmatter, asString } from "@/lib/agent/subagents/markdown";
 
-const DIR = path.join(process.cwd(), "data", "docs");
+const DIR = path.join(dataDir(), "docs");
 
 export interface Doc {
   id: string;
@@ -41,7 +43,7 @@ async function ensureSeed(): Promise<void> {
 
 async function write(doc: Doc): Promise<void> {
   await fs.mkdir(DIR, { recursive: true });
-  await fs.writeFile(path.join(DIR, `${doc.id}.md`), buildFrontmatter({ title: doc.title }, doc.content), "utf8");
+  await writeFileAtomic(path.join(DIR, `${doc.id}.md`), buildFrontmatter({ title: doc.title }, doc.content));
 }
 
 export async function listDocs(): Promise<Doc[]> {

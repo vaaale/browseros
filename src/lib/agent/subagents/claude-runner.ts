@@ -2,6 +2,7 @@ import "server-only";
 import { spawn } from "node:child_process";
 import { connectMcpClient, extractText } from "@/lib/mcp/client";
 import { getHarnessConfig } from "@/lib/devharness/harness-config";
+import { supervisorEnabled, supervisorBegin, supervisorBuild } from "@/lib/devharness/supervisor";
 import { stageAll } from "@/lib/system/git";
 import type { McpServerConfig } from "@/lib/mcp/types";
 import type { SubAgent, SubAgentRunResult } from "./types";
@@ -174,7 +175,25 @@ export async function runClaudeAgent(
   opts?: { onEvent?: OnEvent },
 ): Promise<SubAgentRunResult> {
   const harness = await getHarnessConfig();
-  return harness.mode === "cli"
-    ? runClaudeCli(agent, task, harness.cwd, opts?.onEvent)
-    : runViaMcp(agent, task, harness.server, opts?.onEvent);
+  if (harness.mode !== "cli") return runViaMcp(agent, task, harness.server, opts?.onEvent);
+
+  // Under the Supervisor (live version control), do the work in the isolated
+  // `next` worktree and gate it behind a build; otherwise run in-place.
+  let cwd = harness.cwd;
+  let provisioned = false;
+  if (supervisorEnabled()) {
+    const begun = await supervisorBegin();
+    const wt = begun && typeof begun.worktree === "string" ? (begun.worktree as string) : "";
+    if (wt) {
+      cwd = wt;
+      provisioned = true;
+      opts?.onEvent?.({ tool: "Supervisor: provision next worktree", input: { worktree: wt } });
+    }
+  }
+  const result = await runClaudeCli(agent, task, cwd, opts?.onEvent);
+  if (provisioned && !result.error) {
+    opts?.onEvent?.({ tool: "Supervisor: build + health-gate candidate", input: {} });
+    await supervisorBuild().catch(() => {});
+  }
+  return result;
 }

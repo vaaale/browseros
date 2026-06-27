@@ -1,9 +1,11 @@
 import "server-only";
 import { promises as fs } from "fs";
 import path from "path";
+import { dataDir } from "@/os/data-dir";
+import { writeFileAtomic } from "@/os/atomic-write";
 import { PROVIDERS, type ProviderType } from "./provider-meta";
 
-const FILE = path.join(process.cwd(), "data", "provider.json");
+const FILE = path.join(dataDir(), "provider.json");
 
 export const DEFAULT_MAX_TOKENS = 8192;
 
@@ -85,7 +87,7 @@ export async function updateProviderConfig(patch: Partial<ProviderConfig>): Prom
       patch.maxInputTokens === undefined ? current.maxInputTokens : patch.maxInputTokens || undefined,
   };
   await fs.mkdir(path.dirname(FILE), { recursive: true });
-  await fs.writeFile(FILE, JSON.stringify(next, null, 2), "utf8");
+  await writeFileAtomic(FILE, JSON.stringify(next, null, 2));
   return getProviderConfigView();
 }
 

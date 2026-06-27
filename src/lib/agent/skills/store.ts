@@ -1,9 +1,11 @@
 import "server-only";
 import { promises as fs } from "fs";
 import path from "path";
+import { dataDir } from "@/os/data-dir";
+import { writeFileAtomic } from "@/os/atomic-write";
 import { parseFrontmatter, buildFrontmatter, asString } from "@/lib/agent/subagents/markdown";
 
-const DIR = path.join(process.cwd(), "data", "skills");
+const DIR = path.join(dataDir(), "skills");
 const SKILL_FILE = "SKILL.md";
 const SCRIPTS_DIR = "scripts";
 const REFERENCES_DIR = "references";
@@ -177,7 +179,7 @@ async function writeAssetsDir(dir: string, assets: SkillAsset[] | undefined): Pr
   }
   for (const asset of assets) {
     const name = safeAssetName(asset.name);
-    await fs.writeFile(path.join(dir, name), asset.content ?? "", "utf8");
+    await writeFileAtomic(path.join(dir, name), asset.content ?? "");
   }
 }
 
@@ -224,7 +226,7 @@ async function readSkillById(id: string, withAssets: boolean): Promise<Skill | u
 async function writeSkill(s: Skill): Promise<void> {
   const dirPath = path.join(DIR, s.id);
   await fs.mkdir(dirPath, { recursive: true });
-  await fs.writeFile(path.join(dirPath, SKILL_FILE), toMarkdown(s), "utf8");
+  await writeFileAtomic(path.join(dirPath, SKILL_FILE), toMarkdown(s));
   await writeAssetsDir(path.join(dirPath, SCRIPTS_DIR), s.scripts);
   await writeAssetsDir(path.join(dirPath, REFERENCES_DIR), s.references);
   // Remove any legacy flat-file copy.

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useOSStore } from "@/store/os-provider";
+import { VersionControls } from "./VersionControls";
 
 function Clock() {
   const [now, setNow] = useState<string>("");
@@ -33,7 +34,10 @@ export function Topbar() {
         <span className="font-semibold tracking-tight text-white">BrowserOS</span>
         <span className="text-white/60">{focused?.title ?? "Desktop"}</span>
       </div>
-      <Clock />
+      <div className="flex items-center gap-3">
+        <VersionControls />
+        <Clock />
+      </div>
     </div>
   );
 }

@@ -181,6 +181,46 @@ const REGISTRATIONS: ConfigRegistration[] = [
       await patchNamespace("browser-automation", patch);
     },
   },
+  {
+    schema: {
+      namespace: "datafs",
+      title: "Data Isolation",
+      description:
+        "How a previewed BrowserOS version's data is isolated from your live data during live version control. The active version uses your real data dir; a previewed candidate gets a copy-on-write clone so testing can't pollute it. Only methods your filesystem supports are selectable.",
+      order: 35,
+      customComponent: "datafs",
+      fields: [
+        {
+          key: "method",
+          label: "Isolation method",
+          type: "select",
+          options: [
+            { value: "auto", label: "Auto (recommended)" },
+            { value: "reflink", label: "Reflink (copy-on-write)" },
+            { value: "hardlink", label: "Hardlink farm" },
+            { value: "copy", label: "Full copy" },
+          ],
+        },
+      ],
+    },
+    load: async () => ({ method: ((await readNamespace("datafs")).method as string) || "auto" }),
+    save: async (patch) => {
+      await patchNamespace("datafs", patch);
+    },
+  },
+  {
+    schema: {
+      namespace: "self-modification",
+      title: "Versions",
+      description:
+        "Live version control: preview, promote, and roll back BrowserOS versions via the Supervisor. Available when BrowserOS is served through `npm run supervisor`.",
+      order: 36,
+      customComponent: "self-modification",
+      fields: [],
+    },
+    load: async () => ({}),
+    save: async () => {},
+  },
 ];
 
 export function listConfigSchemas(): ConfigSchema[] {

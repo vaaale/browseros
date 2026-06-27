@@ -1,8 +1,10 @@
 import "server-only";
 import { promises as fs } from "fs";
 import path from "path";
+import { dataDir } from "@/os/data-dir";
+import { writeFileAtomic } from "@/os/atomic-write";
 
-const DIR = path.join(process.cwd(), "data", "config");
+const DIR = path.join(dataDir(), "config");
 
 /** Generic per-namespace JSON config storage (data/config/<ns>.json). */
 export async function readNamespace(ns: string): Promise<Record<string, unknown>> {
@@ -14,8 +16,7 @@ export async function readNamespace(ns: string): Promise<Record<string, unknown>
 }
 
 export async function writeNamespace(ns: string, values: Record<string, unknown>): Promise<void> {
-  await fs.mkdir(DIR, { recursive: true });
-  await fs.writeFile(path.join(DIR, `${ns}.json`), JSON.stringify(values, null, 2), "utf8");
+  await writeFileAtomic(path.join(DIR, `${ns}.json`), JSON.stringify(values, null, 2));
 }
 
 export async function patchNamespace(ns: string, patch: Record<string, unknown>): Promise<Record<string, unknown>> {

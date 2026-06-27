@@ -1,10 +1,12 @@
 import "server-only";
 import { promises as fs } from "fs";
 import path from "path";
+import { dataDir } from "@/os/data-dir";
+import { writeFileAtomic } from "@/os/atomic-write";
 
 // Per-skill usage telemetry, kept in a sidecar so it never pollutes SKILL.md.
 // Drives the Curator's staleness decisions.
-const FILE = path.join(process.cwd(), "data", "skills", ".usage.json");
+const FILE = path.join(dataDir(), "skills", ".usage.json");
 
 export interface UsageRecord {
   useCount: number;
@@ -23,7 +25,7 @@ async function read(): Promise<UsageMap> {
 
 async function write(map: UsageMap): Promise<void> {
   await fs.mkdir(path.dirname(FILE), { recursive: true });
-  await fs.writeFile(FILE, JSON.stringify(map, null, 2), "utf8");
+  await writeFileAtomic(FILE, JSON.stringify(map, null, 2));
 }
 
 export async function touchSkill(id: string, kind: "use" | "patch" = "use"): Promise<void> {

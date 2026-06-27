@@ -7,6 +7,8 @@ import { AssistantTab } from "./settings/AssistantTab";
 import { SkillsTab } from "./settings/SkillsTab";
 import { AppsTab } from "./settings/AppsTab";
 import { DevHarnessTab } from "./settings/DevHarnessTab";
+import { DataFsTab } from "./settings/DataFsTab";
+import { VersionsTab } from "./settings/VersionsTab";
 import { ConfigForm } from "./settings/ConfigForm";
 import { ProviderSettings } from "./ProviderSettings";
 import type { AppProps } from "./types";
@@ -19,6 +21,8 @@ const CUSTOM_TABS: Record<string, React.ComponentType> = {
   skills: SkillsTab,
   apps: AppsTab,
   "dev-harness": DevHarnessTab,
+  datafs: DataFsTab,
+  "self-modification": VersionsTab,
 };
 
 export function SettingsApp(_props: AppProps) {

@@ -1,12 +1,14 @@
 import "server-only";
 import { promises as fs } from "fs";
 import path from "path";
+import { dataDir } from "@/os/data-dir";
+import { writeFileAtomic } from "@/os/atomic-write";
 import type { SubAgent, SubAgentType } from "./types";
 import { parseFrontmatter, buildFrontmatter, asString, asList } from "./markdown";
 import { readNamespace, patchNamespace } from "@/lib/config/store";
 import { DEFAULT_PERSONALITY } from "@/lib/agent/config";
 
-const DIR = path.join(process.cwd(), "data", "agents");
+const DIR = path.join(dataDir(), "agents");
 // The agent whose system prompt is the main assistant's active personality.
 const DEFAULT_AGENT_ID = "assistant";
 
@@ -109,7 +111,7 @@ async function ensureSeed(): Promise<void> {
   for (const d of DEFAULTS) {
     const id = slugify(d.name);
     await fs.mkdir(path.join(DIR, id), { recursive: true });
-    await fs.writeFile(path.join(DIR, id, "AGENT.md"), toMarkdown({ id, ...d }), "utf8");
+    await writeFileAtomic(path.join(DIR, id, "AGENT.md"), toMarkdown({ id, ...d }));
   }
 }
 
@@ -147,7 +149,7 @@ export async function createSubAgent(input: {
   const id = slugify(input.name);
   const agent: SubAgent = { id, type: input.type ?? "local", ...input };
   await fs.mkdir(path.join(DIR, id), { recursive: true });
-  await fs.writeFile(path.join(DIR, id, "AGENT.md"), toMarkdown(agent), "utf8");
+  await writeFileAtomic(path.join(DIR, id, "AGENT.md"), toMarkdown(agent));
   return agent;
 }
 
@@ -182,6 +184,6 @@ export async function setAgentSystemPrompt(id: string, systemPrompt: string): Pr
   const agent = await getSubAgent(id);
   if (!agent) return undefined;
   const updated: SubAgent = { ...agent, systemPrompt };
-  await fs.writeFile(path.join(DIR, agent.id, "AGENT.md"), toMarkdown(updated), "utf8");
+  await writeFileAtomic(path.join(DIR, agent.id, "AGENT.md"), toMarkdown(updated));
   return updated;
 }
