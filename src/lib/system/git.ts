@@ -52,3 +52,34 @@ export async function stageFiles(paths: string[]): Promise<number> {
   await git(["add", "--", ...safe]);
   return safe.length;
 }
+
+export interface StageResult {
+  /** Total files staged in the index after the operation. */
+  staged: number;
+  /** How many of those are newly-added (previously untracked) files. */
+  created: number;
+}
+
+/**
+ * Stage ALL changes — new, modified, and deleted — in the working tree. This is
+ * the deterministic backstop the dev harness runs after a task so files the
+ * agent *created* are never left untracked (the recurring "new file not added"
+ * bug). Safe because dev work happens on a feature branch and `.gitignore`
+ * excludes secrets, runtime data (`data/`), and build output. `cwd` defaults to
+ * the repo root; pass a worktree path to stage there.
+ */
+export async function stageAll(cwd: string = REPO): Promise<StageResult> {
+  await exec("git", ["add", "-A"], { cwd, timeout: 20_000, maxBuffer: 4 * 1024 * 1024 });
+  const { stdout } = await exec("git", ["status", "--porcelain"], { cwd, timeout: 20_000, maxBuffer: 4 * 1024 * 1024 });
+  const lines = stdout.trim() ? stdout.trim().split("\n") : [];
+  let staged = 0;
+  let created = 0;
+  for (const line of lines) {
+    const index = line[0]; // the staged (index) status column
+    if (index && index !== " " && index !== "?") {
+      staged++;
+      if (index === "A") created++;
+    }
+  }
+  return { staged, created };
+}

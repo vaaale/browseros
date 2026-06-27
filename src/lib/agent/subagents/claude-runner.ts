@@ -2,6 +2,7 @@ import "server-only";
 import { spawn } from "node:child_process";
 import { connectMcpClient, extractText } from "@/lib/mcp/client";
 import { getHarnessConfig } from "@/lib/devharness/harness-config";
+import { stageAll } from "@/lib/system/git";
 import type { McpServerConfig } from "@/lib/mcp/types";
 import type { SubAgent, SubAgentRunResult } from "./types";
 
@@ -89,12 +90,22 @@ function runClaudeCli(agent: SubAgent, task: string, cwd: string, onEvent?: OnEv
     child.on("error", (e) =>
       finish({ ...base, output: "", error: `${HARNESS_UNAVAILABLE} failed to spawn claude (${e.message}). Is the Claude CLI installed and on PATH?` }),
     );
-    child.on("close", (code) => {
+    child.on("close", async (code) => {
       if (isError || code !== 0) {
         finish({ ...base, output: resultText, steps, toolCalls, error: resultText || stderr.trim() || `claude exited with code ${code}.` });
-      } else {
-        finish({ ...base, output: resultText, steps, toolCalls });
+        return;
       }
+      // Deterministic backstop: stage everything the agent created/changed so
+      // new files are never left untracked. Feature-branch + .gitignore make
+      // `git add -A` safe; a staging error must never fail the task.
+      let note = "";
+      try {
+        const r = await stageAll(cwd);
+        if (r.staged > 0) note = `\n\n[harness] Staged ${r.staged} changed file(s)${r.created ? ` (${r.created} new)` : ""}.`;
+      } catch {
+        /* ignore staging errors */
+      }
+      finish({ ...base, output: resultText + note, steps, toolCalls });
     });
   });
 }

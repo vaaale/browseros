@@ -2,6 +2,7 @@ import "server-only";
 import { runToolLoop, type ToolEvent } from "@/lib/agent/llm";
 import { toolsFor, DEV_TOOLS } from "./tools";
 import { runClaudeAgent } from "./claude-runner";
+import { stageAll } from "@/lib/system/git";
 import type { SubAgent, SubAgentRunResult } from "./types";
 
 export type SubAgentEvent = ToolEvent;
@@ -24,7 +25,18 @@ async function runLocal(
     maxSteps: isDev ? DEV_MAX_STEPS : undefined,
     onEvent: opts?.onEvent,
   });
-  return { agent: agent.name, type: "local", task, output: result.text, steps: result.steps, toolCalls: result.toolCalls };
+  let output = result.text;
+  if (isDev) {
+    // Same deterministic staging backstop as the Claude harness: ensure files a
+    // dev agent created are staged, not left untracked.
+    try {
+      const r = await stageAll();
+      if (r.staged > 0) output += `\n\n[harness] Staged ${r.staged} changed file(s)${r.created ? ` (${r.created} new)` : ""}.`;
+    } catch {
+      /* ignore staging errors */
+    }
+  }
+  return { agent: agent.name, type: "local", task, output, steps: result.steps, toolCalls: result.toolCalls };
 }
 
 /** Run a sub-agent. Claude agents run as Claude Code (headless CLI or MCP harness)
