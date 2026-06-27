@@ -87,6 +87,7 @@ export function Window({ win }: { win: WindowInstance }) {
 
   return (
     <div
+      data-testid={`window-${win.appId}`}
       className={`absolute flex flex-col overflow-hidden rounded-xl border bg-[#15171e]/95 shadow-2xl backdrop-blur-md transition-shadow ${
         isFocused ? "border-white/20 ring-1 ring-white/10" : "border-white/10"
       }`}

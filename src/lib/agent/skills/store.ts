@@ -79,6 +79,8 @@ const SEED: Omit<Skill, "id">[] = [
           "",
           "Design choices to prefer: make user-editable values a config namespace (a Settings tab) instead of hardcoding, which also exposes them to the assistant as tools; prefer a standalone installed app over a new built-in app when a self-contained app would do; keep changes focused and reversible; do not touch secrets, package.json, lockfiles, or build config unless explicitly asked.",
           "",
+          "Require tests: the developer MUST add or extend Playwright end-to-end tests (and any fixtures they need) under e2e/ that cover the change, and run them (`npm run test:e2e`, or the `e2e` dev command) until green before reporting done. Tests must be deterministic and self-contained (seed their own state); for assistant/chat flows, assert only that the UI mounts/streams, never on the model's exact output.",
+          "",
           "After it reports: summarize what changed and how to test it, and call writeDoc to update the documentation hub.",
         ].join("\n"),
       },

@@ -144,7 +144,7 @@ There is **no "Dev Studio" app and no `buildApp` tool**. Apps are created by del
 
 Rendering (`src/components/apps/SettingsApp.tsx`): a generic `<ConfigForm>` renders `fields`; if `schema.customComponent` is set, a custom React component is used instead (mapped in `CUSTOM_TABS`). Generic per‑namespace JSON is stored at `data/config/<namespace>.json` via `src/lib/config/store.ts` (`readNamespace`/`patchNamespace`); some namespaces (provider, appearance) delegate to their own stores instead.
 
-Current tabs/namespaces: `assistant`, `skills`, `apps`, `appearance`, `ai-provider`, `dev-harness`.
+Current tabs/namespaces: `assistant`, `skills`, `apps`, `appearance`, `ai-provider`, `dev-harness`, `browser-automation`.
 
 ---
 
@@ -355,6 +355,19 @@ npm run dev          # next dev (Turbopack), http://localhost:3000 — src/ hot-
 npx tsc --noEmit     # type check
 npm run lint         # eslint
 npm run build        # production build (regenerates .next/types) — NOT while dev is running
+npm run test:e2e     # Playwright e2e (reuses a running dev server, else starts one)
 ```
 
 Always typecheck after editing. For UI changes, verify in the browser when possible; if you can't, say so explicitly rather than claiming success.
+
+---
+
+## 18. Testing & browser automation (Playwright)
+
+BOS uses Playwright for two distinct purposes (specs: `spec/self-modification/testing.md`, `spec/automation/browser-automation.md`):
+
+- **Self-testing (e2e).** `playwright.config.ts` + the `e2e/` suite. Tests run against the app on `http://localhost:3000` (`reuseExistingServer` reuses a running `npm run dev`, else Playwright starts one). `e2e/global-setup.ts` marks setup complete so the first-run wizard stays closed; `e2e/fixtures.ts` provides a ready desktop. Stable hooks added to the shell: `data-testid="desktop" | "dock" | "dock-<appId>" | "window-<appId>"`. Keep tests deterministic and **stub/avoid the LLM** (assert the chat UI mounts, not model output). Run with `npm run test:e2e` (or the `e2e` entry in `lib/dev/run-command.ts`). The developer agent MUST author tests + fixtures for any BOS change (the "Develop in BrowserOS" skill encodes this).
+- **Browser automation (assistant tool).** **Settings → Browser Automation** (`browser-automation` namespace, off by default) configures a *managed* Playwright MCP server. `lib/automation/playwright-mcp.ts` derives an `McpServerConfig` from that config (host scope via `--allowed-origins`/`--blocked-origins`, `--headless`, `--isolated`, plus `--executable-path` pointing at the installed Chromium resolved by the probe — so it reuses the e2e browser with no extra download) and `lib/agent/runtime.ts` appends it to the agent's MCP servers, so its browser tools are auto-exposed. Deny-by-default host scope; sandboxed; bypasses the in-app proxy's SSRF guard, so only allowed origins are reachable.
+- **Capability probe.** `lib/playwright/probe.ts` (`detectPlaywright()`) checks for a Chromium build and the `@playwright/test` / `@playwright/mcp` packages; both features **degrade gracefully** when no browser is present (e2e is skippable; automation simply exposes no tools).
+
+One-time environment setup: `npm install -D @playwright/test @playwright/mcp` then `npx playwright install chromium` (run the browser install as your normal user; `sudo npx playwright install-deps chromium` for system libraries).

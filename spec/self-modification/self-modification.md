@@ -71,8 +71,8 @@ Each version is an ordinary BOS (Next.js) instance, launched by the Supervisor f
 ## 4. Build and health gate
 
 - A candidate MUST be built as an **immutable production build** in its own worktree (`next build` into that worktree's own `.next`), then run (`next start` on its own internal port). Production builds — not a shared `next dev` hot-reload — are the version unit: they are immutable snapshots, and a per-worktree `.next` avoids the shared-`.next` hazard documented in `docs/DEVELOPMENT.md`.
-- Before a candidate may be previewed or promoted, it MUST pass a validation pipeline: **typecheck → lint → build → boot → health probe**. The health probe is an HTTP `GET /api/health` against the candidate's own port.
-- A candidate carries a state: `building → ready` on success, `building → failed` on any pipeline failure (with logs retained for inspection). Only a `ready` candidate is previewable/promotable.
+- Before a candidate may be promoted, it MUST pass a validation pipeline: **typecheck → lint → build → boot → health probe → end-to-end (Playwright) verification**. The health probe is an HTTP `GET /api/health` against the candidate's own port; the E2E stage is specified in `spec/self-modification/testing.md` and follows the same probe-and-degrade rule (skipped with a clear status where no browser is available).
+- A candidate carries a state: `building → ready` (boot + health) `→ testing → verified` on success, or `failed` / `tests-failed` on a build/health or E2E failure respectively (with logs and reports retained for inspection). A candidate is **previewable at `ready`** (preview is not blocked on E2E); it is **promotable when `verified`**, or when the user overrides a `tests-failed` candidate per the configured gate policy (see `spec/self-modification/testing.md` §4).
 - BOS MUST expose a cheap **`/api/health`** endpoint reporting readiness (process up, data root readable, app able to render). The Supervisor uses it for the gate and for liveness of running versions.
 
 ---
@@ -99,7 +99,7 @@ For ergonomics, BOS's Topbar MUST surface the version controls: the current vers
 
 ## 6. Promote, rollback, discard, drain
 
-- **Promote.** Promote performs coordinated git and runtime actions that MUST agree on what `active` is, in this order:
+- **Promote.** Promote requires a `verified` candidate (or a user override of a `tests-failed` candidate per the gate policy in `spec/self-modification/testing.md` §4). It then performs coordinated git and runtime actions that MUST agree on what `active` is, in this order:
   1. **Git integration (merge).** Fast-forward the candidate's feature branch into the **base branch that `active` tracks** (the branch the feature stems from, e.g. `main`), advancing it to the candidate's commit. Because `next` was reset to `active`'s exact HEAD at begin (§3), this is normally a clean **fast-forward** — linear history, no merge commit. Re-anchor `active` to the new HEAD; record the prior commit as `previous` (the immediate rollback target).
   2. **Tagging (mandatory).** Every promote MUST create an **annotated git tag** on the promoted commit — a monotonic version marker (e.g. `bos/v<N>`) annotated with the feature summary, source branch, and timestamp. Tags are the durable, ordered record of every promoted version and the targets for tag-based rollback (below). Tagging is not disableable.
   3. **Push (configurable).** Per the `pushMode` setting (§10): **`manual`** (default — nothing is pushed automatically) or **`auto-on-promote`** (push the base branch and the new tag to the configured GitLab remote). Regardless of `pushMode`, a **manual Push action** MUST be available in the version controls (§5.3, §5.4) to push the canonical base branch and all promote tags to the remote at any time — e.g. to retry after a failed auto-push, or to publish a batch of local promotes. `pushMode` governs only whether promote pushes *automatically*; it never removes the manual action.
@@ -122,7 +122,7 @@ For ergonomics, BOS's Topbar MUST surface the version controls: the current vers
                 ▼                                │
  idle ─ begin ─► [next @ active HEAD + data clone] ─► agent edits next ─► validate
    ▲              (deterministic, Supervisor)                              (tsc·lint·
-   │                                                                        build·health)
+   │                                                                        build·health·e2e)
    │                                                                          │
    │                                                          failed ◄────────┤
    │                                                                          ▼ ready
@@ -135,7 +135,7 @@ For ergonomics, BOS's Topbar MUST surface the version controls: the current vers
 
 - **begin**: a self-modification task starts → Supervisor provisions `next` (§3) and its data clone (§8).
 - **edit**: the developer sub-agent edits `next` only.
-- **validate**: the build/health gate (§4) moves `next` to `ready` or `failed`.
+- **validate**: the gate (§4) builds, health-checks, then runs Playwright self-tests (`spec/self-modification/testing.md`) — moving `next` to `verified`, or `failed` / `tests-failed`.
 - **preview**: the user pins their session to `next` (§5.2), tests, and switches back at will.
 - **promote / discard / rollback**: per §6 — promote fast-forwards the feature branch into the base branch and tags it; rollback targets `previous` (instant) or any earlier tag via the same provision → validate → flip pipeline.
 
@@ -166,8 +166,8 @@ The mechanism for producing the clone is pluggable and chosen by a capability pr
 ## 10. UI & configuration
 
 - **Topbar** version controls (§5.4) and the **Supervisor control page** (§5.3).
-- A **Versions** view (a Settings tab and/or the control page) listing the versions (`active`/`next`/`previous`), their state and build logs, and the **tag history** of promoted versions, with one-click promote / rollback (to `previous` or any tag) / discard / **push to remote**, and SHOULD show push status (e.g. unpushed promotes/tags, last push result).
-- A **configuration namespace** (e.g. `self-modification`) MUST expose at least: the public port, the internal port range, the worktrees location, the **base branch**, the **`pushMode`** (`manual` | `auto-on-promote`) and the remote to push to, the **tag scheme/prefix** (tagging itself is mandatory and not disableable), the retain-`previous` policy, and the build/health timeouts. Per the BOS configuration system this also exposes these to the assistant as tools.
+- A **Versions** view (a Settings tab and/or the control page) listing the versions (`active`/`next`/`previous`), their state and build logs, and the **tag history** of promoted versions, with one-click promote / rollback (to `previous` or any tag) / discard / **push to remote**, and SHOULD show push status (e.g. unpushed promotes/tags, last push result) and the latest **E2E test results** per candidate (pass/fail with failing screenshots, per `spec/self-modification/testing.md` §6).
+- A **configuration namespace** (e.g. `self-modification`) MUST expose at least: the public port, the internal port range, the worktrees location, the **base branch**, the **`pushMode`** (`manual` | `auto-on-promote`) and the remote to push to, the **tag scheme/prefix** (tagging itself is mandatory and not disableable), the retain-`previous` policy, and the build/health timeouts. Self-testing options (mode, gate policy, report retention) are specified in `spec/self-modification/testing.md` §7. Per the BOS configuration system this also exposes these to the assistant as tools.
 - **First-run.** The first-startup wizard already configures the AI provider and Dev Harness (`spec/bos.md`); the data-isolation method it must also configure is specified in `spec/self-modification/datafs.md`.
 
 ---
@@ -175,5 +175,6 @@ The mechanism for producing the clone is pluggable and chosen by a capability pr
 ## 11. Relationship to other specs
 
 - **`spec/self-modification/datafs.md`** — the data-isolation layer (copy-on-write clone backends, capability probe, the isolation-method setting) this feature relies on for safe preview and code-only promote.
+- **`spec/self-modification/testing.md`** — the Playwright self-testing verify stage of the gate (§4), the agent's obligation to author tests + fixtures, the configurable promote gate with user override, and result reporting.
 - **`spec/self-improvement/self-improvement.md` §8** — the BOS-codebase self-improvement activity (the developer sub-agent editing source) that produces the changes this spec makes safe to apply at runtime.
 - **`spec/bos.md`** — the Developer sub-agent and Dev Harness, the feature-branch / minimize-blast-radius rule, the configuration system, and the first-startup wizard.

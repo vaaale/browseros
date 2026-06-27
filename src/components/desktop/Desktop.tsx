@@ -15,6 +15,7 @@ export function Desktop() {
 
   return (
     <div
+      data-testid="desktop"
       className="fixed inset-0 overflow-hidden"
       style={{ background: wallpaperToCss(settings.wallpaper, settings.wallpaperFit) }}
     >

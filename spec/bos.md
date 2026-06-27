@@ -8,6 +8,8 @@ Below is a description of the initial requirements of the Browser OS (BOS from h
 - `spec/self-improvement/self-improvement.md` — the learning loop (reflection, skills, GEPA, the Curator) and BOS-codebase self-improvement.
 - `spec/self-modification/self-modification.md` — live version control: running multiple BOS versions concurrently so the system can safely modify its own source.
 - `spec/self-modification/datafs.md` — the data-isolation layer (copy-on-write clones, capability probe, the isolation-method setting) that the self-modification feature relies on.
+- `spec/self-modification/testing.md` — Playwright self-testing: a verify stage on the gate so a candidate tests itself (probe-and-degrade) before the user promotes.
+- `spec/automation/browser-automation.md` — browser automation: exposing Playwright to the assistant as a gated, host-scoped MCP tool for web automation (configured in Settings).
 
 # Basic functionality
 The os must have a file browser and web browser.
@@ -169,8 +171,9 @@ Because BOS can edit its own source, applying a change to the very code paths th
 - Each version is a **git worktree** built and run on its own port; the developer sub-agent edits an isolated `next` worktree, never the running tree.
 - The user can **preview** a candidate version (a per-session switch, with Topbar controls and a Supervisor-served fallback control surface), then **promote** it or **discard** it. Promote fast-forwards the feature branch into the base branch and creates a git **tag** (optionally pushed to GitLab); any previously promoted version can be **rolled back** to through the same mechanism.
 - A version being previewed gets an **isolated copy-on-write clone** of the data so testing never pollutes production state; promote is code-only (the clone is discarded and the canonical data carries forward).
+- Before promotion a candidate **tests itself** with Playwright — the developer sub-agent writes the tests and their fixtures as part of the change — and results are surfaced to the user, who may override a failing gate; self-testing degrades gracefully where no browser is available.
 
-This is specified in full in `spec/self-modification/self-modification.md`, with the data-isolation layer in `spec/self-modification/datafs.md`.
+This is specified in full in `spec/self-modification/self-modification.md`, with the data-isolation layer in `spec/self-modification/datafs.md` and self-testing in `spec/self-modification/testing.md`.
 
 # Documentation
 BOS must have a documentation hub containing user-friendly documentation for how to use BOS.

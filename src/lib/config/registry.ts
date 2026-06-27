@@ -137,6 +137,50 @@ const REGISTRATIONS: ConfigRegistration[] = [
       await patchNamespace("dev-harness", patch);
     },
   },
+  {
+    schema: {
+      namespace: "browser-automation",
+      title: "Browser Automation",
+      description:
+        "Let the assistant drive a real browser (via the Playwright MCP server) to automate web tasks. Off by default and sandboxed: the browser is host-scoped (deny-by-default) and bypasses the in-app proxy's SSRF guard, so only origins you allow are reachable. Requires the @playwright/mcp package and an installed Chromium (`npx playwright install chromium`).",
+      order: 40,
+      fields: [
+        { key: "enabled", label: "Enabled", type: "boolean", description: "Master switch. When off, the assistant has no browser-automation tools." },
+        { key: "allowedOrigins", label: "Allowed origins", type: "textarea", description: "Origins the browser may visit (comma/space/semicolon-separated). Empty = nothing is reachable." },
+        { key: "blockedOrigins", label: "Blocked origins", type: "textarea", description: "Origins to always block." },
+        { key: "headless", label: "Headless", type: "boolean" },
+        { key: "isolated", label: "Isolated profile", type: "boolean", description: "Fresh in-memory profile (no access to saved cookies/sessions)." },
+        { key: "downloads", label: "Allow downloads", type: "boolean" },
+        {
+          key: "consentPolicy",
+          label: "Consent",
+          type: "select",
+          options: [
+            { value: "off", label: "No prompt (within allowlist)" },
+            { value: "per-session", label: "Ask once per session" },
+            { value: "per-use", label: "Ask before each use" },
+          ],
+        },
+        { key: "command", label: "MCP command", type: "text", placeholder: "npx @playwright/mcp" },
+      ],
+    },
+    load: async () => {
+      const s = await readNamespace("browser-automation");
+      return {
+        enabled: s.enabled === true,
+        allowedOrigins: (s.allowedOrigins as string) ?? "",
+        blockedOrigins: (s.blockedOrigins as string) ?? "",
+        headless: s.headless !== false,
+        isolated: s.isolated !== false,
+        downloads: s.downloads === true,
+        consentPolicy: (s.consentPolicy as string) || "per-use",
+        command: (s.command as string) || "npx @playwright/mcp",
+      };
+    },
+    save: async (patch) => {
+      await patchNamespace("browser-automation", patch);
+    },
+  },
 ];
 
 export function listConfigSchemas(): ConfigSchema[] {

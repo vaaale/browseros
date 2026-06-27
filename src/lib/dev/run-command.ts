@@ -8,6 +8,7 @@ const COMMANDS: Record<string, { argv: [string, string[]]; timeoutMs: number; de
   typecheck: { argv: ["npx", ["tsc", "--noEmit"]], timeoutMs: 120_000, description: "TypeScript type check" },
   lint: { argv: ["npx", ["eslint", "."]], timeoutMs: 120_000, description: "ESLint" },
   build: { argv: ["npm", ["run", "build"]], timeoutMs: 300_000, description: "Production build" },
+  e2e: { argv: ["npm", ["run", "test:e2e"]], timeoutMs: 600_000, description: "Playwright end-to-end tests" },
 };
 
 export const ALLOWED_COMMANDS = Object.keys(COMMANDS);
