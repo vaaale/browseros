@@ -1,8 +1,8 @@
 # BrowserOS Self-Improvement — Specification
 
-BOS's assistant must **get better over time from its own experience and from user feedback** — turning conversations into durable improvements to its memory, its skills, and (where appropriate) to BOS itself. This document specifies how. It expands the `bos.md` requirements ("Agent self improvement" and "BOS Self improvement") and is informed by a study of Hermes-Agent (`agent/background_review.py`, `agent/curator.py`, `tools/skill_manager_tool.py`, `cron/suggestions.py`).
+BOS's assistant must **get better over time from its own experience and from user feedback** — turning conversations into durable improvements to its memory, its skills, and (where appropriate) to BOS itself. This document specifies how. It expands the `spec/bos.md` requirements ("Agent self improvement" and "BOS Self improvement") and is informed by a study of Hermes-Agent (`agent/background_review.py`, `agent/curator.py`, `tools/skill_manager_tool.py`, `cron/suggestions.py`).
 
-It pairs with `spec/memory.md`: that document specifies the **memory substrate** (the surfaces, storage, the memory tool, recall); this document specifies the **learning loop** that decides what to write and how the skill library evolves. Where they overlap, this document is authoritative for the loop and lifecycle; `memory.md` is authoritative for the storage and the memory tool.
+It pairs with `spec/memory/memory.md`: that document specifies the **memory substrate** (the surfaces, storage, the memory tool, recall); this document specifies the **learning loop** that decides what to write and how the skill library evolves. Where they overlap, this document is authoritative for the loop and lifecycle; `memory.md` is authoritative for the storage and the memory tool.
 
 ## Two scopes of self-improvement
 
@@ -63,19 +63,19 @@ These harden into persistent self-imposed constraints:
 
 ## 3. Skills as the unit of procedural improvement
 
-(Skill structure is specified in `bos.md`; this section covers how the loop creates and edits them.)
+(Skill structure is specified in `spec/bos.md`; this section covers how the loop creates and edits them.)
 
 - A skill is a directory: `SKILL.md` (frontmatter: name, one-sentence description, when-to-use; body) plus optional `references/`, `scripts/`, `templates/`.
 - Skills carry **provenance** (`agent`-created vs seeded/built-in), which governs the lifecycle in §5.
 - The library MUST trend toward **class-level "umbrella" skills** — a rich `SKILL.md` with a `references/` directory for specifics — not a flat list of one-session skills.
 - Skill mutation MUST support: **create**, **edit** (full rewrite), **patch** (targeted find-and-replace in `SKILL.md` or a support file), **delete** (agent-created, non-pinned only), and **add/remove support files**.
-- **Auto-creation from conversation** (per `bos.md`): when a new class of task with a reusable procedure emerges, the loop SHOULD create a skill — subject to the class-level-naming rule and the anti-patterns above.
+- **Auto-creation from conversation** (per `spec/bos.md`): when a new class of task with a reusable procedure emerges, the loop SHOULD create a skill — subject to the class-level-naming rule and the anti-patterns above.
 
 ---
 
 ## 4. Skill optimization over time (GEPA)
 
-Beyond per-session patches, BOS MUST be able to **improve a skill's instructions from accumulated feedback and self-reflection** — the GEPA-style reflective optimizer named in `bos.md` ("Use GEPA to improve any skill over time based on feedback from the user or self-reflection").
+Beyond per-session patches, BOS MUST be able to **improve a skill's instructions from accumulated feedback and self-reflection** — the GEPA-style reflective optimizer named in `spec/bos.md` ("Use GEPA to improve any skill over time based on feedback from the user or self-reflection").
 
 GEPA-style optimization MUST work by **reflection, not blind appending**:
 - **Reflective mutation.** From execution traces (what the skill produced, where it failed), user feedback, and self-reflection, an optimizer proposes an improved version of the skill's instructions in natural language — diagnosing *why* the previous version underperformed and rewriting accordingly.
@@ -122,9 +122,9 @@ The learning loop MAY notice **recurring asks or patterns** and propose improvem
 
 ## 8. BOS self-improvement (improving BOS itself)
 
-Per `bos.md`, BOS must also improve its own implementation over time. This is a **development** activity, not memory/skill learning:
+Per `spec/bos.md`, BOS must also improve its own implementation over time. This is a **development** activity, not memory/skill learning:
 - When asked to build a new app or feature, the assistant MUST **first evaluate** whether an optimal solution requires architectural changes, and whether such changes would improve BOS's quality — and state this briefly before implementing.
-- Improving BOS's own apps, features, or architecture MUST be done by the **developer sub-agent** (Claude) against the source, on a **git feature branch** (minimize blast radius), with changes staged and type-checked and the documentation updated (see the "Develop in BrowserOS" skill and `bos.md`).
+- Improving BOS's own apps, features, or architecture MUST be done by the **developer sub-agent** (Claude) against the source, on a **git feature branch** (minimize blast radius), with changes staged and type-checked and the documentation updated (see the "Develop in BrowserOS" skill and `spec/bos.md`).
 - This path edits `src/`; it MUST NOT be conflated with the agent learning loop, which edits `data/`.
 
 ---
@@ -150,5 +150,5 @@ Per `bos.md`, BOS must also improve its own implementation over time. This is a 
 
 ## 11. Relationship to other specs
 
-- **`spec/memory.md`** — the memory substrate the loop writes to (surfaces, storage, the memory tool, recall, safety). The "what to save / what to skip" guidance for memory lives there.
-- **`bos.md`** — skills, sub-agents and delegation, the developer sub-agent, the feature-branch policy, and the BOS-self-improvement requirement that §8 elaborates.
+- **`spec/memory/memory.md`** — the memory substrate the loop writes to (surfaces, storage, the memory tool, recall, safety). The "what to save / what to skip" guidance for memory lives there.
+- **`spec/bos.md`** — skills, sub-agents and delegation, the developer sub-agent, the feature-branch policy, and the BOS-self-improvement requirement that §8 elaborates.

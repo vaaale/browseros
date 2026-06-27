@@ -1,6 +1,6 @@
 # BrowserOS Memory System — Specification
 
-BOS must have a **self-improving memory system** modeled on Hermes-Agent. This document specifies how it must work. It expands the one-line requirement in `bos.md` ("The agent must have a self-improving memory system similar to Hermes-Agent"). Design choices here are informed by a study of Hermes-Agent's implementation (`tools/memory_tool.py`, `agent/memory_provider.py`, `agent/background_review.py`, `agent/curator.py`, and the Skills subsystem). Its companion `spec/self-improvement.md` specifies the *learning loop* that decides what to write to memory and how skills evolve; this document specifies the memory substrate those writes land in.
+BOS must have a **self-improving memory system** modeled on Hermes-Agent. This document specifies how it must work. It expands the one-line requirement in `spec/bos.md` ("The agent must have a self-improving memory system similar to Hermes-Agent"). Design choices here are informed by a study of Hermes-Agent's implementation (`tools/memory_tool.py`, `agent/memory_provider.py`, `agent/background_review.py`, `agent/curator.py`, and the Skills subsystem). Its companion `spec/self-improvement/self-improvement.md` specifies the *learning loop* that decides what to write to memory and how skills evolve; this document specifies the memory substrate those writes land in.
 
 The goal is an agent that **stops the user repeating themselves** and **gets better at recurring tasks over time**, without unbounded context growth and without hardening transient failures into permanent self-imposed constraints.
 
@@ -12,7 +12,7 @@ Long-term knowledge MUST be split into three distinct surfaces, plus ephemeral c
 
 1. **User profile** — *who the user is*: identity, role, durable preferences, communication style, expectations about how the assistant should behave, workflow habits. Declarative, slow-changing.
 2. **Agent memory** — *the assistant's own notes*: environment facts, project conventions, tool quirks, durable lessons, and the current state of ongoing work. Declarative.
-3. **Skills** — *how to do a class of task*: procedural knowledge captured from proven experience. Narrow, actionable, reusable. (Skills are specified in `bos.md`; this document covers how memory and skills co-evolve.)
+3. **Skills** — *how to do a class of task*: procedural knowledge captured from proven experience. Narrow, actionable, reusable. (Skills are specified in `spec/bos.md`; this document covers how memory and skills co-evolve.)
 
 **The split is load-bearing.** Memory answers "who the user is and what the current situation is"; skills answer "how to do this class of task for this user." A reusable procedure MUST become a skill, never a memory entry. A user preference about *how* a class of task should be done belongs in the relevant **skill body**, not only in memory.
 
@@ -60,17 +60,17 @@ The assistant (and the background-review pass, §6) writes memory through a sing
 
 ## 5. Skills as procedural memory
 
-Skills are the procedural surface of memory and co-evolve with it (full skill structure is specified in `bos.md`). For the memory system, the following MUST hold:
+Skills are the procedural surface of memory and co-evolve with it (full skill structure is specified in `spec/bos.md`). For the memory system, the following MUST hold:
 
 - A skill is a directory: a `SKILL.md` (frontmatter: name, a one-sentence description, when-to-use; body) plus optional `references/` (session-specific detail and condensed knowledge banks), `scripts/` (re-runnable helpers), and `templates/` (starter files to copy).
-- Skills carry **provenance**: `agent`-created vs seeded/built-in. This drives the skill lifecycle (specified in `spec/self-improvement.md` §5).
+- Skills carry **provenance**: `agent`-created vs seeded/built-in. This drives the skill lifecycle (specified in `spec/self-improvement/self-improvement.md` §5).
 - The library SHOULD trend toward **class-level "umbrella" skills** — a rich SKILL.md with a `references/` directory for specifics — NOT a long flat list of one-session, one-skill entries. A skill name MUST be at the class level (e.g. "Debugging the proxy") and MUST NOT be a session artifact (a specific bug id, error string, codename, or "fix-X-today").
 
 ---
 
 ## 6. Self-improvement loop (writes to memory)
 
-Memory is kept current by the **self-improvement loop** — a post-task review pass that decides what to save or update. That loop, the skill signals it acts on, its anti-patterns, and GEPA skill optimization are specified in full in `spec/self-improvement.md`. This section states only its contract with the memory substrate:
+Memory is kept current by the **self-improvement loop** — a post-task review pass that decides what to save or update. That loop, the skill signals it acts on, its anti-patterns, and GEPA skill optimization are specified in full in `spec/self-improvement/self-improvement.md`. This section states only its contract with the memory substrate:
 
 - The review runs as a **separate, restricted pass** (memory + skill-management tools only) and writes memory through the memory tool (§4); it MUST NOT mutate the live conversation or its prompt cache.
 - It writes to the **user profile** when the user reveals identity, durable preferences, or expectations, and to **agent memory** when a durable environment fact, convention, or lesson emerges.
@@ -80,7 +80,7 @@ Memory is kept current by the **self-improvement loop** — a post-task review p
 
 ## 7. Skills & their lifecycle
 
-Skills are the procedural surface that co-evolves with memory. Their creation and editing, optimization over time (GEPA), and lifecycle maintenance — the **Curator** (usage telemetry, staleness transitions, archive-but-never-delete, pinning, agent-only provenance) — are specified in `spec/self-improvement.md` (§3–§5) and `bos.md`. The memory↔skill split MUST be preserved: *who the user is and the current state* → memory; *how to do a class of task* → a skill.
+Skills are the procedural surface that co-evolves with memory. Their creation and editing, optimization over time (GEPA), and lifecycle maintenance — the **Curator** (usage telemetry, staleness transitions, archive-but-never-delete, pinning, agent-only provenance) — are specified in `spec/self-improvement/self-improvement.md` (§3–§5) and `spec/bos.md`. The memory↔skill split MUST be preserved: *who the user is and the current state* → memory; *how to do a class of task* → a skill.
 
 ---
 
@@ -119,6 +119,6 @@ This section is forward-looking: the built-in provider is mandatory; external pr
 ## 11. UI & configuration
 
 - The **Memory app** MUST let the user view, edit, and remove entries in both the User profile and Agent memory, and review what the assistant has learned.
-- **Skills** are managed in Settings → Skills (per `bos.md`).
+- **Skills** are managed in Settings → Skills (per `spec/bos.md`).
 - Configuration MUST expose at least: memory size budgets; whether the self-improvement review runs (and which model it uses); the write-approval gate; the active memory provider; and Curator settings. Per the BOS configuration system, exposing these as a config namespace also exposes them to the assistant as tools.
 

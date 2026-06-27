@@ -2,6 +2,13 @@ We are going to write a single-page BrowserOS using nodejs and nextjs. The os mu
 We will use gitlab which is already configured (cloned).
 Below is a description of the initial requirements of the Browser OS (BOS from here on):
 
+# Specification layout
+`spec/bos.md` (this file) is the canonical overview of all requirements. Detailed, feature-level specifications live in per-feature subdirectories and expand the relevant sections here:
+- `spec/memory/memory.md` — the memory substrate (surfaces, storage, the memory tool, recall, safety).
+- `spec/self-improvement/self-improvement.md` — the learning loop (reflection, skills, GEPA, the Curator) and BOS-codebase self-improvement.
+- `spec/self-modification/self-modification.md` — live version control: running multiple BOS versions concurrently so the system can safely modify its own source.
+- `spec/self-modification/datafs.md` — the data-isolation layer (copy-on-write clones, capability probe, the isolation-method setting) that the self-modification feature relies on.
+
 # Basic functionality
 The os must have a file browser and web browser.
 It must be possible to change the wallpaper
@@ -156,6 +163,15 @@ If the user asks the assistant to implement a new app or feature, BOS must evalu
 Whenever changes are made to BOS, the changes MUST developed using a feature branch so that it can be rolled back if BOS breaks.
 It's important that the agent adds new / stages files when during such work.
 
+# Self-modification (live version control)
+Because BOS can edit its own source, applying a change to the very code paths that are executing the change can break the running instance. BOS MUST therefore run **multiple versions of itself concurrently** and apply self-modifications safely:
+- A stable **Supervisor** (control plane) — separate from, and never modified by, the BOS app it manages — owns version lifecycle, builds, health checks, routing, preview, promote, and rollback.
+- Each version is a **git worktree** built and run on its own port; the developer sub-agent edits an isolated `next` worktree, never the running tree.
+- The user can **preview** a candidate version (a per-session switch, with Topbar controls and a Supervisor-served fallback control surface), then **promote** it (code-only) or **discard** it; a promoted version can be **rolled back**.
+- A version being previewed gets an **isolated copy-on-write clone** of the data so testing never pollutes production state; promote is code-only (the clone is discarded and the canonical data carries forward).
+
+This is specified in full in `spec/self-modification/self-modification.md`, with the data-isolation layer in `spec/self-modification/datafs.md`.
+
 # Documentation
 BOS must have a documentation hub containing user-friendly documentation for how to use BOS.
 Whenever a new app or feature is created, added, modified, or removed, the documentation MUST be updated.
@@ -175,3 +191,4 @@ Either way, delegating to a Claude sub-agent must stream progress where possible
 
 # On first startup
 The first time the user opens BOS, a configuration wizard appears where the user configures the AI provider/model and the Dev Harness — i.e. how Claude Code runs for the Developer sub-agent (headless Claude CLI by default, or an MCP harness).
+The wizard also lets the user choose the **data-isolation method** used for live version control (see `spec/self-modification/datafs.md`), defaulted to the best option compatible with the host filesystem (only compatible methods are selectable).
