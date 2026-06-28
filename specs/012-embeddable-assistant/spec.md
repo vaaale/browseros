@@ -4,7 +4,7 @@
 
 **Created**: 2026-06-28
 
-**Status**: Draft
+**Status**: Implemented (v1)
 
 **Input**: "BOS is AI-first, so the Assistant is a platform capability: any app can embed the assistant chat — scoped to a chosen agent, with the side-panel chrome toggled — bound to the shared conversation store. The Assistant app becomes one consumer of its own embed API."
 

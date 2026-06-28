@@ -6,6 +6,7 @@ import {
   loadConversationMessages,
   saveConversationMessages,
   useActiveConversationId,
+  DEFAULT_GROUP,
 } from "@/lib/agent/conversations";
 
 /**
@@ -25,8 +26,8 @@ import {
 
 const SAVE_DEBOUNCE_MS = 400;
 
-export function useChatPersistence(): { isLoading: boolean } {
-  const threadId = useActiveConversationId();
+export function useChatPersistence(group: string = DEFAULT_GROUP): { isLoading: boolean } {
+  const threadId = useActiveConversationId(group);
   const { agent, setMessages, isLoading } = useCopilotChatInternal();
 
   // The thread whose messages are currently loaded into the agent. Gates saves

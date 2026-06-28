@@ -37,8 +37,10 @@ async function buildAdapter(origin: string): Promise<CopilotServiceAdapter> {
 export async function POST(req: NextRequest) {
   // Provider config and MCP servers are resolved per request so changes made in
   // Settings take effect without a restart.
-  const origin = new URL(req.url).origin;
-  const runtime = new CopilotRuntime(await buildRuntimeOptions());
+  const url = new URL(req.url);
+  const origin = url.origin;
+  const agent = url.searchParams.get("agent") || undefined;
+  const runtime = new CopilotRuntime(await buildRuntimeOptions(agent));
   const serviceAdapter = await buildAdapter(origin);
   const { handleRequest } = copilotRuntimeNextJSAppRouterEndpoint({
     runtime,

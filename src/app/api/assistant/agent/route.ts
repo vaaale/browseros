@@ -28,11 +28,14 @@ async function buildCatalog() {
 
 // The main assistant's personality is the "active agent" — one of the agents in
 // data/agents. (There is no separate "profile" concept.)
-export async function GET() {
+export async function GET(req: NextRequest) {
+  // ?agentId composes instructions for a specific agent (embedded chats, 012);
+  // otherwise the globally active agent.
+  const agentId = new URL(req.url).searchParams.get("agentId") || undefined;
   const [agents, active, composed, catalog] = await Promise.all([
     listSubAgents(),
     getActiveAgentId(),
-    composeInstructions(),
+    composeInstructions(agentId),
     buildCatalog(),
   ]);
   const activeAgent = agents.find((a) => a.id === active);

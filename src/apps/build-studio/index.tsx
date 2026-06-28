@@ -1,175 +1,46 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { Markdown } from "@copilotkit/react-ui";
-import "@copilotkit/react-ui/styles.css";
-import {
-  ChevronDown,
-  ChevronRight,
-  FileText,
-  FolderTree,
-  Hammer,
-  Pencil,
-  RefreshCw,
-  Save,
-  X,
-} from "lucide-react";
+import { useEffect, useState } from "react";
+import { ChevronDown, ChevronRight, FileText, FolderTree, Hammer, RefreshCw } from "lucide-react";
 import type { AppProps } from "@/components/apps/types";
-import type { PipelinePhase, Specification, SpecTreeNode } from "@/lib/specs/types";
+import type { Specification, SpecTreeNode } from "@/lib/specs/types";
+import { AssistantChat } from "@/components/agent/AssistantChat";
 
-interface SpecsResponse {
-  tree?: SpecTreeNode[];
-  specs?: Specification[];
-}
-
-const PHASE_ORDER: PipelinePhase["id"][] = [
-  "constitution",
-  "specify",
-  "clarify",
-  "plan",
-  "tasks",
-  "analyze",
-  "implement",
-  "converge",
-];
-
-const PHASE_LABEL: Record<PipelinePhase["id"], string> = {
-  constitution: "Const",
-  specify: "Spec",
-  clarify: "Clarify",
-  plan: "Plan",
-  tasks: "Tasks",
-  analyze: "Analyze",
-  implement: "Impl",
-  converge: "Converge",
-};
-
-function phaseClass(state: PipelinePhase["state"]): string {
-  if (state === "done") return "border-emerald-500/30 bg-emerald-500/15 text-emerald-300";
-  if (state === "pending") return "border-amber-500/30 bg-amber-500/10 text-amber-300";
-  return "border-white/10 bg-white/5 text-white/30";
-}
-
-function featureIdOf(path: string): string {
-  return path.replace(/^specs\//, "").split("/")[0];
-}
-
-function PhaseStrip({ phases }: { phases: PipelinePhase[] }) {
-  const byId = new Map(phases.map((p) => [p.id, p.state]));
-  return (
-    <div className="flex flex-wrap gap-1">
-      {PHASE_ORDER.map((id) => (
-        <span
-          key={id}
-          className={`rounded border px-1.5 py-0.5 text-[10px] font-medium ${phaseClass(byId.get(id) ?? "na")}`}
-          title={`${id}: ${byId.get(id) ?? "na"}`}
-        >
-          {PHASE_LABEL[id]}
-        </span>
-      ))}
-    </div>
-  );
-}
-
+// Build Studio (013-build-studio-agentic): a spec tree for context/visualization
+// plus the embedded assistant pinned to the Build Studio agent + its own
+// conversation group. The agent does the authoring (and delegates the build to
+// the Developer); the tree mirrors specs/.
 export default function BuildStudioApp(_props: AppProps) {
   const [tree, setTree] = useState<SpecTreeNode[]>([]);
   const [specs, setSpecs] = useState<Specification[]>([]);
-  const [activeFeature, setActiveFeature] = useState<string>("");
-  const [activePath, setActivePath] = useState<string>("");
-  const [content, setContent] = useState<string>("");
-  const [loadedKey, setLoadedKey] = useState<string>("");
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
 
-  const specById = useMemo(() => new Map(specs.map((s) => [s.id, s])), [specs]);
-
-  const loadTree = useCallback(() => {
+  const loadTree = () => {
     fetch("/api/specs")
       .then((r) => r.json())
-      .then((res: SpecsResponse) => {
+      .then((res: { tree?: SpecTreeNode[]; specs?: Specification[] }) => {
         setTree(res.tree ?? []);
         setSpecs(res.specs ?? []);
       })
-      .catch(() => setError("Could not load specs."));
-  }, []);
+      .catch(() => {});
+  };
 
   useEffect(() => {
     loadTree();
-  }, [loadTree]);
+  }, []);
 
-  // Load the active artifact whenever the selection changes. State is set only
-  // inside the fetch callbacks (never synchronously in the effect body).
-  useEffect(() => {
-    if (!activePath) return;
-    let alive = true;
-    fetch(`/api/specs?path=${encodeURIComponent(activePath)}`)
-      .then((r) => r.json())
-      .then((res: { content?: string; error?: string }) => {
-        if (!alive) return;
-        setContent(res.content ?? `Could not load "${activePath}".`);
-        setLoadedKey(activePath);
-        setEditing(false);
-      })
-      .catch(() => {
-        if (!alive) return;
-        setContent(`Could not load "${activePath}".`);
-        setLoadedKey(activePath);
-      });
-    return () => {
-      alive = false;
-    };
-  }, [activePath]);
-
-  const toggle = useCallback((key: string) => {
+  const specById = new Map(specs.map((s) => [s.id, s]));
+  const toggle = (key: string) =>
     setCollapsed((prev) => {
       const next = new Set(prev);
       if (next.has(key)) next.delete(key);
       else next.add(key);
       return next;
     });
-  }, []);
-
-  const openFile = useCallback((path: string) => {
-    setActivePath(path);
-    setActiveFeature(featureIdOf(path));
-  }, []);
-
-  const selectFeature = useCallback((id: string) => {
-    setActiveFeature(id);
-    setActivePath("");
-  }, []);
-
-  const save = useCallback(async () => {
-    if (!activePath) return;
-    setSaving(true);
-    setError("");
-    try {
-      const r = await fetch("/api/specs", {
-        method: "PUT",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ path: activePath, content: draft }),
-      });
-      const res = await r.json();
-      if (!r.ok) throw new Error(res.error || "Save failed");
-      setContent(draft);
-      setEditing(false);
-      loadTree();
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setSaving(false);
-    }
-  }, [activePath, draft, loadTree]);
-
-  const activeSpec = activeFeature ? specById.get(activeFeature) : undefined;
-  const loading = Boolean(activePath) && loadedKey !== activePath;
 
   return (
     <div className="flex h-full text-sm" data-theme="dark">
-      <nav className="flex w-60 shrink-0 flex-col overflow-hidden border-r border-white/10 bg-white/[0.02]">
+      <nav className="flex w-56 shrink-0 flex-col overflow-hidden border-r border-white/10 bg-white/[0.02]">
         <div className="flex items-center justify-between px-3 pt-2 text-xs font-semibold uppercase tracking-wide text-white/40">
           <span className="flex items-center gap-1.5">
             <Hammer size={13} /> Build Studio
@@ -180,148 +51,46 @@ export default function BuildStudioApp(_props: AppProps) {
         </div>
         <div className="min-h-0 flex-1 overflow-auto px-1 py-2">
           {tree.length === 0 ? (
-            <p className="px-3 py-2 text-xs text-white/40">
-              No specifications yet. Open the Assistant, switch to the Build Studio agent, and ask it to specify a feature.
-            </p>
+            <p className="px-3 py-2 text-xs text-white/40">No specs yet. Describe a feature in the chat and Build Studio will create one.</p>
           ) : (
-            tree.map((node) => {
-              if (node.type === "feature") {
-                const isCollapsed = collapsed.has(node.path);
-                const spec = specById.get(node.name);
-                const progress = spec?.taskProgress;
-                return (
-                  <div key={node.path}>
-                    <button
-                      onClick={() => {
-                        selectFeature(node.name);
-                        toggle(node.path);
-                      }}
-                      className={`flex w-full items-center gap-1 rounded px-2 py-1 text-left text-xs font-medium hover:bg-white/5 ${
-                        activeFeature === node.name && !activePath ? "text-white" : "text-white/70"
-                      }`}
-                    >
-                      {isCollapsed ? <ChevronRight size={12} className="shrink-0" /> : <ChevronDown size={12} className="shrink-0" />}
-                      <FolderTree size={12} className="shrink-0 opacity-60" />
-                      <span className="truncate">{spec?.title ?? node.name}</span>
-                      {progress && (
-                        <span className="ml-auto shrink-0 text-[10px] text-white/40">
-                          {progress.done}/{progress.total}
-                        </span>
-                      )}
-                    </button>
-                    {!isCollapsed &&
-                      node.children?.map((child) => (
-                        <button
-                          key={child.path}
-                          onClick={() => openFile(child.path)}
-                          style={{ paddingLeft: 30 }}
-                          className={`flex w-full items-center gap-1.5 rounded px-2 py-1 text-left text-xs transition-colors ${
-                            activePath === child.path ? "bg-white/15 text-white" : "text-white/65 hover:bg-white/10"
-                          }`}
-                        >
-                          <FileText size={12} className="shrink-0 opacity-60" />
-                          <span className="truncate">{child.name}</span>
-                        </button>
-                      ))}
-                  </div>
-                );
-              }
-              return (
-                <button
-                  key={node.path}
-                  onClick={() => openFile(node.path)}
-                  className={`flex w-full items-center gap-1.5 rounded px-2 py-1 text-left text-xs transition-colors ${
-                    activePath === node.path ? "bg-white/15 text-white" : "text-white/65 hover:bg-white/10"
-                  }`}
-                >
+            tree.map((node) =>
+              node.type === "feature" ? (
+                <div key={node.path}>
+                  <button
+                    onClick={() => toggle(node.path)}
+                    className="flex w-full items-center gap-1 rounded px-2 py-1 text-left text-xs font-medium text-white/70 hover:bg-white/5"
+                  >
+                    {collapsed.has(node.path) ? <ChevronRight size={12} className="shrink-0" /> : <ChevronDown size={12} className="shrink-0" />}
+                    <FolderTree size={12} className="shrink-0 opacity-60" />
+                    <span className="truncate">{specById.get(node.name)?.title ?? node.name}</span>
+                  </button>
+                  {!collapsed.has(node.path) &&
+                    node.children?.map((child) => (
+                      <div key={child.path} style={{ paddingLeft: 30 }} className="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-white/55">
+                        <FileText size={12} className="shrink-0 opacity-60" />
+                        <span className="truncate">{child.name}</span>
+                      </div>
+                    ))}
+                </div>
+              ) : (
+                <div key={node.path} className="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-white/55">
                   <FileText size={12} className="shrink-0 opacity-60" />
                   <span className="truncate">{node.name}</span>
-                </button>
-              );
-            })
+                </div>
+              ),
+            )
           )}
         </div>
       </nav>
 
-      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        {activeSpec && (
-          <div className="flex flex-col gap-1.5 border-b border-white/10 px-4 py-2">
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-semibold text-white/80">{activeSpec.title}</span>
-              <span className="text-[10px] text-white/35">{activeSpec.id}</span>
-            </div>
-            <PhaseStrip phases={activeSpec.phases} />
-          </div>
-        )}
-
-        <div className="min-h-0 flex-1 overflow-auto p-5">
-          {error && <p className="mb-2 text-xs text-red-400">{error}</p>}
-          {!activePath && !activeSpec && (
-            <p className="text-xs text-white/40">Select a feature or an artifact.</p>
-          )}
-          {!activePath && activeSpec && (
-            <div className="text-xs text-white/55">
-              <p className="mb-2">Artifacts:</p>
-              <ul className="space-y-1">
-                {activeSpec.artifacts.map((a) => (
-                  <li key={a.path}>
-                    <button onClick={() => openFile(a.path)} className="text-white/75 hover:text-white hover:underline">
-                      {a.name}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-          {activePath &&
-            (loading ? (
-              <p className="text-xs text-white/40">Loading…</p>
-            ) : editing ? (
-              <textarea
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                spellCheck={false}
-                className="h-full w-full resize-none rounded border border-white/10 bg-black/30 p-3 font-mono text-xs text-white/85 outline-none focus:border-white/25"
-              />
-            ) : (
-              <article className="prose-sm max-w-none text-white/85">
-                <Markdown content={content || "_(empty)_"} />
-              </article>
-            ))}
-        </div>
-
-        {activePath && !loading && (
-          <div className="flex items-center justify-between border-t border-white/10 px-4 py-1.5">
-            <span className="truncate text-[10px] text-white/35">{activePath}</span>
-            {editing ? (
-              <div className="flex gap-1">
-                <button
-                  onClick={save}
-                  disabled={saving}
-                  className="flex items-center gap-1 rounded bg-emerald-500/20 px-2 py-1 text-xs text-emerald-200 hover:bg-emerald-500/30 disabled:opacity-50"
-                >
-                  <Save size={12} /> {saving ? "Saving…" : "Save"}
-                </button>
-                <button
-                  onClick={() => setEditing(false)}
-                  className="flex items-center gap-1 rounded px-2 py-1 text-xs text-white/55 hover:bg-white/10"
-                >
-                  <X size={12} /> Cancel
-                </button>
-              </div>
-            ) : (
-              <button
-                onClick={() => {
-                  setDraft(content);
-                  setEditing(true);
-                }}
-                className="flex items-center gap-1 rounded px-2 py-1 text-xs text-white/60 hover:bg-white/10 hover:text-white/85"
-              >
-                <Pencil size={12} /> Edit
-              </button>
-            )}
-          </div>
-        )}
+      <div className="min-w-0 flex-1">
+        <AssistantChat
+          agentId="build-studio"
+          group="build-studio"
+          showConversations
+          showInfo={false}
+          initialLabel="Describe a feature to build, or ask me to refine a spec."
+        />
       </div>
     </div>
   );

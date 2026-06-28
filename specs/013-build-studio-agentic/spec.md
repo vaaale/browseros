@@ -4,7 +4,7 @@
 
 **Created**: 2026-06-28
 
-**Status**: Draft
+**Status**: Implemented (v1)
 
 **Input**: "Make Build Studio an agentic studio: embed the assistant (scoped to the Build Studio agent) so the user works conversationally to create/refine specs and build features end-to-end (idea → spec → clarify → plan → tasks → implemented by the Developer), alongside the spec tree."
 

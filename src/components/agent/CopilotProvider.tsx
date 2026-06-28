@@ -15,14 +15,24 @@ import { DocsActions } from "./DocsActions";
 import { GitActions } from "./GitActions";
 import { WorkflowActions } from "./WorkflowActions";
 import { ToolCallRetry } from "./ToolCallRetry";
-import { useActiveConversationId } from "@/lib/agent/conversations";
+import { useActiveConversationId, DEFAULT_GROUP } from "@/lib/agent/conversations";
 
-export function CopilotProvider({ children }: { children: ReactNode }) {
-  // Scope the chat to the active conversation; switching conversations switches
-  // the CopilotKit thread.
-  const threadId = useActiveConversationId();
+export function CopilotProvider({
+  children,
+  group = DEFAULT_GROUP,
+  agentId,
+}: {
+  children: ReactNode;
+  group?: string;
+  agentId?: string;
+}) {
+  // Scope the chat to the group's active conversation; switching conversations
+  // switches the CopilotKit thread. agentId (when embedded) scopes MCP servers
+  // server-side via the runtime query param (012-embeddable-assistant).
+  const threadId = useActiveConversationId(group);
+  const runtimeUrl = agentId ? `/api/copilotkit?agent=${encodeURIComponent(agentId)}` : "/api/copilotkit";
   return (
-    <CopilotKit runtimeUrl="/api/copilotkit" threadId={threadId}>
+    <CopilotKit runtimeUrl={runtimeUrl} threadId={threadId}>
       <OSActions />
       <McpActions />
       <SubAgentActions />

@@ -6,16 +6,17 @@ import {
   newConversation,
   selectConversation,
   deleteConversation,
+  DEFAULT_GROUP,
 } from "@/lib/agent/conversations";
 
-export function ConversationPanel() {
-  const { conversations, activeId } = useConversations();
+export function ConversationPanel({ group = DEFAULT_GROUP }: { group?: string }) {
+  const { conversations, activeId } = useConversations(group);
 
   return (
     <div className="flex h-full w-48 shrink-0 flex-col border-r border-white/10 bg-white/[0.02]">
       <div className="flex items-center justify-between px-2 py-2">
         <span className="text-xs font-semibold uppercase tracking-wide text-white/40">Chats</span>
-        <button onClick={() => void newConversation()} title="New conversation" className="rounded p-1 text-white/60 hover:bg-white/10 hover:text-white">
+        <button onClick={() => void newConversation(group)} title="New conversation" className="rounded p-1 text-white/60 hover:bg-white/10 hover:text-white">
           <Plus size={14} />
         </button>
       </div>

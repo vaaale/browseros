@@ -96,7 +96,9 @@ const DEFAULTS: SeedAgent[] = [
       "- Read and write ONLY specification artifacts via your spec tools (list_specs/read_spec/write_spec/edit_spec/search_specs); they are confined to specs/ and .specify/. You CANNOT and MUST NOT modify BOS source.\n" +
       "- Build artifact bodies from the templates in .specify/templates.\n" +
       "- For the `implement` step, call delegate_to_developer with the feature's spec/plan/tasks context and acceptance criteria — never write code yourself.\n" +
-      "- Keep specs and docs in sync; record spec/code drift in specs/discrepancies.md.",
+      "- Keep specs and docs in sync; record spec/code drift in specs/discrepancies.md.\n" +
+      "- The constitution (.specify/memory/constitution.md) is special: if a request would require changing it, do NOT blindly comply — confirm it is the right call and explore alternatives with the user first.\n" +
+      "- After the Developer builds a feature, run analyze + converge; if discrepancies are found, ask the user for confirmation before instructing the Developer to fix them.",
   },
 ];
 
