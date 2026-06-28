@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, ArrowRight, RotateCw, Home, ExternalLink } from "lucide-react";
 import { useOSStore } from "@/store/os-provider";
 import { toProxyPath } from "@/lib/proxy-path";
-import type { AppProps } from "./types";
+import type { AppProps } from "@/components/apps/types";
 
 const HOME = "https://example.com";
 
@@ -21,7 +21,7 @@ function proxied(url: string): string {
   return toProxyPath(url);
 }
 
-export function WebBrowser({ windowId, params }: AppProps) {
+export default function WebBrowser({ windowId, params }: AppProps) {
   const initial = typeof params?.url === "string" ? normalizeUrl(params.url as string) : HOME;
   const [history, setHistory] = useState<string[]>([initial]);
   const [index, setIndex] = useState(0);

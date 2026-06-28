@@ -13,12 +13,12 @@ BrowserOS (BOS) is a single‑page, server‑side‑rendered "operating system i
 - Server‑only code (`import "server-only"`, Node/`fs`/secrets) lives behind `src/app/api/**/route.ts`; clients talk over `fetch`. `src/os/types.ts` is framework‑free.
 - **The VFS (`data/vfs`, via `src/os/vfs.ts`) is the user's sandbox — NOT BOS source.** Edit `src/` to change BOS.
 - OS state: `src/store/os-store.ts` (+ `os-provider.tsx`), seeded SSR in `src/app/page.tsx`.
-- Apps: built‑in = React component in `src/components/apps/registry.tsx` + `BUILTIN_APPS` (`src/os/apps.ts`); installed = iframe served from the VFS by `src/app/apps/[...slug]/route.ts`.
+- Apps: built‑in = a self‑describing folder `src/apps/<id>/` (`manifest.ts` + `index.tsx`), auto‑discovered by `tools/gen-apps.mjs` — no central registry (`src/os/apps.ts` + `src/components/apps/registry.tsx` are thin shims over the generated lists); installed = iframe served from GitFS by `src/app/apps/[...slug]/route.ts`.
 - Assistant: CopilotKit wiring in `src/components/agent/` (`*Actions.tsx` register tools; mirror new tools in `src/lib/agent/tool-manifest.ts`). Instructions = `src/lib/agent/config.ts` (CORE_POLICY) + profile + skills.
 - Settings tabs are pluggable config namespaces (`src/lib/config/registry.ts`) — adding one also exposes it to the assistant.
 - All runtime state persists as files under `./data` (gitignored).
 
 ## Common locations
 - Settings → Skills page: `src/components/apps/settings/SkillsTab.tsx` + `src/lib/agent/skills/store.ts` + `src/app/api/skills/route.ts`.
-- Settings tabs: `src/components/apps/settings/` + `src/components/apps/SettingsApp.tsx`.
+- Settings tabs: `src/components/apps/settings/` + `src/apps/settings/index.tsx` (entry).
 - Sub‑agents / delegation: `src/lib/agent/subagents/`.

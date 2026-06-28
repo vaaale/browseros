@@ -8,6 +8,8 @@ export interface AppManifest {
   icon: string;
   defaultWidth: number;
   defaultHeight: number;
+  /** Desktop/dock sort key: lower sorts earlier; unset sorts last (then by name). */
+  order?: number;
   /** Only one window instance allowed at a time. */
   singleton?: boolean;
   /** Built-in apps ship with the OS; others are installed at runtime. */

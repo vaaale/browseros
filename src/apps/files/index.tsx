@@ -18,7 +18,7 @@ import {
 import type { VfsEntry } from "@/os/types";
 import { fsClient } from "@/lib/os-client";
 import { useOSStore } from "@/store/os-provider";
-import type { AppProps } from "./types";
+import type { AppProps } from "@/components/apps/types";
 
 const IMAGE_RE = /\.(png|jpe?g|gif|webp|svg)$/i;
 
@@ -29,7 +29,7 @@ function parentOf(p: string): string {
   return "/" + parts.join("/");
 }
 
-export function FileBrowser({ windowId, params }: AppProps) {
+export default function FileBrowser({ windowId, params }: AppProps) {
   const startPath = typeof params?.path === "string" ? (params.path as string) : "/";
   const [cwd, setCwd] = useState(startPath);
   const [entries, setEntries] = useState<VfsEntry[]>([]);

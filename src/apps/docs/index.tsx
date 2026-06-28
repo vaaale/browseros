@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Markdown } from "@copilotkit/react-ui";
 import "@copilotkit/react-ui/styles.css";
 import { BookOpen } from "lucide-react";
-import type { AppProps } from "./types";
+import type { AppProps } from "@/components/apps/types";
 
 interface Doc {
   id: string;
@@ -12,7 +12,7 @@ interface Doc {
   content: string;
 }
 
-export function DocsApp(_props: AppProps) {
+export default function DocsApp(_props: AppProps) {
   const [docs, setDocs] = useState<Doc[]>([]);
   const [active, setActive] = useState<string>("");
 

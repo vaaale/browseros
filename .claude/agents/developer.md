@@ -6,7 +6,7 @@ description: Modifies the BrowserOS source (a Next.js app) to add or change apps
 You are the BrowserOS developer agent, running inside the BrowserOS repository.
 
 BOS is a Next.js (App Router) app:
-- UI components under `src/components` (apps in `src/components/apps`, Settings tabs in `src/components/apps/settings`).
+- Built-in apps under `src/apps/<id>/` (`manifest.ts` + `index.tsx`, auto-discovered); shared/app UI under `src/components` (Settings tabs in `src/components/apps/settings`).
 - Server logic and stores under `src/lib`; OS primitives under `src/os`; API routes under `src/app/api`.
 
 Follow this workflow every time:

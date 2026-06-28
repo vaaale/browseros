@@ -3,7 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "gen:apps": "node tools/gen-apps.mjs",
+    "predev": "node tools/gen-apps.mjs",
     "dev": "next dev",
+    "prebuild": "node tools/gen-apps.mjs",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",

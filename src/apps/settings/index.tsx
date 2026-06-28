@@ -2,16 +2,16 @@
 
 import { useCallback, useEffect, useState } from "react";
 import type { ConfigSchemaView } from "@/lib/config/types";
-import { AppearanceTab } from "./settings/AppearanceTab";
-import { AssistantTab } from "./settings/AssistantTab";
-import { SkillsTab } from "./settings/SkillsTab";
-import { AppsTab } from "./settings/AppsTab";
-import { DevHarnessTab } from "./settings/DevHarnessTab";
-import { DataFsTab } from "./settings/DataFsTab";
-import { VersionsTab } from "./settings/VersionsTab";
-import { ConfigForm } from "./settings/ConfigForm";
-import { ProviderSettings } from "./ProviderSettings";
-import type { AppProps } from "./types";
+import { AppearanceTab } from "@/components/apps/settings/AppearanceTab";
+import { AssistantTab } from "@/components/apps/settings/AssistantTab";
+import { SkillsTab } from "@/components/apps/settings/SkillsTab";
+import { AppsTab } from "@/components/apps/settings/AppsTab";
+import { DevHarnessTab } from "@/components/apps/settings/DevHarnessTab";
+import { DataFsTab } from "@/components/apps/settings/DataFsTab";
+import { VersionsTab } from "@/components/apps/settings/VersionsTab";
+import { ConfigForm } from "@/components/apps/settings/ConfigForm";
+import { ProviderSettings } from "@/components/apps/ProviderSettings";
+import type { AppProps } from "@/components/apps/types";
 
 // Custom tab components keyed by ConfigSchema.customComponent.
 const CUSTOM_TABS: Record<string, React.ComponentType> = {
@@ -25,7 +25,7 @@ const CUSTOM_TABS: Record<string, React.ComponentType> = {
   "self-modification": VersionsTab,
 };
 
-export function SettingsApp(_props: AppProps) {
+export default function SettingsApp(_props: AppProps) {
   const [schemas, setSchemas] = useState<ConfigSchemaView[]>([]);
   const [active, setActive] = useState<string>("");
 

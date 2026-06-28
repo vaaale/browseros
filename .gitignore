@@ -58,3 +58,8 @@ next-env.d.ts
 # so the nested app repo never collides with the BOS source tree.
 /apps
 .memsearch
+
+# generated: built-in app registry (auto-discovered from src/apps/<id>/ by
+# tools/gen-apps.mjs; regenerated on predev/prebuild and `npm run gen:apps`)
+/src/apps/_manifests.generated.ts
+/src/apps/_components.generated.ts

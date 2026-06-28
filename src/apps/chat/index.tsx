@@ -10,10 +10,10 @@ import { ChatToolRenderer } from "@/components/agent/ChatToolRenderer";
 import { useChatPersistence } from "@/components/agent/ChatPersistence";
 import { ReasoningAssistantMessage } from "@/components/agent/ReasoningAssistantMessage";
 import { markdownRenderers } from "@/components/agent/MarkdownRenderers";
-import { ConversationPanel } from "./assistant/ConversationPanel";
-import { InfoPanel } from "./assistant/InfoPanel";
-import { AgentSelector } from "./assistant/AgentSelector";
-import type { AppProps } from "./types";
+import { ConversationPanel } from "@/components/apps/assistant/ConversationPanel";
+import { InfoPanel } from "@/components/apps/assistant/InfoPanel";
+import { AgentSelector } from "@/components/apps/assistant/AgentSelector";
+import type { AppProps } from "@/components/apps/types";
 
 const FALLBACK_INSTRUCTIONS =
   "You are the BrowserOS assistant. You can launch apps, manage the virtual file system, open web pages, change the wallpaper, connect MCP servers, delegate to sub-agents, remember things, and build new apps using the provided actions. Prefer doing over describing, and be concise.";
@@ -24,7 +24,7 @@ const THEME_OVERRIDES: React.CSSProperties = {
   ["--copilot-kit-background-color" as string]: "#0f1117",
 };
 
-export function ChatApp(_props: AppProps) {
+export default function ChatApp(_props: AppProps) {
   const launch = useOSStore((s) => s.launch);
   // Drives per-conversation load/save AND exposes the chat's loading state.
   const { isLoading } = useChatPersistence();

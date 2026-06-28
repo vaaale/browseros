@@ -40,9 +40,13 @@ src/
     layout.tsx, page.tsx        Root layout; SSR entry — seeds the OS store
     apps/[...slug]/route.ts     Serves installed-app files from the VFS (/apps/<id>/…)
     api/**/route.ts             All server endpoints (see §13)
+  apps/                         Built-in apps — one self-describing folder each:
+    <id>/manifest.ts            App metadata (AppManifest; folder name = id)
+    <id>/index.tsx              Entry component (default export; "use client")
+    _*.generated.ts             Auto-discovery output (gitignored; tools/gen-apps.mjs)
   os/                           Framework-free OS core
     types.ts                    AppManifest, OSSettings, WindowInstance, VfsEntry …
-    apps.ts                     BUILTIN_APPS registry + getApp()
+    apps.ts                     BUILTIN_APPS (sorted; discovered from src/apps/*) + getApp()
     vfs.ts                      Virtual file system (jailed to data/vfs)
     settings.ts                 OS settings (data/settings.json)
     wallpapers.ts               Wallpaper presets + wallpaperToCss()
@@ -52,8 +56,9 @@ src/
   components/
     desktop/                    Shell: Desktop, WindowManager, Window, Dock, Topbar,
                                 icons.tsx (name→lucide), FirstRunWizard
-    apps/                       App components: FileBrowser, WebBrowser, ChatApp,
-                                MemoryApp, DocsApp, SettingsApp, IframeApp, registry.tsx
+    apps/                       Shared app UI: registry.tsx (id→component, sourced
+                                from src/apps), IframeApp (installed-app frame),
+                                ProviderSettings, types.ts (AppProps)
       assistant/                Assistant sub-UI: ConversationPanel, InfoPanel, AgentSelector
       settings/                 Settings tabs: AppearanceTab, AppsTab, SkillsTab,
                                 DevHarnessTab, AssistantTab, ConfigForm
@@ -106,11 +111,11 @@ data/                           ALL runtime state (gitignored) — see §12
 | `applySettings(patch)` | Update OS settings in the store (persist separately via `settingsClient`). |
 | `registerApp(app)` / `unregisterApp(id)` | Add/remove an app at runtime (live desktop/dock refresh; `unregisterApp` also closes its windows). |
 
-**SSR seeding** (`src/app/page.tsx`): server‑reads `getSettings()` + `listInstalledManifests()`, merges with `BUILTIN_APPS`, and passes them to `<OSProvider settings apps>`. Access state with `useOSStore(selector)`; for fresh reads in callbacks use `useOSStoreApi().getState()`.
+**SSR seeding** (`src/app/page.tsx`): server‑reads `getSettings()` + `listInstalledManifests()`, merges with `BUILTIN_APPS` (built‑in apps auto‑discovered from `src/apps/*`), and passes them to `<OSProvider settings apps>`. Access state with `useOSStore(selector)`; for fresh reads in callbacks use `useOSStoreApi().getState()`.
 
-**AppManifest** (`src/os/types.ts`): `id, name, icon (lucide name), defaultWidth, defaultHeight, singleton?, builtin?, kind?: "builtin"|"iframe", url?, source?`.
+**AppManifest** (`src/os/types.ts`): `id, name, icon (lucide name), defaultWidth, defaultHeight, order?, singleton?, builtin?, kind?: "builtin"|"iframe", url?, source?`.
 
-**How a window renders an app** (`src/components/desktop/Window.tsx`): if `manifest.kind === "iframe"` → `<IframeApp>` loads `manifest.url`; else it looks up a React component via `getAppComponent(appId)` from `src/components/apps/registry.tsx`. Built‑in apps are entries in that registry `Map`; runtime‑installed apps are iframes.
+**How a window renders an app** (`src/components/desktop/Window.tsx`): if `manifest.kind === "iframe"` → `<IframeApp>` loads `manifest.url`; else it looks up a React component via `getAppComponent(appId)` from `src/components/apps/registry.tsx`. Built‑in apps are discovered from `src/apps/<id>/index.tsx` and exposed through that registry `Map`; runtime‑installed apps are iframes.
 
 **Icons** (`src/components/desktop/icons.tsx`): `<AppIcon name=… />` maps a manifest's icon string to a lucide‑react component (with a fallback). Use a name that exists in that set. For installed apps, `pickIcon(name, spec)` in `src/lib/apps/store.ts` auto‑selects an icon by keyword (timer→`Timer`, calc→`Calculator`, note→`StickyNote`, …, default `Puzzle`).
 
@@ -144,7 +149,7 @@ There is **no "Dev Studio" app and no `buildApp` tool**. Apps are created by del
 
 `/api/config` GET returns all schemas with `values` (secret fields blanked) + `secretsSet`; PATCH `{namespace, values}` calls the registration's `save`. The same schema is **auto‑exposed to the assistant** as the `updateSetting`/`listConfigurableSettings` actions, so adding a tab also gives the agent a config tool — for free.
 
-Rendering (`src/components/apps/SettingsApp.tsx`): a generic `<ConfigForm>` renders `fields`; if `schema.customComponent` is set, a custom React component is used instead (mapped in `CUSTOM_TABS`). Generic per‑namespace JSON is stored at `data/config/<namespace>.json` via `src/lib/config/store.ts` (`readNamespace`/`patchNamespace`); some namespaces (provider, appearance) delegate to their own stores instead.
+Rendering (`src/apps/settings/index.tsx`): a generic `<ConfigForm>` renders `fields`; if `schema.customComponent` is set, a custom React component is used instead (mapped in `CUSTOM_TABS`). Generic per‑namespace JSON is stored at `data/config/<namespace>.json` via `src/lib/config/store.ts` (`readNamespace`/`patchNamespace`); some namespaces (provider, appearance) delegate to their own stores instead.
 
 Current tabs/namespaces: `assistant`, `skills`, `apps`, `appearance`, `ai-provider`, `dev-harness`, `browser-automation`.
 
@@ -293,15 +298,15 @@ The AI provider config (incl. the API key) persists via the provider store and i
 ## 14. Extension recipes
 
 ### Add a built‑in app
-1. Create `src/components/apps/MyApp.tsx` (`"use client"`, props `{ windowId, appId, params }` from `AppProps`). Keep content text‑selectable.
-2. Register it in `src/components/apps/registry.tsx` (`["myapp", MyApp]`).
-3. Add an `AppManifest` to `BUILTIN_APPS` in `src/os/apps.ts` (`id:"myapp"`, a valid `icon` from `icons.tsx`, sizes, `singleton?`). It then appears on the desktop/dock (SSR seed) and is launchable via `launchApp`.
+1. Create `src/apps/<id>/manifest.ts` — `export default` an `AppManifest` (the `id` MUST equal the folder name; a valid `icon` from `icons.tsx`, `defaultWidth`/`defaultHeight`, `order?` for dock position, `singleton?`).
+2. Create `src/apps/<id>/index.tsx` (`"use client"`, `export default` a component taking `AppProps` `{ windowId, appId, params }`). Keep content text‑selectable.
+3. That's it — `tools/gen-apps.mjs` (runs on `predev`/`prebuild`, or `npm run gen:apps`) auto‑discovers the folder, so it appears on the desktop/dock (SSR seed, ordered by `order`) and is launchable via `launchApp`. No central registry to edit — the same "drop a folder" model as installed apps.
 4. If it needs persistence, add a server store under `src/lib/...` (`import "server-only"`, write under `data/…`) + an `/api/...` route; call it from the client with `fetch`.
 5. Update `data/docs` and, if relevant, `tool-manifest.ts`.
 
 ### Add a Settings tab
 1. Add a `ConfigRegistration` to `REGISTRATIONS` in `src/lib/config/registry.ts` (`schema.namespace`, `title`, `order`, `fields` and/or `customComponent`; `load`/`save`). For simple key/values, `save` can use `patchNamespace(ns, patch)`.
-2. For a custom UI, create `src/components/apps/settings/MyTab.tsx` and map it in `CUSTOM_TABS` in `SettingsApp.tsx` by the `customComponent` key.
+2. For a custom UI, create `src/components/apps/settings/MyTab.tsx` and map it in `CUSTOM_TABS` in `src/apps/settings/index.tsx` by the `customComponent` key.
 3. The fields are auto‑exposed to the assistant via `updateSetting` — no extra work.
 
 ### Add an assistant tool/action
@@ -326,7 +331,7 @@ The AI provider config (incl. the API key) persists via the provider store and i
 
 ## 15. Design heuristics (make good choices)
 
-- **Built‑in app vs installed app?** Built‑in = a first‑class React app in the repo (registry + `BUILTIN_APPS`), for OS features. Installed app = a self‑contained `index.html` served as an iframe, for user‑requested utilities. Don't make a built‑in app when a generated standalone app suffices.
+- **Built‑in app vs installed app?** Built‑in = a first‑class React app in the repo (a folder under `src/apps/<id>/`), for OS features. Installed app = a self‑contained `index.html` served as an iframe, for user‑requested utilities. Don't make a built‑in app when a generated standalone app suffices.
 - **Where does state live?** Ephemeral window/UI state → the Zustand store. User data → the VFS. Durable feature/app config → a config namespace (gets a Settings tab + an assistant tool for free). Agent knowledge → memory/skills. Never invent a new persistence path when one of these fits.
 - **Local vs Claude sub‑agent.** Any code change → Claude. Research/writing/file‑tidying → local. Don't route coding to the local model.
 - **Adding config?** If a value should be user‑editable, add a config namespace rather than hardcoding — you get UI + an assistant tool automatically.

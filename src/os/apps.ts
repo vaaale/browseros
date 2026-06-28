@@ -1,16 +1,17 @@
 import type { AppManifest } from "./types";
+import { BUILTIN_APPS as DISCOVERED } from "@/apps/_manifests.generated";
 
-// Built-in applications that ship with BrowserOS. The registry is the
-// extensibility seam: runtime-installed apps are appended to this set
-// (see the dev harness / app SDK in later phases).
-export const BUILTIN_APPS: AppManifest[] = [
-  { id: "files", name: "Files", icon: "Folder", defaultWidth: 760, defaultHeight: 500, builtin: true },
-  { id: "browser", name: "Browser", icon: "Globe", defaultWidth: 940, defaultHeight: 620, builtin: true },
-  { id: "chat", name: "Assistant", icon: "Bot", defaultWidth: 880, defaultHeight: 640, singleton: true, builtin: true },
-  { id: "memory", name: "Memory", icon: "Brain", defaultWidth: 640, defaultHeight: 520, singleton: true, builtin: true },
-  { id: "docs", name: "Docs", icon: "BookOpen", defaultWidth: 760, defaultHeight: 560, singleton: true, builtin: true },
-  { id: "settings", name: "Settings", icon: "Settings", defaultWidth: 680, defaultHeight: 500, singleton: true, builtin: true },
-];
+// Built-in apps are self-describing folders under src/apps/<id>/ (manifest.ts +
+// index.tsx), discovered at build time by tools/gen-apps.mjs — there is no
+// hand-maintained registry to edit, exactly like the GitFS user apps. The
+// generated list is id-sorted; we re-sort by each manifest's `order` (then name)
+// so the desktop/dock layout is stable and controlled per-app. Runtime-installed
+// apps are appended by the SSR seed in src/app/page.tsx.
+export const BUILTIN_APPS: AppManifest[] = [...DISCOVERED].sort(
+  (a, b) =>
+    (a.order ?? Number.MAX_SAFE_INTEGER) - (b.order ?? Number.MAX_SAFE_INTEGER) ||
+    a.name.localeCompare(b.name),
+);
 
 export function getApp(id: string, apps: AppManifest[] = BUILTIN_APPS): AppManifest | undefined {
   return apps.find((a) => a.id === id);

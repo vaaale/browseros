@@ -1,23 +1,14 @@
 "use client";
 
 import type { AppComponent } from "./types";
-import { FileBrowser } from "./FileBrowser";
-import { WebBrowser } from "./WebBrowser";
-import { SettingsApp } from "./SettingsApp";
-import { ChatApp } from "./ChatApp";
-import { MemoryApp } from "./MemoryApp";
-import { DocsApp } from "./DocsApp";
+import { BUILTIN_COMPONENTS } from "@/apps/_components.generated";
 
-// Maps an app id to the client component that renders inside its window.
-// Runtime-installed apps register here via registerAppComponent().
-const REGISTRY = new Map<string, AppComponent>([
-  ["files", FileBrowser],
-  ["browser", WebBrowser],
-  ["settings", SettingsApp],
-  ["chat", ChatApp],
-  ["memory", MemoryApp],
-  ["docs", DocsApp],
-]);
+// Maps an app id to the React component rendered inside its window. Built-in
+// apps are discovered from src/apps/<id>/index.tsx at build time (see
+// tools/gen-apps.mjs); only first-class React apps render through here, while
+// runtime-installed apps load as iframes. registerAppComponent lets a future
+// runtime loader add more.
+const REGISTRY = new Map<string, AppComponent>(Object.entries(BUILTIN_COMPONENTS));
 
 export function getAppComponent(appId: string): AppComponent | undefined {
   return REGISTRY.get(appId);

@@ -2,6 +2,10 @@
 
 Installed apps are user-authored **content** (versioned in GitFS — see `spec/self-modification/gitfs.md`) rendered as a sandboxed iframe at `/apps/<id>`. An app may be either a **single static HTML file** or a **multi-file TypeScript/TSX project** bundled at install time. The project form exists so apps can be genuinely capable (components, TS, React), not limited to one inline HTML document.
 
+## 0. Built-in apps vs installed apps
+
+This spec covers **installed** apps. **Built-in** apps (Files, Browser, Assistant, Memory, Docs, Settings) are a different category: first-class React components compiled into the BOS bundle. Each is a self-describing folder `src/apps/<id>/` with a `manifest.ts` (`export default` an `AppManifest`; the folder name is the `id`) and an `index.tsx` entry (`export default` the component). They are **auto-discovered** at build time by `tools/gen-apps.mjs` — regenerated on `predev`/`prebuild`/`npm run gen:apps` into gitignored `src/apps/_*.generated.ts`, which `src/os/apps.ts` and `src/components/apps/registry.tsx` consume. Adding one is just dropping a folder — no central registry to edit, mirroring how installed apps need none. Both share the "an app is a folder with a manifest" shape; they differ in runtime (bundled React component vs sandboxed iframe) and storage (BOS source vs GitFS).
+
 ## 1. App shapes
 
 - **Static app:** a folder with `index.html` (+ optional assets), served as-is. No build.

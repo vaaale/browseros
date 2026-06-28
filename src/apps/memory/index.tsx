@@ -2,11 +2,11 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Brain, Trash2, Plus, UserCircle } from "lucide-react";
-import type { AppProps } from "./types";
+import type { AppProps } from "@/components/apps/types";
 
 type Target = "user" | "memory";
 
-export function MemoryApp(_props: AppProps) {
+export default function MemoryApp(_props: AppProps) {
   const [user, setUser] = useState<string[]>([]);
   const [memory, setMemory] = useState<string[]>([]);
 
