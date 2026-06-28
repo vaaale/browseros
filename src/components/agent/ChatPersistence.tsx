@@ -33,8 +33,17 @@ export function useChatPersistence(): { isLoading: boolean } {
   // so we never write one thread's messages under another id during a swap.
   const loadedForRef = useRef<string | null>(null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Keep the latest setMessages in a ref so the load effect does NOT depend on
+  // its identity. Otherwise the effect re-runs on unrelated re-renders (e.g. the
+  // version-control toolbar updating) and reloads a trimmed disk copy OVER an
+  // in-flight turn — wiping the live conversation and orphaning the run.
+  const setMessagesRef = useRef(setMessages);
+  useEffect(() => {
+    setMessagesRef.current = setMessages;
+  });
 
-  // Load persisted messages into the agent whenever the active thread changes.
+  // Load persisted messages into the agent only when the thread (or agent)
+  // actually changes — never on a plain re-render.
   useEffect(() => {
     if (!agent || !threadId || threadId === "default") return;
     let cancelled = false;
@@ -43,13 +52,13 @@ export function useChatPersistence(): { isLoading: boolean } {
       const raw = await loadConversationMessages(threadId);
       if (cancelled) return;
       // A non-GQL array is forwarded straight to agent.setMessages().
-      setMessages(raw as Parameters<typeof setMessages>[0]);
+      setMessagesRef.current(raw as Parameters<typeof setMessages>[0]);
       loadedForRef.current = threadId;
     })();
     return () => {
       cancelled = true;
     };
-  }, [agent, threadId, setMessages]);
+  }, [agent, threadId]);
 
   // Debounce-save the agent's messages on every change for the loaded thread.
   // addMessage() mutates the messages array in place, so a render dependency
@@ -60,6 +69,10 @@ export function useChatPersistence(): { isLoading: boolean } {
       onMessagesChanged: ({ messages }) => {
         if (loadedForRef.current !== threadId) return;
         const snapshot = messages as unknown[];
+        // Never persist an empty snapshot over a real conversation — an empty
+        // array here is a transient reset (thread swap / remount), not the user
+        // clearing the chat.
+        if (snapshot.length === 0) return;
         if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
         saveTimerRef.current = setTimeout(() => {
           void saveConversationMessages(threadId, snapshot);

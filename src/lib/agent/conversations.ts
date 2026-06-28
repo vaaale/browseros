@@ -2,6 +2,7 @@
 
 import { useSyncExternalStore } from "react";
 import { fsClient } from "@/lib/os-client";
+import { trimToSettledTail } from "@/lib/agent/conversations-sanitize";
 
 /**
  * Conversations live as one JSON file per chat under the user's VFS at
@@ -25,18 +26,23 @@ interface State {
 
 export const CHATS_DIR = "/Documents/Chats";
 const ACTIVE_KEY = "bos.activeConversation";
+const DEFAULT_TITLE = "New conversation";
 const SERVER_SNAPSHOT: State = {
   conversations: [{ id: "default", title: "Conversation", createdAt: 0 }],
   activeId: "default",
   loaded: false,
 };
 
+// Conversations currently awaiting an auto-title response — prevents firing
+// duplicate requests while a generation is in flight.
+const titleGenInFlight = new Set<string>();
+
 function newId(): string {
   return "c-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 }
 
 function freshConversation(): Conversation {
-  return { id: newId(), title: "New conversation", createdAt: Date.now() };
+  return { id: newId(), title: DEFAULT_TITLE, createdAt: Date.now() };
 }
 
 function chatPath(id: string): string {
@@ -219,10 +225,11 @@ export async function renameConversation(id: string, title: string): Promise<voi
   }
 }
 
-/** Load the persisted messages for a conversation (raw JSON; not yet rehydrated). */
+/** Load the persisted messages for a conversation, trimmed to a settled tail so
+ *  reopening it can never resume an in-flight turn (no uncommanded agent run). */
 export async function loadConversationMessages(id: string): Promise<unknown[]> {
   const file = await readConversationFile(id);
-  return file?.messages ?? [];
+  return trimToSettledTail(file?.messages ?? []);
 }
 
 /** Persist the messages of a conversation, preserving its metadata. */
@@ -230,13 +237,85 @@ export async function saveConversationMessages(id: string, messages: unknown[]):
   const current = state;
   const meta = current?.conversations.find((c) => c.id === id);
   const existing = await readConversationFile(id);
+  // Never replace an existing non-empty conversation with an empty message list:
+  // an empty snapshot is a transient reset (thread swap / remount), not the user
+  // clearing history. Dropping it here is the last line of defense against wipes.
+  if (messages.length === 0 && existing && existing.messages.length > 0) return;
+  // Prefer the in-memory title: renameConversation updates state synchronously
+  // before writing to disk, so memory is always at least as fresh as disk and
+  // a concurrent auto-title rename can't be clobbered by this save.
   const file: ConversationFile = {
     id,
-    title: existing?.title ?? meta?.title ?? "Conversation",
+    title: meta?.title ?? existing?.title ?? "Conversation",
     createdAt: existing?.createdAt ?? meta?.createdAt ?? Date.now(),
     messages,
   };
   await writeConversationFile(file);
+  void maybeGenerateTitleInBackground(id, messages);
+}
+
+interface AnyMessage {
+  role?: string;
+  content?: unknown;
+  toolCalls?: unknown[];
+}
+
+function readMessage(m: unknown): AnyMessage | null {
+  return m && typeof m === "object" ? (m as AnyMessage) : null;
+}
+
+function firstUserText(messages: unknown[]): string | null {
+  for (const m of messages) {
+    const x = readMessage(m);
+    if (x?.role === "user" && typeof x.content === "string" && x.content.trim().length > 0) {
+      return x.content;
+    }
+  }
+  return null;
+}
+
+function firstSettledAssistantText(messages: unknown[]): string | null {
+  for (const m of messages) {
+    const x = readMessage(m);
+    if (x?.role !== "assistant") continue;
+    const hasPendingCalls = Array.isArray(x.toolCalls) && x.toolCalls.length > 0;
+    if (hasPendingCalls) continue;
+    if (typeof x.content === "string" && x.content.trim().length > 0) return x.content;
+  }
+  return null;
+}
+
+/** Fire-and-forget background title generation, gated to once per conversation
+ *  and only while the title is still the default placeholder. */
+async function maybeGenerateTitleInBackground(id: string, messages: unknown[]): Promise<void> {
+  if (titleGenInFlight.has(id)) return;
+  const meta = state?.conversations.find((c) => c.id === id);
+  if (!meta || meta.title !== DEFAULT_TITLE) return;
+  const userText = firstUserText(messages);
+  const assistantText = firstSettledAssistantText(messages);
+  if (!userText || !assistantText) return;
+
+  titleGenInFlight.add(id);
+  try {
+    const res = await fetch("/api/assistant/title", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userMessage: userText, assistantMessage: assistantText }),
+    });
+    if (!res.ok) return;
+    const data = (await res.json()) as { title?: string };
+    const title = data.title?.trim();
+    if (!title) return;
+    // Recheck — the user may have renamed the conversation manually while the
+    // request was in flight; never overwrite a human-chosen title.
+    const cur = state?.conversations.find((c) => c.id === id);
+    if (!cur || cur.title !== DEFAULT_TITLE) return;
+    await renameConversation(id, title);
+  } catch {
+    // Title generation is best-effort — failures are silent.
+  } finally {
+    titleGenInFlight.delete(id);
+  }
 }
 
 export function useConversations(): State {
