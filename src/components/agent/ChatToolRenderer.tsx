@@ -6,7 +6,7 @@ import { ChevronDown, ChevronRight, Wrench, Loader2 } from "lucide-react";
 import { parseMcpUi } from "@/lib/mcp/ui";
 import { parseNested, type NestedEvent } from "@/lib/agent/nested-events";
 import { useDelegation } from "@/lib/agent/subagent-events";
-import { useCollapsed, markComplete, setCollapsed } from "@/lib/agent/card-collapse";
+import { registerCard, toggleCard, useCardOpen } from "@/lib/agent/card-collapse";
 
 function preview(value: unknown, max = 600): string {
   if (value === undefined || value === null) return "";
@@ -47,23 +47,27 @@ function NestedEvents({ events, output, running }: { events: NestedEvent[]; outp
   );
 }
 
-// A single collapsible event card. Expanded on arrival; auto-collapses a few
-// seconds after the event completes so only its heading remains visible.
+// A single collapsible event card. It joins the shared accordion: expanded when
+// it is the newest card, and collapsed as soon as a newer card or the agent's
+// answer is inserted. The header is a button so clicking it reliably toggles the
+// card (the old native <details> approach didn't toggle once `open` was driven by
+// the store).
 function EventCard({ name, status, args, result }: { name: string; status: string; args: unknown; result: unknown }) {
+  // No stable tool-call id is available from the catch-all render props, so the
+  // id is content-derived. It changes while args stream in (keeping the live card
+  // the newest/open one) and stabilizes once the call completes.
   const cardId = `${name}:${preview(args, 120)}`;
-  const collapsed = useCollapsed(cardId);
-  const expanded = !collapsed;
+  const open = useCardOpen(cardId);
   const busy = status !== "complete";
+
+  // Newest card opens (and collapses the previous). Idempotent per id.
+  useEffect(() => {
+    registerCard(cardId);
+  }, [cardId]);
 
   // Live sub-agent events for delegation cards (streamed before completion).
   const liveKey = name === "delegateToSubAgent" ? String((args as { task?: string })?.task ?? "") : "";
   const live = useDelegation(liveKey);
-
-  // Schedule auto-collapse once the event completes (timer lives in the store,
-  // so it survives the remounts that happen during streaming).
-  useEffect(() => {
-    if (status === "complete") markComplete(cardId);
-  }, [status, cardId]);
 
   const argText = preview(args, 300);
   const resultStr = typeof result === "string" ? result : "";
@@ -71,42 +75,43 @@ function EventCard({ name, status, args, result }: { name: string; status: strin
   const nested = status === "complete" ? parseNested(resultStr) : null;
   const liveEvents = live && (live.events.length > 0 || !live.done) ? live : null;
 
-  // Native <details> toggle (reliable click handling), with `open` driven by the
-  // module collapse store so auto-collapse and manual toggling stay in sync.
   return (
-    <details
-      open={expanded}
-      onToggle={(e) => setCollapsed(cardId, !(e.currentTarget as HTMLDetailsElement).open)}
-      className="my-1 rounded-lg border border-white/10 bg-black/30 text-xs"
-    >
-      <summary className="flex cursor-pointer select-none items-center gap-2 px-2 py-1.5 marker:content-['']">
-        {expanded ? <ChevronDown size={12} className="text-white/40" /> : <ChevronRight size={12} className="text-white/40" />}
+    <div className="my-1 rounded-lg border border-white/10 bg-black/30 text-xs">
+      <button
+        type="button"
+        onClick={() => toggleCard(cardId)}
+        aria-expanded={open}
+        className="flex w-full cursor-pointer select-none items-center gap-2 px-2 py-1.5 text-left"
+      >
+        {open ? <ChevronDown size={12} className="shrink-0 text-white/40" /> : <ChevronRight size={12} className="shrink-0 text-white/40" />}
         <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${busy ? "animate-pulse bg-amber-400" : "bg-emerald-400"}`} />
         <Wrench size={12} className="shrink-0 text-white/50" />
         <span className="truncate font-mono font-medium text-white/85">{name}</span>
         <span className="ml-auto shrink-0 text-white/40">{busy ? status : "done"}</span>
-      </summary>
+      </button>
 
-      <div className="px-2 pb-2">
-        {argText && argText !== "{}" && (
-          <pre className="overflow-x-auto whitespace-pre-wrap break-words text-[11px] text-white/55">{argText}</pre>
-        )}
-        {liveEvents ? (
-          <NestedEvents events={liveEvents.events} output={liveEvents.done ? liveEvents.output ?? "" : ""} running={!liveEvents.done} />
-        ) : nested ? (
-          <NestedEvents events={nested.events} output={nested.output} />
-        ) : mcpUi ? (
-          <McpUiView html={mcpUi.html} url={mcpUi.url} />
-        ) : (
-          status === "complete" &&
-          result !== undefined && (
-            <pre className="mt-1 overflow-x-auto whitespace-pre-wrap break-words border-t border-white/10 pt-1 text-[11px] text-white/70">
-              {preview(result)}
-            </pre>
-          )
-        )}
-      </div>
-    </details>
+      {open && (
+        <div className="px-2 pb-2">
+          {argText && argText !== "{}" && (
+            <pre className="overflow-x-auto whitespace-pre-wrap break-words text-[11px] text-white/55">{argText}</pre>
+          )}
+          {liveEvents ? (
+            <NestedEvents events={liveEvents.events} output={liveEvents.done ? liveEvents.output ?? "" : ""} running={!liveEvents.done} />
+          ) : nested ? (
+            <NestedEvents events={nested.events} output={nested.output} />
+          ) : mcpUi ? (
+            <McpUiView html={mcpUi.html} url={mcpUi.url} />
+          ) : (
+            status === "complete" &&
+            result !== undefined && (
+              <pre className="mt-1 overflow-x-auto whitespace-pre-wrap break-words border-t border-white/10 pt-1 text-[11px] text-white/70">
+                {preview(result)}
+              </pre>
+            )
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 

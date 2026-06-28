@@ -2,49 +2,56 @@
 
 import { useSyncExternalStore } from "react";
 
-// Module-level collapse state + timers for event cards. Lives outside React so
-// the auto-collapse timer survives the frequent remounts that happen while the
-// assistant turn is still streaming (a per-component setTimeout would be
-// cleared on unmount before it fires).
-const COLLAPSE_MS = 4000;
+// Shared collapse state for Assistant cards (tool-call cards + reasoning cards).
+//
+// The cards form an ordered accordion: the most recently inserted card is the
+// only one expanded, so inserting any new card — or the agent's answer — collapses
+// the previously-open card. Clicking a card header toggles just that card (and,
+// being an accordion, opening one collapses the rest).
+//
+// State lives module-side rather than in React because the card components are
+// remounted frequently while a turn is still streaming; a per-component state
+// would be reset on every remount, losing the open/closed selection.
 
-const collapsed = new Map<string, boolean>();
-const timers = new Map<string, ReturnType<typeof setTimeout>>();
+// Every card id ever registered — used to make registration idempotent so the
+// "newest opens" rule only fires the first time a card appears.
+const seen = new Set<string>();
+// The single currently-expanded card, or null when everything is collapsed.
+let openId: string | null = null;
 const listeners = new Set<() => void>();
 
-function emit() {
+function emit(): void {
   for (const l of listeners) l();
 }
 
-/** Schedule auto-collapse once a card's event completes (idempotent). */
-export function markComplete(id: string): void {
-  if (collapsed.has(id) || timers.has(id)) return;
-  const t = setTimeout(() => {
-    timers.delete(id);
-    collapsed.set(id, true);
-    emit();
-  }, COLLAPSE_MS);
-  timers.set(id, t);
-}
-
-/** Manual toggle: cancels any pending auto-collapse and pins the state. */
-export function setCollapsed(id: string, value: boolean): void {
-  const t = timers.get(id);
-  if (t) {
-    clearTimeout(t);
-    timers.delete(id);
-  }
-  collapsed.set(id, value);
+// Register a card by stable id. The first time a given id is seen it becomes the
+// open card (collapsing whatever was open) — this is the "a new card collapses
+// the previous one" rule. Idempotent: re-registering a known id is a no-op, so
+// the frequent re-renders/remounts during streaming don't reshuffle the view.
+export function registerCard(id: string): void {
+  if (seen.has(id)) return;
+  seen.add(id);
+  openId = id;
   emit();
 }
 
-export function useCollapsed(id: string): boolean {
+// Manual toggle from a card header: open it (collapsing the others) if it isn't
+// open, otherwise collapse it so nothing is expanded.
+export function toggleCard(id: string): void {
+  openId = openId === id ? null : id;
+  emit();
+}
+
+function subscribe(cb: () => void): () => void {
+  listeners.add(cb);
+  return () => listeners.delete(cb);
+}
+
+// True when this card is the expanded one. Safe under SSR (collapsed by default).
+export function useCardOpen(id: string): boolean {
   return useSyncExternalStore(
-    (cb) => {
-      listeners.add(cb);
-      return () => listeners.delete(cb);
-    },
-    () => collapsed.get(id) ?? false,
+    subscribe,
+    () => openId === id,
     () => false,
   );
 }
