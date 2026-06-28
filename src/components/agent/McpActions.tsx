@@ -1,6 +1,7 @@
 "use client";
 
 import { useCopilotAction } from "@copilotkit/react-core";
+import { parseToolArgs } from "@/lib/mcp/args";
 
 // Lets the agent inspect/manage MCP server connections AND use their tools via the
 // gateway (014-mcp-tool-gateway): the agent never gets every server's tools in
@@ -45,17 +46,28 @@ export function McpActions({ agentId }: { agentId?: string }) {
   useCopilotAction({
     name: "callMcpServerTool",
     description:
-      "Call a tool on an MCP server. Discover the server, tool name, and argument schema first via findTools or listMcpServerTools, then pass arguments matching that schema.",
+      "Call a tool on an MCP server. Discover the server, tool name, and argument schema first via findTools or listMcpServerTools, then pass `args` as a JSON object STRING matching that schema.",
     parameters: [
       { name: "server", type: "string", description: "MCP server name", required: true },
       { name: "tool", type: "string", description: "Tool name on that server", required: true },
-      { name: "args", type: "object", description: "Arguments object matching the tool's input schema", required: false },
+      {
+        // MUST be a JSON string, not an object: a bare object parameter has no
+        // declared properties, so the chat framework strips the model's keys to {}
+        // before the call is made (see src/lib/mcp/args.ts).
+        name: "args",
+        type: "string",
+        description:
+          'Arguments as a JSON object string matching the tool\'s input schema, e.g. \'{"project_id":41,"issue_iid":3,"state_event":"close"}\'. Use \'{}\' if the tool takes none.',
+        required: false,
+      },
     ],
     handler: async ({ server, tool, args }) => {
+      const parsed = parseToolArgs(args);
+      if (parsed.error) return `Error: ${parsed.error}`;
       const res = await fetch("/api/mcp/tools", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ server, tool, args: args ?? {}, agent: agentId }),
+        body: JSON.stringify({ server, tool, args: parsed.args, agent: agentId }),
       }).then((r) => r.json());
       return res.error ? `Error: ${res.error}` : String(res.result ?? "");
     },

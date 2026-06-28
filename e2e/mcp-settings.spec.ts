@@ -1,5 +1,6 @@
 import { test, expect } from "./fixtures";
 import { makeToolMatcher } from "../src/lib/mcp/match";
+import { parseToolArgs } from "../src/lib/mcp/args";
 
 // Deterministic smoke test for the MCP Servers settings tab. Verifies the tab
 // renders and that the editor swaps fields per transport. Does not assert on a
@@ -76,5 +77,28 @@ test.describe("MCP gateway — tool matcher", () => {
   });
   test("no match returns nothing", () => {
     expect(run("zzz-nope")).toEqual([]);
+  });
+});
+
+// callMcpServerTool args travel as a JSON string (a bare object param would be
+// stripped to {} by the chat framework — the bug seen with update_issue).
+test.describe("MCP gateway — parseToolArgs", () => {
+  test("parses a JSON object string (the model's path)", () => {
+    expect(parseToolArgs('{"project_id":41,"issue_iid":3,"state_event":"close"}')).toEqual({
+      args: { project_id: 41, issue_iid: 3, state_event: "close" },
+    });
+  });
+  test("empty / missing → {}", () => {
+    expect(parseToolArgs("")).toEqual({ args: {} });
+    expect(parseToolArgs("{}")).toEqual({ args: {} });
+    expect(parseToolArgs(undefined)).toEqual({ args: {} });
+  });
+  test("already-an-object passes through", () => {
+    expect(parseToolArgs({ a: 1 })).toEqual({ args: { a: 1 } });
+  });
+  test("invalid JSON / non-object → error, never silently empty", () => {
+    expect(parseToolArgs("{not json").error).toBeTruthy();
+    expect(parseToolArgs("[1,2,3]").error).toBeTruthy();
+    expect(parseToolArgs('"a string"').error).toBeTruthy();
   });
 });
