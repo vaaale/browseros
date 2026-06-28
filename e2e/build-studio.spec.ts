@@ -8,8 +8,8 @@ test.describe("Build Studio", () => {
     await page.getByTestId("dock-build-studio").click();
     const win = page.getByTestId("window-build-studio");
     await expect(win).toBeVisible();
-    // The seeded specs/001-build-studio feature is listed; its artifacts render
-    // because feature nodes start expanded.
-    await expect(win.getByText("spec.md")).toBeVisible();
+    // Feature nodes start expanded, so each migrated feature's spec.md renders;
+    // assert at least one is visible (the tree mirrors specs/).
+    await expect(win.getByText("spec.md").first()).toBeVisible();
   });
 });
