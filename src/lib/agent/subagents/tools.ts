@@ -4,6 +4,7 @@ import { fetchText } from "@/lib/net";
 import * as repo from "@/lib/dev/repo-fs";
 import { runDevCommand, ALLOWED_COMMANDS } from "@/lib/dev/run-command";
 import * as git from "@/lib/system/git";
+import * as specfs from "@/lib/dev/spec-fs";
 import type { LlmTool } from "@/lib/agent/llm";
 
 // Base tools every sub-agent may use: the sandboxed virtual file system + web.
@@ -111,7 +112,55 @@ export const DEV_TOOLS: Record<string, LlmTool> = {
   },
 };
 
-const ALL_TOOLS: Record<string, LlmTool> = { ...SUBAGENT_TOOLS, ...DEV_TOOLS };
+// Spec-scoped tools for Build Studio: read/write specification artifacts confined
+// to specs/ + .specify/ (never BOS source). Opt-in like DEV_TOOLS — an agent must
+// list them in its `tools`.
+export const SPEC_TOOLS: Record<string, LlmTool> = {
+  list_specs: {
+    description: "List entries in the spec tree (under specs/ or .specify/). Defaults to 'specs'.",
+    parameters: { type: "object", properties: { path: { type: "string", description: "Dir under specs/ or .specify/, defaults to 'specs'" } } },
+    execute: async (input) => JSON.stringify(await specfs.listDir((input.path as string) || "specs")),
+  },
+  read_spec: {
+    description: "Read a specification artifact or template (path under specs/ or .specify/, e.g. 'specs/001-build-studio/spec.md' or '.specify/templates/spec-template.md').",
+    parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+    execute: async (input) => specfs.readFile(input.path as string),
+  },
+  write_spec: {
+    description: "Create or overwrite a specification artifact (path under specs/ or .specify/ ONLY). Build the body from the matching template in .specify/templates.",
+    parameters: {
+      type: "object",
+      properties: { path: { type: "string" }, content: { type: "string" } },
+      required: ["path", "content"],
+    },
+    execute: async (input) => `Wrote ${await specfs.writeFile(input.path as string, (input.content as string) ?? "")}`,
+  },
+  edit_spec: {
+    description: "Replace a unique snippet of text in a spec artifact (the search text must occur exactly once).",
+    parameters: {
+      type: "object",
+      properties: { path: { type: "string" }, find: { type: "string" }, replace: { type: "string" } },
+      required: ["path", "find", "replace"],
+    },
+    execute: async (input) => `Edited ${await specfs.editFile(input.path as string, input.find as string, (input.replace as string) ?? "")}`,
+  },
+  search_specs: {
+    description: "Search the spec tree for a string. Returns matching path:line:text. Optionally restrict to a subdirectory.",
+    parameters: {
+      type: "object",
+      properties: { query: { type: "string" }, dir: { type: "string", description: "Subdir to search, defaults to 'specs'" } },
+      required: ["query"],
+    },
+    execute: async (input) => JSON.stringify(await specfs.search(input.query as string, { dir: input.dir as string | undefined })),
+  },
+};
+
+// Build Studio delegates implementation to the Developer via this tool. The real
+// implementation is built per-run in the sub-agent runner (it needs the parent
+// event stream + a depth guard), so it is referenced here only by id.
+export const DELEGATE_TO_DEVELOPER = "delegate_to_developer";
+
+const ALL_TOOLS: Record<string, LlmTool> = { ...SUBAGENT_TOOLS, ...DEV_TOOLS, ...SPEC_TOOLS };
 
 /**
  * Resolve the tools a sub-agent may use. With no explicit allowlist an agent

@@ -2,7 +2,7 @@
 
 BrowserOS (BOS) is a single‑page, server‑side‑rendered "operating system in the browser" (Next.js App Router + React + Zustand + CopilotKit) with an agentic assistant that can operate and **modify BOS itself**.
 
-**Before changing anything, read `docs/dev/architecture-overview.md`** — the full developer docs live under `docs/dev/` (architecture, data layout, API routes, extension recipes, gotchas). Requirements are in `spec/bos.md` (where code diverges from spec, see `spec/discrepancies.md`). End‑user docs are under `docs/usage/`.
+**Before changing anything, read `docs/dev/architecture-overview.md`** — the full developer docs live under `docs/dev/` (architecture, data layout, API routes, extension recipes, gotchas). Requirements are in `spec/bos.md` (where code diverges from spec, see `spec/discrepancies.md`). Project principles live in the spec-kit **constitution** at `.specify/memory/constitution.md`; new feature specs use `specs/<NNN-feature>/` (spec-kit) and are authored via the **Build Studio** app/agent — the legacy prose specs under `spec/` remain until migrated. End‑user docs are under `docs/usage/`.
 
 ## Working rules
 - Work on a **feature branch** (`git checkout -b bos/<short-name>`); make focused edits; **don't** touch secrets, `package.json`, lockfiles, or build config unless asked.
@@ -22,3 +22,4 @@ BrowserOS (BOS) is a single‑page, server‑side‑rendered "operating system i
 - Settings → Skills page: `src/components/apps/settings/SkillsTab.tsx` + `src/lib/agent/skills/store.ts` + `src/app/api/skills/route.ts`.
 - Settings tabs: `src/components/apps/settings/` + `src/apps/settings/index.tsx` (entry).
 - Sub‑agents / delegation: `src/lib/agent/subagents/`.
+- Build Studio (spec-kit authoring): app `src/apps/build-studio/`, server logic `src/lib/specs/` + `src/lib/dev/spec-fs.ts` + `src/app/api/specs/route.ts`; the agent & "Build Studio" skill are seeded in `subagents/store.ts` / `skills/store.ts`. Specs live under `specs/`; constitution at `.specify/memory/constitution.md`.

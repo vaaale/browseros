@@ -79,6 +79,21 @@ const DEFAULTS: SeedAgent[] = [
     systemPrompt:
       "You are a planning sub-agent. Given a task, produce a concise plan as a numbered list of sub-tasks. For EACH sub-task include: **Name**, **Description**, and **Acceptance criteria**. Keep it actionable and ordered by dependency. Do not implement anything — only plan.",
   },
+  {
+    name: "Build Studio",
+    description:
+      "Authors and refines BOS specifications using spec-kit, and delegates implementation to the Developer sub-agent.",
+    type: "local",
+    tools: ["list_specs", "read_spec", "write_spec", "edit_spec", "search_specs", "delegate_to_developer"],
+    systemPrompt:
+      "You are Build Studio, the BrowserOS spec-authoring agent. You operate the Software-As-A-Prompt workflow: every feature is defined by a specification under specs/ before it is built.\n\n" +
+      'You work through your skills. Load and follow the "Build Studio" skill, which holds the spec-kit pipeline (constitution, specify, clarify, plan, tasks, analyze, implement, converge) and its per-command references.\n\n' +
+      "Hard rules:\n" +
+      "- Read and write ONLY specification artifacts via your spec tools (list_specs/read_spec/write_spec/edit_spec/search_specs); they are confined to specs/ and .specify/. You CANNOT and MUST NOT modify BOS source.\n" +
+      "- Build artifact bodies from the templates in .specify/templates.\n" +
+      "- For the `implement` step, call delegate_to_developer with the feature's spec/plan/tasks context and acceptance criteria — never write code yourself.\n" +
+      "- Keep specs and docs in sync; record spec/code drift in specs/discrepancies.md.",
+  },
 ];
 
 function toMarkdown(a: SubAgent): string {
@@ -103,17 +118,29 @@ function fromMarkdown(id: string, src: string): SubAgent {
   };
 }
 
+async function writeSeedAgent(d: SeedAgent): Promise<void> {
+  const id = slugify(d.name);
+  await fs.mkdir(path.join(DIR, id), { recursive: true });
+  await writeFileAtomic(path.join(DIR, id, "AGENT.md"), toMarkdown({ id, ...d }));
+}
+
+// Agents that must exist on EVERY install, including ones upgraded from before
+// the agent shipped. They are back-filled only when missing, never overwriting
+// a user's edits to an existing agent of the same id.
+const ADDITIVE_DEFAULTS = DEFAULTS.filter((d) => d.name === "Build Studio");
+
 let seeded = false;
 async function ensureSeed(): Promise<void> {
   if (seeded) return;
   seeded = true;
   await fs.mkdir(DIR, { recursive: true });
-  const existing = await fs.readdir(DIR).catch(() => []);
-  if (existing.length > 0) return;
-  for (const d of DEFAULTS) {
-    const id = slugify(d.name);
-    await fs.mkdir(path.join(DIR, id), { recursive: true });
-    await writeFileAtomic(path.join(DIR, id, "AGENT.md"), toMarkdown({ id, ...d }));
+  const existing = await fs.readdir(DIR).catch(() => [] as string[]);
+  if (existing.length === 0) {
+    for (const d of DEFAULTS) await writeSeedAgent(d);
+    return;
+  }
+  for (const d of ADDITIVE_DEFAULTS) {
+    if (!existing.includes(slugify(d.name))) await writeSeedAgent(d);
   }
 }
 

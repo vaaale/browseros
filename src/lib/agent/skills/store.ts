@@ -102,7 +102,84 @@ const SEED: Omit<Skill, "id">[] = [
       },
     ],
   },
+  {
+    name: "Build Studio",
+    description:
+      "Drive the spec-kit pipeline to author and refine BOS specifications, then delegate implementation to the Developer.",
+    whenToUse:
+      "When authoring, refining, planning, analyzing, or implementing a BOS feature through specs — i.e. running any spec-kit step (constitution, specify, clarify, plan, tasks, analyze, implement, converge).",
+    pinned: true,
+    content: [
+      "The Build Studio skill drives the spec-kit pipeline. BOS adopts spec-kit literally: governing principles live in .specify/memory/constitution.md; per-feature artifacts live in specs/<NNN-feature>/ (spec.md, plan.md, tasks.md, ...); blank templates live in .specify/templates/ and the authoritative command prompts in .specify/templates/commands/.",
+      "",
+      "Pipeline (run the step the user asks for; each builds on the previous):",
+      "1. constitution — establish/update project principles (.specify/memory/constitution.md).",
+      "2. specify — turn an idea into specs/<NNN-feature>/spec.md.",
+      "3. clarify — resolve ambiguities; append a '## Clarifications' section to spec.md.",
+      "4. plan — produce plan.md (+ research/data-model/contracts when warranted).",
+      "5. tasks — produce tasks.md (an ordered, dependency-marked checklist).",
+      "6. analyze — cross-artifact consistency check (report only).",
+      "7. implement — delegate to the Developer to build the feature.",
+      "8. converge — assess code vs spec; append remaining work / record drift in specs/discrepancies.md.",
+      "",
+      "How to run any step:",
+      "- Load the matching reference (references/<step>.md) and follow it.",
+      "- Read the authoritative command prompt and template with read_spec (.specify/templates/commands/<step>.md and .specify/templates/<artifact>-template.md), then write the artifact with write_spec / edit_spec. All your file tools are jailed to specs/ and .specify/.",
+      "",
+      "Golden rules:",
+      "- The spec is the source of truth; never get ahead of an agreed spec.",
+      "- You NEVER write BOS source. The `implement` step is ALWAYS delegate_to_developer.",
+      "- Keep specs and docs in sync; record drift in specs/discrepancies.md.",
+      "- New feature folders are numbered NNN-slug (next = highest existing number + 1).",
+    ].join("\n"),
+    references: [
+      {
+        name: "constitution.md",
+        content:
+          "Step: constitution. Read .specify/templates/commands/constitution.md and .specify/templates/constitution-template.md. Create or update .specify/memory/constitution.md with the project's governing principles, and bump the version + amended date line. This is global, not per-feature.",
+      },
+      {
+        name: "specify.md",
+        content:
+          "Step: specify. Choose a feature id with the NNN-slug convention (list_specs on 'specs' to find the highest existing number; next = +1). Read .specify/templates/commands/specify.md and .specify/templates/spec-template.md, then write specs/<id>/spec.md following the template: prioritized, independently-testable user stories; functional requirements; measurable success criteria. Mark unknowns with [NEEDS CLARIFICATION].",
+      },
+      {
+        name: "clarify.md",
+        content:
+          "Step: clarify. Read specs/<id>/spec.md; find ambiguities and [NEEDS CLARIFICATION] markers; ask the user concrete questions. Then append a '## Clarifications' section containing a '### Session <date>' list of Q→A, and update the affected requirements with edit_spec.",
+      },
+      {
+        name: "plan.md",
+        content:
+          "Step: plan. Read the spec plus .specify/templates/commands/plan.md and .specify/templates/plan-template.md. Write specs/<id>/plan.md: technical context; a Constitution Check against .specify/memory/constitution.md; concrete project structure (real file paths); and design notes. Add research.md / data-model.md / contracts/ only when warranted.",
+      },
+      {
+        name: "tasks.md",
+        content:
+          "Step: tasks. Read the spec and plan plus .specify/templates/commands/tasks.md and .specify/templates/tasks-template.md. Write specs/<id>/tasks.md: tasks grouped by user story, dependency-ordered, [P] for parallelizable, with exact file paths.",
+      },
+      {
+        name: "analyze.md",
+        content:
+          "Step: analyze. Read spec + plan + tasks and report cross-artifact inconsistencies and coverage gaps (e.g. requirements with no task, tasks with no requirement, constitution violations). Report only — do not edit artifacts unless asked.",
+      },
+      {
+        name: "implement.md",
+        content:
+          "Step: implement. Ensure spec.md, plan.md and tasks.md exist. Call delegate_to_developer with a complete task: the feature path (specs/<id>), a summary of the spec and plan, the tasks to execute, and acceptance criteria; instruct the Developer to work on a feature branch, run typecheck/lint, and update docs. You never write code yourself — relay the Developer's result and reflect updated status.",
+      },
+      {
+        name: "converge.md",
+        content:
+          "Step: converge. Compare the implemented code against spec/plan/tasks (delegate investigation to the Developer if needed). Append any remaining work to tasks.md, and record divergences between code and spec in specs/discrepancies.md.",
+      },
+    ],
+  },
 ];
+
+// Skills that must exist on EVERY install, including ones upgraded from before
+// the skill shipped. Back-filled only when missing (never clobbering edits).
+const ADDITIVE_SEED = SEED.filter((s) => s.name === "Build Studio");
 
 let seeded = false;
 async function ensureSeed(): Promise<void> {
@@ -110,8 +187,13 @@ async function ensureSeed(): Promise<void> {
   seeded = true;
   await fs.mkdir(DIR, { recursive: true });
   const existing = await listSkillIds();
-  if (existing.length > 0) return;
-  for (const s of SEED) await writeSkill({ id: slugify(s.name), createdBy: "seed", ...s });
+  if (existing.length === 0) {
+    for (const s of SEED) await writeSkill({ id: slugify(s.name), createdBy: "seed", ...s });
+    return;
+  }
+  for (const s of ADDITIVE_SEED) {
+    if (!existing.includes(slugify(s.name))) await writeSkill({ id: slugify(s.name), createdBy: "seed", ...s });
+  }
 }
 
 function toMarkdown(s: Skill): string {
