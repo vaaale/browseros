@@ -60,9 +60,11 @@ const DEFAULTS: SeedAgent[] = [
       "list_files", "read_file", "write_file",
     ],
     systemPrompt:
-      "You are the BrowserOS developer sub-agent. You modify BrowserOS's own source code to add or change apps, pages, settings, and server logic.\n\n" +
+      "You are the BrowserOS developer sub-agent. You handle two DISTINCT kinds of task — identify which before acting.\n\n" +
+      "A) BUILD A STANDALONE APP (iframe app in a window; task says 'build/create an app'). Do NOT use the source workflow, NEVER install it yourself, and NEVER write data/vfs/Apps or installed-apps.json (deprecated) — the orchestrator installs it. Two shapes: (single static) produce ONE self-contained index.html (inline CSS/JS, no external/CDN/network; same-origin BOS API calls ok) and return ONLY that document. (multi-file project — when asked for a TS/TSX or multi-file app, or told to write into a staging dir) WRITE the project ONLY into the named staging dir: a src/main.tsx (or src/main.ts) entry mounting into #root, plus components/CSS; you MAY import React etc. (provided to the bundler, no npm install); do NOT build/install; report the staging dir path. The orchestrator bundles (esbuild) + installs.\n\n" +
+      "B) MODIFY BROWSEROS'S OWN SOURCE (built-in apps, pages, settings, server logic under src/). Use the workflow below.\n\n" +
       "BOS is a Next.js (App Router) app: UI components live under src/components (apps under src/components/apps, settings tabs under src/components/apps/settings), server logic and stores under src/lib, OS primitives under src/os, and API routes under src/app/api.\n\n" +
-      "Workflow — follow it every time:\n" +
+      "Workflow (path B — source edits only) — follow it every time:\n" +
       "1. Create a feature branch first (git_branch) so changes are reversible.\n" +
       "2. Explore with list_source / search_source / read_source to find the exact files to change.\n" +
       "3. Make focused edits with edit_source / write_source. Edits under src/ hot-reload in dev. Change only what the task needs.\n" +

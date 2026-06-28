@@ -172,16 +172,19 @@ async function runViaMcp(agent: SubAgent, task: string, server: McpServerConfig,
 export async function runClaudeAgent(
   agent: SubAgent,
   task: string,
-  opts?: { onEvent?: OnEvent },
+  opts?: { onEvent?: OnEvent; contentOnly?: boolean },
 ): Promise<SubAgentRunResult> {
   const harness = await getHarnessConfig();
   if (harness.mode !== "cli") return runViaMcp(agent, task, harness.server, opts?.onEvent);
 
   // Under the Supervisor (live version control), do the work in the isolated
   // `next` worktree and gate it behind a build; otherwise run in-place.
+  // `contentOnly` tasks (e.g. generating an app's HTML — a GitFS content
+  // operation, not a BOS-source edit) MUST NOT provision a code candidate: the
+  // result is installed via installApp onto the app-candidate branch instead.
   let cwd = harness.cwd;
   let provisioned = false;
-  if (supervisorEnabled()) {
+  if (supervisorEnabled() && !opts?.contentOnly) {
     const begun = await supervisorBegin();
     const wt = begun && typeof begun.worktree === "string" ? (begun.worktree as string) : "";
     if (wt) {

@@ -126,9 +126,11 @@ data/                           ALL runtime state (gitignored) — see §12
 
 ## 5. Apps subsystem
 
-`src/lib/apps/store.ts` keeps `data/installed-apps.json` (records: `id, name, icon, createdAt, dir, status: "installed"|"uninstalled", uninstalledAt?`). Files live in the VFS at `/Apps/<id>` and are served at `/apps/<id>/…` by `src/app/apps/[...slug]/route.ts` (which injects a `<base href="/apps/<id>/">` into HTML so relative URLs resolve). `toManifest()` turns a record into an iframe `AppManifest` (`url: /apps/<id>`).
+Apps are **versioned content in their own git repo (GitFS)**, not in `data/`. Root: `appsDir()` (`src/os/apps-dir.ts`) = `BOS_APPS_DIR` or `<cwd>/apps` (gitignored; a standalone repo via `src/lib/gitfs/store.ts`). See `spec/self-modification/gitfs.md`.
 
-Lifecycle: `installApp({name, icon?, files})` (writes VFS + records `installed`), `uninstallApp(id)` (soft — `status:"uninstalled"`, **keeps files**), `restoreApp(id)`, `purgeApp(id)` (removes record + deletes files). `listInstalledManifests()` returns only `installed` apps (desktop). API: `/api/apps` (GET list, POST install, DELETE uninstall/`?purge=1`, PATCH restore).
+`src/lib/apps/store.ts` has **no central registry** — each app is a self-contained folder `<appsDir>/<id>/` holding its files plus an `app.json` manifest (`id, name, icon, createdAt, status: "installed"|"uninstalled", uninstalledAt?`). Apps are **discovered by listing** the apps dir. Served at `/apps/<id>/…` by `src/app/apps/[...slug]/route.ts` (reads the filesystem under a path-escape jail; injects `<base href="/apps/<id>/">` into HTML). `toManifest()` → iframe `AppManifest` (`url: /apps/<id>`).
+
+Lifecycle (each step commits to GitFS): `installApp({name, icon?, files})` (writes `<id>/` + `app.json`), `uninstallApp(id)` (soft — `status:"uninstalled"`, **keeps files**), `restoreApp(id)`, `purgeApp(id)` (removes the folder). `listInstalledManifests()` returns only `installed` apps (desktop). API: `/api/apps` (GET list, POST install, DELETE uninstall/`?purge=1`, PATCH restore).
 
 There is **no "Dev Studio" app and no `buildApp` tool**. Apps are created by delegating to the developer agent and then calling the `installApp` assistant action (the **Build App** skill).
 
@@ -239,10 +241,10 @@ The default tool set (`SUBAGENT_TOOLS`) is **VFS‑only**; dev tools are never h
 
 | Path | Contents |
 |---|---|
-| `data/vfs/` | User VFS (Documents, Pictures, Desktop, Apps). Installed apps at `data/vfs/Apps/<id>/`. Chat history at `data/vfs/Documents/Chats/<id>.json`. |
+| `data/vfs/` | User VFS (Documents, Pictures, Desktop). Chat history at `data/vfs/Documents/Chats/<id>.json`. |
 | `data/settings.json` | OS settings (wallpaper, accent, theme). |
 | `data/config/<ns>.json` | Generic per‑namespace config (e.g. `dev-harness`). |
-| `data/installed-apps.json` | Installed‑app registry (with `status`). |
+| `apps/<id>/` (`BOS_APPS_DIR`) | Installed apps — a standalone git repo (GitFS), `index.html` + `app.json` per app. Not under `data/`. |
 | `data/mcp-servers.json` | Chat MCP servers. |
 | `data/memory/memories.json` | Long‑term memory. |
 | `data/skills/<id>.md` or `data/skills/<id>/SKILL.md` (+ `scripts/`, `references/`) | Skill library. |

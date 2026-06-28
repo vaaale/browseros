@@ -22,16 +22,43 @@ export function DevActions() {
       { name: "icon", type: "string", description: "Optional lucide icon name (e.g. Clock, Calculator, Music, ListTodo); auto-chosen if omitted", required: false },
     ],
     handler: async ({ name, html, icon }) => {
+      // draft: under the Supervisor the app installs onto the app-candidate
+      // branch (previewable; promote/discard from the Topbar) instead of going
+      // live immediately. Outside the Supervisor it's a no-op (installs live).
       const res = await fetch("/api/apps", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, html, icon }),
+        body: JSON.stringify({ name, html, icon, draft: true }),
       }).then((r) => r.json());
       if (res.error) return `Error: ${res.error}`;
       const app = res.app as AppManifest;
       store.getState().registerApp(app);
       store.getState().launch(app.id);
-      return `Installed "${app.name}". It is now in your dock and open.`;
+      return `Installed "${app.name}". It is in your dock and open. If a Supervisor is running, it's a preview on the app-candidate branch — Promote or Discard it from the Topbar.`;
+    },
+  });
+
+  useCopilotAction({
+    name: "buildApp",
+    description:
+      "Install a multi-file app PROJECT (TypeScript/TSX, may import React) that a Claude developer sub-agent authored into a staging directory. Use this for anything beyond a single static HTML file. First delegate to the developer (contentOnly) to WRITE the project into a fresh staging dir with a src/main.tsx (or src/main.ts) entry; then call buildApp with the app name and that directory. The project is bundled with esbuild and installed as a preview (promote/discard from the Topbar).",
+    parameters: [
+      { name: "name", type: "string", description: "App name", required: true },
+      { name: "dir", type: "string", description: "Absolute path of the staging directory the developer wrote the project into (must contain src/main.tsx or src/main.ts)", required: true },
+      { name: "entry", type: "string", description: "Build entry relative to dir; defaults to src/main.tsx or src/main.ts", required: false },
+      { name: "icon", type: "string", description: "Optional lucide icon name; auto-chosen if omitted", required: false },
+    ],
+    handler: async ({ name, dir, entry, icon }) => {
+      const res = await fetch("/api/apps/build", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, dir, entry, icon }),
+      }).then((r) => r.json());
+      if (res.error) return `Error: ${res.error}`;
+      const app = res.app as AppManifest;
+      store.getState().registerApp(app);
+      store.getState().launch(app.id);
+      return `Built and installed "${app.name}". It's a preview on the app-candidate branch — Promote or Discard from the Topbar.`;
     },
   });
 

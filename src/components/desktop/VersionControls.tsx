@@ -11,6 +11,7 @@ interface SupState {
   active: Ver | null;
   next: Ver | null;
   previous: Ver | null;
+  appCandidate: { branch: string; base: string } | null;
 }
 
 // Compact live-version-control surface in the Topbar. Renders nothing unless
@@ -57,6 +58,7 @@ export function VersionControls() {
 
   if (!state) return null;
   const next = state.next;
+  const app = state.appCandidate;
   const activeLabel = state.active?.branch || "active";
   const ready = next?.state === "ready";
   const failed = next?.state === "failed" || next?.state === "tests-failed";
@@ -64,6 +66,14 @@ export function VersionControls() {
 
   return (
     <div className="flex items-center gap-1 text-[11px]">
+      {app && (
+        <>
+          <span className="text-white/55" title={`app preview on branch ${app.branch} (base ${app.base})`}>app preview</span>
+          <button disabled={busy} onClick={() => act("app-promote")} className={`${btn} bg-emerald-500/25 hover:bg-emerald-500/40`}>Promote app</button>
+          <button disabled={busy} onClick={() => act("app-discard")} className={`${btn} bg-white/10 hover:bg-white/20`}>Discard app</button>
+          <span className="mx-0.5 text-white/20">|</span>
+        </>
+      )}
       {next && (
         <>
           <span className="text-white/55" title={`candidate branch: ${next.branch ?? "(unknown)"}`}>{next.branch ?? "candidate"}</span>

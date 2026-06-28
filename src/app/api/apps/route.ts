@@ -12,17 +12,21 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     if (!body.name) return NextResponse.json({ error: "name is required" }, { status: 400 });
 
-    // Accept either a full files map or a single html string for convenience.
+    // Accept a full files map (multi-file/built project) or a single html string.
     const files: Record<string, string> =
       body.files && typeof body.files === "object"
-        ? body.files
+        ? (body.files as Record<string, string>)
         : body.html
           ? { "index.html": String(body.html) }
           : {};
-    if (!files["index.html"]) return NextResponse.json({ error: "index.html (or html) is required" }, { status: 400 });
+    const entry = typeof body.entry === "string" && body.entry.trim() ? body.entry.trim() : undefined;
+    if (!entry && !files["index.html"]) {
+      return NextResponse.json({ error: "Provide index.html/html (static) or entry + files (built project)" }, { status: 400 });
+    }
 
     const icon = body.icon ? String(body.icon) : pickIcon(String(body.name));
-    const manifest = await installApp({ name: String(body.name), icon, files });
+    // draft: install onto the app-candidate branch (previewable) instead of live.
+    const manifest = await installApp({ name: String(body.name), icon, files, entry }, { draft: body.draft === true });
     return NextResponse.json({ app: manifest });
   } catch (err) {
     return NextResponse.json({ error: (err as Error).message }, { status: 400 });

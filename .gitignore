@@ -50,6 +50,11 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# browseros runtime data (VFS, settings, memory, installed apps)
+# browseros runtime data (VFS, settings, memory, mcp/provider config)
 /data
+
+# browseros user apps — a standalone git repo (GitFS), versioned independently
+# of BOS source. Default location; override with BOS_APPS_DIR. Gitignored here
+# so the nested app repo never collides with the BOS source tree.
+/apps
 .memsearch

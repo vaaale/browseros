@@ -37,3 +37,13 @@ export function supervisorBegin(): Promise<Record<string, unknown> | null> {
 export function supervisorBuild(): Promise<Record<string, unknown> | null> {
   return call("build", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
 }
+
+/**
+ * Begin (or reuse) the app-content candidate: a branch in the apps repo (GitFS)
+ * that the active server serves once checked out. Installing an app while a
+ * candidate is active lands it on that branch (previewable), then the user
+ * promotes or discards it. No-op (returns null) when not under the Supervisor.
+ */
+export function supervisorAppBegin(): Promise<Record<string, unknown> | null> {
+  return call("app-begin", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+}

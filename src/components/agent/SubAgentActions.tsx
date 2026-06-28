@@ -66,8 +66,9 @@ export function SubAgentActions() {
       { name: "ephemeralType", type: "string", description: "'local' or 'claude'", required: false },
       { name: "ephemeralSystemPrompt", type: "string", description: "For a one-off agent: its instructions", required: false },
       { name: "ephemeralSubagentType", type: "string", description: "For a one-off 'claude' agent: harness subagent_type (defaults to the name)", required: false },
+      { name: "contentOnly", type: "boolean", description: "Set true when the task only PRODUCES content and does not edit BOS source code (e.g. generating an app's HTML to install). Skips provisioning a BOS-code candidate worktree.", required: false },
     ],
-    handler: async ({ agent, task, ephemeralName, ephemeralType, ephemeralSystemPrompt, ephemeralSubagentType }) => {
+    handler: async ({ agent, task, ephemeralName, ephemeralType, ephemeralSystemPrompt, ephemeralSubagentType, contentOnly }) => {
       const ephemeral = ephemeralName && ephemeralSystemPrompt
         ? { name: ephemeralName, type: ephemeralType === "claude" ? "claude" : "local", systemPrompt: ephemeralSystemPrompt, subagentType: ephemeralSubagentType }
         : undefined;
@@ -79,7 +80,7 @@ export function SubAgentActions() {
         const res = await fetch("/api/subagents/delegate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ agent, task, ephemeral }),
+          body: JSON.stringify({ agent, task, ephemeral, contentOnly: contentOnly === true }),
         });
         if (!res.ok) {
           finishDelegation(key, "");

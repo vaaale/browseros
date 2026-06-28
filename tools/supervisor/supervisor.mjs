@@ -35,6 +35,18 @@ const REUSE_ACTIVE_PORT = process.env.BOS_ACTIVE_REUSE_PORT ? Number(process.env
 const PORTS = { active: PORT_BASE, previous: PORT_BASE + 1, next: PORT_BASE + 2 };
 const PIN_COOKIE = "bos_pin";
 
+// Apps content repo (GitFS) — versioned user apps, a standalone repo independent
+// of BOS source. App candidates are git BRANCHES here (not worktrees + a second
+// server): the active BOS serves the apps repo's working tree, so checking out
+// the candidate branch makes the in-progress app visible ("branch-live" preview),
+// promote merges it to the base branch, discard drops it. This is orthogonal to
+// the BOS-code candidate flow above and needs no extra port/proxy.
+const APPS_REPO = process.env.BOS_APPS_DIR || path.join(REPO, "apps");
+const APP_CANDIDATE_BRANCH = "app-candidate";
+const GIT_IDENTITY = ["-c", "user.name=BrowserOS", "-c", "user.email=bos@localhost"];
+/** @type {{branch:string, base:string}|null} */
+let appCandidate = null;
+
 const log = (...a) => console.log("[supervisor]", ...a);
 
 // ---------------------------------------------------------------- version registry
@@ -54,7 +66,7 @@ async function publicState() {
   const pick = async (v) =>
     v ? { role: v.role, branch: await liveBranch(v), port: v.port, state: v.state, commit: v.commit, tag: v.tag, tests: v.tests, reused: !!v.reused } : null;
   const [active, next, previous] = await Promise.all([pick(versions.active), pick(versions.next), pick(versions.previous)]);
-  return { active, next, previous, pushMode: PUSH_MODE, baseBranch };
+  return { active, next, previous, appCandidate, pushMode: PUSH_MODE, baseBranch };
 }
 
 // ---------------------------------------------------------------- git
@@ -242,6 +254,54 @@ async function discard() {
   log("discarded candidate");
 }
 
+// ---------------------------------------------------------------- app content candidate (GitFS)
+async function appsRepoExists() {
+  try { await fs.access(path.join(APPS_REPO, ".git")); return true; } catch { return false; }
+}
+async function ensureAppsRepo() {
+  if (await appsRepoExists()) return;
+  await fs.mkdir(APPS_REPO, { recursive: true });
+  await git(["init", "-q"], APPS_REPO);
+  await git([...GIT_IDENTITY, "commit", "--allow-empty", "-q", "-m", "init content repo"], APPS_REPO).catch(() => {});
+}
+
+/** Begin (or reuse) the app candidate: a branch in the apps repo, checked out so
+ *  the active server serves it. Idempotent — repeated builds accumulate here. */
+async function appBegin() {
+  await ensureAppsRepo();
+  if (appCandidate) return appCandidate;
+  const cur = await git(["rev-parse", "--abbrev-ref", "HEAD"], APPS_REPO);
+  const base = cur === APP_CANDIDATE_BRANCH ? "master" : cur;
+  const exists = await gitTry(["rev-parse", "--verify", APP_CANDIDATE_BRANCH], APPS_REPO);
+  await git(["checkout", ...(exists ? [APP_CANDIDATE_BRANCH] : ["-b", APP_CANDIDATE_BRANCH])], APPS_REPO);
+  appCandidate = { branch: APP_CANDIDATE_BRANCH, base };
+  log(`app candidate begun on ${APP_CANDIDATE_BRANCH} (base ${base})`);
+  return appCandidate;
+}
+
+/** Promote the app candidate: merge its branch into base, delete the branch. */
+async function appPromote() {
+  if (!appCandidate) throw new Error("no app candidate to promote");
+  const { base } = appCandidate;
+  await git(["checkout", base], APPS_REPO);
+  await git([...GIT_IDENTITY, "merge", "--no-edit", APP_CANDIDATE_BRANCH], APPS_REPO);
+  await gitTry(["branch", "-D", APP_CANDIDATE_BRANCH], APPS_REPO);
+  appCandidate = null;
+  log("app candidate promoted");
+  return { promoted: true };
+}
+
+/** Discard the app candidate: return to base and drop the branch (app gone). */
+async function appDiscard() {
+  if (!appCandidate) return { discarded: false };
+  const { base } = appCandidate;
+  await gitTry(["checkout", "-f", base], APPS_REPO);
+  await gitTry(["branch", "-D", APP_CANDIDATE_BRANCH], APPS_REPO);
+  appCandidate = null;
+  log("app candidate discarded");
+  return { discarded: true };
+}
+
 /** Push the canonical base branch + tags to the remote (manual action). */
 async function pushNow() {
   await git(["push", REMOTE, baseBranch, "--follow-tags"], REPO);
@@ -330,6 +390,9 @@ async function handleControl(req, res, sub) {
     if (sub === "promote" && req.method === "POST") return sendJson(res, { ok: true, ...(await promote()) });
     if (sub === "rollback" && req.method === "POST") return sendJson(res, { ok: true, ...(await rollback()) });
     if (sub === "discard" && req.method === "POST") { await discard(); return sendJson(res, { ok: true }); }
+    if (sub === "app-begin" && req.method === "POST") return sendJson(res, { ok: true, ...(await appBegin()) });
+    if (sub === "app-promote" && req.method === "POST") return sendJson(res, { ok: true, ...(await appPromote()) });
+    if (sub === "app-discard" && req.method === "POST") return sendJson(res, { ok: true, ...(await appDiscard()) });
     if (sub === "push" && req.method === "POST") return sendJson(res, { ok: true, ...(await pushNow()) });
   } catch (e) {
     return sendJson(res, { ok: false, error: String(e.message || e) }, 500);

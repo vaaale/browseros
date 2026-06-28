@@ -21,7 +21,9 @@ export default defineConfig({
     screenshot: "only-on-failure",
     video: "retain-on-failure",
   },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  // Use system Google Chrome (channel) rather than Playwright's bundled
+  // Chromium, which isn't downloaded in this environment.
+  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"], channel: "chrome" } }],
   webServer: {
     command: "npm run dev",
     url: BASE_URL,

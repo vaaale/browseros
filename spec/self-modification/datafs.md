@@ -5,7 +5,7 @@ DataFS is the single layer through which **all** BOS runtime state is read and w
 DataFS MUST work on **any filesystem BOS can run on** — local disks, unprivileged Docker volumes, and network/removable mounts (SMB/CIFS, FAT/exFAT, object-storage FUSE) — by **probing filesystem capability at startup and degrading gracefully**. It MUST NOT hard-depend on any one filesystem feature.
 
 ### Motivation / current state
-Today data access is scattered raw `fs` calls rooted at `process.cwd()/data` across many stores (the VFS, settings, memory, skills, agents, docs, config, the provider config, the installed-apps registry, the MCP-servers registry). Write discipline is inconsistent: some stores write atomically (temp file + rename), most write in place. Network and removable filesystems lack hardlinks and weaken atomic-rename. DataFS therefore MUST (a) **centralize** access behind one module, (b) **standardize atomic writes**, and (c) **never assume** a specific filesystem capability.
+Today data access is scattered raw `fs` calls rooted at `process.cwd()/data` across many stores (the VFS, settings, memory, skills, agents, docs, config, the provider config, the MCP-servers registry). Write discipline is inconsistent: some stores write atomically (temp file + rename), most write in place. Network and removable filesystems lack hardlinks and weaken atomic-rename. DataFS therefore MUST (a) **centralize** access behind one module, (b) **standardize atomic writes**, and (c) **never assume** a specific filesystem capability.
 
 ---
 
@@ -24,7 +24,8 @@ Today data access is scattered raw `fs` calls rooted at `process.cwd()/data` acr
 ## 2. The DataFS module (interface)
 
 - A single **server-only** module exposing path-relative operations against the resolved root, e.g.: `root()`, `readText` / `readBuffer`, `writeAtomic(text|buffer)`, `list`, `stat`, `exists`, `mkdir`, `remove`, `rename`.
-- **All existing stores MUST be migrated to it.** Migration scope (every site that currently joins `process.cwd()/data`): the VFS (`os/vfs.ts`), OS settings (`os/settings.ts`), installed-apps registry (`lib/apps/store.ts`), generic config (`lib/config/store.ts`), provider config (`lib/agent/provider.ts`), docs hub (`lib/docs/store.ts`), agents store (`lib/agent/subagents/store.ts`), MCP servers (`lib/mcp/store.ts`), memory (`lib/agent/memory/*`), and skills (`lib/agent/skills/*`). The VFS retains its path-escape jail; DataFS supplies the root resolution, atomic writes, and clone/overlay behavior.
+- **All existing stores MUST be migrated to it.** Migration scope (every site that currently joins `process.cwd()/data`): the VFS (`os/vfs.ts`), OS settings (`os/settings.ts`), generic config (`lib/config/store.ts`), provider config (`lib/agent/provider.ts`), docs hub (`lib/docs/store.ts`), agents store (`lib/agent/subagents/store.ts`), MCP servers (`lib/mcp/store.ts`), memory (`lib/agent/memory/*`), and skills (`lib/agent/skills/*`). The VFS retains its path-escape jail; DataFS supplies the root resolution, atomic writes, and clone/overlay behavior.
+- **Installed apps are NOT a DataFS store.** Apps are versioned, shareable *content*; they moved out of `data/` into their own git repo (GitFS — `spec/self-modification/gitfs.md`, root `BOS_APPS_DIR`, default `<cwd>/apps`). DataFS holds only runtime state where the latest value is all that matters; anything needing real history/branch/share belongs to GitFS.
 - **One write path.** Writes MUST funnel through `writeAtomic()`. This gives crash-safety to every store and is the prerequisite that makes the hardlink-farm backend (§3) correct.
 
 ---

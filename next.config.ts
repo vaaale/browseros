@@ -15,6 +15,9 @@ const nextConfig: NextConfig = {
   // trailing-slash redirect would strip the slash and break relative URL
   // resolution inside proxied pages, so disable that redirect.
   skipTrailingSlashRedirect: true,
+  // esbuild (used to build per-app projects at install time) ships a native
+  // binary and must not be bundled by the server compiler — keep it external.
+  serverExternalPackages: ["esbuild"],
   ...(allowedDevOrigins.length ? { allowedDevOrigins } : {}),
 };
 

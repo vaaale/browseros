@@ -4,8 +4,9 @@ BOS can modify its own source (the Next.js app under `src/`). The hazard this do
 
 This spec defines **live version control**: BOS MUST be able to run **multiple versions of itself concurrently** so that a self-modification never takes down the running instance, and so that a candidate version can be **previewed, promoted, rolled back, or discarded** safely. It expands the `spec/bos.md` requirements "BOS Self improvement" and "Minimizing blast radius".
 
-It pairs with two other specs:
+It pairs with three other specs:
 - `spec/self-modification/datafs.md` — the **data-isolation layer** that lets concurrent versions share one canonical data store while a previewed candidate writes to an isolated, throwaway copy. This document is authoritative for the control plane; `datafs.md` is authoritative for the data plane.
+- `spec/self-modification/gitfs.md` — the **versioned-content layer** (installed apps now, workflows later). Content lives in its own independent git repo, versioned by git, **separate from BOS-code self-modification**: building an app is a content operation and does NOT spin up a BOS-code candidate. Code candidates (this doc) and content candidates (GitFS) are orthogonal and may both be in flight; the Supervisor's candidate machinery is the same mechanism parameterized by which repo it operates on.
 - `spec/self-improvement/self-improvement.md` §8 — the **BOS-codebase self-improvement** activity (the developer sub-agent deciding *what* source change to make). That spec decides what to change; **this** spec makes applying the change safe at runtime.
 
 ---

@@ -1,12 +1,21 @@
 import "server-only";
 import { promises as fs } from "fs";
 import path from "path";
-import { dataDir } from "@/os/data-dir";
+import { appsDir } from "@/os/apps-dir";
 import { writeFileAtomic } from "@/os/atomic-write";
-import * as vfs from "@/os/vfs";
+import { ensureRepo, commitAll } from "@/lib/gitfs/store";
+import { buildAppDir } from "@/lib/apps/build";
+import { supervisorEnabled, supervisorAppBegin } from "@/lib/devharness/supervisor";
 import type { AppManifest } from "@/os/types";
 
-const FILE = path.join(dataDir(), "installed-apps.json");
+// Installed apps are versioned *content* in a standalone git repo (GitFS) rooted
+// at appsDir(). There is NO central registry file: each app is a self-contained
+// directory `<appsDir>/<id>/` holding its files (entry `index.html`) plus an
+// `app.json` manifest. Apps are DISCOVERED by listing that directory — which is
+// what keeps them additive, conflict-free on upstream merges, and ready for a
+// community marketplace (an app = a portable, self-describing folder).
+
+const MANIFEST = "app.json";
 
 export type AppStatus = "installed" | "uninstalled";
 
@@ -15,7 +24,7 @@ export interface InstalledApp {
   name: string;
   icon: string;
   createdAt: number;
-  /** VFS directory holding the app, e.g. /Apps/<id>. */
+  /** App directory relative to the apps root, e.g. /<id>. */
   dir: string;
   /**
    * "installed" apps appear on the desktop. "uninstalled" apps are hidden but
@@ -23,6 +32,12 @@ export interface InstalledApp {
    */
   status: AppStatus;
   uninstalledAt?: number;
+  /** For built projects: the source entry (e.g. "src/main.tsx") esbuild bundles into dist/. Absent for plain static apps. */
+  entry?: string;
+}
+
+function root(): string {
+  return appsDir();
 }
 
 function slugify(name: string): string {
@@ -58,19 +73,42 @@ export function pickIcon(name: string, spec = ""): string {
   return "Puzzle";
 }
 
-async function readAll(): Promise<InstalledApp[]> {
+async function readApp(id: string): Promise<InstalledApp | null> {
   try {
-    const apps = JSON.parse(await fs.readFile(FILE, "utf8")) as InstalledApp[];
-    // Records written before soft-uninstall existed have no status; treat as installed.
-    return apps.map((a) => ({ ...a, status: a.status ?? "installed" }));
+    const raw = await fs.readFile(path.join(root(), id, MANIFEST), "utf8");
+    const m = JSON.parse(raw) as Partial<InstalledApp>;
+    return {
+      id,
+      name: typeof m.name === "string" ? m.name : id,
+      icon: typeof m.icon === "string" ? m.icon : "Puzzle",
+      createdAt: typeof m.createdAt === "number" ? m.createdAt : 0,
+      dir: `/${id}`,
+      status: m.status === "uninstalled" ? "uninstalled" : "installed",
+      uninstalledAt: typeof m.uninstalledAt === "number" ? m.uninstalledAt : undefined,
+      entry: typeof m.entry === "string" ? m.entry : undefined,
+    };
   } catch {
-    return [];
+    return null;
   }
 }
 
-async function writeAll(apps: InstalledApp[]): Promise<void> {
-  await fs.mkdir(path.dirname(FILE), { recursive: true });
-  await writeFileAtomic(FILE, JSON.stringify(apps, null, 2));
+/** Discover all apps by listing the apps repo (each app dir has an app.json). */
+async function readAll(): Promise<InstalledApp[]> {
+  let entries: import("fs").Dirent[];
+  try {
+    entries = await fs.readdir(root(), { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const ids = entries.filter((e) => e.isDirectory() && !e.name.startsWith(".")).map((e) => e.name);
+  const apps = await Promise.all(ids.map(readApp));
+  return apps.filter((a): a is InstalledApp => a !== null).sort((a, b) => a.createdAt - b.createdAt);
+}
+
+async function writeManifest(app: InstalledApp): Promise<void> {
+  const { dir: _dir, ...rest } = app;
+  void _dir;
+  await writeFileAtomic(path.join(root(), app.id, MANIFEST), JSON.stringify(rest, null, 2));
 }
 
 /** Convert an installed app into an OS app manifest (rendered as an iframe). */
@@ -99,51 +137,81 @@ export async function listInstalledManifests(): Promise<AppManifest[]> {
 
 /**
  * Install an app from a set of files. `index.html` is required and becomes the
- * entry point. Files are written into the VFS at /Apps/<id> and served from
- * /apps/<id>/ so the app can call BrowserOS APIs (same-origin).
+ * entry point. Files are written into the apps repo at <appsDir>/<id> and served
+ * from /apps/<id>/ (same-origin, so the app can call BrowserOS APIs). The change
+ * is committed to GitFS.
  */
-export async function installApp(input: {
-  name: string;
-  icon?: string;
-  files: Record<string, string>;
-}): Promise<AppManifest> {
-  if (!input.files["index.html"]) throw new Error("An index.html file is required");
-  const apps = await readAll();
+export async function installApp(
+  input: {
+    name: string;
+    icon?: string;
+    files: Record<string, string>;
+    /** Built project: source entry (e.g. "src/main.tsx") esbuild bundles into dist/. If set, an index.html is generated and not required in files. */
+    entry?: string;
+  },
+  opts?: { draft?: boolean },
+): Promise<AppManifest> {
+  if (!input.entry && !input.files["index.html"]) {
+    throw new Error("Provide either an index.html (static app) or an entry (built project)");
+  }
+  const r = root();
+  await ensureRepo(r);
+  // Draft install (under the Supervisor): check out the app-candidate branch
+  // first, so this install lands on it (previewable) instead of going live. The
+  // user then promotes or discards via the version controls. Outside the
+  // Supervisor this is a no-op and the app installs live.
+  if (opts?.draft && supervisorEnabled()) {
+    await supervisorAppBegin();
+  }
   const id = slugify(input.name);
-  const dir = `/Apps/${id}`;
+  const dir = path.join(r, id);
 
   for (const [rel, content] of Object.entries(input.files)) {
-    await vfs.writeText(`${dir}/${rel}`, content);
+    await writeFileAtomic(path.join(dir, rel), content);
   }
 
-  const app: InstalledApp = { id, name: input.name, icon: input.icon || "Puzzle", createdAt: Date.now(), dir, status: "installed" };
-  await writeAll([...apps.filter((a) => a.id !== id), app]);
+  // Built project: bundle the source entry into dist/ (served instead of the raw files).
+  if (input.entry) {
+    await buildAppDir(dir, input.entry, input.name);
+  }
+
+  const app: InstalledApp = {
+    id,
+    name: input.name,
+    icon: input.icon || pickIcon(input.name),
+    createdAt: Date.now(),
+    dir: `/${id}`,
+    status: "installed",
+    entry: input.entry,
+  };
+  await writeManifest(app);
+  await commitAll(r, `install app ${id}${opts?.draft ? " (draft)" : ""}`);
   return toManifest(app);
 }
 
 /** Soft uninstall: hide the app from the desktop but keep its files for restore. */
 export async function uninstallApp(id: string): Promise<InstalledApp[]> {
-  const next = (await readAll()).map((a) =>
-    a.id === id ? { ...a, status: "uninstalled" as AppStatus, uninstalledAt: Date.now() } : a,
-  );
-  await writeAll(next);
-  return next;
+  const app = await readApp(id);
+  if (app) {
+    await writeManifest({ ...app, status: "uninstalled", uninstalledAt: Date.now() });
+    await commitAll(root(), `uninstall app ${id}`);
+  }
+  return readAll();
 }
 
 /** Restore a previously uninstalled app (its files were kept). */
 export async function restoreApp(id: string): Promise<AppManifest | undefined> {
-  const apps = await readAll();
-  const app = apps.find((a) => a.id === id);
+  const app = await readApp(id);
   if (!app) return undefined;
   const restored: InstalledApp = { ...app, status: "installed", uninstalledAt: undefined };
-  await writeAll(apps.map((a) => (a.id === id ? restored : a)));
+  await writeManifest(restored);
+  await commitAll(root(), `restore app ${id}`);
   return toManifest(restored);
 }
 
-/** Permanently delete an app's record and its files. */
+/** Permanently delete an app's directory and commit the removal. */
 export async function purgeApp(id: string): Promise<InstalledApp[]> {
-  const next = (await readAll()).filter((a) => a.id !== id);
-  await writeAll(next);
-  await vfs.remove(`/Apps/${id}`).catch(() => {});
-  return next;
+  await fs.rm(path.join(root(), id), { recursive: true, force: true }).catch(() => {});
+  await commitAll(root(), `purge app ${id}`);
+  return readAll();
 }
