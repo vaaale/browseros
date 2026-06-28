@@ -4,7 +4,7 @@ Installed apps are **versioned content** in their own standalone git repo (GitFS
 **not** runtime state and **not** BOS source. They render as a sandboxed **iframe**
 at `/apps/<id>`.
 
-Specs: `spec/self-modification/gitfs.md`, `spec/self-modification/apps.md`.
+Specs: `specs/007-gitfs/spec.md`, `specs/009-installed-apps/spec.md`.
 
 ---
 
@@ -39,7 +39,7 @@ restore) and `/api/apps/build` (POST — build & install a project).
 
 ---
 
-## App shapes (`spec/self-modification/apps.md`)
+## App shapes (`specs/009-installed-apps/spec.md`)
 
 - **Static app** — a folder with `index.html` (+ assets), served as‑is.
 - **Project app** — a multi‑file TS/TSX project bundled at install time. `app.json`

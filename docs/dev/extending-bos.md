@@ -2,7 +2,7 @@
 
 Concrete, copy‑the‑pattern guides. Each links to the subsystem page for detail.
 Always `npx tsc --noEmit` + `npm run lint` after, and update the relevant
-`docs/usage` / `docs/dev` page (served by the Docs app) and `spec/` file.
+`docs/usage` / `docs/dev` page (served by the Docs app) and `specs/` file.
 
 ---
 

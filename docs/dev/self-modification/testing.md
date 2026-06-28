@@ -1,6 +1,6 @@
 # Self-modification: testing & verification
 
-Spec: `spec/self-modification/testing.md`.
+Spec: `specs/008-self-testing/spec.md`.
 
 BOS ships an **end‑to‑end** suite so a self‑modification can be verified before it's
 trusted.
@@ -52,4 +52,4 @@ surfaced in the Versions UI). Today the Supervisor health‑gates a candidate on
 (`building` → `ready` | `failed`); it does **not** run e2e as a gated stage, and the
 `tests-failed` state referenced by the UI is never produced. The e2e suite exists
 and is run **manually / by the agent**, not auto‑run on promote. See
-`spec/discrepancies.md`.
+`specs/discrepancies.md`.

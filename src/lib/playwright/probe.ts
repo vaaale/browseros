@@ -4,8 +4,8 @@ import os from "node:os";
 import path from "node:path";
 
 // Shared Playwright capability probe used by both self-testing
-// (spec/self-modification/testing.md) and browser automation
-// (spec/automation/browser-automation.md). Lightweight and dependency-free:
+// (specs/008-self-testing/spec.md) and browser automation
+// (specs/004-browser-automation/spec.md). Lightweight and dependency-free:
 // it checks the filesystem rather than importing Playwright, so it is safe to
 // call from any server context. Both features degrade gracefully when a
 // browser is unavailable instead of failing hard.

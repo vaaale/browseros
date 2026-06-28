@@ -62,7 +62,7 @@ Ephemeral agents run without being persisted.
   - `list_source` / `read_source` / `search_source` / `write_source` /
     `edit_source` via `src/lib/dev/repo-fs.ts` — **jailed to the repo root**; reads
     deny `.env*`/`.git`/`node_modules`/`.next`; **writes allowed only under** `src/`,
-    `spec/`, `public/`, `docs/`, `data/`.
+    `specs/`, `public/`, `docs/`, `data/`.
   - `run_command` via `src/lib/dev/run-command.ts` — fixed allowlist
     (`typecheck`→`npx tsc --noEmit`, `lint`→`npx eslint .`, `build`→`npm run build`,
     `e2e`), `execFile` (no shell).

@@ -70,7 +70,7 @@ export const DEV_TOOLS: Record<string, LlmTool> = {
     execute: async (input) => JSON.stringify(await repo.search(input.query as string, { dir: input.dir as string | undefined })),
   },
   write_source: {
-    description: "Create or overwrite a source file in the BrowserOS repository. Writes are allowed only under src/, spec/, public/, docs/, data/. src/ edits hot-reload in dev.",
+    description: "Create or overwrite a source file in the BrowserOS repository. Writes are allowed only under src/, specs/, public/, docs/, data/. src/ edits hot-reload in dev.",
     parameters: {
       type: "object",
       properties: { path: { type: "string" }, content: { type: "string" } },

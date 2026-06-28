@@ -37,7 +37,7 @@ Developer.
   `src/`.
 - Specs are repo content under `specs/`, versioned with BOS (distinct from installed-app
   content, which lives in GitFS).
-- The legacy prose specs under `spec/` (singular) are being migrated to `specs/`
-  (spec-kit) feature by feature; until then both directories coexist.
+- The legacy prose specs under `spec/` (singular) were migrated to `specs/`
+  (spec-kit); the original prose remains in git history.
 
 See `specs/001-build-studio/` for the spec/plan/tasks that drove this feature.

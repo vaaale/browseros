@@ -5,7 +5,7 @@ import { promisify } from "node:util";
 import path from "node:path";
 import { detectDataFsCapabilities, type IsolationMethod } from "./probe";
 
-// Clone backends for the data-isolation layer (spec/self-modification/datafs.md
+// Clone backends for the data-isolation layer (specs/006-data-isolation/spec.md
 // §3). The Supervisor calls provisionClone() to give a previewed candidate an
 // isolated copy of the canonical data dir; discardClone() drops it. The base is
 // only ever read here, so the canonical data is never mutated by a preview.

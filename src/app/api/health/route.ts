@@ -5,7 +5,7 @@ import { dataDir } from "@/os/data-dir";
 export const dynamic = "force-dynamic";
 
 // Cheap readiness probe used by the self-modification Supervisor's build/health
-// gate (spec/self-modification/self-modification.md §4) and for version liveness.
+// gate (specs/005-self-modification/spec.md §4) and for version liveness.
 // 200 + { ok: true } means the process is up and can read its data root.
 export async function GET() {
   let dataReadable = false;

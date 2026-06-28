@@ -1,6 +1,6 @@
 # Self-improvement subsystem (skills, review, GEPA, curator)
 
-Spec: `spec/self-improvement/self-improvement.md`. User‑facing:
+Spec: `specs/003-self-improvement/spec.md`. User‑facing:
 `docs/usage/self-improvement/`.
 
 The assistant improves by updating **memory** (who/what) and **skills** (how). This
@@ -59,7 +59,7 @@ version.
 
 > This is **GEPA‑lite**: a single reflective optimization, not the full GEPA loop
 > (candidate generation + evaluation against representative tasks + Pareto selection
-> + versioned rollback). See `spec/discrepancies.md`.
+> + versioned rollback). See `specs/discrepancies.md`.
 
 ---
 

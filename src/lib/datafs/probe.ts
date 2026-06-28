@@ -6,7 +6,7 @@ import path from "node:path";
 import { dataDir } from "@/os/data-dir";
 
 // Filesystem capability probe for the data-isolation layer
-// (spec/self-modification/datafs.md §4). It detects what the data dir's
+// (specs/006-data-isolation/spec.md §4). It detects what the data dir's
 // filesystem supports so the isolation-method setting can offer only compatible
 // backends and default to the best available. Probe-and-degrade: the universal
 // floor (copy, overlay) is always compatible.

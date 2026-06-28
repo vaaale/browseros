@@ -21,7 +21,7 @@ const READ_DENY: RegExp[] = [
 
 // Writes are confined to source/content trees; never package.json, lockfiles,
 // next.config, .env, .git, etc. (which could break the build or leak secrets).
-const WRITE_ALLOW_PREFIXES = ["src/", "spec/", "public/", "docs/", "data/"];
+const WRITE_ALLOW_PREFIXES = ["src/", "specs/", ".specify/", "public/", "docs/", "data/"];
 
 const MAX_READ_BYTES = 512 * 1024;
 const MAX_SEARCH_RESULTS = 200;

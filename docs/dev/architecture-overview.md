@@ -2,9 +2,9 @@
 
 > **Audience:** the BOS assistant's **developer sub‑agent** (Claude Code) and human
 > contributors. Read this before implementing a new app or modifying a BOS feature.
-> The canonical *requirements* live in `spec/`; this tree documents **how BOS is
+> The canonical *requirements* live in `specs/`; this tree documents **how BOS is
 > actually built** (code is the source of truth — where code and spec disagree, see
-> `spec/discrepancies.md`).
+> `specs/discrepancies.md`).
 
 ---
 
@@ -51,7 +51,7 @@ under `./apps`.
    initial markup (hydration mismatches).
 6. **Update docs.** When you add/modify/remove an app or feature, update the
    relevant page under `docs/usage` + `docs/dev` (the source trees the in‑OS Docs
-   app serves) and the matching `spec/` file if the architecture changed.
+   app serves) and the matching `specs/` file if the architecture changed.
 7. **No premature abstraction, no dead code, minimal comments** (only explain
    non‑obvious "why").
 

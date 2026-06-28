@@ -1,6 +1,6 @@
 # Memory subsystem
 
-Spec: `spec/memory/memory.md`. User‑facing: `docs/usage/memory/how-memory-works.md`.
+Spec: `specs/002-memory/spec.md`. User‑facing: `docs/usage/memory/how-memory-works.md`.
 
 Two durable, curated surfaces, **injected** into the assistant's instructions as a
 **frozen snapshot** at conversation start.

@@ -2,12 +2,12 @@
 
 BrowserOS (BOS) is a single‑page, server‑side‑rendered "operating system in the browser" (Next.js App Router + React + Zustand + CopilotKit) with an agentic assistant that can operate and **modify BOS itself**.
 
-**Before changing anything, read `docs/dev/architecture-overview.md`** — the full developer docs live under `docs/dev/` (architecture, data layout, API routes, extension recipes, gotchas). Requirements are in `spec/bos.md` (where code diverges from spec, see `spec/discrepancies.md`). Project principles live in the spec-kit **constitution** at `.specify/memory/constitution.md`; new feature specs use `specs/<NNN-feature>/` (spec-kit) and are authored via the **Build Studio** app/agent — the legacy prose specs under `spec/` remain until migrated. End‑user docs are under `docs/usage/`.
+**Before changing anything, read `docs/dev/architecture-overview.md`** — the full developer docs live under `docs/dev/` (architecture, data layout, API routes, extension recipes, gotchas). Requirements are in `specs/000-browseros-core/spec.md` (where code diverges from spec, see `specs/discrepancies.md`). Project principles live in the spec-kit **constitution** at `.specify/memory/constitution.md`; new feature specs use `specs/<NNN-feature>/` (spec-kit) and are authored via the **Build Studio** app/agent; `specs/overview.md` maps all features. End‑user docs are under `docs/usage/`.
 
 ## Working rules
 - Work on a **feature branch** (`git checkout -b bos/<short-name>`); make focused edits; **don't** touch secrets, `package.json`, lockfiles, or build config unless asked.
 - After editing: `npx tsc --noEmit` and `npm run lint`; fix what you broke. `src/` hot‑reloads under `npm run dev`. **Do not run `npm run build` while `next dev` is running** (shared `.next`).
-- Update `data/docs` (and `spec/bos.md` if architecture changed) when you add/modify/remove a feature.
+- Update `data/docs` (and `specs/000-browseros-core/spec.md` if architecture changed) when you add/modify/remove a feature.
 
 ## Orientation
 - Server‑only code (`import "server-only"`, Node/`fs`/secrets) lives behind `src/app/api/**/route.ts`; clients talk over `fetch`. `src/os/types.ts` is framework‑free.

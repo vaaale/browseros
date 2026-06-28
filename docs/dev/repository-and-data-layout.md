@@ -3,7 +3,7 @@
 ## Repository map
 
 ```
-spec/                           Canonical requirements/design (keep in sync)
+specs/                           Canonical requirements/design (keep in sync)
   bos.md                        Top-level requirements overview
   memory/ self-improvement/     Per-feature specs
   self-modification/ automation/

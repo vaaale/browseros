@@ -82,7 +82,7 @@ distinction — *who/what* vs *how*. Don't add a third knowledge store.
 
 ## Keep mirrors in sync
 
-`tool-manifest.ts` mirrors the registered actions (Tools panel). `spec/` mirrors
+`tool-manifest.ts` mirrors the registered actions (Tools panel). `specs/` mirrors
 architecture. `docs/usage` + `docs/dev` (the source trees the in‑OS Docs app renders) mirror features for users and developers. Update all relevant mirrors
 when you change behavior — and record intentional spec divergence in
-`spec/discrepancies.md`.
+`specs/discrepancies.md`.

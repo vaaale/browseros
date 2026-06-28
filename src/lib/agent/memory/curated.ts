@@ -3,7 +3,7 @@ import { promises as fs } from "fs";
 import path from "path";
 import { dataDir } from "@/os/data-dir";
 
-// Curated, bounded, file-backed memory — the always-injected core (spec/memory.md).
+// Curated, bounded, file-backed memory — the always-injected core (specs/002-memory/spec.md).
 // Two surfaces:
 //   USER.md   — who the user is: identity, role, durable preferences, style, expectations.
 //   MEMORY.md — the assistant's notes: environment facts, conventions, tool quirks, lessons.

@@ -1,6 +1,6 @@
 # Browser automation
 
-Spec: `spec/automation/browser-automation.md`. User‑facing:
+Spec: `specs/004-browser-automation/spec.md`. User‑facing:
 `docs/usage/settings/browser-automation.md`.
 
 Lets the assistant drive a **real browser** via a managed **Playwright MCP** server.
@@ -56,4 +56,4 @@ e2e suite installs (`npx playwright install chromium`).
 
 The `consent` setting (per‑use / per‑session elicitation) is **persisted but not
 yet enforced** — the enforced controls today are the master switch, origin filters,
-and the isolated profile. Tracked in `spec/discrepancies.md`.
+and the isolated profile. Tracked in `specs/discrepancies.md`.

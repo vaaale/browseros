@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // BrowserOS Supervisor — the stable control plane for live version control
-// (spec/self-modification/self-modification.md, run-model A).
+// (specs/005-self-modification/spec.md, run-model A).
 //
 // It owns the PUBLIC port and reverse-proxies to internal `next` instances
 // (active / next / previous), each launched from its own git worktree on its

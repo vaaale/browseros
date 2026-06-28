@@ -1,6 +1,6 @@
 import { defineConfig, devices } from "@playwright/test";
 
-// E2E configuration for BrowserOS self-testing (see spec/self-modification/testing.md).
+// E2E configuration for BrowserOS self-testing (see specs/008-self-testing/spec.md).
 // Tests run against a real production-like app on BASE_URL. `reuseExistingServer`
 // means a dev server already running on :3000 is reused; otherwise Playwright
 // starts `npm run dev` for the run.

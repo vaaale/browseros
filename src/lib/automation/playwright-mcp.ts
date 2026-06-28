@@ -4,7 +4,7 @@ import { getRegistration } from "@/lib/config/registry";
 import { detectPlaywright } from "@/lib/playwright/probe";
 
 // Builds a *managed* Playwright MCP server from the `browser-automation` config
-// (spec/automation/browser-automation.md). It is not persisted to
+// (specs/004-browser-automation/spec.md). It is not persisted to
 // data/mcp-servers.json — it is derived per request and appended to the agent's
 // MCP servers in runtime.ts, so policy changes apply with no restart.
 

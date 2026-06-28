@@ -5,7 +5,7 @@ import { MEMORY_LLM_TOOL } from "@/lib/agent/memory/tool";
 import { listSkills, getSkill, saveSkill, patchSkill } from "@/lib/agent/skills/store";
 import { touchSkill } from "@/lib/agent/skills/usage";
 
-// The self-improvement review (spec/self-improvement.md §2): a separate pass,
+// The self-improvement review (specs/003-self-improvement/spec.md §2): a separate pass,
 // restricted to the memory + skill-management tools, that inspects a completed
 // conversation and decides what to save/update. It can take no other action.
 

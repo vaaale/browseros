@@ -2,7 +2,7 @@ import "server-only";
 import { listSkills, archiveSkill } from "./store";
 import { allUsage } from "./usage";
 
-// The Curator (spec/self-improvement.md §5): maintains the agent-created skill
+// The Curator (specs/003-self-improvement/spec.md §5): maintains the agent-created skill
 // library. Deterministic, non-destructive — it only ARCHIVES (recoverable),
 // only touches agent-created, unpinned skills, and leaves a skill alone until it
 // has been idle past the staleness threshold.

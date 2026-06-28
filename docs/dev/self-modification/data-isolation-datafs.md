@@ -1,6 +1,6 @@
 # Self-modification: data isolation (DataFS)
 
-Spec: `spec/self-modification/datafs.md`. User‑facing:
+Spec: `specs/006-data-isolation/spec.md`. User‑facing:
 `docs/usage/settings/data-isolation.md`.
 
 When a candidate BOS version is previewed, it must run against an **isolated copy**
@@ -59,4 +59,4 @@ agents, config, settings use `writeFileAtomic`.)
 > `writeAtomic`, …) and **five** backends (incl. ZFS/btrfs snapshots and a sparse
 > overlay). Today there is **no unified funnel** (stores use `dataDir()` + atomic
 > write directly) and only **reflink/hardlink/copy** are implemented (snapshot/
-> overlay are not). See `spec/discrepancies.md`.
+> overlay are not). See `specs/discrepancies.md`.

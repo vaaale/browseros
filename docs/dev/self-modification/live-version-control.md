@@ -1,6 +1,6 @@
 # Self-modification: live version control (the Supervisor)
 
-Spec: `spec/self-modification/self-modification.md`. User‑facing:
+Spec: `specs/005-self-modification/spec.md`. User‑facing:
 `docs/usage/versions/live-version-control.md`.
 
 BOS can modify its own code **while running**. The **Supervisor** is the stable

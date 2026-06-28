@@ -2,7 +2,7 @@
 
 BrowserOS documentation is split into two trees by audience. Both are kept in sync
 with the codebase (the **code is the source of truth**; intentional divergence from
-the specs in `spec/` is tracked in [`spec/discrepancies.md`](../spec/discrepancies.md)).
+the specs in `specs/` is tracked in [`specs/discrepancies.md`](../specs/discrepancies.md)).
 
 ---
 
@@ -54,5 +54,5 @@ When you add, change, or remove an app or feature:
 
 1. Update the relevant page(s) under `docs/usage/` and `docs/dev/` — the in‑OS
    Docs app renders these automatically (there's no separate runtime copy).
-2. If the architecture changed, update `spec/` (and note any code↔spec divergence in
-   `spec/discrepancies.md`).
+2. If the architecture changed, update `specs/` (and note any code↔spec divergence in
+   `specs/discrepancies.md`).

@@ -5,7 +5,7 @@ export const dynamic = "force-dynamic";
 
 // Exposes the data-isolation capability probe so Settings can offer only
 // compatible isolation methods and default to the best one
-// (spec/self-modification/datafs.md §4–§5).
+// (specs/006-data-isolation/spec.md §4–§5).
 export async function GET(req: Request) {
   const force = new URL(req.url).searchParams.get("reprobe") === "1";
   const caps = await detectDataFsCapabilities(force);
