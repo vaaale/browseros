@@ -25,6 +25,9 @@ to `000-browseros-core`.
 | 008 | Self-testing (Playwright) | `specs/008-self-testing/` |
 | 009 | Installed apps | `specs/009-installed-apps/` |
 | 010 | Documentation hub | `specs/010-documentation/` |
+| 011 | Per-agent capabilities (tools/skills/MCP) — *Draft* | `specs/011-per-agent-capabilities/` |
+| 012 | Embeddable Assistant (integration plane) — *Draft* | `specs/012-embeddable-assistant/` |
+| 013 | Build Studio — agentic studio (idea → built feature) — *Draft* | `specs/013-build-studio-agentic/` |
 
 ## Other artifacts
 

@@ -4,7 +4,7 @@
 
 **Created**: 2026-06-28
 
-**Status**: Draft
+**Status**: Implemented (v1; extended by `013-build-studio-agentic`)
 
 **Input**: User description: "BOS includes a Software-As-A-Prompt subsystem. Build Studio is a specialized spec-authoring agent plus a companion app that uses GitHub spec-kit to author and refine specifications under `specs/`, and delegates implementation to the existing Developer sub-agent. The app has a left tree of the spec structure and a main pane that visualizes spec development."
 
