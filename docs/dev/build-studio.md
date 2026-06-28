@@ -26,8 +26,18 @@ Developer.
   integration) needs BOTH a skill (instructions) and a tool/MCP (the capability).
 - **API** — `src/app/api/specs/route.ts`: `GET` tree+status / artifact, `PUT` artifact
   (atomic). Server-only; the app talks to it over `fetch`.
-- **App** — `src/apps/build-studio/` (`manifest.ts` + `index.tsx`): spec tree +
-  pipeline strip + artifact view/edit.
+- **App** — `src/apps/build-studio/` (`manifest.ts` + `index.tsx`): a three-pane layout —
+  spec tree (left) + pipeline strip & artifact view/edit (centre) + the embedded
+  **agent chat** (right, `<AssistantChat agentId="build-studio" group="build-studio">`,
+  per `012`/`013`). The two side panes are resizable via
+  `src/components/apps/ResizeHandle.tsx` (widths persisted in `localStorage`).
+- **Agent app-control tools** — `src/apps/build-studio/AgentTools.tsx` registers
+  `openSpecArtifact` (show an artifact in the centre viewer) and `refreshSpecTree`
+  (reload the tree) as `useCopilotAction` frontend tools. They are passed through
+  `AssistantChat`'s `children` slot so they mount **inside the chat's CopilotKit provider**
+  and are therefore callable by the build-studio agent (and only when the app is open).
+  These are frontend UI-control actions — **distinct from `SPEC_TOOLS`**, the server-side
+  file tools the sub-agent uses to read/write `specs/`.
 
 ## Conventions
 

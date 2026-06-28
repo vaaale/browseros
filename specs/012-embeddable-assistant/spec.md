@@ -15,7 +15,7 @@
 ### Session 2026-06-28
 
 - Q: How are conversations partitioned across embeds (FR-004)? → A: Conversations belong to a **group/partition**. The **Assistant app shows all conversations grouped** (nested, like the Docs and Specs trees); an **embed shows only its own group** — e.g. Build Studio shows only Build Studio conversations. The group maps to the embed's scope (its agent/provider).
-- Q: Can multiple agent/thread-scoped chats coexist (FR-006)? → A: Yes. CopilotKit's provider can wrap a **sub-tree** (per its docs) and accepts `threadId` + `agent` props, so an embed mounts its **own CopilotKit provider** scoped to its sub-tree, with its own `threadId` (→ its conversation group) and agent/instructions; the Assistant app keeps the global provider. This gives independent agent + conversation scoping with no cross-talk.
+- Q: Can multiple agent/thread-scoped chats coexist (FR-006)? → A: Yes, but **only if no shared/global CopilotKit provider wraps them**. Nested CopilotKit providers do NOT isolate — an outer provider dominates inner ones and collapses every surface onto one runtime/thread (observed: starting a new conversation in the Assistant also made it appear in Build Studio). So there MUST be no app-wide provider; **each chat surface mounts its OWN provider as a top-level sibling**, each with its own `threadId` (→ its conversation group) and agent/instructions. That gives independent agent + conversation scoping with no cross-talk. (Earlier this clarification assumed an embed could nest under a kept global provider — that assumption was wrong and produced the shared-chat bug.)
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -53,8 +53,9 @@ The built-in Assistant app is refactored to use the same embed API (dogfood) —
 
 ### Edge Cases
 
-- Two assistant surfaces coexisting (Assistant app + an embed) must not bleed agent scope or conversation context into each other.
+- Two assistant surfaces coexisting (Assistant app + an embed) must not bleed agent scope, conversation context, **or per-surface UI state (e.g. the collapsible event-card accordion)** into each other.
 - An embed pinned to an agent that was deleted should fall back gracefully.
+- Opening an embed restores its group's active conversation; per core `FR-016` that restore is **display-only** (no agent run, no tool re-execution) even when the conversation contains tool-call history — which is the common case for an embed that mounts on app open.
 
 ## Requirements *(mandatory)*
 
@@ -65,9 +66,10 @@ The built-in Assistant app is refactored to use the same embed API (dogfood) —
 - **FR-003**: The embed MUST accept **chrome options** — show/hide the conversation panel (left) and the info panel (right) independently.
 - **FR-004**: Conversations MUST be **partitioned into groups** on the shared conversation store: each conversation belongs to a group keyed by the embed's scope (its agent/provider). The **Assistant app MUST display conversations grouped** (nested, like the Docs/Specs trees); an **embed MUST show only its own group** (e.g. Build Studio shows only Build Studio conversations).
 - **FR-005**: `composeInstructions` MUST support composing instructions for a **specified agent** (honoring that agent's scoped skills per `011`), not only the global active agent.
-- **FR-006**: Multiple assistant surfaces MUST coexist without cross-talk. Mechanism: an embed mounts its **own CopilotKit provider scoped to its sub-tree** (CopilotKit supports a provider over a sub-tree, with `threadId` + `agent` props), giving each embed its own conversation thread/group and agent; the Assistant app keeps the global provider.
+- **FR-006**: Multiple assistant surfaces MUST coexist without cross-talk (agent scope, conversation/thread, AND per-surface UI state all independent). Mechanism: **each chat surface mounts its OWN CopilotKit provider as a top-level sibling**, with its own `threadId` (→ its conversation group) and agent/instructions. There MUST be **no shared/global CopilotKit provider** wrapping multiple surfaces — nested CopilotKit providers do NOT isolate; an outer provider dominates inner ones and collapses all surfaces onto a single runtime/thread. The Assistant app is itself one such sibling surface, not a global host.
 - **FR-007**: The built-in **Assistant app MUST be refactored to consume this embed API**, becoming the reference consumer (full chrome, global active agent).
 - **FR-008**: The embed MUST stream the same live events as the Assistant (thinking, tool calls/responses, and nested sub-agent events).
+- **FR-009**: Per-surface chat **UI state** MUST be isolated too, not only agent and conversation scope. In particular the collapsible event-card accordion (core `FR-007`) MUST be scoped per surface, so expanding/collapsing a card in one chat never moves cards in another.
 
 ### Key Entities
 
@@ -84,7 +86,7 @@ The built-in Assistant app is refactored to use the same embed API (dogfood) —
 - **SC-002**: That chat is pinned to a chosen agent regardless of the global active agent.
 - **SC-003**: The side panels can be toggled off so the host app controls the chrome.
 - **SC-004**: The Assistant app itself runs on the embed API.
-- **SC-005**: Embedded and Assistant chats do not bleed agent or conversation context.
+- **SC-005**: Embedded and Assistant chats do not bleed agent, conversation, or UI-state (event-card accordion) context — and starting a new conversation in one never makes it appear in the other.
 
 ## Assumptions & Dependencies
 

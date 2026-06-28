@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { CopilotChat } from "@copilotkit/react-ui";
 import "@copilotkit/react-ui/styles.css";
 import { CheckCircle2, Loader2 } from "lucide-react";
@@ -34,6 +34,10 @@ export interface AssistantChatProps {
   /** Assistant mode: show all conversation groups (nested) and switch between
    *  them (each group implies its agent); shows the personality selector. */
   allGroups?: boolean;
+  /** Extra nodes rendered INSIDE this surface's CopilotKit provider — e.g. a host
+   *  app registering `useCopilotAction` tools the embedded agent can call to drive
+   *  the app's UI. They render no visible chrome (the action components return null). */
+  children?: ReactNode;
 }
 
 // Embeddable assistant chat (012-embeddable-assistant). Mounts its OWN CopilotKit
@@ -46,6 +50,7 @@ export function AssistantChat(props: AssistantChatProps) {
   const agentId = group === DEFAULT_GROUP ? props.agentId : group;
   return (
     <CopilotProvider group={group} agentId={agentId}>
+      {props.children}
       <AssistantChatInner {...props} group={group} agentId={agentId} onPickGroup={props.allGroups ? setGroup : undefined} />
     </CopilotProvider>
   );

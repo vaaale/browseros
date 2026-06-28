@@ -25,7 +25,7 @@ description: "Task list for Embeddable Assistant (012-embeddable-assistant)"
 
 - [ ] T003 Make `src/lib/agent/conversations.ts` **group-aware**: a `group` field; on-disk layout `/Documents/Chats/<group>/<id>.json` with **back-compat migration** of existing flat files into the `assistant` group; a per-group active id (localStorage keyed by group); and group-scoped APIs (`useConversations(group)`, `useActiveConversationId(group)`, `new/select/delete` per group).
 - [ ] T004 Parameterize `src/components/agent/CopilotProvider.tsx` — accept `threadId`/`group` (and an optional pinned agent) instead of hardcoding the global active conversation; keep the `*Actions` registered inside.
-- [ ] T005 Key `src/components/agent/ChatPersistence.tsx` by `(group, threadId)` so each group persists to its own files.
+- [ ] T005 Key `src/components/agent/ChatPersistence.tsx` by `(group, threadId)` so each group persists to its own files. Restore MUST be **display-only and load-once** (core `FR-016`): load a thread at most once per open, claim it synchronously so the agent object's identity churn during a run does NOT re-trigger a load, and never re-load over an in-flight turn (re-issuing `setMessages` on a tool-call turn restarts the runtime → a re-render/remount loop).
 
 **Checkpoint**: conversations partition by group; existing chats still load (migrated).
 
@@ -33,7 +33,7 @@ description: "Task list for Embeddable Assistant (012-embeddable-assistant)"
 
 ## Phase 3: User Stories 1–3 — Embed, agent scope, chrome (P1)
 
-- [ ] T006 Add `src/components/agent/AssistantChat.tsx` — the embeddable surface: its own `CopilotProvider` over the sub-tree, instructions composed for `agentId` (default = global active), `useChatPersistence` + `ChatToolRenderer`, and chrome props (`group`, `showConversations?`, `showInfo?`).
+- [ ] T006 Add `src/components/agent/AssistantChat.tsx` — the embeddable surface: its own `CopilotProvider`, instructions composed for `agentId` (default = global active), `useChatPersistence` + `ChatToolRenderer`, and chrome props (`group`, `showConversations?`, `showInfo?`). Wrap the chat in a **per-surface card-collapse scope** (`FR-009`, core `FR-007`) so its event-card accordion is independent of other surfaces.
 - [ ] T007 Thread the embed's `agentId` to `/api/copilotkit` so `buildRuntimeOptions(agentId)` scopes MCP (a request header on the embed's `CopilotKit`, read in the route; fall back to `/api/copilotkit?agent=…` if per-provider headers aren't supported — confirm during build).
 
 ---
@@ -47,13 +47,14 @@ description: "Task list for Embeddable Assistant (012-embeddable-assistant)"
 ## Phase 5: User Story 5 — Assistant consumes the embed (P2)
 
 - [ ] T009 Refactor `src/apps/chat/index.tsx` to render `<AssistantChat group="assistant" showConversations showInfo />` (the reference consumer); remove the now-duplicated provider/chat wiring.
+- [ ] T009a **Remove the global `<CopilotKit>`/`CopilotProvider` from `src/app/page.tsx`.** Each chat surface (the Assistant app via `<AssistantChat>`, every embed) must be the sole top-level provider for its own sub-tree. This is REQUIRED, not optional: nested CopilotKit providers do NOT isolate, so leaving a global provider collapses all surfaces onto one runtime/thread (the shared-chat bug). Do this together with T006/T009 so a surface always has exactly one provider at every step.
 
 ---
 
 ## Phase 6: Polish & Cross-Cutting
 
 - [ ] T010 [P] Docs: `docs/usage/assistant/*` + `docs/dev/assistant/*` for the embeddable assistant + conversation groups.
-- [ ] T011 [P] Tests: the existing desktop e2e (opens the Assistant) must still pass; add an embedded-chat smoke (full coverage lands with `013`, which provides a real embed).
+- [ ] T011 [P] Tests: the existing desktop e2e (opens the Assistant) must still pass; add an embedded-chat smoke (full coverage lands with `013`, which provides a real embed). Add isolation guards: starting a new conversation in one surface MUST NOT appear in the other, and each surface's event-card accordion toggles independently. Add a restore guard: reopening a conversation with tool-call history appends nothing, starts no run, and its tool-card headers still toggle on click (core `FR-016`, `FR-007`).
 - [ ] T012 Run typecheck + lint to green; `/speckit.analyze` on `012`.
 
 ---
@@ -68,5 +69,5 @@ description: "Task list for Embeddable Assistant (012-embeddable-assistant)"
 
 ## Notes
 
-- The per-embed CopilotKit provider over a sub-tree is the mechanism for both agent scoping and conversation partitioning (spec Clarifications).
+- Each surface's OWN top-level CopilotKit provider (with NO global provider above it) is the mechanism for agent scoping and conversation partitioning. Nested CopilotKit providers do NOT isolate — an outer provider dominates inner ones (spec Clarifications + FR-006).
 - Per-embed *action* scoping is out of scope here (the `011` deferral in `TODO.md`).

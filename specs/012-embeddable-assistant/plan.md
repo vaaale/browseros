@@ -7,8 +7,9 @@
 ## Summary
 
 Extract the chat into a reusable, **agent-scoped `<AssistantChat>` embed** — each
-instance mounts its own CopilotKit provider over a sub-tree, with its own
-conversation thread, chrome toggles, and pinned agent. Refactor the Assistant app
+instance mounts its own **top-level** CopilotKit provider (there must be NO
+global/app-wide provider; see Design notes), with its own conversation thread,
+chrome toggles, and pinned agent. Refactor the Assistant app
 to consume it. Conversations are **partitioned by group** (the Assistant shows all
 groups nested; an embed shows only its own). `011` already added
 `composeInstructions(agentId?)` and `buildRuntimeOptions(agentId?)`.
@@ -55,10 +56,10 @@ src/apps/chat/index.tsx                   # EDIT — consume <AssistantChat grou
 ## Design notes
 
 ### Embeddable component (`<AssistantChat>`)
-Props: `agentId?` (pin agent; default = global active), `group` (conversation partition; default `"assistant"`), `showConversations?`, `showInfo?` (chrome). It renders its **own** `CopilotProvider` over its sub-tree (so multiple agent/thread-scoped chats coexist — CopilotKit supports a provider per sub-tree), composes instructions for `agentId` via `/api/assistant/agent?agentId=…` (or a small endpoint), and mounts `<CopilotChat>` + `useChatPersistence` + `ChatToolRenderer`.
+Props: `agentId?` (pin agent; default = global active), `group` (conversation partition; default `"assistant"`), `showConversations?`, `showInfo?` (chrome). It renders its **own** `CopilotProvider`, composes instructions for `agentId` via `/api/assistant/agent?agentId=…` (or a small endpoint), and mounts `<CopilotChat>` + `useChatPersistence` + `ChatToolRenderer`. It also wraps the chat in a **per-surface card-collapse scope** (core `FR-007`) so its event-card accordion is independent of other surfaces.
 
-### Per-embed provider
-`CopilotProvider` is parameterized by `threadId` (the group's active conversation) and optionally the pinned agent; it registers the `*Actions` inside its sub-tree as today. The Assistant app and an embed each get an independent provider → no thread/agent cross-talk.
+### Per-surface provider — NO global provider
+`CopilotProvider` is parameterized by `threadId` (the group's active conversation) and optionally the pinned agent; it registers the `*Actions` inside its sub-tree. **Each chat surface mounts its own provider as a top-level sibling, and there must be NO global/app-wide `<CopilotKit>` provider wrapping them.** Nested CopilotKit providers do NOT isolate — an outer/global provider dominates inner ones, so every surface would share one runtime/thread (the shared-chat bug, observed as a new Assistant conversation also appearing in Build Studio). So the global provider must be **removed from `src/app/page.tsx`**; the Assistant app and every embed are independent sibling providers → no thread/agent cross-talk.
 
 ### Conversation partitioning (the core refactor)
 `Conversation` gains `group: string`. On disk: `/Documents/Chats/<group>/<id>.json` (existing flat files migrate to the `assistant` group on first load — back-compat). The store exposes **group-scoped** views: `useConversations(group)`, `useActiveConversationId(group)`, and `new/select/delete` scoped to a group, with a per-group active id (localStorage keyed by group). `ConversationPanel` with no `group` lists **all groups, nested**; with a `group` lists only that one.

@@ -35,13 +35,14 @@ async function save(servers: McpServerConfig[]): Promise<void> {
 
 export async function addMcpServer(cfg: McpServerConfig): Promise<McpServerConfig[]> {
   const servers = await listMcpServers();
-  const next = [...servers.filter((s) => s.endpoint !== cfg.endpoint), cfg];
+  // Keyed by name (upsert): re-adding the same name replaces it.
+  const next = [...servers.filter((s) => s.name !== cfg.name), cfg];
   await save(next);
   return next;
 }
 
-export async function removeMcpServer(endpoint: string): Promise<McpServerConfig[]> {
-  const next = (await listMcpServers()).filter((s) => s.endpoint !== endpoint);
+export async function removeMcpServer(name: string): Promise<McpServerConfig[]> {
+  const next = (await listMcpServers()).filter((s) => s.name !== name);
   await save(next);
   return next;
 }

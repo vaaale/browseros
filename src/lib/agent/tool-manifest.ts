@@ -38,10 +38,12 @@ export const ASSISTANT_TOOLS: ToolInfo[] = [
   { group: "Skills", name: "improveSkill", description: "Improve a skill from feedback (GEPA)." },
   { group: "Skills", name: "runCurator", description: "Archive stale agent-created skills (recoverable)." },
 
-  { group: "MCP", name: "listMcpServers", description: "List connected MCP servers." },
+  { group: "MCP", name: "listMcpServers", description: "List connected MCP servers (with descriptions)." },
+  { group: "MCP", name: "findTools", description: "Search MCP tools across all servers (returns schemas)." },
+  { group: "MCP", name: "listMcpServerTools", description: "List a server's tools with their input schemas." },
+  { group: "MCP", name: "callMcpServerTool", description: "Call a tool on an MCP server." },
   { group: "MCP", name: "addMcpServer", description: "Connect an MCP server." },
   { group: "MCP", name: "removeMcpServer", description: "Disconnect an MCP server." },
-  { group: "MCP", name: "probeMcpServer", description: "Test an MCP server and list its tools." },
 
   { group: "Dev", name: "installApp", description: "Install an app from generated HTML (adds it to the dock and opens it)." },
   { group: "Dev", name: "buildApp", description: "Build & install a multi-file TS/TSX app project (esbuild) from a developer staging dir." },

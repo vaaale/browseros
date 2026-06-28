@@ -9,6 +9,7 @@ import { AppsTab } from "@/components/apps/settings/AppsTab";
 import { DevHarnessTab } from "@/components/apps/settings/DevHarnessTab";
 import { DataFsTab } from "@/components/apps/settings/DataFsTab";
 import { VersionsTab } from "@/components/apps/settings/VersionsTab";
+import { McpServersTab } from "@/components/apps/settings/McpServersTab";
 import { ConfigForm } from "@/components/apps/settings/ConfigForm";
 import { ProviderSettings } from "@/components/apps/ProviderSettings";
 import type { AppProps } from "@/components/apps/types";
@@ -19,6 +20,7 @@ const CUSTOM_TABS: Record<string, React.ComponentType> = {
   "ai-provider": ProviderSettings,
   assistant: AssistantTab,
   skills: SkillsTab,
+  mcp: McpServersTab,
   apps: AppsTab,
   "dev-harness": DevHarnessTab,
   datafs: DataFsTab,

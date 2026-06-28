@@ -120,7 +120,7 @@ discrepancies are reported and recorded.
 - **FR-003**: Build Studio MUST be able to read, create, and modify specification artifacts confined to the `specs/` tree and the `.specify/` templates and constitution.
 - **FR-004**: Build Studio MUST implement the spec-kit pipeline (constitution, specify, clarify, plan, tasks, analyze, implement, converge) using the vendored spec-kit templates and command methodology, delivered as skills. The `checklist` and `taskstoissues` commands are out of scope for v1.
 - **FR-005**: Implementation steps MUST be delegated to the Developer (Claude) sub-agent; Build Studio MUST NOT write application or source code itself.
-- **FR-006**: BOS MUST provide a "Build Studio" app with a left panel showing a navigable tree of `specs/` and a main pane visualizing the selected feature's artifacts and pipeline status.
+- **FR-006**: BOS MUST provide a "Build Studio" app with a left panel showing a navigable tree of `specs/` and a main pane visualizing the selected feature's artifacts and pipeline status. Side panels MUST be **user-resizable** via draggable dividers (widths persist across sessions). (`013` adds a third pane — the embedded agent chat — to this layout.)
 - **FR-007**: The app MUST render spec artifacts (markdown) and show per-phase status and `tasks.md` progress.
 - **FR-008**: When implementation runs, the app/assistant MUST stream live progress events (including events from the delegated Developer sub-agent).
 - **FR-009**: Build Studio MUST keep specs and docs in sync per the constitution and record spec ↔ code drift in `specs/discrepancies.md`.

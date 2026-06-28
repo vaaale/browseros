@@ -7,7 +7,7 @@ import { PROVIDERS, type ProviderType } from "./provider-meta";
 
 const FILE = path.join(dataDir(), "provider.json");
 
-export const DEFAULT_MAX_TOKENS = 8192;
+export const DEFAULT_MAX_TOKENS = 65535;
 
 export interface ProviderConfig {
   provider: ProviderType;

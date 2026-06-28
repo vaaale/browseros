@@ -29,16 +29,37 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   ]);
 }
 
+function label(cfg: McpServerConfig): string {
+  return cfg.name || cfg.endpoint || cfg.command || "mcp";
+}
+
 function stdioTransport(cfg: McpServerConfig): Transport {
-  const parts = cfg.endpoint.trim().split(/\s+/).filter(Boolean);
-  const command = parts[0];
-  if (!command) throw new Error("stdio transport requires a command (e.g. \"claude mcp serve\")");
+  // Prefer the structured command + args (the standard MCP config shape, e.g.
+  // command: "docker", args: ["run", …]); fall back to parsing a command line from
+  // `endpoint` for older configs.
+  let command = cfg.command?.trim();
+  let args = cfg.args ?? [];
+  if (!command) {
+    const parts = (cfg.endpoint ?? "").trim().split(/\s+/).filter(Boolean);
+    command = parts[0];
+    args = parts.slice(1);
+  }
+  if (!command) throw new Error('stdio transport requires a command (e.g. "docker" or "claude mcp serve")');
   return new StdioClientTransport({
     command,
-    args: parts.slice(1),
+    args,
     cwd: cfg.cwd || process.cwd(),
     env: { ...getDefaultEnvironment(), ...(cfg.env ?? {}) },
   });
+}
+
+// http/sse: the bearer convenience token plus any custom headers (custom wins).
+function httpHeaders(cfg: McpServerConfig): Record<string, string> | undefined {
+  const headers: Record<string, string> = {
+    ...(cfg.apiKey ? { Authorization: `Bearer ${cfg.apiKey}` } : {}),
+    ...(cfg.headers ?? {}),
+  };
+  return Object.keys(headers).length > 0 ? headers : undefined;
 }
 
 export async function connectMcpClient(cfg: McpServerConfig): Promise<Client> {
@@ -49,14 +70,15 @@ export async function connectMcpClient(cfg: McpServerConfig): Promise<Client> {
     transport = stdioTransport(cfg);
     timeout = STDIO_CONNECT_TIMEOUT_MS;
   } else {
+    if (!cfg.endpoint) throw new Error("http/sse transport requires an endpoint URL");
     const url = new URL(cfg.endpoint);
-    const headers = cfg.apiKey ? { Authorization: `Bearer ${cfg.apiKey}` } : undefined;
+    const headers = httpHeaders(cfg);
     transport =
       cfg.transport === "sse"
         ? new SSEClientTransport(url, { requestInit: headers ? { headers } : undefined })
         : new StreamableHTTPClientTransport(url, { requestInit: headers ? { headers } : undefined });
   }
-  await withTimeout(client.connect(transport), timeout, `MCP connect to ${cfg.endpoint}`);
+  await withTimeout(client.connect(transport), timeout, `MCP connect to ${label(cfg)}`);
   return client;
 }
 
@@ -96,7 +118,7 @@ export async function createBosMcpClient(cfg: McpServerConfig): Promise<CopilotM
   try {
     client = await connectMcpClient(cfg);
   } catch (err) {
-    console.warn(`[BOS][MCP] ${cfg.endpoint} unavailable: ${(err as Error).message}`);
+    console.warn(`[BOS][MCP] ${label(cfg)} unavailable: ${(err as Error).message}`);
     return { async tools() { return {}; } };
   }
 
@@ -124,7 +146,7 @@ export async function createBosMcpClient(cfg: McpServerConfig): Promise<CopilotM
         }
         return map;
       } catch (err) {
-        console.warn(`[BOS][MCP] listTools failed for ${cfg.endpoint}: ${(err as Error).message}`);
+        console.warn(`[BOS][MCP] listTools failed for ${label(cfg)}: ${(err as Error).message}`);
         return {};
       }
     },

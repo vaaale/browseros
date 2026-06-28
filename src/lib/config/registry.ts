@@ -41,6 +41,19 @@ const REGISTRATIONS: ConfigRegistration[] = [
   },
   {
     schema: {
+      namespace: "mcp",
+      title: "MCP Servers",
+      description:
+        "Connect Model Context Protocol servers so the assistant can use their tools. Supports Streamable HTTP and SSE (remote, with an optional bearer token or custom headers) and stdio (a local process, e.g. docker/npx, with env vars). Test a connection to list its tools.",
+      order: 7,
+      customComponent: "mcp",
+      fields: [],
+    },
+    load: async () => ({}),
+    save: async () => {},
+  },
+  {
+    schema: {
       namespace: "apps",
       title: "Apps",
       description: "Manage installed apps. Uninstall keeps an app's files so it can be restored; purge deletes them.",

@@ -22,7 +22,10 @@ async function buildCatalog() {
   return {
     tools: [...Object.keys(SUBAGENT_TOOLS), ...Object.keys(DEV_TOOLS), ...Object.keys(SPEC_TOOLS), DELEGATE_TO_DEVELOPER],
     skills: skills.map((s) => ({ id: s.id, name: s.name })),
-    mcp: mcp.map((m) => ({ name: m.name, endpoint: m.endpoint })),
+    mcp: mcp.map((m) => ({
+      name: m.name,
+      endpoint: m.endpoint || [m.command, ...(m.args ?? [])].filter(Boolean).join(" "),
+    })),
   };
 }
 

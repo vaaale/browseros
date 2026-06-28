@@ -34,7 +34,7 @@ export function CopilotProvider({
   return (
     <CopilotKit runtimeUrl={runtimeUrl} threadId={threadId}>
       <OSActions />
-      <McpActions />
+      <McpActions agentId={agentId} />
       <SubAgentActions />
       <MemoryActions />
       <DevActions />

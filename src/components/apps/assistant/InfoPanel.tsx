@@ -102,12 +102,12 @@ function McpTab({ allowed }: { allowed?: string[] }) {
 
   const probe = useCallback(async (list: McpServerConfig[]) => {
     for (const s of list) {
-      setStatus((st) => ({ ...st, [s.endpoint]: "checking" }));
+      setStatus((st) => ({ ...st, [s.name]: "checking" }));
       try {
-        const res = await fetch(`/api/mcp?probe=${encodeURIComponent(s.endpoint)}`).then((r) => r.json());
-        setStatus((st) => ({ ...st, [s.endpoint]: res.result?.ok ? "connected" : "disconnected" }));
+        const res = await fetch(`/api/mcp?probe=${encodeURIComponent(s.name)}`).then((r) => r.json());
+        setStatus((st) => ({ ...st, [s.name]: res.result?.ok ? "connected" : "disconnected" }));
       } catch {
-        setStatus((st) => ({ ...st, [s.endpoint]: "disconnected" }));
+        setStatus((st) => ({ ...st, [s.name]: "disconnected" }));
       }
     }
   }, []);
@@ -117,7 +117,7 @@ function McpTab({ allowed }: { allowed?: string[] }) {
       .then((r) => r.json())
       .then((d) => {
         const all: McpServerConfig[] = d.servers ?? [];
-        const shown = all.filter((s) => allows(allowed, s.name) || allows(allowed, s.endpoint));
+        const shown = all.filter((s) => allows(allowed, s.name) || allows(allowed, s.endpoint ?? ""));
         setServers(shown);
         probe(shown);
       })
@@ -129,9 +129,10 @@ function McpTab({ allowed }: { allowed?: string[] }) {
   return (
     <div className="space-y-1.5">
       {servers.map((s) => {
-        const st = status[s.endpoint] ?? "checking";
+        const st = status[s.name] ?? "checking";
+        const detail = s.endpoint || [s.command, ...(s.args ?? [])].filter(Boolean).join(" ");
         return (
-          <div key={s.endpoint} className="rounded border border-white/10 bg-white/[0.03] p-2">
+          <div key={s.name} className="rounded border border-white/10 bg-white/[0.03] p-2">
             <div className="flex items-center gap-1.5">
               {st === "connected" ? (
                 <PlugZap size={12} className="text-emerald-300" />
@@ -143,7 +144,7 @@ function McpTab({ allowed }: { allowed?: string[] }) {
               <span className="truncate font-medium text-white/85">{s.name}</span>
               <span className={`ml-auto text-[10px] ${st === "connected" ? "text-emerald-300" : "text-white/40"}`}>{st}</span>
             </div>
-            <p className="mt-0.5 truncate text-[10px] text-white/40">{s.endpoint}</p>
+            <p className="mt-0.5 truncate text-[10px] text-white/40">{detail}</p>
           </div>
         );
       })}

@@ -2,11 +2,17 @@
 
 import { useCopilotAction } from "@copilotkit/react-core";
 
-// Lets the agent inspect and manage its own MCP server connections.
-export function McpActions() {
+// Lets the agent inspect/manage MCP server connections AND use their tools via the
+// gateway (014-mcp-tool-gateway): the agent never gets every server's tools in
+// context — it searches/lists tools (with schemas) and calls them on demand. The
+// `agentId` (the chat's pinned agent) scopes the gateway to that agent's allowed
+// servers (011); omitted = the globally active agent.
+export function McpActions({ agentId }: { agentId?: string }) {
+  const scope = agentId ? `&agent=${encodeURIComponent(agentId)}` : "";
+
   useCopilotAction({
     name: "listMcpServers",
-    description: "List the MCP servers the agent is connected to.",
+    description: "List the MCP servers available to you, with their descriptions (what each is for).",
     parameters: [],
     handler: async () => {
       const res = await fetch("/api/mcp").then((r) => r.json());
@@ -15,20 +21,66 @@ export function McpActions() {
   });
 
   useCopilotAction({
+    name: "findTools",
+    description:
+      "Search for MCP tools across all servers available to you. Use this to discover the right tool for a task (e.g. 'list repositories'). Query is a case-insensitive search over tool name + description; '*' and '?' wildcards are supported. Returns each tool's server, name, description, and input JSON schema. Then call it with callMcpServerTool.",
+    parameters: [{ name: "query", type: "string", description: "Search text or wildcard pattern, e.g. 'repo*'", required: true }],
+    handler: async ({ query }) => {
+      const res = await fetch(`/api/mcp/tools?find=${encodeURIComponent(String(query ?? ""))}${scope}`).then((r) => r.json());
+      return JSON.stringify(res);
+    },
+  });
+
+  useCopilotAction({
+    name: "listMcpServerTools",
+    description:
+      "List the tools a specific MCP server exposes, each with its description and input JSON schema, so you can call one with callMcpServerTool.",
+    parameters: [{ name: "server", type: "string", description: "MCP server name", required: true }],
+    handler: async ({ server }) => {
+      const res = await fetch(`/api/mcp/tools?server=${encodeURIComponent(String(server ?? ""))}${scope}`).then((r) => r.json());
+      return JSON.stringify(res);
+    },
+  });
+
+  useCopilotAction({
+    name: "callMcpServerTool",
+    description:
+      "Call a tool on an MCP server. Discover the server, tool name, and argument schema first via findTools or listMcpServerTools, then pass arguments matching that schema.",
+    parameters: [
+      { name: "server", type: "string", description: "MCP server name", required: true },
+      { name: "tool", type: "string", description: "Tool name on that server", required: true },
+      { name: "args", type: "object", description: "Arguments object matching the tool's input schema", required: false },
+    ],
+    handler: async ({ server, tool, args }) => {
+      const res = await fetch("/api/mcp/tools", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ server, tool, args: args ?? {}, agent: agentId }),
+      }).then((r) => r.json());
+      return res.error ? `Error: ${res.error}` : String(res.result ?? "");
+    },
+  });
+
+  useCopilotAction({
     name: "addMcpServer",
     description:
-      "Connect a new MCP server by endpoint URL (streamable-http by default). Its tools become available to the agent on the next message.",
+      "Connect a new MCP server. For 'http' (streamable, default) or 'sse', give an endpoint URL (+ optional apiKey bearer token or custom headers). For 'stdio', give a command and args (e.g. command 'docker', args ['run','-i','--rm', …]) with optional env. Users can also manage these in Settings → MCP Servers.",
     parameters: [
-      { name: "endpoint", type: "string", description: "MCP server URL", required: true },
-      { name: "name", type: "string", description: "Friendly name", required: false },
-      { name: "apiKey", type: "string", description: "Bearer token if required", required: false },
-      { name: "transport", type: "string", description: '"http" (default) or "sse"', required: false },
+      { name: "name", type: "string", description: "Unique friendly name (the key)", required: true },
+      { name: "description", type: "string", description: "What the server is for (shown to you as an index)", required: false },
+      { name: "transport", type: "string", description: '"http" (default), "sse", or "stdio"', required: false },
+      { name: "endpoint", type: "string", description: "Server URL (http/sse)", required: false },
+      { name: "apiKey", type: "string", description: "Bearer token (http/sse)", required: false },
+      { name: "headers", type: "object", description: 'Custom headers (http/sse), e.g. { "Private-Token": "…" }', required: false },
+      { name: "command", type: "string", description: "Executable to spawn (stdio), e.g. 'docker'", required: false },
+      { name: "args", type: "string[]", description: "Command arguments (stdio)", required: false },
+      { name: "env", type: "object", description: "Environment variables (stdio)", required: false },
     ],
-    handler: async ({ endpoint, name, apiKey, transport }) => {
+    handler: async ({ name, description, transport, endpoint, apiKey, headers, command, args, env }) => {
       const res = await fetch("/api/mcp", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ endpoint, name, apiKey, transport }),
+        body: JSON.stringify({ name, description, transport, endpoint, apiKey, headers, command, args, env }),
       }).then((r) => r.json());
       return res.error ? `Error: ${res.error}` : `Connected. Servers: ${JSON.stringify(res.servers)}`;
     },
@@ -36,23 +88,11 @@ export function McpActions() {
 
   useCopilotAction({
     name: "removeMcpServer",
-    description: "Disconnect an MCP server by endpoint URL.",
-    parameters: [{ name: "endpoint", type: "string", description: "MCP server URL", required: true }],
-    handler: async ({ endpoint }) => {
-      const res = await fetch(`/api/mcp?endpoint=${encodeURIComponent(endpoint as string)}`, {
-        method: "DELETE",
-      }).then((r) => r.json());
+    description: "Disconnect an MCP server by its name.",
+    parameters: [{ name: "name", type: "string", description: "MCP server name", required: true }],
+    handler: async ({ name }) => {
+      const res = await fetch(`/api/mcp?name=${encodeURIComponent(name as string)}`, { method: "DELETE" }).then((r) => r.json());
       return `Remaining servers: ${JSON.stringify(res.servers ?? [])}`;
-    },
-  });
-
-  useCopilotAction({
-    name: "probeMcpServer",
-    description: "Test connectivity to an MCP server and list its tools.",
-    parameters: [{ name: "endpoint", type: "string", description: "MCP server URL", required: true }],
-    handler: async ({ endpoint }) => {
-      const res = await fetch(`/api/mcp?probe=${encodeURIComponent(endpoint as string)}`).then((r) => r.json());
-      return JSON.stringify(res.result ?? {});
     },
   });
 

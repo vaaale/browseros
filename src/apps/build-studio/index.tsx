@@ -17,6 +17,17 @@ import {
 import type { AppProps } from "@/components/apps/types";
 import type { PipelinePhase, Specification, SpecTreeNode } from "@/lib/specs/types";
 import { AssistantChat } from "@/components/agent/AssistantChat";
+import { ResizeHandle } from "@/components/apps/ResizeHandle";
+import { BuildStudioAgentTools } from "./AgentTools";
+
+const LEFT_W_KEY = "bos.buildStudio.leftWidth";
+const RIGHT_W_KEY = "bos.buildStudio.rightWidth";
+
+function readStoredWidth(key: string, fallback: number): number {
+  if (typeof window === "undefined") return fallback;
+  const v = Number(window.localStorage.getItem(key));
+  return Number.isFinite(v) && v > 0 ? v : fallback;
+}
 
 interface SpecsResponse {
   tree?: SpecTreeNode[];
@@ -84,6 +95,19 @@ export default function BuildStudioApp(_props: AppProps) {
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [leftWidth, setLeftWidth] = useState<number>(() => readStoredWidth(LEFT_W_KEY, 224));
+  const [rightWidth, setRightWidth] = useState<number>(() => readStoredWidth(RIGHT_W_KEY, 520));
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(LEFT_W_KEY, String(leftWidth));
+    } catch {}
+  }, [leftWidth]);
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(RIGHT_W_KEY, String(rightWidth));
+    } catch {}
+  }, [rightWidth]);
 
   const specById = useMemo(() => new Map(specs.map((s) => [s.id, s])), [specs]);
 
@@ -163,8 +187,12 @@ export default function BuildStudioApp(_props: AppProps) {
 
   return (
     <div className="flex h-full text-sm" data-theme="dark">
-      {/* Left: spec tree */}
-      <nav className="flex w-56 shrink-0 flex-col overflow-hidden border-r border-white/10 bg-white/[0.02]">
+      {/* Left: spec tree (resizable) */}
+      <nav
+        data-testid="build-studio-tree"
+        style={{ width: leftWidth }}
+        className="flex shrink-0 flex-col overflow-hidden border-r border-white/10 bg-white/[0.02]"
+      >
         <div className="flex items-center justify-between px-3 pt-2 text-xs font-semibold uppercase tracking-wide text-white/40">
           <span className="flex items-center gap-1.5">
             <Hammer size={13} /> Build Studio
@@ -230,6 +258,8 @@ export default function BuildStudioApp(_props: AppProps) {
         </div>
       </nav>
 
+      <ResizeHandle getWidth={() => leftWidth} setWidth={setLeftWidth} min={160} max={420} />
+
       {/* Center: artifact viewer / editor */}
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         {activeSpec && (
@@ -291,16 +321,22 @@ export default function BuildStudioApp(_props: AppProps) {
         )}
       </div>
 
-      {/* Right: the Build Studio agent chat with its own (build-studio) conversation
-          list; the info panel is hidden ("the assistant minus its side panels"). */}
-      <aside className="flex w-[520px] shrink-0 flex-col border-l border-white/10">
+      <ResizeHandle getWidth={() => rightWidth} setWidth={setRightWidth} min={340} max={820} invert />
+
+      {/* Right (resizable): the Build Studio agent chat with its own (build-studio)
+          conversation list; the info panel is hidden ("the assistant minus its info
+          panel"). The agent can drive this app via BuildStudioAgentTools (rendered
+          inside the chat's provider so it is callable by the build-studio agent). */}
+      <aside style={{ width: rightWidth }} className="flex shrink-0 flex-col border-l border-white/10">
         <AssistantChat
           agentId="build-studio"
           group="build-studio"
           showConversations
           showInfo={false}
           initialLabel="Describe a feature to build, or ask me to refine the selected spec."
-        />
+        >
+          <BuildStudioAgentTools onOpen={openFile} onRefresh={loadTree} />
+        </AssistantChat>
       </aside>
     </div>
   );

@@ -40,7 +40,7 @@ export async function POST(req: NextRequest) {
       "Write the title.",
     ].join("\n");
 
-    const raw = await complete({ system: TITLE_SYSTEM, prompt, maxTokens: 64 });
+    const raw = await complete({ system: TITLE_SYSTEM, prompt, maxTokens: 65535 });
     const title = cleanTitle(raw);
     if (!title) return NextResponse.json({ error: "Empty title" }, { status: 502 });
     return NextResponse.json({ title });

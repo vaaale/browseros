@@ -1,8 +1,10 @@
 # MCP servers
 
 BOS supports **MCP (Model Context Protocol)** servers — external tool providers
-the assistant can connect to. Connecting an MCP server makes its tools available
-to the assistant automatically, alongside BOS's built‑in actions.
+the assistant can use. Rather than loading every server's tools into the
+assistant at once (a single server can expose 100+ tools), BOS shows the
+assistant a short **description of each server** and lets it **discover and call**
+tools on demand — so adding big servers doesn't slow the chat or confuse the model.
 
 ---
 
@@ -17,23 +19,43 @@ status for each:
 
 ---
 
-## Connecting a server
+## Configuring servers (Settings → MCP Servers)
 
-Ask the assistant to manage MCP servers — it has tools to **list**, **add**,
-**remove**, and **probe** (test) servers. For example:
+Open **Settings → MCP Servers** to add, edit, test, and remove servers. Each
+server has a unique **name**, a short **description** (what it's for — this is what
+the assistant sees, so write it for the agent, e.g. "Tools to interact with
+GitLab"), and one of three **transports**:
 
-> "Add an MCP server at `https://my-tools.example.com/mcp`."
+- **Streamable HTTP** — a server URL. Optionally add a **bearer token** and/or
+  arbitrary **custom headers** (e.g. `Private-Token: …`).
+- **SSE** — a server URL using server‑sent events (same token/header options).
+- **stdio** — a **local process** BOS spawns. Give a **command**, **arguments**
+  (one per line), optional **environment variables**, and a working directory.
+  For example, the GitHub MCP server via Docker:
+  - command: `docker`
+  - args: `run`, `-i`, `--rm`, `-e`, `GITHUB_PERSONAL_ACCESS_TOKEN`, `ghcr.io/github/github-mcp-server`
+  - env: `GITHUB_PERSONAL_ACCESS_TOKEN = ghp_…`
 
-> "Probe the tools server and tell me what tools it exposes."
+Click **Test connection** to verify a server and list the tools it exposes
+*before* saving. You can also paste a standard MCP JSON config via **Import from
+JSON**.
 
-BOS supports three transports:
+Per‑agent access (which agents may use which servers) is set under
+**Settings → Assistant**.
 
-- **HTTP (streamable)** — a server URL.
-- **SSE** — a server URL using server‑sent events.
-- **stdio** — a local command BOS spawns (e.g. a CLI MCP server).
+## How the assistant uses them
 
-Connections are **resilient**: if a server is unreachable, the assistant simply
-gets no tools from it rather than failing the whole chat.
+You don't pick tools — just ask for what you want (e.g. *"Use gitlab and list my
+projects"*). Behind the scenes the assistant:
+
+1. reads the server **descriptions** to pick the right server,
+2. **discovers** the tool — `findTools` (search across all servers) or
+   `listMcpServerTools` (one server), which return each tool's arguments, then
+3. **calls** it with `callMcpServerTool`.
+
+It can also **add / remove / list** servers on request (e.g. *"Add an MCP server
+at `https://my-tools.example.com/mcp`"*). Connections are **resilient**: an
+unreachable server reports an error for that server rather than failing the chat.
 
 ---
 
