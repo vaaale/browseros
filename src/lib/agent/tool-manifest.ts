@@ -51,9 +51,8 @@ export const ASSISTANT_TOOLS: ToolInfo[] = [
   { group: "Dev", name: "stageChanges", description: "Stage changed files." },
   { group: "Dev", name: "gitStatus", description: "Show git branch and changes." },
 
-  { group: "Docs", name: "listDocs", description: "List documentation pages." },
-  { group: "Docs", name: "readDoc", description: "Read a documentation page." },
-  { group: "Docs", name: "writeDoc", description: "Create/update a documentation page." },
+  { group: "Docs", name: "listDocs", description: "List documentation pages (usage + dev trees)." },
+  { group: "Docs", name: "readDoc", description: "Read a documentation page by ref, e.g. usage/apps/files.md." },
 
   { group: "Assistant", name: "switchAssistantAgent", description: "Switch the active assistant agent (personality)." },
   { group: "Assistant", name: "getMyInstructions", description: "Read the active composed instructions." },

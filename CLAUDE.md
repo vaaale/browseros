@@ -2,7 +2,7 @@
 
 BrowserOS (BOS) is a single‑page, server‑side‑rendered "operating system in the browser" (Next.js App Router + React + Zustand + CopilotKit) with an agentic assistant that can operate and **modify BOS itself**.
 
-**Before changing anything, read `docs/DEVELOPMENT.md`** (architecture, data layout, API routes, extension recipes, gotchas). Requirements are in `spec/bos.md`. End‑user docs are `docs/USER_GUIDE.md`.
+**Before changing anything, read `docs/dev/architecture-overview.md`** — the full developer docs live under `docs/dev/` (architecture, data layout, API routes, extension recipes, gotchas). Requirements are in `spec/bos.md` (where code diverges from spec, see `spec/discrepancies.md`). End‑user docs are under `docs/usage/`.
 
 ## Working rules
 - Work on a **feature branch** (`git checkout -b bos/<short-name>`); make focused edits; **don't** touch secrets, `package.json`, lockfiles, or build config unless asked.
@@ -14,7 +14,7 @@ BrowserOS (BOS) is a single‑page, server‑side‑rendered "operating system i
 - **The VFS (`data/vfs`, via `src/os/vfs.ts`) is the user's sandbox — NOT BOS source.** Edit `src/` to change BOS.
 - OS state: `src/store/os-store.ts` (+ `os-provider.tsx`), seeded SSR in `src/app/page.tsx`.
 - Apps: built‑in = a self‑describing folder `src/apps/<id>/` (`manifest.ts` + `index.tsx`), auto‑discovered by `tools/gen-apps.mjs` — no central registry (`src/os/apps.ts` + `src/components/apps/registry.tsx` are thin shims over the generated lists); installed = iframe served from GitFS by `src/app/apps/[...slug]/route.ts`.
-- Assistant: CopilotKit wiring in `src/components/agent/` (`*Actions.tsx` register tools; mirror new tools in `src/lib/agent/tool-manifest.ts`). Instructions = `src/lib/agent/config.ts` (CORE_POLICY) + profile + skills.
+- Assistant: CopilotKit wiring in `src/components/agent/` (`*Actions.tsx` register tools; mirror new tools in `src/lib/agent/tool-manifest.ts`). Instructions = `src/lib/agent/config.ts` (CORE_POLICY) + active agent + memory + skills.
 - Settings tabs are pluggable config namespaces (`src/lib/config/registry.ts`) — adding one also exposes it to the assistant.
 - All runtime state persists as files under `./data` (gitignored).
 

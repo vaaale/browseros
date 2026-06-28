@@ -1,47 +1,53 @@
 "use client";
 
 import { useCopilotAction } from "@copilotkit/react-core";
-import type { Doc } from "@/lib/docs/store";
 
-// Lets the assistant read and update the documentation hub. Per BOS policy, the
-// assistant updates docs whenever an app or feature is added/changed/removed.
+// Read-only browsing of the project documentation tree: docs/usage/** (end
+// users) and docs/dev/** (developers). The docs are SOURCE files — to change
+// them, edit the tree via the developer sub-agent; there is no runtime write
+// action.
+interface DocNode {
+  type: "file" | "dir";
+  path: string;
+  title: string;
+  children?: DocNode[];
+}
+
 export function DocsActions() {
   useCopilotAction({
     name: "listDocs",
-    description: "List documentation pages in the BOS documentation hub.",
+    description:
+      "List documentation pages in the BOS documentation tree (usage = end-user docs, dev = developer docs). Returns refs like 'usage/apps/files.md'.",
     parameters: [],
     handler: async () => {
-      const res = await fetch("/api/docs").then((r) => r.json());
-      return JSON.stringify((res.docs ?? []).map((d: Doc) => ({ id: d.id, title: d.title })));
+      const res = (await fetch("/api/docs").then((r) => r.json())) as { tree?: Record<string, DocNode[]> };
+      const flat: { ref: string; title: string }[] = [];
+      const walk = (section: string, nodes: DocNode[] = []) => {
+        for (const n of nodes) {
+          if (n.type === "file") flat.push({ ref: `${section}/${n.path}`, title: n.title });
+          else walk(section, n.children);
+        }
+      };
+      for (const section of Object.keys(res.tree ?? {})) walk(section, res.tree?.[section]);
+      return JSON.stringify(flat);
     },
   });
 
   useCopilotAction({
     name: "readDoc",
-    description: "Read a documentation page by id or title.",
-    parameters: [{ name: "id", type: "string", description: "Doc id or title", required: true }],
-    handler: async ({ id }) => {
-      const res = await fetch(`/api/docs?id=${encodeURIComponent(id as string)}`).then((r) => r.json());
-      const d: Doc | undefined = res.doc;
-      return d ? `# ${d.title}\n${d.content}` : `No doc "${id}".`;
-    },
-  });
-
-  useCopilotAction({
-    name: "writeDoc",
     description:
-      "Create or update a documentation page (markdown). Call this whenever you add, modify, or remove an app or feature.",
-    parameters: [
-      { name: "title", type: "string", description: "Doc title", required: true },
-      { name: "content", type: "string", description: "Markdown content", required: true },
-    ],
-    handler: async ({ title, content }) => {
-      const res = await fetch("/api/docs", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title, content }),
-      }).then((r) => r.json());
-      return res.error ? `Error: ${res.error}` : `Saved doc "${res.doc.title}".`;
+      "Read a documentation page by ref, e.g. 'usage/apps/files.md' or 'dev/memory/memory.md' (the first path segment is the section: usage or dev).",
+    parameters: [{ name: "ref", type: "string", description: "Doc ref like 'usage/apps/files.md'", required: true }],
+    handler: async ({ ref }) => {
+      const raw = String(ref ?? "").replace(/^\/+/, "");
+      const slash = raw.indexOf("/");
+      if (slash < 0) return `Invalid ref "${ref}". Use 'usage/...' or 'dev/...'.`;
+      const section = raw.slice(0, slash);
+      const docPath = raw.slice(slash + 1);
+      const res = (await fetch(
+        `/api/docs?section=${encodeURIComponent(section)}&path=${encodeURIComponent(docPath)}`,
+      ).then((r) => r.json())) as { doc?: { content: string }; error?: string };
+      return res.doc ? res.doc.content : res.error ? `Error: ${res.error}` : `No doc "${ref}".`;
     },
   });
 

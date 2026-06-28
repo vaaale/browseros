@@ -1,28 +1,27 @@
 import { NextRequest, NextResponse } from "next/server";
-import { listDocs, getDoc, saveDoc, removeDoc } from "@/lib/docs/store";
+import { docsTree, getDoc, isSection } from "@/lib/docs/store";
 
 export const dynamic = "force-dynamic";
 
+// Read-only access to the project documentation tree (docs/usage + docs/dev).
+// - GET                          -> { tree: { usage: DocNode[], dev: DocNode[] } }
+// - GET ?section=usage&path=...  -> { doc: { section, path, title, content } }
 export async function GET(req: NextRequest) {
-  const id = new URL(req.url).searchParams.get("id");
-  if (id) return NextResponse.json({ doc: await getDoc(id) });
-  return NextResponse.json({ docs: await listDocs() });
-}
+  const url = new URL(req.url);
+  const section = url.searchParams.get("section");
+  const docPath = url.searchParams.get("path");
 
-export async function POST(req: NextRequest) {
-  try {
-    const body = await req.json();
-    if (!body.title || !body.content) return NextResponse.json({ error: "title and content are required" }, { status: 400 });
-    const doc = await saveDoc({ title: String(body.title), content: String(body.content) });
+  if (section || docPath) {
+    if (!section || !isSection(section)) {
+      return NextResponse.json({ error: "a valid 'section' (usage|dev) is required" }, { status: 400 });
+    }
+    if (!docPath) {
+      return NextResponse.json({ error: "'path' is required when 'section' is given" }, { status: 400 });
+    }
+    const doc = await getDoc(section, docPath);
+    if (!doc) return NextResponse.json({ error: "document not found" }, { status: 404 });
     return NextResponse.json({ doc });
-  } catch (err) {
-    return NextResponse.json({ error: (err as Error).message }, { status: 400 });
   }
-}
 
-export async function DELETE(req: NextRequest) {
-  const id = new URL(req.url).searchParams.get("id");
-  if (!id) return NextResponse.json({ error: "id query param required" }, { status: 400 });
-  await removeDoc(id);
-  return NextResponse.json({ docs: await listDocs() });
+  return NextResponse.json({ tree: await docsTree() });
 }
