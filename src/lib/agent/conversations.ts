@@ -6,43 +6,45 @@ import { trimToSettledTail } from "@/lib/agent/conversations-sanitize";
 
 /**
  * Conversations live as one JSON file per chat under the user's VFS at
- * /Documents/Chats/<id>.json. Each file holds the metadata AND the message
- * history, so opening the app surfaces every prior conversation from disk and
- * messages survive reloads. The active conversation id is cached in
- * localStorage so we can focus the right thread immediately on mount.
+ * /Documents/Chats/<id>.json. Each file holds metadata AND message history.
+ *
+ * Conversations are partitioned into GROUPS (012-embeddable-assistant): the
+ * Assistant app uses the default "assistant" group; an embedded chat (e.g. Build
+ * Studio) uses its own group and only sees its group's conversations. The group is
+ * a field on each conversation (files without one default to "assistant", so older
+ * chats migrate transparently). The active conversation id is tracked PER GROUP in
+ * localStorage. All public APIs default to the "assistant" group, so existing
+ * callers are unaffected.
  */
+
+export const DEFAULT_GROUP = "assistant";
 
 export interface Conversation {
   id: string;
   title: string;
   createdAt: number;
+  group: string;
 }
 
 interface State {
-  conversations: Conversation[];
-  activeId: string;
+  conversations: Conversation[]; // across all groups
+  activeByGroup: Record<string, string>;
   loaded: boolean;
 }
 
 export const CHATS_DIR = "/Documents/Chats";
-const ACTIVE_KEY = "bos.activeConversation";
+const ACTIVE_KEY_PREFIX = "bos.activeConversation.";
 const DEFAULT_TITLE = "New conversation";
-const SERVER_SNAPSHOT: State = {
-  conversations: [{ id: "default", title: "Conversation", createdAt: 0 }],
-  activeId: "default",
-  loaded: false,
-};
+const SERVER_SNAPSHOT: State = { conversations: [], activeByGroup: {}, loaded: false };
 
-// Conversations currently awaiting an auto-title response — prevents firing
-// duplicate requests while a generation is in flight.
 const titleGenInFlight = new Set<string>();
 
 function newId(): string {
   return "c-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 }
 
-function freshConversation(): Conversation {
-  return { id: newId(), title: DEFAULT_TITLE, createdAt: Date.now() };
+function freshConversation(group: string): Conversation {
+  return { id: newId(), title: DEFAULT_TITLE, createdAt: Date.now(), group };
 }
 
 function chatPath(id: string): string {
@@ -53,8 +55,7 @@ interface ConversationFile {
   id: string;
   title: string;
   createdAt: number;
-  // Plain AG-UI message objects ({ id, role, content, toolCalls? }); loaded
-  // straight back into the chat agent by useChatPersistence.
+  group: string;
   messages: unknown[];
 }
 
@@ -67,6 +68,7 @@ async function readConversationFile(id: string): Promise<ConversationFile | null
       id: parsed.id ?? id,
       title: typeof parsed.title === "string" ? parsed.title : "Conversation",
       createdAt: typeof parsed.createdAt === "number" ? parsed.createdAt : 0,
+      group: typeof parsed.group === "string" && parsed.group ? parsed.group : DEFAULT_GROUP,
       messages: Array.isArray(parsed.messages) ? parsed.messages : [],
     };
   } catch {
@@ -86,20 +88,31 @@ function notify(): void {
   for (const l of listeners) l();
 }
 
-function readActiveId(): string | null {
+function readActiveId(group: string): string | null {
   try {
-    return localStorage.getItem(ACTIVE_KEY);
+    return localStorage.getItem(ACTIVE_KEY_PREFIX + group);
   } catch {
     return null;
   }
 }
 
-function persistActiveId(id: string): void {
+function persistActiveId(group: string, id: string): void {
   try {
-    localStorage.setItem(ACTIVE_KEY, id);
+    localStorage.setItem(ACTIVE_KEY_PREFIX + group, id);
   } catch {
     /* ignore */
   }
+}
+
+function resolveActiveByGroup(conversations: Conversation[]): Record<string, string> {
+  const active: Record<string, string> = {};
+  for (const c of conversations) {
+    if (active[c.group]) continue;
+    const stored = readActiveId(c.group);
+    const valid = stored && conversations.some((x) => x.group === c.group && x.id === stored);
+    active[c.group] = valid ? stored! : conversations.find((x) => x.group === c.group)!.id;
+  }
+  return active;
 }
 
 async function loadFromVfs(): Promise<void> {
@@ -113,7 +126,7 @@ async function loadFromVfs(): Promise<void> {
         const id = e.name.replace(/\.json$/, "");
         const file = await readConversationFile(id);
         if (!file) return null;
-        return { id: file.id, title: file.title, createdAt: file.createdAt };
+        return { id: file.id, title: file.title, createdAt: file.createdAt, group: file.group };
       }),
     );
     conversations = loaded.filter((c): c is Conversation => c !== null);
@@ -122,23 +135,20 @@ async function loadFromVfs(): Promise<void> {
     conversations = [];
   }
 
-  if (conversations.length === 0) {
-    const seed = freshConversation();
-    conversations = [seed];
+  // The Assistant always has at least one thread (preserves prior behavior).
+  if (!conversations.some((c) => c.group === DEFAULT_GROUP)) {
+    const seed = freshConversation(DEFAULT_GROUP);
+    conversations = [seed, ...conversations];
     try {
       await writeConversationFile({ ...seed, messages: [] });
     } catch {
-      /* ignore — show the seed anyway, save will retry on next mutation */
+      /* show the seed anyway; save retries on next mutation */
     }
   }
 
-  const storedActive = readActiveId();
-  const activeId =
-    storedActive && conversations.some((c) => c.id === storedActive)
-      ? storedActive
-      : conversations[0].id;
-  persistActiveId(activeId);
-  state = { conversations, activeId, loaded: true };
+  const activeByGroup = resolveActiveByGroup(conversations);
+  for (const [group, id] of Object.entries(activeByGroup)) persistActiveId(group, id);
+  state = { conversations, activeByGroup, loaded: true };
   notify();
 }
 
@@ -161,12 +171,16 @@ function setState(next: State): void {
   notify();
 }
 
-export async function newConversation(): Promise<string> {
+export async function newConversation(group: string = DEFAULT_GROUP): Promise<string> {
   await ensureLoading();
-  const conv = freshConversation();
-  const current = state ?? { conversations: [], activeId: "", loaded: true };
-  persistActiveId(conv.id);
-  setState({ conversations: [conv, ...current.conversations], activeId: conv.id, loaded: true });
+  const conv = freshConversation(group);
+  const current = state ?? { conversations: [], activeByGroup: {}, loaded: true };
+  persistActiveId(group, conv.id);
+  setState({
+    conversations: [conv, ...current.conversations],
+    activeByGroup: { ...current.activeByGroup, [group]: conv.id },
+    loaded: true,
+  });
   try {
     await writeConversationFile({ ...conv, messages: [] });
   } catch (err) {
@@ -175,32 +189,45 @@ export async function newConversation(): Promise<string> {
   return conv.id;
 }
 
+// id is globally unique; the group is inferred from the conversation.
 export function selectConversation(id: string): void {
   const current = get();
-  if (current.activeId === id) return;
-  persistActiveId(id);
-  setState({ ...current, activeId: id });
+  const conv = current.conversations.find((c) => c.id === id);
+  if (!conv || current.activeByGroup[conv.group] === id) return;
+  persistActiveId(conv.group, id);
+  setState({ ...current, activeByGroup: { ...current.activeByGroup, [conv.group]: id } });
 }
 
 export async function deleteConversation(id: string): Promise<void> {
   await ensureLoading();
   const current = state ?? get();
+  const target = current.conversations.find((c) => c.id === id);
+  const group = target?.group ?? DEFAULT_GROUP;
   let conversations = current.conversations.filter((c) => c.id !== id);
-  let activeId = current.activeId;
-  if (conversations.length === 0) {
-    const seed = freshConversation();
-    conversations = [seed];
-    activeId = seed.id;
+  const activeByGroup = { ...current.activeByGroup };
+
+  // The Assistant group always keeps at least one thread.
+  if (group === DEFAULT_GROUP && !conversations.some((c) => c.group === DEFAULT_GROUP)) {
+    const seed = freshConversation(DEFAULT_GROUP);
+    conversations = [seed, ...conversations];
+    activeByGroup[DEFAULT_GROUP] = seed.id;
+    persistActiveId(DEFAULT_GROUP, seed.id);
     try {
       await writeConversationFile({ ...seed, messages: [] });
     } catch (err) {
       console.error("Failed to seed replacement conversation", err);
     }
-  } else if (activeId === id) {
-    activeId = conversations[0].id;
+  } else if (activeByGroup[group] === id) {
+    const next = conversations.find((c) => c.group === group);
+    if (next) {
+      activeByGroup[group] = next.id;
+      persistActiveId(group, next.id);
+    } else {
+      delete activeByGroup[group];
+    }
   }
-  persistActiveId(activeId);
-  setState({ conversations, activeId, loaded: true });
+
+  setState({ conversations, activeByGroup, loaded: true });
   try {
     await fsClient.remove(chatPath(id));
   } catch {
@@ -241,13 +268,11 @@ export async function saveConversationMessages(id: string, messages: unknown[]):
   // an empty snapshot is a transient reset (thread swap / remount), not the user
   // clearing history. Dropping it here is the last line of defense against wipes.
   if (messages.length === 0 && existing && existing.messages.length > 0) return;
-  // Prefer the in-memory title: renameConversation updates state synchronously
-  // before writing to disk, so memory is always at least as fresh as disk and
-  // a concurrent auto-title rename can't be clobbered by this save.
   const file: ConversationFile = {
     id,
     title: meta?.title ?? existing?.title ?? "Conversation",
     createdAt: existing?.createdAt ?? meta?.createdAt ?? Date.now(),
+    group: meta?.group ?? existing?.group ?? DEFAULT_GROUP,
     messages,
   };
   await writeConversationFile(file);
@@ -306,19 +331,17 @@ async function maybeGenerateTitleInBackground(id: string, messages: unknown[]): 
     const data = (await res.json()) as { title?: string };
     const title = data.title?.trim();
     if (!title) return;
-    // Recheck — the user may have renamed the conversation manually while the
-    // request was in flight; never overwrite a human-chosen title.
     const cur = state?.conversations.find((c) => c.id === id);
     if (!cur || cur.title !== DEFAULT_TITLE) return;
     await renameConversation(id, title);
   } catch {
-    // Title generation is best-effort — failures are silent.
+    /* title generation is best-effort */
   } finally {
     titleGenInFlight.delete(id);
   }
 }
 
-export function useConversations(): State {
+function useStoreState(): State {
   return useSyncExternalStore(
     (cb) => {
       listeners.add(cb);
@@ -330,6 +353,26 @@ export function useConversations(): State {
   );
 }
 
-export function useActiveConversationId(): string {
-  return useConversations().activeId;
+/** Conversations for a group (default "assistant") + that group's active id. */
+export function useConversations(group: string = DEFAULT_GROUP): {
+  conversations: Conversation[];
+  activeId: string;
+  loaded: boolean;
+} {
+  const s = useStoreState();
+  return {
+    conversations: s.conversations.filter((c) => c.group === group),
+    activeId: s.activeByGroup[group] ?? "",
+    loaded: s.loaded,
+  };
+}
+
+/** All conversations across groups (for a grouped/nested view). */
+export function useAllConversations(): { conversations: Conversation[]; loaded: boolean } {
+  const s = useStoreState();
+  return { conversations: s.conversations, loaded: s.loaded };
+}
+
+export function useActiveConversationId(group: string = DEFAULT_GROUP): string {
+  return useConversations(group).activeId;
 }
