@@ -111,20 +111,36 @@ async function ensureWorktree(role, commit) {
   const branch = `bos/${role}-${Date.now().toString(36)}`;
   await fs.mkdir(WORKTREES, { recursive: true });
   await git(["worktree", "add", "-b", branch, wt, commit]);
-  // Worktrees don't get node_modules (gitignored). A symlink is rejected by
-  // Turbopack ("points out of the filesystem root"), so hardlink-clone the
-  // repo's node_modules into the worktree — cheap on the same filesystem
-  // (shared inodes), falling back to a full copy across filesystems.
+  await hydrateWorktree(wt);
+  return { wt, branch };
+}
+
+// Worktrees don't get node_modules (gitignored). A symlink is rejected by
+// Turbopack ("points out of the filesystem root"), so hardlink-clone the repo's
+// node_modules into the worktree — cheap on the same filesystem (shared inodes),
+// falling back to a full copy. Also carry env secrets (also gitignored).
+async function hydrateWorktree(wt) {
   const nm = path.join(wt, "node_modules");
   try {
     await exec("cp", ["-al", path.join(REPO, "node_modules"), nm], { maxBuffer: 64 * 1024 * 1024, timeout: 300_000 });
   } catch {
     await exec("cp", ["-a", path.join(REPO, "node_modules"), nm], { maxBuffer: 64 * 1024 * 1024, timeout: 600_000 }).catch(() => {});
   }
-  // Carry env secrets if present (also gitignored).
   for (const f of [".env", ".env.local"]) {
     await fs.copyFile(path.join(REPO, f), path.join(wt, f)).catch(() => {});
   }
+}
+
+// Check out an EXISTING branch into the `next` worktree (vs ensureWorktree, which
+// creates a fresh bos/<role>-* branch off a commit). Used to serve an arbitrary
+// branch selected from the toolbar's branch dropdown.
+async function ensureWorktreeForBranch(branch) {
+  const wt = path.join(WORKTREES, "next");
+  await gitTry(["worktree", "remove", "--force", wt]);
+  await fs.rm(wt, { recursive: true, force: true }).catch(() => {});
+  await fs.mkdir(WORKTREES, { recursive: true });
+  await git(["worktree", "add", wt, branch]);
+  await hydrateWorktree(wt);
   return { wt, branch };
 }
 
@@ -254,6 +270,35 @@ async function discard() {
   log("discarded candidate");
 }
 
+/** Branches selectable from the toolbar dropdown — real branches only, hiding
+ *  the internal bos/* worktree branches the Supervisor creates. Base is always
+ *  present so the active version is always selectable. */
+async function listBranches() {
+  const raw = (await gitTry(["branch", "--format=%(refname:short)"])) || "";
+  const branches = raw.split("\n").map((s) => s.trim()).filter((b) => b && !b.startsWith("bos/"));
+  if (!branches.includes(baseBranch)) branches.unshift(baseBranch);
+  return branches;
+}
+
+/** Activate a branch from the toolbar dropdown: base → drop any candidate and
+ *  return to the active version; otherwise (re)provision `next` from that branch
+ *  and build it in the background. handleControl pins the session via Set-Cookie;
+ *  pinnedVersion only routes to it once the build reports ready. */
+async function activate(branch) {
+  await discard();
+  if (!branch || branch === baseBranch) return { base: true };
+  const { wt } = await ensureWorktreeForBranch(branch);
+  const clone = path.join(CLONES, "next");
+  await provisionClone(clone);
+  const v = {
+    role: "next", branch, worktree: wt, dataDir: clone, port: PORTS.next,
+    state: "building", proc: null, commit: await gitTry(["rev-parse", "HEAD"], wt),
+  };
+  versions.next = v;
+  void buildAndStart(v).catch((e) => { v.state = "failed"; log(`activate build failed: ${e.message || e}`); });
+  return { branch, state: "building" };
+}
+
 // ---------------------------------------------------------------- app content candidate (GitFS)
 async function appsRepoExists() {
   try { await fs.access(path.join(APPS_REPO, ".git")); return true; } catch { return false; }
@@ -318,10 +363,19 @@ function parseCookies(req) {
   return out;
 }
 
-function pinnedRole(req) {
+// Resolve which running version this request should be served by. The pin cookie
+// holds either a role ("next"/"previous", set by the /__supervisor control page)
+// or a branch name (set when a branch is activated from the toolbar dropdown). A
+// pin is only honored while its version is "ready"; otherwise we fall back to
+// active so a still-building candidate never serves 502s to a pinned session.
+function pinnedVersion(req) {
   const pin = parseCookies(req)[PIN_COOKIE];
-  if (pin && versions[pin] && versions[pin].state === "ready") return pin;
-  return "active";
+  if (!pin || pin === "active") return versions.active;
+  if (versions[pin] && versions[pin].state === "ready") return versions[pin];
+  for (const v of [versions.next, versions.previous, versions.active]) {
+    if (v && v.state === "ready" && v.branch === pin) return v;
+  }
+  return versions.active;
 }
 
 function readBody(req) {
@@ -366,11 +420,13 @@ function probeOnce(port) {
 }
 
 async function handleControl(req, res, sub) {
-  if (req.method === "GET" && (sub === "" || sub === "state")) {
+  if (req.method === "GET" && (sub === "" || sub === "state" || sub === "branches")) {
     if (sub === "") { res.writeHead(200, { "Content-Type": "text/html" }); res.end(controlPage()); return; }
+    if (sub === "branches") return sendJson(res, { ok: true, branches: await listBranches(), base: baseBranch });
     return sendJson(res, await publicState());
   }
   const body = await readBody(req);
+  const clearPin = { "Set-Cookie": `${PIN_COOKIE}=; Path=/; Max-Age=0` };
   try {
     if (sub === "pin" && req.method === "POST") {
       const role = String(body.version || "active");
@@ -387,9 +443,17 @@ async function handleControl(req, res, sub) {
       if (!versions.next) return sendJson(res, { ok: false, error: "no candidate" }, 400);
       return sendJson(res, { ok: true, state: await buildAndStart(versions.next) });
     }
-    if (sub === "promote" && req.method === "POST") return sendJson(res, { ok: true, ...(await promote()) });
-    if (sub === "rollback" && req.method === "POST") return sendJson(res, { ok: true, ...(await rollback()) });
-    if (sub === "discard" && req.method === "POST") { await discard(); return sendJson(res, { ok: true }); }
+    if (sub === "activate" && req.method === "POST") {
+      const branch = String(body.branch || "");
+      const result = await activate(branch);
+      const cookie = !branch || branch === baseBranch
+        ? clearPin
+        : { "Set-Cookie": `${PIN_COOKIE}=${encodeURIComponent(branch)}; Path=/; HttpOnly` };
+      return sendJson(res, { ok: true, ...result }, 200, cookie);
+    }
+    if (sub === "promote" && req.method === "POST") return sendJson(res, { ok: true, ...(await promote()) }, 200, clearPin);
+    if (sub === "rollback" && req.method === "POST") return sendJson(res, { ok: true, ...(await rollback()) }, 200, clearPin);
+    if (sub === "discard" && req.method === "POST") { await discard(); return sendJson(res, { ok: true }, 200, clearPin); }
     if (sub === "app-begin" && req.method === "POST") return sendJson(res, { ok: true, ...(await appBegin()) });
     if (sub === "app-promote" && req.method === "POST") return sendJson(res, { ok: true, ...(await appPromote()) });
     if (sub === "app-discard" && req.method === "POST") return sendJson(res, { ok: true, ...(await appDiscard()) });
@@ -453,15 +517,14 @@ async function main() {
       void handleControl(req, res, sub);
       return;
     }
-    const role = pinnedRole(req);
-    const port = versions[role]?.port;
+    const port = pinnedVersion(req)?.port;
     if (!port) { res.writeHead(502, { "Content-Type": "text/plain" }); res.end("No active version"); return; }
     proxyTo(port, req, res);
   });
 
   // Proxy WebSocket upgrades (e.g. next dev's HMR socket) to the pinned version.
   server.on("upgrade", (req, clientSocket, head) => {
-    const port = versions[pinnedRole(req)]?.port;
+    const port = pinnedVersion(req)?.port;
     if (!port) return clientSocket.destroy();
     const up = http.request({ hostname: "127.0.0.1", port, path: req.url, method: req.method, headers: req.headers });
     up.on("upgrade", (upRes, upSocket, upHead) => {
