@@ -51,6 +51,23 @@ the OS's safety rules and can use skills.
 
 ---
 
+## Capabilities (skills, MCP, tools)
+
+Each agent can be scoped to a subset of **skills**, **MCP servers**, and **tools**
+in **Settings → Assistant** (pick the agent, then check what it may use under
+**Capabilities**). Leaving a group fully checked means *all allowed* — the default,
+so nothing is restricted unless you choose to.
+
+- **Skills** — only the agent's allowed skills appear in its skills index.
+- **MCP servers** — only the allowed servers' tools are exposed to the agent.
+- **Tools** — the agent's sub‑agent tools (used when it is delegated to).
+
+This lets you give a focused agent (e.g. a spec‑authoring agent) exactly the
+capabilities it needs. The right‑hand **Tools / Skills / MCP** panel in the chat
+reflects the active agent's scoped skills and MCP.
+
+---
+
 ## How the personality is assembled
 
 When you chat, the assistant's full instructions are composed from:
@@ -60,7 +77,7 @@ When you chat, the assistant's full instructions are composed from:
 2. **The active agent's** personality.
 3. Your **memory** snapshot (user profile + agent notes).
 4. A **skills index** (names + when‑to‑use; full skill bodies are loaded on
-   demand).
+   demand), filtered to the agent's allowed skills (see Capabilities above).
 
 You can ask the assistant to show its current composed instructions, or to rewrite
 the active agent's instructions, with its built‑in tools.

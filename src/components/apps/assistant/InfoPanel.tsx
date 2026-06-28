@@ -8,8 +8,27 @@ import type { McpServerConfig } from "@/lib/mcp/types";
 
 type Tab = "tools" | "skills" | "mcp";
 
+// An unset/empty allowlist means "all" (011-per-agent-capabilities).
+function allows(allow: string[] | undefined, id: string): boolean {
+  return !allow || allow.length === 0 || allow.includes(id);
+}
+
 export function InfoPanel() {
   const [tab, setTab] = useState<Tab>("tools");
+  const [caps, setCaps] = useState<{ skills: string[]; mcp: string[] } | null>(null);
+
+  // Reflect the active agent's scoped skills/MCP. (Tools span two id namespaces —
+  // see TODO.md — so the Tools tab still lists all for now.)
+  useEffect(() => {
+    fetch("/api/assistant/agent")
+      .then((r) => r.json())
+      .then((d) => {
+        const active = (d.agents ?? []).find((a: { id: string }) => a.id === d.active);
+        setCaps({ skills: active?.skills ?? [], mcp: active?.mcp ?? [] });
+      })
+      .catch(() => setCaps({ skills: [], mcp: [] }));
+  }, []);
+
   return (
     <div className="flex h-full w-56 shrink-0 flex-col border-l border-white/10 bg-white/[0.02]">
       <div className="flex shrink-0 border-b border-white/10 text-xs">
@@ -25,8 +44,8 @@ export function InfoPanel() {
       </div>
       <div className="min-h-0 flex-1 overflow-auto p-2 text-xs">
         {tab === "tools" && <ToolsTab />}
-        {tab === "skills" && <SkillsTab />}
-        {tab === "mcp" && <McpTab />}
+        {tab === "skills" && <SkillsTab allowed={caps?.skills} />}
+        {tab === "mcp" && <McpTab allowed={caps?.mcp} />}
       </div>
     </div>
   );
@@ -54,16 +73,17 @@ function ToolsTab() {
   );
 }
 
-function SkillsTab() {
+function SkillsTab({ allowed }: { allowed?: string[] }) {
   const [skills, setSkills] = useState<Skill[] | null>(null);
   useEffect(() => {
     fetch("/api/skills").then((r) => r.json()).then((d) => setSkills(d.skills ?? [])).catch(() => setSkills([]));
   }, []);
   if (!skills) return <p className="text-white/40">Loading…</p>;
-  if (skills.length === 0) return <p className="text-white/40">No skills yet.</p>;
+  const shown = skills.filter((s) => allows(allowed, s.id));
+  if (shown.length === 0) return <p className="text-white/40">No skills available to this agent.</p>;
   return (
     <div className="space-y-2">
-      {skills.map((s) => (
+      {shown.map((s) => (
         <div key={s.id} className="rounded border border-white/10 bg-white/[0.03] p-2">
           <div className="flex items-center gap-1.5">
             <Sparkles size={11} className="text-amber-300/80" />
@@ -76,7 +96,7 @@ function SkillsTab() {
   );
 }
 
-function McpTab() {
+function McpTab({ allowed }: { allowed?: string[] }) {
   const [servers, setServers] = useState<McpServerConfig[] | null>(null);
   const [status, setStatus] = useState<Record<string, "checking" | "connected" | "disconnected">>({});
 
@@ -96,14 +116,16 @@ function McpTab() {
     fetch("/api/mcp")
       .then((r) => r.json())
       .then((d) => {
-        setServers(d.servers ?? []);
-        probe(d.servers ?? []);
+        const all: McpServerConfig[] = d.servers ?? [];
+        const shown = all.filter((s) => allows(allowed, s.name) || allows(allowed, s.endpoint));
+        setServers(shown);
+        probe(shown);
       })
       .catch(() => setServers([]));
-  }, [probe]);
+  }, [probe, allowed]);
 
   if (!servers) return <p className="text-white/40">Loading…</p>;
-  if (servers.length === 0) return <p className="text-white/40">No MCP servers configured.</p>;
+  if (servers.length === 0) return <p className="text-white/40">No MCP servers available to this agent.</p>;
   return (
     <div className="space-y-1.5">
       {servers.map((s) => {

@@ -22,6 +22,8 @@ interface SeedAgent {
   type: SubAgentType;
   systemPrompt: string;
   tools?: string[];
+  skills?: string[];
+  mcp?: string[];
 }
 
 const DEFAULTS: SeedAgent[] = [
@@ -85,6 +87,8 @@ const DEFAULTS: SeedAgent[] = [
       "Authors and refines BOS specifications using spec-kit, and delegates implementation to the Developer sub-agent.",
     type: "local",
     tools: ["list_specs", "read_spec", "write_spec", "edit_spec", "search_specs", "delegate_to_developer"],
+    skills: ["build-studio"],
+    mcp: [],
     systemPrompt:
       "You are Build Studio, the BrowserOS spec-authoring agent. You operate the Software-As-A-Prompt workflow: every feature is defined by a specification under specs/ before it is built.\n\n" +
       'You work through your skills. Load and follow the "Build Studio" skill, which holds the spec-kit pipeline (constitution, specify, clarify, plan, tasks, analyze, implement, converge) and its per-command references.\n\n' +
@@ -98,7 +102,7 @@ const DEFAULTS: SeedAgent[] = [
 
 function toMarkdown(a: SubAgent): string {
   return buildFrontmatter(
-    { name: a.name, description: a.description, type: a.type, model: a.model, subagent_type: a.subagentType, tools: a.tools },
+    { name: a.name, description: a.description, type: a.type, model: a.model, subagent_type: a.subagentType, tools: a.tools, skills: a.skills, mcp: a.mcp },
     a.systemPrompt,
   );
 }
@@ -113,6 +117,8 @@ function fromMarkdown(id: string, src: string): SubAgent {
     type,
     systemPrompt: body,
     tools: asList(meta.tools),
+    skills: asList(meta.skills),
+    mcp: asList(meta.mcp),
     model: asString(meta.model),
     subagentType: asString(meta.subagent_type),
   };
@@ -213,6 +219,24 @@ export async function setAgentSystemPrompt(id: string, systemPrompt: string): Pr
   const agent = await getSubAgent(id);
   if (!agent) return undefined;
   const updated: SubAgent = { ...agent, systemPrompt };
+  await writeFileAtomic(path.join(DIR, agent.id, "AGENT.md"), toMarkdown(updated));
+  return updated;
+}
+
+/** Update an agent's capability allowlists (tools/skills/mcp). Only provided
+ *  classes are changed; unset/empty means "all" at enforcement time. */
+export async function setAgentCapabilities(
+  id: string,
+  caps: { tools?: string[]; skills?: string[]; mcp?: string[] },
+): Promise<SubAgent | undefined> {
+  const agent = await getSubAgent(id);
+  if (!agent) return undefined;
+  const updated: SubAgent = {
+    ...agent,
+    tools: caps.tools ?? agent.tools,
+    skills: caps.skills ?? agent.skills,
+    mcp: caps.mcp ?? agent.mcp,
+  };
   await writeFileAtomic(path.join(DIR, agent.id, "AGENT.md"), toMarkdown(updated));
   return updated;
 }
