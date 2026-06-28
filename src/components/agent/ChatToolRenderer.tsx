@@ -6,7 +6,7 @@ import { ChevronDown, ChevronRight, Wrench, Loader2 } from "lucide-react";
 import { parseMcpUi } from "@/lib/mcp/ui";
 import { parseNested, type NestedEvent } from "@/lib/agent/nested-events";
 import { useDelegation } from "@/lib/agent/subagent-events";
-import { registerCard, toggleCard, useCardOpen } from "@/lib/agent/card-collapse";
+import { registerCard, toggleCard, useCardOpen, useCardScope } from "@/lib/agent/card-collapse";
 
 function preview(value: unknown, max = 600): string {
   if (value === undefined || value === null) return "";
@@ -57,13 +57,14 @@ function EventCard({ name, status, args, result }: { name: string; status: strin
   // id is content-derived. It changes while args stream in (keeping the live card
   // the newest/open one) and stabilizes once the call completes.
   const cardId = `${name}:${preview(args, 120)}`;
-  const open = useCardOpen(cardId);
+  const scope = useCardScope();
+  const open = useCardOpen(scope, cardId);
   const busy = status !== "complete";
 
   // Newest card opens (and collapses the previous). Idempotent per id.
   useEffect(() => {
-    registerCard(cardId);
-  }, [cardId]);
+    registerCard(scope, cardId);
+  }, [scope, cardId]);
 
   // Live sub-agent events for delegation cards (streamed before completion).
   const liveKey = name === "delegateToSubAgent" ? String((args as { task?: string })?.task ?? "") : "";
@@ -79,7 +80,19 @@ function EventCard({ name, status, args, result }: { name: string; status: strin
     <div className="my-1 rounded-lg border border-white/10 bg-black/30 text-xs">
       <button
         type="button"
-        onClick={() => toggleCard(cardId)}
+        // Toggle on pointerdown (not click): CopilotKit remounts the wildcard
+        // tool-call render whenever the chat re-renders (e.g. while the agent
+        // (re)connects after a conversation is restored), which replaces this
+        // button between mousedown and mouseup so a `click` never completes. A
+        // pointerdown is a single event that lands on whatever button is mounted
+        // at that instant. keydown keeps the header keyboard-operable.
+        onPointerDown={() => toggleCard(scope, cardId)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            toggleCard(scope, cardId);
+          }
+        }}
         aria-expanded={open}
         className="flex w-full cursor-pointer select-none items-center gap-2 px-2 py-1.5 text-left"
       >
@@ -116,12 +129,20 @@ function EventCard({ name, status, args, result }: { name: string; status: strin
 }
 
 // Catch-all renderer: every tool/action call becomes a collapsible event card.
+// The empty dependency array memoizes the action registration so the wildcard
+// `render` keeps a STABLE identity across re-renders. CopilotKit mounts the
+// wildcard render as a component type, so a fresh closure each render would
+// REMOUNT every tool card on any chat re-render (e.g. while an agent run churns),
+// which destroys the header button mid-click — the card could never be toggled.
 export function ChatToolRenderer() {
-  useCopilotAction({
-    name: "*",
-    render: ({ name, status, args, result }: CatchAllActionRenderProps<[]>) => (
-      <EventCard name={name} status={status} args={args} result={result} />
-    ),
-  });
+  useCopilotAction(
+    {
+      name: "*",
+      render: ({ name, status, args, result }: CatchAllActionRenderProps<[]>) => (
+        <EventCard name={name} status={status} args={args} result={result} />
+      ),
+    },
+    [],
+  );
   return null;
 }

@@ -2,7 +2,6 @@ import { getSettings } from "@/os/settings";
 import { BUILTIN_APPS } from "@/os/apps";
 import { listInstalledManifests } from "@/lib/apps/store";
 import { OSProvider } from "@/store/os-provider";
-import { CopilotProvider } from "@/components/agent/CopilotProvider";
 import { Desktop } from "@/components/desktop/Desktop";
 
 // The OS reads live settings on every request, so render dynamically.
@@ -13,9 +12,10 @@ export default async function Page() {
   const apps = [...BUILTIN_APPS, ...installed];
   return (
     <OSProvider settings={settings} apps={apps}>
-      <CopilotProvider>
-        <Desktop />
-      </CopilotProvider>
+      {/* No global CopilotKit provider: each chat surface (the Assistant app, the
+          Build Studio embed) mounts its OWN provider so they have independent
+          agents, threads, and conversation groups (012-embeddable-assistant). */}
+      <Desktop />
     </OSProvider>
   );
 }

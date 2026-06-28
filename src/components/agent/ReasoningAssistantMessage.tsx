@@ -3,7 +3,7 @@
 import { useEffect } from "react";
 import { AssistantMessage, type AssistantMessageProps } from "@copilotkit/react-ui";
 import { Brain, ChevronDown, ChevronRight } from "lucide-react";
-import { registerCard, toggleCard, useCardOpen } from "@/lib/agent/card-collapse";
+import { registerCard, toggleCard, useCardOpen, useCardScope } from "@/lib/agent/card-collapse";
 
 const THINK_OPEN = "<think>";
 const THINK_CLOSE = "</think>";
@@ -38,18 +38,19 @@ export function ReasoningAssistantMessage(props: AssistantMessageProps) {
   const { reasoning, answer, live } = splitReasoning(raw);
   const messageId = props.message?.id ?? "";
   const reasonId = `reason:${messageId}`;
-  const open = useCardOpen(reasonId);
+  const scope = useCardScope();
+  const open = useCardOpen(scope, reasonId);
 
   const hasReasoning = reasoning.length > 0;
   const hasAnswer = answer.trim().length > 0;
 
   useEffect(() => {
-    if (hasReasoning) registerCard(reasonId);
-  }, [hasReasoning, reasonId]);
+    if (hasReasoning) registerCard(scope, reasonId);
+  }, [hasReasoning, scope, reasonId]);
 
   useEffect(() => {
-    if (hasAnswer) registerCard(`answer:${messageId}`);
-  }, [hasAnswer, messageId]);
+    if (hasAnswer) registerCard(scope, `answer:${messageId}`);
+  }, [hasAnswer, scope, messageId]);
 
   const answerMessage = props.message ? { ...props.message, content: answer } : props.message;
 
@@ -59,7 +60,7 @@ export function ReasoningAssistantMessage(props: AssistantMessageProps) {
         <div className="mb-2 overflow-hidden rounded-lg border border-white/10 bg-white/[0.03]">
           <button
             type="button"
-            onClick={() => toggleCard(reasonId)}
+            onClick={() => toggleCard(scope, reasonId)}
             aria-expanded={open}
             className="flex w-full cursor-pointer select-none items-center gap-1.5 px-2.5 py-1.5 text-left text-xs text-white/55"
           >

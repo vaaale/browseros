@@ -367,10 +367,14 @@ export function useConversations(group: string = DEFAULT_GROUP): {
   };
 }
 
-/** All conversations across groups (for a grouped/nested view). */
-export function useAllConversations(): { conversations: Conversation[]; loaded: boolean } {
+/** All conversations across groups (for a grouped/nested view) + each group's active id. */
+export function useAllConversations(): {
+  conversations: Conversation[];
+  activeByGroup: Record<string, string>;
+  loaded: boolean;
+} {
   const s = useStoreState();
-  return { conversations: s.conversations, loaded: s.loaded };
+  return { conversations: s.conversations, activeByGroup: s.activeByGroup, loaded: s.loaded };
 }
 
 export function useActiveConversationId(group: string = DEFAULT_GROUP): string {
