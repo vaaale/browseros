@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAgent } from "@/lib/agent/subagents/store";
 import { runSubAgent } from "@/lib/agent/subagents/runner";
 import type { Agent } from "@/lib/agent/subagents/types";
+import { withLogContext, logger } from "@/lib/logging";
 
 export const dynamic = "force-dynamic";
 // A local dev tool-loop can run many steps; the NDJSON stream keeps the
@@ -42,12 +43,17 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: `No sub-agent "${body.agent}" and no ephemeral spec provided` }, { status: 404 });
   }
   const agent = def;
+  // Correlate this delegation (and any Supervisor build it triggers) to the
+  // originating browser session — see specs/017-central-logging.
+  const sessionId = req.headers.get("x-bos-session") || undefined;
 
   const stream = new ReadableStream<Uint8Array>({
-    async start(controller) {
+    start(controller) {
       const enc = new TextEncoder();
       const emit = (obj: unknown) => controller.enqueue(enc.encode(JSON.stringify(obj) + "\n"));
+      return withLogContext({ sessionId }, async () => {
       try {
+        logger().info("subagents.delegate", `delegate \u2192 ${agent.name}`, { agent: agent.id, interactive: body.interactive === true });
         const result = await runSubAgent(agent, task, {
           onEvent: (ev) => emit({ type: "tool", ...ev }),
           contentOnly: body.contentOnly === true,
@@ -65,10 +71,14 @@ export async function POST(req: NextRequest) {
           interactive: body.interactive === true,
         });
         emit({ type: "done", result });
+        logger().info("subagents.delegate", `delegate done: ${agent.name}`, { steps: result.steps, ...(result.error ? { error: result.error } : {}) });
       } catch (err) {
         emit({ type: "error", error: (err as Error).message });
+        logger().error("subagents.delegate", `delegate failed: ${agent.name}`, err);
       }
+      await logger().flush();
       controller.close();
+      });
     },
   });
 

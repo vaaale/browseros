@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { sessionHeader } from "@/lib/logging/client/session";
 
 interface Ver {
   role: string;
@@ -8,6 +9,7 @@ interface Ver {
   state: string;
   commit?: string;
   reused?: boolean;
+  buildError?: string;
 }
 interface SupState {
   base: Ver | null;
@@ -25,6 +27,7 @@ function VersionRow({ v }: { v: Ver | null }) {
         {v.state}
         {v.branch ? ` · ${v.branch}` : ""}
         {v.reused ? " · (reused dev server)" : ""}
+        {v.buildError ? <span className="mt-1 block whitespace-pre-wrap text-red-300/80">{v.buildError}</span> : null}
       </span>
     </div>
   );
@@ -60,7 +63,7 @@ export function VersionsTab() {
     try {
       const r = await fetch(`/__supervisor/${p}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...sessionHeader() },
         body: JSON.stringify(body ?? {}),
       });
       const j = await r.json();

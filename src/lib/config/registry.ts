@@ -235,6 +235,44 @@ const REGISTRATIONS: ConfigRegistration[] = [
     load: async () => ({}),
     save: async () => {},
   },
+  {
+    schema: {
+      namespace: "logging",
+      title: "Logs",
+      description:
+        "Central logging: each browser session's frontend, backend, and Supervisor activity is collected into one time-ordered timeline (the Supervisor is the sink). View the whole system or one session and filter by stream/level. Build failures capture their full output.",
+      order: 38,
+      customComponent: "logging",
+      fields: [
+        {
+          key: "level",
+          label: "Minimum level",
+          type: "select",
+          options: [
+            { value: "debug", label: "debug" },
+            { value: "info", label: "info" },
+            { value: "warn", label: "warn" },
+            { value: "error", label: "error" },
+          ],
+        },
+        { key: "retentionDays", label: "Retention (days)", type: "number" },
+        { key: "maxSizeMb", label: "Max total size (MB)", type: "number" },
+        { key: "frontendCapture", label: "Capture frontend logs", type: "boolean" },
+      ],
+    },
+    load: async () => {
+      const s = await readNamespace("logging");
+      return {
+        level: (s.level as string) || "info",
+        retentionDays: typeof s.retentionDays === "number" ? s.retentionDays : 7,
+        maxSizeMb: typeof s.maxSizeMb === "number" ? s.maxSizeMb : 512,
+        frontendCapture: s.frontendCapture !== false,
+      };
+    },
+    save: async (patch) => {
+      await patchNamespace("logging", patch);
+    },
+  },
 ];
 
 export function listConfigSchemas(): ConfigSchema[] {

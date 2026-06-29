@@ -1,6 +1,7 @@
 "use client";
 
 import type { OSSettings, VfsEntry } from "@/os/types";
+import { sessionHeader } from "@/lib/logging/client/session";
 
 async function jsonOrThrow<T>(res: Response): Promise<T> {
   const data = await res.json();
@@ -20,25 +21,25 @@ export const fsClient = {
   write: (path: string, content: string) =>
     fetch("/api/fs", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...sessionHeader() },
       body: JSON.stringify({ op: "write", path, content }),
     }).then((r) => jsonOrThrow<{ ok: true }>(r)),
   mkdir: (path: string) =>
     fetch("/api/fs", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...sessionHeader() },
       body: JSON.stringify({ op: "mkdir", path }),
     }).then((r) => jsonOrThrow<{ ok: true }>(r)),
   remove: (path: string) =>
     fetch("/api/fs", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...sessionHeader() },
       body: JSON.stringify({ op: "delete", path }),
     }).then((r) => jsonOrThrow<{ ok: true }>(r)),
   rename: (path: string, to: string) =>
     fetch("/api/fs", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...sessionHeader() },
       body: JSON.stringify({ op: "rename", path, to }),
     }).then((r) => jsonOrThrow<{ ok: true }>(r)),
   rawUrl: (path: string) => `/api/fs/raw?path=${encodeURIComponent(path)}`,
@@ -48,7 +49,7 @@ export const settingsClient = {
   patch: (patch: Partial<OSSettings>) =>
     fetch("/api/settings", {
       method: "PATCH",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...sessionHeader() },
       body: JSON.stringify(patch),
     }).then((r) => jsonOrThrow<{ settings: OSSettings }>(r).then((d) => d.settings)),
 };

@@ -31,6 +31,7 @@ to `000-browseros-core`.
 | 014 | MCP tool gateway (progressive disclosure) — *Draft* | `specs/014-mcp-tool-gateway/` |
 | 015 | MermaidJS rendering in Assistant chat — *Draft* | `specs/015-mermaid-chat-support/` |
 | 016 | Unified agent model (sub-agent is a role, not a type) — *Draft* | `specs/016-unified-agents/` |
+| 017 | Central logging (session-partitioned, Supervisor-collected) — *Draft* | `specs/017-central-logging/` |
 
 ## Other artifacts
 

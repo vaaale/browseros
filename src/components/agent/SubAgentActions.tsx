@@ -5,6 +5,7 @@ import { useCopilotAction } from "@/components/agent/gated-action";
 import { encodeNested } from "@/lib/agent/nested-events";
 import { startDelegation, pushDelegationEvent, finishDelegation } from "@/lib/agent/subagent-events";
 import { useActiveConversationId, DEFAULT_GROUP } from "@/lib/agent/conversations";
+import { sessionHeader } from "@/lib/logging/client/session";
 
 type Choice = "once" | "session" | "local";
 
@@ -91,7 +92,7 @@ export function SubAgentActions({ group = DEFAULT_GROUP }: { group?: string }) {
       try {
         const res = await fetch("/api/subagents/delegate", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...sessionHeader() },
           body: JSON.stringify({ agent, task, ephemeral, contentOnly: contentOnly === true, branchKey: threadIdRef.current, interactive: true }),
         });
         if (!res.ok) {

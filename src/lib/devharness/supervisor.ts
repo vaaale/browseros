@@ -1,4 +1,5 @@
 import "server-only";
+import { getLogContext } from "@/lib/logging/context";
 
 // Thin client the BOS app uses to talk to the Supervisor control plane
 // (tools/supervisor). Enabled only when BOS_SUPERVISOR_URL is set (i.e. the app
@@ -16,8 +17,15 @@ export function supervisorEnabled(): boolean {
 async function call(pathname: string, init?: RequestInit): Promise<Record<string, unknown> | null> {
   const u = baseUrl();
   if (!u) return null;
+  // Forward the request's browser session id so the Supervisor attributes this
+  // control action (e.g. a build) to the same session timeline as the chat.
+  const sessionId = getLogContext().sessionId;
+  const headers = {
+    ...(init?.headers as Record<string, string> | undefined),
+    ...(sessionId ? { "x-bos-session": sessionId } : {}),
+  };
   try {
-    const res = await fetch(`${u}/__supervisor/${pathname}`, init);
+    const res = await fetch(`${u}/__supervisor/${pathname}`, { ...init, headers });
     return (await res.json()) as Record<string, unknown>;
   } catch {
     return null;

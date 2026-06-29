@@ -1,11 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { sessionHeader } from "@/lib/logging/client/session";
 
 interface Ver {
   role: string;
   branch?: string;
   state: string;
+  buildError?: string;
+  buildLog?: string;
 }
 interface SupState {
   base: Ver | null;
@@ -77,7 +80,7 @@ export function VersionControls() {
     try {
       const r = await fetch(`/__supervisor/${p}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...sessionHeader() },
         body: JSON.stringify(body ?? {}),
       });
       return (await r.json()) as PostResult;
@@ -185,7 +188,11 @@ export function VersionControls() {
       {hasCand && (
         <>
           {building && <span className="text-amber-300/80">building…</span>}
-          {failed && <span className="text-red-300/80">build failed</span>}
+          {failed && (
+            <span className="max-w-[280px] truncate text-red-300/80" title={cand?.buildError || "build failed"}>
+              build failed{cand?.buildError ? `: ${short((cand.buildError.split("\n").pop() || cand.buildError).trim())}` : ""}
+            </span>
+          )}
           {ready && !previewing && (
             <button disabled={busy} onClick={onPreview} title="View this preview in the browser (it is not the base version yet)" className={`${btn} bg-sky-500/25 hover:bg-sky-500/40`}>Preview</button>
           )}

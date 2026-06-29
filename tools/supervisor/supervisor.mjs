@@ -18,6 +18,7 @@ import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { LogStore } from "./log-store.mjs";
 
 const exec = promisify(execFile);
 
@@ -50,7 +51,20 @@ const GIT_IDENTITY = ["-c", "user.name=BrowserOS", "-c", "user.email=bos@localho
 /** @type {{branch:string, base:string}|null} */
 let appCandidate = null;
 
-const log = (...a) => console.log("[supervisor]", ...a);
+// Central log store (specs/017-central-logging). The Supervisor is the SINGLE writer
+// and always-on sink: frontend + version-server backends ship records here too.
+const logStore = new LogStore(CANONICAL_DATA);
+
+// console + persist. log() mirrors every supervisor message into the store (supervisor
+// stream); slog() adds structured fields (branch, versionLabel, err, buildLog, …).
+const log = (...a) => {
+  console.log("[supervisor]", ...a);
+  try { logStore.write({ level: "info", stream: "supervisor", component: "supervisor", msg: a.map(String).join(" ") }, { versionLabel: "supervisor" }); } catch { /* never fail on logging */ }
+};
+const slog = (level, component, msg, extra = {}) => {
+  console.log("[supervisor]", msg);
+  try { logStore.write({ level, stream: "supervisor", component, msg, ...extra }, { versionLabel: "supervisor" }); } catch { /* never fail on logging */ }
+};
 
 // ---------------------------------------------------------------- version registry
 // Only two roles: the always-on BASE (a singleton, a detached worktree at the base
@@ -91,7 +105,7 @@ async function liveBranch(v) {
 }
 async function publicState() {
   const pick = async (v) =>
-    v ? { role: v.role, branch: await liveBranch(v), port: v.port, state: v.state, commit: v.commit, reused: !!v.reused } : null;
+    v ? { role: v.role, branch: await liveBranch(v), port: v.port, state: v.state, commit: v.commit, reused: !!v.reused, ...(v.buildError ? { buildError: v.buildError } : {}), ...(v.buildLog ? { buildLog: v.buildLog } : {}) } : null;
   const [b, p] = await Promise.all([pick(base), pick(preview)]);
   return { base: b, preview: p, appCandidate, pushMode: PUSH_MODE, baseBranch };
 }
@@ -182,7 +196,7 @@ function startProc(v) {
     stdio: "inherit",
   });
   v.proc.on("exit", (code) => {
-    log(`version "${v.role}" (${v.branch}) process exited (${code})`);
+    slog(code === 0 || code === null ? "info" : "warn", "process", `version "${v.role}" (${v.branch}) process exited (${code})`, { branch: v.branch, versionLabel: v.role, data: { code } });
     // An unexpected death of a running version must not keep routing traffic to a
     // dead port — mark it so pinnedVersion falls back to base.
     if (v.state === "ready") v.state = "stopped";
@@ -220,33 +234,89 @@ async function waitHealthy(port) {
   return false;
 }
 
+// Run `npm run build` in a worktree, STREAMING stdout+stderr into a build-log blob
+// and keeping a tail as the failure reason. This is the fix for the "build failed
+// and I couldn't see why" black box (specs/017): the real compiler output is now
+// persisted and the reason is surfaced. Resolves { ok, code, reason, relPath }.
+const BUILD_TIMEOUT_MS = 600_000;
+function runBuild(cwd, branch, ctx = {}) {
+  return new Promise((resolve) => {
+    const blob = logStore.openBuildLog(branch);
+    let child;
+    try {
+      child = spawn("npm", ["run", "build"], { cwd, env: process.env, stdio: ["ignore", "pipe", "pipe"] });
+    } catch (e) {
+      blob.stream.end();
+      resolve({ ok: false, code: null, reason: `failed to spawn build: ${e.message}`, relPath: blob.relPath });
+      return;
+    }
+    const TAIL_MAX = 16 * 1024;
+    let tail = "";
+    const onChunk = (c) => {
+      try { blob.stream.write(c); } catch { /* ignore */ }
+      tail += c.toString();
+      if (tail.length > TAIL_MAX) tail = tail.slice(-TAIL_MAX);
+    };
+    child.stdout.on("data", onChunk);
+    child.stderr.on("data", onChunk);
+    const killer = setTimeout(() => { try { child.kill("SIGKILL"); } catch { /* ignore */ } }, BUILD_TIMEOUT_MS);
+    const done = (r) => { clearTimeout(killer); blob.stream.end(); resolve(r); };
+    child.on("error", (e) => done({ ok: false, code: null, reason: `failed to spawn build: ${e.message}`, relPath: blob.relPath }));
+    child.on("close", (code) => {
+      const reason = code === 0 ? "" : (tail.trim().split("\n").slice(-40).join("\n") || `build exited with code ${code}`);
+      done({ ok: code === 0, code, reason, relPath: blob.relPath });
+    });
+  });
+}
+
 // Build a preview worktree (commit its edits onto the feature branch so a later
 // promote can fast-forward them), (re)start it, and health-gate it. Stops any
 // existing server for this version FIRST so a rebuild never collides on its port.
-async function buildAndStart(v) {
+// On failure it sets state "failed" + stashes the reason (v.buildError) rather than
+// throwing, so callers (e.g. /build) can surface WHY.
+async function buildAndStart(v, ctx = {}) {
   await stopProc(v);
   await git(["add", "-A"], v.worktree).catch(() => {});
   await git(["commit", "-m", `BOS candidate (${v.branch})`], v.worktree).catch(() => {});
   v.commit = await git(["rev-parse", "HEAD"], v.worktree).catch(() => v.commit);
   v.state = "building";
-  log(`building ${v.branch} @ ${v.worktree} (commit ${String(v.commit).slice(0, 8)})`);
-  await exec("npm", ["run", "build"], { cwd: v.worktree, env: process.env, maxBuffer: 32 * 1024 * 1024, timeout: 600_000 });
+  v.buildError = "";
+  const lctx = { branch: v.branch, versionLabel: v.role, ...(ctx.sessionId ? { sessionId: ctx.sessionId } : {}) };
+  slog("info", "build", `building ${v.branch} @ ${v.worktree} (commit ${String(v.commit).slice(0, 8)})`, lctx);
+  const build = await runBuild(v.worktree, v.branch, lctx);
+  v.buildLog = build.relPath;
+  if (!build.ok) {
+    v.state = "failed";
+    v.buildError = build.reason;
+    slog("error", "build", `build FAILED: ${v.branch} (exit ${build.code})`, { ...lctx, buildLog: build.relPath, err: { message: build.reason } });
+    return v.state;
+  }
   startProc(v);
   v.state = (await waitHealthy(v.port)) ? "ready" : "failed";
-  log(`${v.branch} → ${v.state}`);
+  if (v.state === "failed") v.buildError = `health check failed: no healthy /api/health on :${v.port} within ${HEALTH_TIMEOUT_MS}ms`;
+  slog(v.state === "ready" ? "info" : "error", "build", `${v.branch} -> ${v.state}`, { ...lctx, buildLog: build.relPath, ...(v.buildError ? { err: { message: v.buildError } } : {}) });
   return v.state;
 }
 
 // Build + start BASE from a detached worktree at `commit` (no commit step — base is
-// not a candidate branch). Runs against canonical data.
+// not a candidate branch). Runs against canonical data. A base build failure is
+// fatal at boot, so this still throws after logging the captured reason.
 async function buildAndStartBase(commit) {
   const wt = await addBaseWorktree(commit);
   base = { role: "base", branch: baseBranch, worktree: wt, dataDir: CANONICAL_DATA, port: BASE_PORT, state: "building", proc: null, commit };
-  log(`building base (${baseBranch} @ ${commit.slice(0, 8)})`);
-  await exec("npm", ["run", "build"], { cwd: wt, env: process.env, maxBuffer: 32 * 1024 * 1024, timeout: 600_000 });
+  const lctx = { branch: baseBranch, versionLabel: "base" };
+  slog("info", "build", `building base (${baseBranch} @ ${commit.slice(0, 8)})`, lctx);
+  const build = await runBuild(wt, baseBranch, lctx);
+  base.buildLog = build.relPath;
+  if (!build.ok) {
+    base.state = "failed";
+    base.buildError = build.reason;
+    slog("error", "build", `base build FAILED (exit ${build.code})`, { ...lctx, buildLog: build.relPath, err: { message: build.reason } });
+    throw new Error(`base build failed:\n${build.reason}`);
+  }
   startProc(base);
   base.state = (await waitHealthy(BASE_PORT)) ? "ready" : "failed";
-  log(`base → ${base.state}`);
+  slog(base.state === "ready" ? "info" : "error", "build", `base -> ${base.state}`, { ...lctx, buildLog: build.relPath });
   return base.state;
 }
 
@@ -307,9 +377,9 @@ async function beginPreview(branch) {
   return await provisionPreview(branch || newPreviewBranch());
 }
 
-async function buildPreview() {
+async function buildPreview(ctx = {}) {
   if (!preview) throw new Error("no preview to build");
-  return await buildAndStart(preview);
+  return await buildAndStart(preview, ctx);
 }
 
 // Toolbar branch selection. Base → drop any preview, back to base. An already-ready
@@ -505,6 +575,17 @@ function readBody(req) {
   });
 }
 
+// Like readBody but caps the payload (log ingestion is the only large body we accept).
+function readBodyCapped(req, maxBytes) {
+  return new Promise((resolve) => {
+    let b = "";
+    let over = false;
+    req.on("data", (c) => { if (over) return; b += c; if (b.length > maxBytes) { over = true; b = ""; } });
+    req.on("end", () => { try { resolve(b ? JSON.parse(b) : {}); } catch { resolve({}); } });
+    req.on("error", () => resolve({}));
+  });
+}
+
 function sendJson(res, obj, status = 200, headers = {}) {
   const body = JSON.stringify(obj);
   res.writeHead(status, { "Content-Type": "application/json", ...headers });
@@ -539,6 +620,27 @@ function probeOnce(port) {
 }
 
 async function handleControl(req, res, sub) {
+  const sessionId = typeof req.headers["x-bos-session"] === "string" ? req.headers["x-bos-session"] : undefined;
+
+  // --- central log store: ingestion (frontend + backend ship here) + reads (viewer) ---
+  if (sub === "logs" && req.method === "POST") {
+    const payload = await readBodyCapped(req, 2 * 1024 * 1024);
+    const records = payload && Array.isArray(payload.records) ? payload.records : (Array.isArray(payload) ? payload : []);
+    await logStore.writeBatch(records, { stream: "frontend", ...(sessionId ? { sessionId } : {}) });
+    return sendJson(res, { ok: true, n: Array.isArray(records) ? records.length : 0 });
+  }
+  if (sub === "logs" && req.method === "GET") {
+    const q = new URL(req.url, "http://localhost").searchParams;
+    if (q.get("sessions") === "1") return sendJson(res, { ok: true, sessions: await logStore.listSessions() });
+    const records = await logStore.query({
+      session: q.get("session") || undefined,
+      stream: q.get("stream") || undefined,
+      level: q.get("level") || undefined,
+      since: q.get("since") ? Number(q.get("since")) : undefined,
+      limit: q.get("limit") ? Number(q.get("limit")) : undefined,
+    });
+    return sendJson(res, { ok: true, records });
+  }
   if (req.method === "GET" && (sub === "" || sub === "state" || sub === "branches" || sub === "preview-changes" || sub === "next-changes")) {
     if (sub === "") { res.writeHead(200, { "Content-Type": "text/html" }); res.end(controlPage()); return; }
     if (sub === "branches") return sendJson(res, { ok: true, branches: await listBranches(), base: baseBranch });
@@ -551,6 +653,7 @@ async function handleControl(req, res, sub) {
     return sendJson(res, { ...st, serving: sv ? { role: sv.role, branch: await liveBranch(sv) } : null });
   }
   const body = await readBody(req);
+  slog("info", `control:${sub}`, `${sub} requested`, { ...(sessionId ? { sessionId } : {}), ...(body && Object.keys(body).length ? { data: body } : {}) });
   const clearPin = { "Set-Cookie": `${PIN_COOKIE}=; Path=/; Max-Age=0` };
   try {
     if (sub === "pin" && req.method === "POST") {
@@ -568,7 +671,8 @@ async function handleControl(req, res, sub) {
     }
     if (sub === "build" && req.method === "POST") {
       if (!preview) return sendJson(res, { ok: false, error: "no preview" }, 400);
-      return sendJson(res, { ok: true, state: await buildPreview() });
+      const state = await buildPreview({ sessionId });
+      return sendJson(res, { ok: state === "ready", state, ...(preview && preview.buildError ? { error: preview.buildError } : {}), ...(preview && preview.buildLog ? { buildLog: preview.buildLog } : {}) });
     }
     if (sub === "activate" && req.method === "POST") {
       const branch = String(body.branch || "");
@@ -586,7 +690,9 @@ async function handleControl(req, res, sub) {
     if (sub === "app-discard" && req.method === "POST") return sendJson(res, { ok: true, ...(await appDiscard()) });
     if (sub === "push" && req.method === "POST") return sendJson(res, { ok: true, ...(await pushNow()) });
   } catch (e) {
-    return sendJson(res, { ok: false, error: String(e.message || e) }, 500);
+    const msg = String(e.message || e);
+    slog("error", `control:${sub}`, `${sub} failed: ${msg}`, { ...(sessionId ? { sessionId } : {}), err: { message: msg } });
+    return sendJson(res, { ok: false, error: msg }, 500);
   }
   return sendJson(res, { ok: false, error: "unknown control endpoint" }, 404);
 }
@@ -622,6 +728,15 @@ refresh();
 async function main() {
   if (!baseBranch) baseBranch = await git(["rev-parse", "--abbrev-ref", "HEAD"]);
   await reconcileWorktrees();
+
+  // Logging retention (best-effort from the `logging` config namespace) + periodic prune.
+  try {
+    const cfg = JSON.parse(await fs.readFile(path.join(CANONICAL_DATA, "config", "logging.json"), "utf8"));
+    if (Number(cfg.retentionDays) > 0) logStore.retentionDays = Number(cfg.retentionDays);
+    if (Number(cfg.maxSizeMb) > 0) logStore.maxBytes = Number(cfg.maxSizeMb) * 1024 * 1024;
+  } catch { /* defaults */ }
+  void logStore.prune();
+  setInterval(() => void logStore.prune(), 3_600_000);
 
   if (REUSE_BASE_PORT) {
     base = { role: "base", port: REUSE_BASE_PORT, state: "ready", reused: true, branch: baseBranch, commit: await gitTry(["rev-parse", "HEAD"]) };
