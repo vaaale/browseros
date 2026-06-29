@@ -81,8 +81,10 @@ delimited JSON), not a single body.
 ## Supervisor (separate process, not Next.js)
 
 Served by `tools/supervisor/supervisor.mjs` on the public port at `/__supervisor`:
-`state`, `branches`, `pin`, `begin`, `build`, `activate`, `promote`, `rollback`,
-`discard`, `app-begin`, `app-promote`, `app-discard`, `push`. See
+`state`, `branches`, `preview-changes` (alias `next-changes`), `pin`, `begin`,
+`build`, `activate`, `promote`, `discard` (alias `stop`), `app-begin`,
+`app-promote`, `app-discard`, `push`. There is **no `rollback`** endpoint (deferred;
+every promote leaves a `bos/v<timestamp>` tag as the anchor for it). See
 [Live version control](self-modification/live-version-control.md).
 
 ---

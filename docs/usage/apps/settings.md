@@ -19,7 +19,7 @@ Select a tab from the left sidebar; the panel on the right shows its options.
 | **Appearance** | Wallpaper, fit, and accent color. | [Appearance](../settings/appearance.md) |
 | **AI Provider** | Provider, model, API key, token limits. | [AI Provider](../settings/ai-provider.md) |
 | **Data Isolation** | How a previewed BOS version's data is isolated. | [Data isolation](../settings/data-isolation.md) |
-| **Versions** | Preview/promote/roll back BOS versions. | [Live version control](../versions/live-version-control.md) |
+| **Versions** | Preview/promote/stop BOS versions. | [Live version control](../versions/live-version-control.md) |
 | **Dev Harness** | How Claude Code runs for development tasks. | [Dev Harness](../settings/dev-harness.md) |
 | **Browser Automation** | Let the assistant drive a real browser. | [Browser automation](../settings/browser-automation.md) |
 

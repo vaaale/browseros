@@ -47,9 +47,12 @@ If you're not sure, just describe what you want; the assistant picks the right p
 
 - The Developer always works on a **feature branch** to minimize blast radius.
 - It's expected to **write tests** for its change.
-- When BOS runs under the **Supervisor**, a code change becomes a **candidate
-  version** you can **preview**, then **promote** or **discard** — without taking
-  down the running OS. See [Live version control](../versions/live-version-control.md).
+- When BOS runs under the **Supervisor**, a code change is built as a **preview**
+  (a feature branch alongside the running **base**) that you can **preview**, then
+  **promote** or **stop** — without taking down the running OS. If you **Stop** a
+  preview to refine it, its branch is kept, so asking the assistant to keep
+  improving it continues on the same branch. See
+  [Live version control](../versions/live-version-control.md).
 
 ---
 

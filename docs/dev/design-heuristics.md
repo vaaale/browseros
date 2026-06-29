@@ -34,8 +34,8 @@ is never mutated). A non‑atomic write breaks preview isolation and crash‑saf
 ## `data/` schema must be backward-compatible
 
 The Supervisor shares one canonical `data/` across versions and **promote is
-code‑only**; a **rollback** runs older code on the same data. So any storage change
-must be readable by the previous version. Migrate forward‑compatibly.
+code‑only**; a (deferred) **rollback** would run older code on the same data. So any
+storage change must be readable by the previous version. Migrate forward‑compatibly.
 
 ## Streaming events live outside React
 

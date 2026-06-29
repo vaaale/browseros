@@ -41,17 +41,17 @@ Each entry: what the spec says · what the code does · where · suggested actio
 
 ## 4. Self-modification: no Playwright "verify" stage; promote gates on `ready`, not `verified`
 
-- **Spec:** `specs/005-self-modification/spec.md` FR-004 — pipeline typecheck→lint→build→boot→health→E2E with states `building → ready → testing → verified | failed | tests-failed`; FR-007 — promote requires `verified` (or override). `specs/008-self-testing/spec.md` specifies the verify stage.
-- **Code:** the Supervisor implements only `building → ready | failed` (build + `/api/health`). There is **no `testing`/`verified`/`tests-failed`** stage and **`promote()` requires `state === "ready"`**. The e2e suite exists (`e2e/`, `playwright.config.ts`) but is run manually / by the agent. (`VersionControls.tsx` references test states the Supervisor never produces.)
+- **Spec:** `specs/008-self-testing/spec.md` specifies a verify stage after health (`ready → testing (Playwright) → verified | tests-failed`) and a `gatePolicy`. (`specs/005-self-modification/spec.md` FR-004 was **revised to match the code** — `idle → building → ready | failed` — so the gap is now only with `008`.)
+- **Code:** the Supervisor implements only `idle → building → ready | failed` (build + `/api/health`). There is **no `testing`/`verified`/`tests-failed`** stage and **`promote()` requires `state === "ready"`**. The e2e suite exists (`e2e/`, `playwright.config.ts`) but is run manually / by the agent. `VersionControls.tsx` tracks only `ready`/`building`/`failed`/`stopped` (no test states).
 - **Where:** `tools/supervisor/supervisor.mjs` (`buildAndStart`, `promote`), `src/components/desktop/VersionControls.tsx`, `e2e/`.
-- **Action:** implement the verify stage in the Supervisor, or amend `005`/`008` to state that promote gates on health (`ready`) and E2E is a separate manual/agent step.
+- **Action:** implement the verify stage in the Supervisor, or keep `008` as a deferred companion (`005` already states promote gates on health = `ready`, with E2E a separate manual/agent step).
 
 ---
 
 ## 5. Supervisor parameters are env-only (not assistant-exposed config)
 
-- **Spec:** `specs/005-self-modification/spec.md` FR-011 surfaces public/internal ports, base branch, push mode, tag scheme, retain-previous, and timeouts via the configuration system (Settings tab + assistant tool).
-- **Code:** these are **environment variables** read by `tools/supervisor/supervisor.mjs` (`BOS_PUBLIC_PORT`, `BOS_PORT_BASE`, `BOS_BASE_BRANCH`, `BOS_WORKTREES`, `BOS_PUSH_MODE`, `BOS_REMOTE`, `BOS_HEALTH_TIMEOUT_MS`, …). The `self-modification` namespace's `VersionsTab` is status/actions only (`fields: []`).
+- **Spec:** `specs/005-self-modification/spec.md` FR-011 surfaces public/base ports, preview pool size, worktrees location, base branch, push mode + remote, tag scheme, and build/health timeouts via the configuration system (Settings tab + assistant tool).
+- **Code:** these are **environment variables** read by `tools/supervisor/supervisor.mjs` (`BOS_PUBLIC_PORT`, `BOS_PORT_BASE`, `BOS_PORT_POOL_SIZE`, `BOS_BASE_BRANCH`, `BOS_WORKTREES`, `BOS_PUSH_MODE`, `BOS_REMOTE`, `BOS_HEALTH_TIMEOUT_MS`, …). The `self-modification` namespace's `VersionsTab` is status/actions only (`fields: []`).
 - **Action:** back the `self-modification` namespace with these values, or document them as deploy-time env only.
 
 ---
@@ -137,7 +137,7 @@ Each entry: what the spec says · what the code does · where · suggested actio
 
 - Memory: two curated surfaces, character budgets with reject-on-overflow, atomic batch ops, substring `replace`/`remove` with refuse-on-ambiguity, in-process write locking, frozen-snapshot injection (`curated.ts`).
 - Memory: leaf sub-agents cannot write memory — the memory tool is not in `SUBAGENT_TOOLS`; only the parent assistant + the restricted review pass write.
-- Self-modification: separate stable Supervisor owning the public port; per-session preview pin; retain-previous + rollback; `/__supervisor` fallback page with rollback + push; code-only promote discarding the data clone.
+- Self-modification: separate stable Supervisor owning the public port; one always-on **base** + at most one **preview** on a pooled port (branch-named worktrees); per-session preview pin; safe-ordering promote (build + health-gate on the base port before moving the base ref); one-conversation-↔-one-feature-branch continuity across a Stop; `/__supervisor` fallback page (Preview / Back to base / Promote / Stop / Push); code-only promote discarding the data clone. (Rollback is deferred — every promote leaves a `bos/v<timestamp>` tag as the anchor.)
 - DataFS: base-read-only-during-preview invariant; copy is the universal floor; `datafs` config namespace + first-run wizard step.
 - Config system: a namespace yields **both** a Settings tab and assistant tools.
 - Dev harness: headless Claude CLI default + MCP (stdio/HTTP/SSE); development is Claude-only with a permission gate for non-dev Claude use.

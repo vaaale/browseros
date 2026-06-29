@@ -79,7 +79,9 @@ optional `references/` and `scripts/`.
 
 Delegate to the `developer` (Claude) agent — never the local model, never via the
 VFS. It works on a feature branch (`startFeatureBranch`), edits under `src/`,
-typechecks, stages. Under the Supervisor this becomes a previewable **candidate**.
+typechecks, stages. Under the Supervisor the change is built as a **preview** (the
+feature branch in its own worktree, alongside the running **base**) that the user
+previews then promotes or stops.
 
 → [Modifying BOS](../usage/building-and-modifying/modifying-bos.md) ·
 [Live version control](self-modification/live-version-control.md)

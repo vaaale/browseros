@@ -3,10 +3,10 @@
 This tab controls how a **previewed BOS version's data** is kept separate from your
 **live data** during [live version control](../versions/live-version-control.md).
 
-When you preview a candidate version of BOS, it runs against an **isolated
-copy‑on‑write clone** of your data, so testing the candidate (sending chats,
+When you preview a version of BOS, it runs against an **isolated
+copy‑on‑write clone** of your data, so testing the preview (sending chats,
 changing settings, creating files) can never pollute your real data. Your live
-data is only ever **read** during a preview. When you promote a candidate, the
+data is only ever **read** during a preview. When you promote a preview, the
 clone is discarded and your canonical data carries forward unchanged (promote is
 **code‑only**).
 
@@ -30,8 +30,8 @@ this initially and defaults to the best available; you can change it here later.
 ## When does this matter?
 
 Only when BOS runs under its **Supervisor** (live version control) and you actually
-**preview** a candidate version. When nothing is being previewed, the active BOS
-uses your real data directly with **zero** overhead.
+**preview** a version. When nothing is being previewed, the base BOS uses your real
+data directly with **zero** overhead.
 
 > **Tip:** for data on a network/removable mount, prefer keeping your live data on
 > local storage. **Full copy** is the safe universal choice when in doubt.

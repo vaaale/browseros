@@ -33,6 +33,6 @@ or feature, it updates these pages as part of the change (by editing the source 
 the developer sub‑agent) — so the in‑OS docs stay current as your BOS evolves,
 including pages describing apps you asked it to build.
 
-> **Tip.** While previewing a candidate version of BOS (see *Live version
-> control*), the Docs app shows *that* version's documentation, so you can read
-> exactly what changed before you promote it.
+> **Tip.** While previewing a version of BOS (see *Live version control*), the Docs
+> app shows *that* version's documentation, so you can read exactly what changed
+> before you promote it.

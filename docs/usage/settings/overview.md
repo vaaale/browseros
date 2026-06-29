@@ -23,7 +23,7 @@ Two things make BOS Settings special:
 | **[Appearance](appearance.md)** | Wallpaper, fit, accent color. |
 | **[AI Provider](ai-provider.md)** | Provider, model, API key, token limits. |
 | **[Data Isolation](data-isolation.md)** | How previewed versions isolate data. |
-| **[Versions](../versions/live-version-control.md)** | Preview / promote / roll back BOS versions. |
+| **[Versions](../versions/live-version-control.md)** | Preview / promote / stop BOS versions. |
 | **[Dev Harness](dev-harness.md)** | How Claude Code runs for development. |
 | **[Browser Automation](browser-automation.md)** | Let the assistant drive a real browser. |
 

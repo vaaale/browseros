@@ -27,8 +27,8 @@ The dock at the bottom lists apps for quick access. Click an app in the dock to
 
 The top bar runs across the top of the screen. When BOS is served through its
 **Supervisor** (live version control), the top bar also shows the **version
-controls** — a dropdown of branches plus Promote/Discard actions for previewing
-candidate versions of BOS. See
+controls** — a **Base** branch dropdown plus Preview / Promote / Stop actions for
+previewing a feature branch of BOS. See
 [Live version control](../versions/live-version-control.md). When BOS is run
 normally, the version controls are simply hidden.
 

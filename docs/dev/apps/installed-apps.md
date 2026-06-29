@@ -84,7 +84,7 @@ install:
   dir (no build/install), then call `buildApp` (`/api/apps/build` → `readProjectDir`
   → `installApp({ files, entry }, { draft:true })`).
 
-`contentOnly:true` keeps it a **content** operation (no BOS‑code candidate worktree)
-— see [Sub‑agents](../assistant/sub-agents-and-delegation.md). Candidate preview /
-promote / discard for apps is the GitFS `app-candidate` branch — see
-[Live version control](../self-modification/live-version-control.md).
+`contentOnly:true` keeps it a **content** operation (no BOS‑code preview worktree)
+— see [Sub‑agents](../assistant/sub-agents-and-delegation.md). Preview / promote /
+discard for apps is the GitFS `app-candidate` branch (served branch‑live by base, no
+extra port) — see [Live version control](../self-modification/live-version-control.md).

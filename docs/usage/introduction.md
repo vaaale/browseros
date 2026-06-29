@@ -23,8 +23,9 @@ see the developer documentation under `docs/dev/`.
   it has learned, and a library of **skills** (reusable procedures) that improve
   from your feedback.
 - **It can safely run multiple versions of itself.** When BOS changes its own
-  code, it can preview a candidate version and promote or discard it without
-  taking down the running system.
+  code, it builds the change as a **preview** alongside the running **base**
+  version, so you can preview it and then promote or stop it without taking down
+  the running system.
 
 ---
 
