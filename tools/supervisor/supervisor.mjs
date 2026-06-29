@@ -181,6 +181,11 @@ async function addWorktreeForBranch(branch) {
   await gitTry(["worktree", "remove", "--force", wt]);
   await fs.rm(wt, { recursive: true, force: true }).catch(() => {});
   await fs.mkdir(path.dirname(wt), { recursive: true });
+  // Clear any stale worktree registration (e.g. a worktree dir removed by hand, or a
+  // leftover lock) so `worktree add` can't fail with "already registered"/"already
+  // checked out" — the failure that would otherwise push the caller into editing the
+  // live checkout in place (specs/017-central-logging diagnosis).
+  await gitTry(["worktree", "prune"]);
   await git(["worktree", "add", wt, branch]);
   await hydrateWorktree(wt);
   return wt;

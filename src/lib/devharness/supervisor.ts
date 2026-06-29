@@ -36,6 +36,14 @@ export function supervisorState(): Promise<Record<string, unknown> | null> {
   return call("state");
 }
 
+/** All git branches the Supervisor knows about. Used to check that a remembered
+ *  branch-key still exists before trying to resume it, so a manually-deleted (or
+ *  promoted-and-deleted) branch starts fresh instead of being resurrected. Returns
+ *  null when not under the Supervisor. */
+export function supervisorBranches(): Promise<Record<string, unknown> | null> {
+  return call("branches");
+}
+
 /** Files changed on the preview vs base (committed in its worktree), so the
  *  assistant's gitStatus can see a preview even though the main checkout is clean.
  *  Returns null when not under the Supervisor. */

@@ -2,7 +2,7 @@ import "server-only";
 import { spawn } from "node:child_process";
 import { connectMcpClient, extractText } from "@/lib/mcp/client";
 import { getHarnessConfig } from "@/lib/devharness/harness-config";
-import { supervisorEnabled, supervisorState, supervisorBegin, supervisorBuild } from "@/lib/devharness/supervisor";
+import { supervisorEnabled, supervisorState, supervisorBegin, supervisorBuild, supervisorBranches } from "@/lib/devharness/supervisor";
 import { getBranchForKey, setBranchForKey } from "@/lib/devharness/thread-branches";
 import { stageAll } from "@/lib/system/git";
 import type { McpServerConfig } from "@/lib/mcp/types";
@@ -310,7 +310,16 @@ export async function runClaudeAgent(
     //     the thing I'm looking at"), then the key's remembered branch, else fresh.
     //   • headless (workflow/integration): the supplied key is AUTHORITATIVE — its own
     //     remembered branch (fresh on first use), never a human's stray live preview.
-    const remembered = opts?.branchKey ? await getBranchForKey(opts.branchKey) : undefined;
+    let remembered = opts?.branchKey ? await getBranchForKey(opts.branchKey) : undefined;
+    // Don't resurrect a remembered branch that no longer exists (e.g. the user
+    // manually deleted it, or it was promoted then deleted): start fresh instead.
+    // Only drop it when the Supervisor positively reports the branch is gone — a
+    // failed lookup keeps the resume so a transient blip doesn't fork a new branch.
+    if (remembered) {
+      const list = await supervisorBranches().catch(() => null);
+      const known = list && Array.isArray(list.branches) ? (list.branches as unknown[]).map(String) : null;
+      if (known && !known.includes(remembered)) remembered = undefined;
+    }
     let resume = remembered;
     if (opts?.interactive) {
       const st = await supervisorState().catch(() => null);
@@ -326,6 +335,26 @@ export async function runClaudeAgent(
       candidateBranch = begun && typeof begun.branch === "string" ? (begun.branch as string) : "";
       if (opts?.branchKey && candidateBranch) await setBranchForKey(opts.branchKey, candidateBranch);
       opts?.onEvent?.({ tool: "Supervisor: provision preview worktree", input: { worktree: wt, branch: candidateBranch } });
+    } else {
+      // Provisioning the isolated worktree FAILED. We must NOT fall back to editing
+      // the live checkout in place: under the Supervisor the running version is
+      // served from it (in dev, `next dev` hot-recompiles it), so in-place edits can
+      // crash the running BOS and pollute the base checkout (breaking Promote). Fail
+      // loudly with the reason instead of silently doing damage. (specs/005, 017)
+      const reason =
+        begun && typeof begun.error === "string" && begun.error
+          ? begun.error
+          : "the Supervisor did not return a preview worktree";
+      opts?.onEvent?.({ tool: "Supervisor: provision FAILED — change not applied", input: { reason } });
+      return {
+        agent: agent.name,
+        type: "claude",
+        task,
+        output: "",
+        steps: 0,
+        toolCalls: [],
+        error: `Could not provision an isolated preview worktree, so your change was NOT applied (refusing to edit the live version in place). Reason: ${reason}. Use Stop in the top bar to clear any stuck preview and try again; if it persists, restart the Supervisor.`,
+      };
     }
   }
   const result = await cliRun(agent, task, cwd, opts?.onEvent);
