@@ -147,7 +147,11 @@ function runOpenCodeCli(agent: Agent, task: string, cwd: string, onEvent?: OnEve
   if (agent.model) args.push("--model", agent.model);
 
   return new Promise<AgentRunResult>((resolve) => {
-    const child = spawn("opencode", args, { cwd, env: process.env });
+    // stdio[0]="ignore" is REQUIRED: `opencode run` reads stdin and blocks on its
+    // EOF when stdin is a non-TTY pipe (Node's spawn default), which would hang the
+    // harness forever. Closing stdin lets it proceed immediately. (Claude Code's
+    // `claude -p` doesn't read stdin, so runClaudeCli doesn't need this.)
+    const child = spawn("opencode", args, { cwd, env: process.env, stdio: ["ignore", "pipe", "pipe"] });
     const toolCalls: { tool: string; input: unknown }[] = [];
     const seenCalls = new Set<string>();
     // Text parts arrive as cumulative updates keyed by part id; last-write-wins per
