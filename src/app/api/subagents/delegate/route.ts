@@ -48,7 +48,11 @@ export async function POST(req: NextRequest) {
       const enc = new TextEncoder();
       const emit = (obj: unknown) => controller.enqueue(enc.encode(JSON.stringify(obj) + "\n"));
       try {
-        const result = await runSubAgent(agent, task, { onEvent: (ev) => emit({ type: "tool", ...ev }), contentOnly: body.contentOnly === true });
+        const result = await runSubAgent(agent, task, {
+          onEvent: (ev) => emit({ type: "tool", ...ev }),
+          contentOnly: body.contentOnly === true,
+          threadId: typeof body.threadId === "string" ? body.threadId : undefined,
+        });
         emit({ type: "done", result });
       } catch (err) {
         emit({ type: "error", error: (err as Error).message });

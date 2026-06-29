@@ -28,19 +28,25 @@ export function supervisorState(): Promise<Record<string, unknown> | null> {
   return call("state");
 }
 
-/** Files changed on the `next` candidate vs base (committed in its worktree), so
- *  the assistant's gitStatus can see a candidate even though the main checkout is
- *  clean. Returns null when not under the Supervisor. */
+/** Files changed on the preview vs base (committed in its worktree), so the
+ *  assistant's gitStatus can see a preview even though the main checkout is clean.
+ *  Returns null when not under the Supervisor. */
 export function supervisorNextChanges(): Promise<Record<string, unknown> | null> {
-  return call("next-changes");
+  return call("preview-changes");
 }
 
-/** Provision the `next` candidate worktree (+ data clone). Returns its path. */
-export function supervisorBegin(): Promise<Record<string, unknown> | null> {
-  return call("begin", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+/** Provision (or resume) the preview worktree (+ data clone). When `branch` is
+ *  given, that branch is checked out with its history (continuity / resume);
+ *  otherwise a fresh `bos/next-*` branch is created. Returns `{ branch, worktree }`. */
+export function supervisorBegin(branch?: string): Promise<Record<string, unknown> | null> {
+  return call("begin", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(branch ? { branch } : {}),
+  });
 }
 
-/** Build + health-gate the candidate. */
+/** Build + health-gate the preview. */
 export function supervisorBuild(): Promise<Record<string, unknown> | null> {
   return call("build", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
 }

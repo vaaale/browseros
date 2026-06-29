@@ -2,11 +2,13 @@
 // BrowserOS Supervisor — the stable control plane for live version control
 // (specs/005-self-modification/spec.md, run-model A).
 //
-// It owns the PUBLIC port and reverse-proxies to internal `next` instances
-// (active / next / previous), each launched from its own git worktree on its
-// own port with its own BOS_DATA_DIR. It serves the version-independent
-// /__supervisor control surface (state · preview-pin · promote · rollback ·
-// discard · push) so the running OS can be swapped safely.
+// It owns the PUBLIC port and reverse-proxies to internal `next start` instances:
+//  - BASE: the current promoted code, ALWAYS running on BASE_PORT.
+//  - PREVIEW: at most one feature branch being viewed, on a port drawn from a pool
+//    above BASE_PORT. Previews live in branch-named worktrees so the bookkeeping
+//    survives restarts and a branch can be resumed after a Stop.
+// It serves the version-independent /__supervisor control surface so the running
+// OS can be swapped safely.
 //
 // Standalone & dependency-light (Node built-ins only): the Supervisor is the
 // trusted kernel and is NOT itself self-modified. Run: `npm run supervisor`.
@@ -22,25 +24,26 @@ const exec = promisify(execFile);
 // ---------------------------------------------------------------- config
 const REPO = process.env.BOS_REPO || process.cwd();
 const PUBLIC_PORT = Number(process.env.BOS_PUBLIC_PORT || 8080);
-const PORT_BASE = Number(process.env.BOS_PORT_BASE || 3100);
-let baseBranch = process.env.BOS_BASE_BRANCH || "";             // resolved to current branch at startup
+const BASE_PORT = Number(process.env.BOS_PORT_BASE || 3000);
+// Number of preview ports available ABOVE the base port: BASE_PORT+1 .. BASE_PORT+POOL_SIZE.
+const POOL_SIZE = Number(process.env.BOS_PORT_POOL_SIZE || 20);
+let baseBranch = process.env.BOS_BASE_BRANCH || "";             // resolved to REPO's current branch at startup
 const WORKTREES = process.env.BOS_WORKTREES || path.join(path.dirname(REPO), "bos-worktrees");
 const CANONICAL_DATA = process.env.BOS_CANONICAL_DATA || path.join(REPO, "data");
 const CLONES = process.env.BOS_DATA_CLONES || path.join(path.dirname(REPO), "bos-data-clones");
 const PUSH_MODE = process.env.BOS_PUSH_MODE || "manual";        // manual | auto-on-promote
 const REMOTE = process.env.BOS_REMOTE || "origin";
 const HEALTH_TIMEOUT_MS = Number(process.env.BOS_HEALTH_TIMEOUT_MS || 120_000);
-// Reuse an already-running server as `active` (dev convenience / testing).
-const REUSE_ACTIVE_PORT = process.env.BOS_ACTIVE_REUSE_PORT ? Number(process.env.BOS_ACTIVE_REUSE_PORT) : null;
-const PORTS = { active: PORT_BASE, previous: PORT_BASE + 1, next: PORT_BASE + 2 };
+// Reuse an already-running server as BASE (dev convenience / testing).
+const REUSE_BASE_PORT = process.env.BOS_ACTIVE_REUSE_PORT ? Number(process.env.BOS_ACTIVE_REUSE_PORT) : null;
 const PIN_COOKIE = "bos_pin";
 
 // Apps content repo (GitFS) — versioned user apps, a standalone repo independent
 // of BOS source. App candidates are git BRANCHES here (not worktrees + a second
-// server): the active BOS serves the apps repo's working tree, so checking out
-// the candidate branch makes the in-progress app visible ("branch-live" preview),
-// promote merges it to the base branch, discard drops it. This is orthogonal to
-// the BOS-code candidate flow above and needs no extra port/proxy.
+// server): the base BOS serves the apps repo's working tree, so checking out the
+// candidate branch makes the in-progress app visible ("branch-live" preview),
+// promote merges it to the base branch, discard drops it. Orthogonal to the
+// BOS-code preview flow above and needs no extra port/proxy.
 const APPS_REPO = process.env.BOS_APPS_DIR || path.join(REPO, "apps");
 const APP_CANDIDATE_BRANCH = "app-candidate";
 const GIT_IDENTITY = ["-c", "user.name=BrowserOS", "-c", "user.email=bos@localhost"];
@@ -50,23 +53,47 @@ let appCandidate = null;
 const log = (...a) => console.log("[supervisor]", ...a);
 
 // ---------------------------------------------------------------- version registry
-/** @typedef {{role:string,branch?:string,worktree?:string,dataDir?:string,port:number,state:string,proc?:import('node:child_process').ChildProcess|null,commit?:string,tag?:string,reused?:boolean,tests?:string}} Version */
-/** @type {{active:Version|null, next:Version|null, previous:Version|null}} */
-const versions = { active: null, next: null, previous: null };
+// Only two roles: the always-on BASE (a singleton, a detached worktree at the base
+// commit so it never conflicts with REPO's own checkout of baseBranch) and at most
+// one PREVIEW (a feature branch in a branch-named worktree).
+/** @typedef {{role:string,branch?:string,worktree?:string,dataDir?:string,port:number,state:string,proc?:import('node:child_process').ChildProcess|null,commit?:string,reused?:boolean}} Version */
+/** @type {Version|null} */ let base = null;
+/** @type {Version|null} */ let preview = null;
 
-// Resolve a version's branch live from its working dir so renames, merges, and
-// branch switches are reflected in the UI rather than the value captured when
-// the version was first registered. The reused active serves from the main repo
-// (no worktree); worktree-backed versions resolve from their own worktree.
+function worktreePath(branch) { return path.join(WORKTREES, branch); }
+function clonePath(branch) { return path.join(CLONES, branch); }
+function newPreviewBranch() { return `bos/next-${Date.now().toString(36)}`; }
+function tagStamp() {
+  const d = new Date();
+  const z = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())}-${z(d.getHours())}_${z(d.getMinutes())}_${z(d.getSeconds())}`;
+}
+
+// Lowest free preview port in (BASE_PORT, BASE_PORT+POOL_SIZE]. Skips ports held by
+// a tracked version or anything foreign already listening (probe-before-bind).
+async function allocPreviewPort() {
+  const used = new Set();
+  if (base?.port) used.add(base.port);
+  if (preview?.port) used.add(preview.port);
+  for (let p = BASE_PORT + 1; p <= BASE_PORT + POOL_SIZE; p++) {
+    if (used.has(p)) continue;
+    if (await probeOnce(p)) continue;
+    return p;
+  }
+  throw new Error(`no free preview port in pool ${BASE_PORT + 1}-${BASE_PORT + POOL_SIZE}`);
+}
+
+// Resolve a version's branch live from its working dir so renames/merges are
+// reflected rather than the value captured at registration.
 async function liveBranch(v) {
   if (!v) return undefined;
   return (await gitTry(["rev-parse", "--abbrev-ref", "HEAD"], v.worktree || REPO)) || v.branch;
 }
 async function publicState() {
   const pick = async (v) =>
-    v ? { role: v.role, branch: await liveBranch(v), port: v.port, state: v.state, commit: v.commit, tag: v.tag, tests: v.tests, reused: !!v.reused } : null;
-  const [active, next, previous] = await Promise.all([pick(versions.active), pick(versions.next), pick(versions.previous)]);
-  return { active, next, previous, appCandidate, pushMode: PUSH_MODE, baseBranch };
+    v ? { role: v.role, branch: await liveBranch(v), port: v.port, state: v.state, commit: v.commit, reused: !!v.reused } : null;
+  const [b, p] = await Promise.all([pick(base), pick(preview)]);
+  return { base: b, preview: p, appCandidate, pushMode: PUSH_MODE, baseBranch };
 }
 
 // ---------------------------------------------------------------- git
@@ -104,17 +131,6 @@ async function provisionClone(target) {
 }
 
 // ---------------------------------------------------------------- worktree + process lifecycle
-async function ensureWorktree(role, commit) {
-  const wt = path.join(WORKTREES, role);
-  await gitTry(["worktree", "remove", "--force", wt]);
-  await fs.rm(wt, { recursive: true, force: true }).catch(() => {});
-  const branch = `bos/${role}-${Date.now().toString(36)}`;
-  await fs.mkdir(WORKTREES, { recursive: true });
-  await git(["worktree", "add", "-b", branch, wt, commit]);
-  await hydrateWorktree(wt);
-  return { wt, branch };
-}
-
 // Worktrees don't get node_modules (gitignored). A symlink is rejected by
 // Turbopack ("points out of the filesystem root"), so hardlink-clone the repo's
 // node_modules into the worktree — cheap on the same filesystem (shared inodes),
@@ -131,26 +147,59 @@ async function hydrateWorktree(wt) {
   }
 }
 
-// Check out an EXISTING branch into the `next` worktree (vs ensureWorktree, which
-// creates a fresh bos/<role>-* branch off a commit). Used to serve an arbitrary
-// branch selected from the toolbar's branch dropdown.
-async function ensureWorktreeForBranch(branch) {
-  const wt = path.join(WORKTREES, "next");
+// Create/replace the BASE worktree: detached at `commit` so it never conflicts with
+// REPO's own checkout of baseBranch. Fixed location (base is a singleton).
+async function addBaseWorktree(commit) {
+  const wt = path.join(WORKTREES, "base");
   await gitTry(["worktree", "remove", "--force", wt]);
   await fs.rm(wt, { recursive: true, force: true }).catch(() => {});
   await fs.mkdir(WORKTREES, { recursive: true });
+  await git(["worktree", "add", "--detach", wt, commit]);
+  await hydrateWorktree(wt);
+  return wt;
+}
+
+// Create/replace a worktree for an EXISTING branch at WORKTREES/<branch>. Branch
+// names may contain '/', kept as nested dirs (git ref rules forbid foo AND foo/bar
+// at once, so no path collision); mkdir the parent.
+async function addWorktreeForBranch(branch) {
+  const wt = worktreePath(branch);
+  await gitTry(["worktree", "remove", "--force", wt]);
+  await fs.rm(wt, { recursive: true, force: true }).catch(() => {});
+  await fs.mkdir(path.dirname(wt), { recursive: true });
   await git(["worktree", "add", wt, branch]);
   await hydrateWorktree(wt);
-  return { wt, branch };
+  return wt;
 }
 
 function startProc(v) {
   v.proc = spawn("npx", ["next", "start", "-p", String(v.port)], {
     cwd: v.worktree,
-    env: { ...process.env, PORT: String(v.port), BOS_DATA_DIR: v.dataDir, BOS_VERSION_LABEL: v.role },
+    // BOS_CANONICAL_DATA lets a version persist cross-version state (e.g. the
+    // conversation→branch map) to canonical data even when it runs on a throwaway
+    // preview clone, so it survives Stop/promote.
+    env: { ...process.env, PORT: String(v.port), BOS_DATA_DIR: v.dataDir, BOS_CANONICAL_DATA: CANONICAL_DATA, BOS_VERSION_LABEL: v.role },
     stdio: "inherit",
   });
-  v.proc.on("exit", (code) => log(`version "${v.role}" process exited (${code})`));
+  v.proc.on("exit", (code) => {
+    log(`version "${v.role}" (${v.branch}) process exited (${code})`);
+    // An unexpected death of a running version must not keep routing traffic to a
+    // dead port — mark it so pinnedVersion falls back to base.
+    if (v.state === "ready") v.state = "stopped";
+  });
+}
+
+// Stop a version's server and RESOLVE ONLY AFTER it has actually exited, so the
+// port is free to rebind (critical when reusing the base port on promote). SIGKILL
+// escalation guards against a process that ignores SIGTERM.
+function stopProc(v) {
+  return new Promise((resolve) => {
+    const p = v?.proc;
+    if (!p || p.killed || p.exitCode !== null || p.signalCode) { if (v) v.proc = null; return resolve(); }
+    p.once("exit", () => { v.proc = null; resolve(); });
+    try { p.kill("SIGTERM"); } catch { v.proc = null; return resolve(); }
+    setTimeout(() => { try { if (p.exitCode === null && !p.signalCode) p.kill("SIGKILL"); } catch { /* ignore */ } }, 5000);
+  });
 }
 
 async function waitHealthy(port) {
@@ -171,217 +220,215 @@ async function waitHealthy(port) {
   return false;
 }
 
-/** Build a candidate worktree (own .next), start it, and health-gate it. */
+// Build a preview worktree (commit its edits onto the feature branch so a later
+// promote can fast-forward them), (re)start it, and health-gate it. Stops any
+// existing server for this version FIRST so a rebuild never collides on its port.
 async function buildAndStart(v) {
-  // Commit the worktree's changes onto the candidate branch so a later promote
-  // can fast-forward them into the base branch — the agent's edits live in the
-  // worktree's working tree, and without a commit there's nothing to merge.
+  await stopProc(v);
   await git(["add", "-A"], v.worktree).catch(() => {});
-  await git(["commit", "-m", `BOS candidate (${v.role})`], v.worktree).catch(() => {});
+  await git(["commit", "-m", `BOS candidate (${v.branch})`], v.worktree).catch(() => {});
   v.commit = await git(["rev-parse", "HEAD"], v.worktree).catch(() => v.commit);
   v.state = "building";
-  log(`building ${v.role} @ ${v.worktree} (commit ${String(v.commit).slice(0, 8)})`);
+  log(`building ${v.branch} @ ${v.worktree} (commit ${String(v.commit).slice(0, 8)})`);
   await exec("npm", ["run", "build"], { cwd: v.worktree, env: process.env, maxBuffer: 32 * 1024 * 1024, timeout: 600_000 });
   startProc(v);
   v.state = (await waitHealthy(v.port)) ? "ready" : "failed";
-  log(`${v.role} → ${v.state}`);
+  log(`${v.branch} → ${v.state}`);
   return v.state;
 }
 
-function stopProc(v) {
-  if (v?.proc && !v.proc.killed) { try { v.proc.kill("SIGTERM"); } catch { /* ignore */ } }
+// Build + start BASE from a detached worktree at `commit` (no commit step — base is
+// not a candidate branch). Runs against canonical data.
+async function buildAndStartBase(commit) {
+  const wt = await addBaseWorktree(commit);
+  base = { role: "base", branch: baseBranch, worktree: wt, dataDir: CANONICAL_DATA, port: BASE_PORT, state: "building", proc: null, commit };
+  log(`building base (${baseBranch} @ ${commit.slice(0, 8)})`);
+  await exec("npm", ["run", "build"], { cwd: wt, env: process.env, maxBuffer: 32 * 1024 * 1024, timeout: 600_000 });
+  startProc(base);
+  base.state = (await waitHealthy(BASE_PORT)) ? "ready" : "failed";
+  log(`base → ${base.state}`);
+  return base.state;
 }
 
 // Predict whether the candidate can be rebased onto base WITHOUT touching the
-// worktree (so a conflict leaves the running candidate previewable). Returns null
-// when the 3-way merge applies cleanly, else the conflict report (which files).
-async function mergeTreeConflicts(cwd, base) {
-  const mb = await gitTry(["merge-base", base, "HEAD"], cwd);
+// worktree (so a conflict leaves the running preview intact). Returns null when the
+// 3-way merge applies cleanly, else the conflict report (which files).
+async function mergeTreeConflicts(cwd, ref) {
+  const mb = await gitTry(["merge-base", ref, "HEAD"], cwd);
   if (!mb) return null; // no common base resolvable — let the rebase itself decide
   try {
-    await exec("git", ["merge-tree", "--write-tree", `--merge-base=${mb}`, base, "HEAD"], { cwd, maxBuffer: 8 * 1024 * 1024 });
+    await exec("git", ["merge-tree", "--write-tree", `--merge-base=${mb}`, ref, "HEAD"], { cwd, maxBuffer: 8 * 1024 * 1024 });
     return null; // exit 0 = clean
   } catch (e) {
-    // Non-zero exit = conflicts; merge-tree prints the conflicted paths/info.
     const out = `${String(e.stdout || "")}\n${String(e.stderr || "")}`.trim();
     return out || "merge conflicts (manual resolution required)";
   }
 }
 
-// Refresh a stale candidate onto a base that moved under it: rebase its worktree
-// onto base, then REBUILD + re-health-gate so a later FF-promote serves built+tested
-// code (not the stale build). Caller has confirmed a clean merge via
-// mergeTreeConflicts; the rebase still has an abort safety net. Runs in the
-// background (build is slow) — sets v.state building→ready|failed for the toolbar.
-async function refreshCandidateOntoBase(v) {
-  stopProc(v);
-  v.proc = null;
-  v.state = "building";
-  log(`refresh: rebasing ${v.branch} onto ${baseBranch}`);
-  try {
-    await git(["rebase", baseBranch], v.worktree);
-  } catch (e) {
-    await gitTry(["rebase", "--abort"], v.worktree);
-    v.state = "failed";
-    throw new Error(`auto-rebase of ${v.branch} onto ${baseBranch} failed: ${e.message || e}`);
-  }
-  await buildAndStart(v); // (re)commit is a no-op after a clean rebase; build + health-gate
-  log(`refresh: ${v.branch} → ${v.state}`);
-}
-
 // ---------------------------------------------------------------- operations
-/** Provision a fresh `next` candidate worktree (off active's HEAD) + data clone. */
-async function beginNext() {
-  // Idempotent: reuse an existing candidate instead of tearing it down. Repeated
-  // dev runs accumulate into the same `next`; Discard/Promote clears it so the
-  // next task starts fresh. (Prevents wiping a candidate you're previewing.)
-  if (versions.next) {
-    log(`begin: reusing existing candidate ${versions.next.branch}`);
-    return versions.next;
+// Provision (or resume) a PREVIEW for `branch`: branch-named worktree + data clone +
+// a pooled port. An existing branch is checked out with its committed history
+// (continuity after a Stop or restart); a missing one is created off base. Does NOT
+// build — the developer agent edits the worktree, then /build runs.
+async function provisionPreview(branch) {
+  if (!branch || branch === baseBranch) return null;
+  if (preview && preview.branch !== branch) await dropPreview(); // one preview at a time (kill-on-switch)
+  const exists = await gitTry(["rev-parse", "--verify", `refs/heads/${branch}`]);
+  if (!exists) {
+    const from = base?.commit || (await git(["rev-parse", "HEAD"]));
+    await git(["branch", branch, from]);
   }
-  const commit = versions.active?.commit || (await git(["rev-parse", "HEAD"]));
-  const { wt, branch } = await ensureWorktree("next", commit);
-  const clone = path.join(CLONES, "next");
+  const wt = await addWorktreeForBranch(branch);
+  const clone = clonePath(branch);
   await provisionClone(clone);
-  versions.next = { role: "next", branch, worktree: wt, dataDir: clone, port: PORTS.next, state: "idle", proc: null, commit };
-  log(`begin: next worktree ${branch} @ ${commit.slice(0, 8)}`);
-  return versions.next;
+  const port = await allocPreviewPort();
+  preview = { role: "preview", branch, worktree: wt, dataDir: clone, port, state: "idle", proc: null, commit: await gitTry(["rev-parse", "HEAD"], wt) };
+  log(`preview ${branch} provisioned on port ${port}`);
+  return preview;
 }
 
-/** Promote `next` → active: git ff-merge into the base branch, tag, optional push,
- *  restart on canonical data (code-only), flip routing, retain previous, drain. */
-async function promote() {
-  const cand = versions.next;
-  if (!cand) throw new Error("no candidate to promote");
-  if (cand.state === "idle" || cand.state === "building") {
-    throw new Error(`candidate ${cand.branch} is still building — Promote will be available when it is ready.`);
-  }
-  if (cand.state !== "ready") throw new Error(`candidate ${cand.branch} is not promotable (state: ${cand.state}).`);
-  const candCommit = await git(["rev-parse", "HEAD"], cand.worktree);
+// Stop + clean the current preview (kill its server, remove its worktree + data
+// clone). The BRANCH is intentionally left intact so the work can be resumed later.
+async function dropPreview() {
+  if (!preview) return;
+  const p = preview;
+  preview = null;
+  await stopProc(p);
+  await gitTry(["worktree", "remove", "--force", p.worktree]);
+  await fs.rm(p.dataDir, { recursive: true, force: true }).catch(() => {});
+  log(`dropped preview ${p.branch} (branch kept)`);
+}
 
-  // The base checkout (REPO) must be clean: promote runs `git checkout base` +
-  // `git merge --ff-only` here; an in-place edit (e.g. an agent editing the main
-  // checkout instead of the candidate worktree) leaves it dirty and the merge
-  // aborts with "local changes would be overwritten".
+// /begin — provision (or resume) the preview worktree for the developer agent.
+// Reuses the current preview when the branch matches (or none is given, e.g. an
+// agent iterating mid-session) so its uncommitted edits aren't wiped.
+async function beginPreview(branch) {
+  if (preview && (!branch || preview.branch === branch)) return preview;
+  return await provisionPreview(branch || newPreviewBranch());
+}
+
+async function buildPreview() {
+  if (!preview) throw new Error("no preview to build");
+  return await buildAndStart(preview);
+}
+
+// Toolbar branch selection. Base → drop any preview, back to base. An already-ready
+// preview of the same branch → just (re)pin (no rebuild). Otherwise provision +
+// build in the background; the pin only routes once it reports ready.
+async function activate(branch) {
+  if (!branch || branch === baseBranch) { await dropPreview(); return { base: true }; }
+  if (preview && preview.branch === branch && preview.state === "ready") return { branch, state: "ready" };
+  await beginPreview(branch);
+  void buildPreview().catch((e) => { if (preview) preview.state = "failed"; log(`activate build failed: ${e.message || e}`); });
+  return { branch, state: "building" };
+}
+
+// Promote the preview to BASE. Safe ordering: do every fallible step (rebase, build,
+// off-port health-gate) while base still serves; only AFTER the new code is healthy
+// on the base port do we advance the base branch ref + tag (the point of no return).
+// A failure before that leaves the base branch untouched and restores the old base.
+async function promote() {
+  const cand = preview;
+  if (!cand) throw new Error("no preview to promote");
+  if (cand.state !== "ready") throw new Error(`preview ${cand.branch} is not ready (state: ${cand.state}).`);
+
   const dirty = await gitTry(["status", "--porcelain"], REPO);
   if (dirty) {
-    throw new Error(
-      `base checkout (${REPO}) has uncommitted changes — commit, stash, or discard them before promoting:\n${dirty}`,
-    );
+    throw new Error(`base checkout (${REPO}) has uncommitted changes — commit, stash, or discard them before promoting:\n${dirty}`);
   }
 
-  // Promote escalation (005-self-modification): prefer a fast-forward; if the base
-  // moved under the candidate, auto-refresh (rebase onto base → rebuild → re-gate)
-  // so a second Promote is a clean FF of built+tested code; if the rebase would
-  // conflict, report the files for manual resolution (the in-browser 3-way merge is
-  // a deferred capability). gitTry → "" when baseBranch is an ancestor of candCommit
-  // (FF-able), null when it is not.
-  if ((await gitTry(["merge-base", "--is-ancestor", baseBranch, candCommit], REPO)) === null) {
+  // 1) Make the preview a clean descendant of base, in its own worktree. FF: already
+  //    ahead → nothing to do. Non-FF: rebase onto base, then rebuild + re-gate.
+  if ((await gitTry(["merge-base", "--is-ancestor", baseBranch, "HEAD"], cand.worktree)) === null) {
     const conflicts = await mergeTreeConflicts(cand.worktree, baseBranch);
-    if (conflicts) {
-      throw new Error(`candidate ${cand.branch} can't be auto-rebased onto ${baseBranch} — manual merge required:\n${conflicts}`);
+    if (conflicts) throw new Error(`preview ${cand.branch} can't be auto-rebased onto ${baseBranch} — manual merge required:\n${conflicts}`);
+    await stopProc(cand);
+    try {
+      await git(["rebase", baseBranch], cand.worktree);
+    } catch (e) {
+      await gitTry(["rebase", "--abort"], cand.worktree);
+      throw new Error(`auto-rebase of ${cand.branch} onto ${baseBranch} failed: ${e.message || e}`);
     }
-    cand.state = "building"; // disable Promote immediately so a double-click can't start two refreshes
-    void refreshCandidateOntoBase(cand).catch((e) => log(`refresh failed: ${e.message || e}`));
-    throw new Error(`base "${baseBranch}" moved under candidate ${cand.branch}; rebasing onto ${baseBranch} and rebuilding — Promote again when it is ready.`);
+    const st = await buildAndStart(cand);
+    if (st !== "ready") throw new Error(`rebuilt preview ${cand.branch} failed its health check (state: ${st}); base unchanged.`);
+  }
+  const newCommit = await git(["rev-parse", "HEAD"], cand.worktree);
+
+  // 2) Swap on the base port: stop old base (await exit), start the candidate's code
+  //    on BASE_PORT against CANONICAL data, health-gate THERE.
+  const oldBase = base;
+  await stopProc(oldBase);
+  const swapped = { role: "base", branch: cand.branch, worktree: cand.worktree, dataDir: CANONICAL_DATA, port: BASE_PORT, state: "building", proc: null, commit: newCommit };
+  startProc(swapped);
+  if (!(await waitHealthy(BASE_PORT))) {
+    // Failure AFTER killing old base but BEFORE moving the base ref → restore old base.
+    await stopProc(swapped);
+    if (oldBase) { startProc(oldBase); await waitHealthy(oldBase.port); base = oldBase; }
+    throw new Error(`promote failed: ${cand.branch} did not become healthy on the base port; restored the previous base. The base branch was NOT moved.`);
   }
 
-  // Git integration: fast-forward the base branch to the candidate's commit.
+  // 3) Point of no return: fast-forward the base branch to the candidate, tag, push.
   await git(["checkout", baseBranch], REPO);
-  await git(["merge", "--ff-only", candCommit], REPO);
-  const tag = `bos/v${new Date().toISOString().replace(/[^0-9]/g, "").slice(0, 14)}`;
+  await git(["merge", "--ff-only", newCommit], REPO);
+  const tag = `bos/v${tagStamp()}`;
   await git(["tag", "-a", tag, "-m", `promote ${cand.branch}`], REPO);
-  if (PUSH_MODE === "auto-on-promote") {
-    await gitTry(["push", REMOTE, baseBranch, "--follow-tags"], REPO);
-  }
+  if (PUSH_MODE === "auto-on-promote") await gitTry(["push", REMOTE, baseBranch, "--follow-tags"], REPO);
 
-  // Code-only at the data layer: the new active runs the candidate's code but
-  // against the CANONICAL data dir (the preview clone is discarded). Restart the
-  // candidate worktree's server on canonical data.
-  stopProc(cand);
-  const newActive = { role: "active", branch: cand.branch, worktree: cand.worktree, dataDir: CANONICAL_DATA, port: PORTS.active, state: "ready", commit: candCommit, tag };
-  startProc(newActive);
-  await waitHealthy(newActive.port);
-
-  // Drain: keep the old active as `previous` (still serving in-flight) for rollback.
-  stopProc(versions.previous); // reap the older previous, if any
-  versions.previous = versions.active;
-  if (versions.previous) versions.previous.role = "previous";
-  versions.active = newActive;
-  // Discard the candidate's data clone (code-only promote).
+  // 4) Adopt the swapped server as base. Detach its worktree off the feature branch
+  //    (same commit → no file change, server keeps running) so the now-merged branch
+  //    can be deleted and base isn't sitting "on" a feature branch. Clean up.
+  base = swapped;
+  await stopProc(cand); // the preview's pool-port server is now redundant — reap it so it doesn't leak
+  await gitTry(["checkout", "--detach"], swapped.worktree);
+  base.branch = baseBranch;
+  if (oldBase?.worktree && oldBase.worktree !== swapped.worktree) await gitTry(["worktree", "remove", "--force", oldBase.worktree]);
   await fs.rm(cand.dataDir, { recursive: true, force: true }).catch(() => {});
-  versions.next = null;
-  log(`promoted ${cand.branch} → active (tag ${tag})`);
-  return { tag };
+  await gitTry(["branch", "-D", cand.branch]); // merged into base; clears the conversation's anchor (resolved by existence check)
+  preview = null;
+  log(`promoted ${cand.branch} → base (tag ${tag})`);
+  return { tag, branch: cand.branch };
 }
 
-/** Roll back to the retained previous version (instant drain-and-flip). */
-async function rollback() {
-  if (!versions.previous) throw new Error("no previous version to roll back to");
-  const reinstated = versions.previous;
-  reinstated.role = "active";
-  versions.previous = versions.active && versions.active !== reinstated ? versions.active : null;
-  if (versions.previous) versions.previous.role = "previous";
-  versions.active = reinstated;
-  log("rolled back to previous");
-  return { active: reinstated.branch };
-}
-
-/** Discard the current candidate (stop it, drop its worktree + data clone). */
-async function discard() {
-  const cand = versions.next;
-  if (!cand) return;
-  stopProc(cand);
-  await gitTry(["worktree", "remove", "--force", cand.worktree], REPO);
-  await fs.rm(cand.dataDir, { recursive: true, force: true }).catch(() => {});
-  versions.next = null;
-  log("discarded candidate");
-}
-
-/** Files changed on the `next` candidate vs the base branch. The agent's edits are
- *  COMMITTED in the candidate worktree (buildAndStart), so the main checkout looks
- *  clean — this surfaces the real change so the assistant's gitStatus isn't fooled
- *  into thinking nothing happened. */
-async function nextChanges() {
-  const cand = versions.next;
-  if (!cand) return { ok: true, candidate: null };
-  const raw = (await gitTry(["diff", "--name-status", `${baseBranch}...HEAD`], cand.worktree)) || "";
+// Files changed on the preview vs the base branch. The agent's edits are COMMITTED
+// in the preview worktree (buildAndStart), so the main checkout looks clean — this
+// surfaces the real change so the assistant's gitStatus isn't fooled.
+async function previewChanges() {
+  if (!preview) return { ok: true, candidate: null };
+  const raw = (await gitTry(["diff", "--name-status", `${baseBranch}...HEAD`], preview.worktree)) || "";
   const files = raw
     ? raw.split("\n").filter(Boolean).map((l) => {
         const tab = l.indexOf("\t");
         return tab < 0 ? { status: l.trim(), path: "" } : { status: l.slice(0, tab).trim(), path: l.slice(tab + 1) };
       })
     : [];
-  return { ok: true, candidate: { branch: await liveBranch(cand), base: baseBranch, state: cand.state, commit: cand.commit, files } };
+  return { ok: true, candidate: { branch: await liveBranch(preview), base: baseBranch, state: preview.state, commit: preview.commit, files } };
 }
 
-/** Branches selectable from the toolbar dropdown — real branches only, hiding
- *  the internal bos/* worktree branches the Supervisor creates. Base is always
- *  present so the active version is always selectable. */
+// All git branches for the toolbar dropdown (including bos/* feature branches, so an
+// orphaned preview from a previous run can be re-selected). Base is always present.
 async function listBranches() {
   const raw = (await gitTry(["branch", "--format=%(refname:short)"])) || "";
-  const branches = raw.split("\n").map((s) => s.trim()).filter((b) => b && !b.startsWith("bos/"));
+  const branches = raw.split("\n").map((s) => s.trim()).filter(Boolean);
   if (!branches.includes(baseBranch)) branches.unshift(baseBranch);
   return branches;
 }
 
-/** Activate a branch from the toolbar dropdown: base → drop any candidate and
- *  return to the active version; otherwise (re)provision `next` from that branch
- *  and build it in the background. handleControl pins the session via Set-Cookie;
- *  pinnedVersion only routes to it once the build reports ready. */
-async function activate(branch) {
-  await discard();
-  if (!branch || branch === baseBranch) return { base: true };
-  const { wt } = await ensureWorktreeForBranch(branch);
-  const clone = path.join(CLONES, "next");
-  await provisionClone(clone);
-  const v = {
-    role: "next", branch, worktree: wt, dataDir: clone, port: PORTS.next,
-    state: "building", proc: null, commit: await gitTry(["rev-parse", "HEAD"], wt),
-  };
-  versions.next = v;
-  void buildAndStart(v).catch((e) => { v.state = "failed"; log(`activate build failed: ${e.message || e}`); });
-  return { branch, state: "building" };
+// On startup, remove the Supervisor's own leftover worktrees from a previous run
+// (their processes died with the old supervisor). The BRANCHES survive, so an
+// orphaned preview stays selectable from the dropdown — this just prevents
+// `git worktree add` collisions and stale-port confusion.
+async function reconcileWorktrees() {
+  await gitTry(["worktree", "prune"]);
+  const list = (await gitTry(["worktree", "list", "--porcelain"])) || "";
+  for (const line of list.split("\n")) {
+    if (!line.startsWith("worktree ")) continue;
+    const wt = line.slice("worktree ".length).trim();
+    if (wt && wt !== REPO && wt.startsWith(WORKTREES)) {
+      await gitTry(["worktree", "remove", "--force", wt]);
+      await fs.rm(wt, { recursive: true, force: true }).catch(() => {});
+    }
+  }
+  await gitTry(["worktree", "prune"]);
 }
 
 // ---------------------------------------------------------------- app content candidate (GitFS)
@@ -394,9 +441,6 @@ async function ensureAppsRepo() {
   await git(["init", "-q"], APPS_REPO);
   await git([...GIT_IDENTITY, "commit", "--allow-empty", "-q", "-m", "init content repo"], APPS_REPO).catch(() => {});
 }
-
-/** Begin (or reuse) the app candidate: a branch in the apps repo, checked out so
- *  the active server serves it. Idempotent — repeated builds accumulate here. */
 async function appBegin() {
   await ensureAppsRepo();
   if (appCandidate) return appCandidate;
@@ -408,8 +452,6 @@ async function appBegin() {
   log(`app candidate begun on ${APP_CANDIDATE_BRANCH} (base ${base})`);
   return appCandidate;
 }
-
-/** Promote the app candidate: merge its branch into base, delete the branch. */
 async function appPromote() {
   if (!appCandidate) throw new Error("no app candidate to promote");
   const { base } = appCandidate;
@@ -420,8 +462,6 @@ async function appPromote() {
   log("app candidate promoted");
   return { promoted: true };
 }
-
-/** Discard the app candidate: return to base and drop the branch (app gone). */
 async function appDiscard() {
   if (!appCandidate) return { discarded: false };
   const { base } = appCandidate;
@@ -432,7 +472,6 @@ async function appDiscard() {
   return { discarded: true };
 }
 
-/** Push the canonical base branch + tags to the remote (manual action). */
 async function pushNow() {
   await git(["push", REMOTE, baseBranch, "--follow-tags"], REPO);
   return { pushed: baseBranch };
@@ -448,19 +487,14 @@ function parseCookies(req) {
   return out;
 }
 
-// Resolve which running version this request should be served by. The pin cookie
-// holds either a role ("next"/"previous", set by the /__supervisor control page)
-// or a branch name (set when a branch is activated from the toolbar dropdown). A
-// pin is only honored while its version is "ready"; otherwise we fall back to
-// active so a still-building candidate never serves 502s to a pinned session.
+// Resolve which running version serves this request. The pin cookie holds "preview"
+// or a branch name; it is only honored while the preview is "ready" (a still-
+// building or dead preview falls back to base, never a 502).
 function pinnedVersion(req) {
   const pin = parseCookies(req)[PIN_COOKIE];
-  if (!pin || pin === "active") return versions.active;
-  if (versions[pin] && versions[pin].state === "ready") return versions[pin];
-  for (const v of [versions.next, versions.previous, versions.active]) {
-    if (v && v.state === "ready" && v.branch === pin) return v;
-  }
-  return versions.active;
+  if (!pin || pin === "base") return base;
+  if (preview && preview.state === "ready" && (pin === "preview" || preview.branch === pin)) return preview;
+  return base;
 }
 
 function readBody(req) {
@@ -488,7 +522,7 @@ function proxyTo(port, req, res) {
       `<!doctype html><meta charset="utf-8"><body style="font:14px system-ui;background:#0f1117;color:#e8eaf0;padding:40px;line-height:1.6">` +
         `<h2>This BrowserOS version isn't responding</h2>` +
         `<p>The Supervisor could not reach the upstream on port ${port}: <code>${e.message}</code>.</p>` +
-        `<p>In <b>reuse</b> mode the active version proxies to an existing server — make sure <code>npm run dev</code> is running on that port. ` +
+        `<p>In <b>reuse</b> mode base proxies to an existing server — make sure <code>npm run dev</code> is running on that port. ` +
         `Or use <b>full</b> mode (omit <code>BOS_ACTIVE_REUSE_PORT</code>) so the Supervisor builds and serves it.</p>` +
         `<p>Control surface: <a href="/__supervisor" style="color:#a9c4ff">/__supervisor</a></p></body>`,
     );
@@ -505,13 +539,13 @@ function probeOnce(port) {
 }
 
 async function handleControl(req, res, sub) {
-  if (req.method === "GET" && (sub === "" || sub === "state" || sub === "branches" || sub === "next-changes")) {
+  if (req.method === "GET" && (sub === "" || sub === "state" || sub === "branches" || sub === "preview-changes" || sub === "next-changes")) {
     if (sub === "") { res.writeHead(200, { "Content-Type": "text/html" }); res.end(controlPage()); return; }
     if (sub === "branches") return sendJson(res, { ok: true, branches: await listBranches(), base: baseBranch });
-    if (sub === "next-changes") return sendJson(res, await nextChanges());
+    if (sub === "preview-changes" || sub === "next-changes") return sendJson(res, await previewChanges());
     // state — include which version THIS session is being served (the pin cookie),
-    // so the toolbar can tell "you're viewing the candidate" from "a candidate
-    // exists but you're still on active".
+    // so the toolbar can tell "you're viewing the preview" from "a preview exists
+    // but you're still on base".
     const st = await publicState();
     const sv = pinnedVersion(req);
     return sendJson(res, { ...st, serving: sv ? { role: sv.role, branch: await liveBranch(sv) } : null });
@@ -520,19 +554,21 @@ async function handleControl(req, res, sub) {
   const clearPin = { "Set-Cookie": `${PIN_COOKIE}=; Path=/; Max-Age=0` };
   try {
     if (sub === "pin" && req.method === "POST") {
-      const role = String(body.version || "active");
-      if (role === "active" || (versions[role] && versions[role].state === "ready")) {
-        const clear = role === "active";
-        return sendJson(res, { ok: true, pinned: role }, 200, {
-          "Set-Cookie": clear ? `${PIN_COOKIE}=; Path=/; Max-Age=0` : `${PIN_COOKIE}=${role}; Path=/; HttpOnly`,
-        });
+      const v = String(body.version || "base");
+      if (v === "base") return sendJson(res, { ok: true, pinned: "base" }, 200, clearPin);
+      if (preview && preview.state === "ready" && (v === "preview" || preview.branch === v)) {
+        return sendJson(res, { ok: true, pinned: v }, 200, { "Set-Cookie": `${PIN_COOKIE}=${encodeURIComponent(v)}; Path=/; HttpOnly` });
       }
-      return sendJson(res, { ok: false, error: `version "${role}" not previewable` }, 400);
+      return sendJson(res, { ok: false, error: `version "${v}" not previewable` }, 400);
     }
-    if (sub === "begin" && req.method === "POST") return sendJson(res, await beginNext().then((v) => ({ ok: true, branch: v.branch, worktree: v.worktree })));
+    if (sub === "begin" && req.method === "POST") {
+      const branch = body.branch ? String(body.branch) : undefined;
+      const v = await beginPreview(branch);
+      return sendJson(res, { ok: true, branch: v.branch, worktree: v.worktree });
+    }
     if (sub === "build" && req.method === "POST") {
-      if (!versions.next) return sendJson(res, { ok: false, error: "no candidate" }, 400);
-      return sendJson(res, { ok: true, state: await buildAndStart(versions.next) });
+      if (!preview) return sendJson(res, { ok: false, error: "no preview" }, 400);
+      return sendJson(res, { ok: true, state: await buildPreview() });
     }
     if (sub === "activate" && req.method === "POST") {
       const branch = String(body.branch || "");
@@ -543,8 +579,8 @@ async function handleControl(req, res, sub) {
       return sendJson(res, { ok: true, ...result }, 200, cookie);
     }
     if (sub === "promote" && req.method === "POST") return sendJson(res, { ok: true, ...(await promote()) }, 200, clearPin);
-    if (sub === "rollback" && req.method === "POST") return sendJson(res, { ok: true, ...(await rollback()) }, 200, clearPin);
-    if (sub === "discard" && req.method === "POST") { await discard(); return sendJson(res, { ok: true }, 200, clearPin); }
+    // discard / stop are the same action now: kill + clean the preview, back to base.
+    if ((sub === "discard" || sub === "stop") && req.method === "POST") { await dropPreview(); return sendJson(res, { ok: true }, 200, clearPin); }
     if (sub === "app-begin" && req.method === "POST") return sendJson(res, { ok: true, ...(await appBegin()) });
     if (sub === "app-promote" && req.method === "POST") return sendJson(res, { ok: true, ...(await appPromote()) });
     if (sub === "app-discard" && req.method === "POST") return sendJson(res, { ok: true, ...(await appDiscard()) });
@@ -564,15 +600,13 @@ button:hover{background:#262a35}pre{background:#0b0d12;border:1px solid #2a2d36;
 <h1>BrowserOS Supervisor</h1>
 <p>Version-independent control surface. Always reachable even if a BOS version's UI is broken.</p>
 <div class="row">
-  <button onclick="act('pin',{version:'next'})">Preview next</button>
-  <button onclick="act('pin',{version:'previous'})">Preview previous</button>
-  <button onclick="act('pin',{version:'active'})">Back to active</button>
+  <button onclick="act('pin',{version:'preview'})">Preview</button>
+  <button onclick="act('pin',{version:'base'})">Back to base</button>
 </div>
 <div class="row">
-  <button onclick="act('build')">Build candidate</button>
+  <button onclick="act('build')">Build preview</button>
   <button onclick="act('promote')">Promote</button>
-  <button onclick="act('rollback')">Rollback</button>
-  <button onclick="act('discard')">Discard</button>
+  <button onclick="act('discard')">Stop / discard</button>
   <button onclick="act('push')">Push to remote</button>
   <button onclick="refresh()">Refresh</button>
 </div>
@@ -587,18 +621,16 @@ refresh();
 // ---------------------------------------------------------------- main
 async function main() {
   if (!baseBranch) baseBranch = await git(["rev-parse", "--abbrev-ref", "HEAD"]);
+  await reconcileWorktrees();
 
-  if (REUSE_ACTIVE_PORT) {
-    versions.active = { role: "active", port: REUSE_ACTIVE_PORT, state: "ready", reused: true, branch: baseBranch, commit: await gitTry(["rev-parse", "HEAD"]) };
-    log(`reusing existing server on :${REUSE_ACTIVE_PORT} as active (dev mode)`);
-    if (!(await probeOnce(REUSE_ACTIVE_PORT))) {
-      log(`WARNING: nothing is responding on :${REUSE_ACTIVE_PORT}. Reuse mode proxies the active version there — start \`npm run dev\` on :${REUSE_ACTIVE_PORT} first, or omit BOS_ACTIVE_REUSE_PORT so the Supervisor builds + serves active itself.`);
+  if (REUSE_BASE_PORT) {
+    base = { role: "base", port: REUSE_BASE_PORT, state: "ready", reused: true, branch: baseBranch, commit: await gitTry(["rev-parse", "HEAD"]) };
+    log(`reusing existing server on :${REUSE_BASE_PORT} as base (dev mode)`);
+    if (!(await probeOnce(REUSE_BASE_PORT))) {
+      log(`WARNING: nothing is responding on :${REUSE_BASE_PORT}. Reuse mode proxies base there — start \`npm run dev\` on :${REUSE_BASE_PORT} first, or omit BOS_ACTIVE_REUSE_PORT so the Supervisor builds + serves base itself.`);
     }
   } else {
-    const commit = await git(["rev-parse", "HEAD"]);
-    const { wt, branch } = await ensureWorktree("active", commit);
-    versions.active = { role: "active", branch, worktree: wt, dataDir: CANONICAL_DATA, port: PORTS.active, state: "idle", commit };
-    await buildAndStart(versions.active);
+    await buildAndStartBase(await git(["rev-parse", "HEAD"]));
   }
 
   const server = http.createServer((req, res) => {
@@ -609,7 +641,7 @@ async function main() {
       return;
     }
     const port = pinnedVersion(req)?.port;
-    if (!port) { res.writeHead(502, { "Content-Type": "text/plain" }); res.end("No active version"); return; }
+    if (!port) { res.writeHead(502, { "Content-Type": "text/plain" }); res.end("No base version"); return; }
     proxyTo(port, req, res);
   });
 
@@ -638,7 +670,7 @@ async function main() {
     up.end();
   });
 
-  server.listen(PUBLIC_PORT, () => log(`listening on :${PUBLIC_PORT} (base branch: ${baseBranch}); control at /__supervisor`));
+  server.listen(PUBLIC_PORT, () => log(`listening on :${PUBLIC_PORT} (base branch: ${baseBranch}, base port: ${BASE_PORT}, preview pool: ${BASE_PORT + 1}-${BASE_PORT + POOL_SIZE}); control at /__supervisor`));
 }
 
 main().catch((e) => { console.error("[supervisor] fatal:", e); process.exit(1); });

@@ -81,7 +81,7 @@ async function runLocal(
 export async function runSubAgent(
   agent: Agent,
   task: string,
-  opts?: { onEvent?: (e: SubAgentEvent) => void; contentOnly?: boolean; depth?: number },
+  opts?: { onEvent?: (e: SubAgentEvent) => void; contentOnly?: boolean; depth?: number; threadId?: string },
 ): Promise<AgentRunResult> {
   if (agent.type === "claude") {
     // Development must be done by Claude — no local-provider fallback here.

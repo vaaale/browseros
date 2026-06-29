@@ -82,7 +82,7 @@ export function CopilotProvider({
         <AgentCapabilitiesProvider allow={allow}>
           <OSActions />
           <McpActions agentId={agentId} />
-          <SubAgentActions />
+          <SubAgentActions group={group} />
           <MemoryActions />
           <DevActions />
           <ConfigActions />

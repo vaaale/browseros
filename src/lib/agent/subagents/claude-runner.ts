@@ -2,7 +2,8 @@ import "server-only";
 import { spawn } from "node:child_process";
 import { connectMcpClient, extractText } from "@/lib/mcp/client";
 import { getHarnessConfig } from "@/lib/devharness/harness-config";
-import { supervisorEnabled, supervisorBegin, supervisorBuild } from "@/lib/devharness/supervisor";
+import { supervisorEnabled, supervisorState, supervisorBegin, supervisorBuild } from "@/lib/devharness/supervisor";
+import { getThreadBranch, setThreadBranch } from "@/lib/devharness/thread-branches";
 import { stageAll } from "@/lib/system/git";
 import type { McpServerConfig } from "@/lib/mcp/types";
 import type { Agent, AgentRunResult } from "./types";
@@ -172,7 +173,7 @@ async function runViaMcp(agent: Agent, task: string, server: McpServerConfig, on
 export async function runClaudeAgent(
   agent: Agent,
   task: string,
-  opts?: { onEvent?: OnEvent; contentOnly?: boolean },
+  opts?: { onEvent?: OnEvent; contentOnly?: boolean; threadId?: string },
 ): Promise<AgentRunResult> {
   const harness = await getHarnessConfig();
   if (harness.mode !== "cli") return runViaMcp(agent, task, harness.server, opts?.onEvent);
@@ -186,13 +187,23 @@ export async function runClaudeAgent(
   let provisioned = false;
   let candidateBranch = "";
   if (supervisorEnabled() && !opts?.contentOnly) {
-    const begun = await supervisorBegin();
+    // Resolve which feature branch to work on. "Previewed branch wins": if a preview
+    // is currently active, continue on it; otherwise resume the branch this
+    // conversation last worked on (survives a Stop that dropped the preview);
+    // otherwise begin a fresh branch. The conversation is then (re)anchored to the
+    // branch so a later "improve it" continues here.
+    const st = await supervisorState().catch(() => null);
+    const previewBranch =
+      st && st.preview && typeof st.preview === "object" ? (st.preview as { branch?: string }).branch : undefined;
+    const resume = previewBranch || (opts?.threadId ? await getThreadBranch(opts.threadId) : undefined);
+    const begun = await supervisorBegin(resume);
     const wt = begun && typeof begun.worktree === "string" ? (begun.worktree as string) : "";
     if (wt) {
       cwd = wt;
       provisioned = true;
       candidateBranch = begun && typeof begun.branch === "string" ? (begun.branch as string) : "";
-      opts?.onEvent?.({ tool: "Supervisor: provision next worktree", input: { worktree: wt, branch: candidateBranch } });
+      if (opts?.threadId && candidateBranch) await setThreadBranch(opts.threadId, candidateBranch);
+      opts?.onEvent?.({ tool: "Supervisor: provision preview worktree", input: { worktree: wt, branch: candidateBranch } });
     }
   }
   const result = await runClaudeCli(agent, task, cwd, opts?.onEvent);
@@ -208,8 +219,8 @@ export async function runClaudeAgent(
     result.output =
       (result.output || "") +
       (state === "ready"
-        ? `\n\n[candidate] Your changes are built as candidate ${brand} — this is NOT yet the active version the user sees. To view it: top-bar **Active ▾** → **Preview**; then **Promote** to make it active (or **Discard**). Do NOT re-apply the change to the main checkout.`
-        : `\n\n[candidate] Built candidate ${brand}, but its health check did not pass (state: ${state || "unknown"}); it is not active. Review before promoting.`);
+        ? `\n\n[candidate] Your changes are built as preview ${brand} — this is NOT yet the base version the user sees. To view it: top-bar **Base ▾** → **Preview**; then **Promote** to make it the base (or **Stop** to discard). Do NOT re-apply the change to the main checkout.`
+        : `\n\n[candidate] Built preview ${brand}, but its health check did not pass (state: ${state || "unknown"}); it is not the base. Review before promoting.`);
   }
   return result;
 }

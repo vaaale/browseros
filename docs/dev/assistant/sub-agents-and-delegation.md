@@ -96,10 +96,12 @@ the dev tools implicitly.
 
 `runClaudeAgent` integrates with live version control:
 
-- If served under the **Supervisor** and the task is **not** `contentOnly`, it calls
-  `supervisorBegin()` to provision the isolated `next` worktree (+ data clone),
-  points Claude's `cwd` there, runs, then calls `supervisorBuild()` to build +
-  health‑gate the candidate.
+- If served under the **Supervisor** and the task is **not** `contentOnly`, it
+  resolves the feature branch (**previewed branch wins** → the conversation's
+  remembered branch → fresh) and calls `supervisorBegin(branch)` to provision (or
+  **resume**) the isolated preview worktree (+ data clone), re‑anchors the branch to
+  the conversation (`thread-branches.ts`), points Claude's `cwd` there, runs, then
+  calls `supervisorBuild()` to build + health‑gate the preview.
 - **`contentOnly:true`** (e.g. generating an app's HTML — a *content* op) MUST NOT
   provision a code candidate; the result is installed via `installApp` onto the
   GitFS `app-candidate` branch instead.

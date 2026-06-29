@@ -1,8 +1,10 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import { useCopilotAction } from "@/components/agent/gated-action";
 import { encodeNested } from "@/lib/agent/nested-events";
 import { startDelegation, pushDelegationEvent, finishDelegation } from "@/lib/agent/subagent-events";
+import { useActiveConversationId, DEFAULT_GROUP } from "@/lib/agent/conversations";
 
 type Choice = "once" | "session" | "local";
 
@@ -17,7 +19,16 @@ interface DelegateResult {
 
 // Sub-agent delegation: list/create agents, delegate (existing or ephemeral),
 // and an elicitation card to approve a Claude agent for a non-dev task.
-export function SubAgentActions() {
+export function SubAgentActions({ group = DEFAULT_GROUP }: { group?: string }) {
+  // The active conversation id, read through a ref so the delegate handler always
+  // sends the CURRENT thread (not a stale closure value). It anchors a delegated
+  // dev task to this conversation's feature branch (continuity across Stop).
+  const threadId = useActiveConversationId(group);
+  const threadIdRef = useRef(threadId);
+  useEffect(() => {
+    threadIdRef.current = threadId;
+  }, [threadId]);
+
   useCopilotAction({
     name: "listSubAgents",
     description: "List available sub-agents (id, name, type local|claude, description) you can delegate to.",
@@ -80,7 +91,7 @@ export function SubAgentActions() {
         const res = await fetch("/api/subagents/delegate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ agent, task, ephemeral, contentOnly: contentOnly === true }),
+          body: JSON.stringify({ agent, task, ephemeral, contentOnly: contentOnly === true, threadId: threadIdRef.current }),
         });
         if (!res.ok) {
           finishDelegation(key, "");
