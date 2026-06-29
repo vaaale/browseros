@@ -47,8 +47,20 @@ function newId(): string {
   return "c-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 }
 
+function normalizeAgentId(agentId?: string): string | undefined {
+  if (typeof agentId !== "string") return undefined;
+  const trimmed = agentId.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
 function freshConversation(group: string, agentId?: string): Conversation {
-  return { id: newId(), title: DEFAULT_TITLE, createdAt: Date.now(), group, agentId };
+  const id = newId();
+  const normalized = normalizeAgentId(agentId);
+  // Build the object so `agentId` is OMITTED (not set to undefined) when absent,
+  // and present as a string when supplied. Keeps both runtime shape and JSON
+  // output unambiguous: no `"agentId": undefined` traps for spread/serializers.
+  const base: Conversation = { id, title: DEFAULT_TITLE, createdAt: Date.now(), group };
+  return normalized ? { ...base, agentId: normalized } : base;
 }
 
 function chatPath(id: string): string {
@@ -188,7 +200,17 @@ export async function newConversation(group: string = DEFAULT_GROUP, agentId?: s
     loaded: true,
   });
   try {
-    await writeConversationFile({ ...conv, messages: [] });
+    // Build the file object explicitly (no spread) so each persisted field is
+    // visible at this call site — guarantees `agentId` reaches disk when set.
+    const file: ConversationFile = {
+      id: conv.id,
+      title: conv.title,
+      createdAt: conv.createdAt,
+      group: conv.group,
+      messages: [],
+    };
+    if (conv.agentId) file.agentId = conv.agentId;
+    await writeConversationFile(file);
   } catch (err) {
     console.error("Failed to persist new conversation", err);
   }
