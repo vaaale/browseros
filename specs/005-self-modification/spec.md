@@ -10,7 +10,7 @@
 
 > Migrated from `spec/self-modification/self-modification.md` (the control plane). Pairs with `006-data-isolation` (data plane), `008-self-testing` (verify stage), `007-gitfs` (content candidates), and `003-self-improvement` (what source change to make).
 >
-> **Revised** for the port-pool model: a single always-on **base** + at most one **preview** (replacing the fixed `active`/`next`/`previous` triple), branch-named worktrees, kill-on-switch, safe-ordering promote, and one-conversation-↔-one-branch continuity. **Rollback is a deferred capability** — every promote is still tagged as the durable anchor for it.
+> **Revised** for the port-pool model: a single always-on **base** + at most one **preview** (replacing the fixed `active`/`next`/`previous` triple), branch-named worktrees, kill-on-switch, safe-ordering promote, and **branch-key → feature-branch continuity** (any caller — chat, workflow, or external integration — supplies a stable key to drive repeated development on one branch). **Rollback is a deferred capability** — every promote is still tagged as the durable anchor for it.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -36,11 +36,13 @@ The user pins their session to the preview, tests it end-to-end at the same URL,
 
 ### User Story 3 - Continuity across a Stop (Priority: P1)
 
-Stopping a preview kills + cleans it but **keeps its branch**; asking the assistant to keep improving "the thing we worked on" continues on the **same** feature branch (one conversation ↔ one branch; a currently-previewed branch wins).
+Stopping a preview kills + cleans it but **keeps its branch**; asking to keep improving "the thing we worked on" continues on the **same** feature branch. Work is anchored by an opaque **branch key** (a chat's conversation id, a workflow id, an external `gitlab-issue:1234`, …): an interactive chat lets a currently-previewed branch win first; a headless caller's key is authoritative.
 
 **Acceptance Scenarios**:
 
-1. **Given** a feature was worked on in a conversation and then Stopped, **When** the user asks the same conversation's assistant to improve it, **Then** the developer resumes the same feature branch rather than starting a new one.
+1. **Given** a feature was worked on under some branch key and then Stopped, **When** the same key delegates again, **Then** the developer resumes the same feature branch rather than starting a new one.
+2. **Given** a headless caller (workflow/integration) supplies a branch key while an unrelated preview happens to be live, **When** it delegates, **Then** it works on ITS key's branch and never adopts the live preview.
+3. **Given** a branch key whose branch was deleted by a promote, **When** that key delegates again, **Then** a fresh branch is provisioned off the new base (the anchor self-heals).
 
 ### User Story 4 - An un-brickable escape hatch (Priority: P2)
 
@@ -66,8 +68,9 @@ The Supervisor serves a version-independent control page that works even if a BO
 - **FR-007**: Promote MUST require a `ready` preview and a **clean base checkout**, failing early with an actionable, surfaced error otherwise. Promote uses **safe ordering**: (a) make the preview a clean descendant of base in its own worktree (fast-forward, else rebase + rebuild + re-health-gate, else surface conflicts); (b) stop the old base (awaiting exit), start the candidate's code on the base port against **canonical** data, and health-gate there — on failure, restore the previous base with the **base branch unmoved**; (c) only then fast-forward the base branch, create a mandatory annotated tag (`bos/v<yyyy-mm-dd-hh_mm_ss>`), push per `pushMode` (`manual` default | `auto-on-promote`), adopt the swapped server as base (detached off the now-merged branch, which is deleted). Promote is **code-only** (data clone discarded, canonical data carries forward).
 - **FR-008**: *(Deferred.)* Rollback is not implemented in this revision. Every promote MUST leave an annotated tag so a future rollback can restore a prior version via the provision→build→swap pipeline without rewriting pushed history.
 - **FR-009**: Stop MUST stop the preview (awaiting process exit), remove its worktree and data clone, and return the session to base; the preview's **branch is kept** (resumable). `stopProc` MUST await actual process exit so the base port can be safely rebound on promote.
-- **FR-010**: On-disk `data/` schema changes SHOULD be backward-compatible; the Supervisor MUST be immutable to self-modification; background jobs run on **base**; the harness runs sandboxed. The Supervisor MUST pass `BOS_CANONICAL_DATA` to every version so cross-version state (the conversation→branch map) persists to canonical data even from a preview's clone.
+- **FR-010**: On-disk `data/` schema changes SHOULD be backward-compatible; the Supervisor MUST be immutable to self-modification; background jobs run on **base**; the harness runs sandboxed. The Supervisor MUST pass `BOS_CANONICAL_DATA` to every version so cross-version state (the branch-key → branch map) persists to canonical data even from a preview's clone.
 - **FR-011**: A `self-modification` config namespace MUST expose public/base ports, preview pool size, worktrees location, base branch, `pushMode` + remote, tag scheme, and build/health timeouts; a **Versions** view lists base + preview state with Preview/Promote/Stop/Push.
+- **FR-012**: Repeated development MUST be anchorable to one feature branch via an opaque **branch key** supplied by the caller (conversation id, workflow id, external id such as `gitlab-issue:1234`), persisted in canonical data so it survives Stop/promote; a key whose branch was promoted-away MUST self-heal to a fresh branch off base. An **interactive** caller (a chat) MAY let a currently-previewed branch take precedence; a **headless** caller (workflow/integration) MUST be key-authoritative and MUST NOT adopt an unrelated live preview. The generic entry points are `POST /api/subagents/delegate` (`branchKey`, legacy alias `threadId`; optional `interactive`) and `POST /api/workflows/run` (`branchKey`, default `workflow:<id>`).
 
 ### Key Entities
 
@@ -76,7 +79,7 @@ The Supervisor serves a version-independent control page that works even if a BO
 - **Preview** — at most one feature-branch version on a pooled port, with a state machine (idle→building→ready|failed).
 - **Git tag** — durable ordered record of every promote (anchor for the deferred rollback).
 - **Preview pin** — per-session routing override.
-- **Conversation→branch map** — durable (canonical-data) anchor making one conversation continue on one feature branch.
+- **Branch-key → branch map** — durable (canonical-data) anchor (`thread-branches.ts`) making any stable key (conversation id, workflow id, external issue id, …) continue on one feature branch.
 
 ## Success Criteria *(mandatory)*
 

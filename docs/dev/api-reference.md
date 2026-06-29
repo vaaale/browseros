@@ -39,7 +39,7 @@ delimited JSON), not a single body.
 | `/api/assistant/title` | POST | Background conversation title (isolated, sanitized) |
 | `/api/assistant/reflect` | POST | Self‑improvement review pass |
 | `/api/subagents` | GET, POST, DELETE | Sub‑agent registry |
-| `/api/subagents/delegate` | POST | Run a sub‑agent (**NDJSON** stream) |
+| `/api/subagents/delegate` | POST | Run a sub‑agent (**NDJSON** stream). `branchKey` (alias `threadId`) anchors dev work to one feature branch; `interactive` lets a live preview win over it |
 
 ## Memory / skills
 
@@ -71,7 +71,7 @@ delimited JSON), not a single body.
 |---|---|---|
 | `/api/workflows` | GET, POST, PUT, DELETE | Workflow CRUD |
 | `/api/workflows/validate` | POST | Validate a workflow graph |
-| `/api/workflows/run` | POST | Execute (**NDJSON** stream) |
+| `/api/workflows/run` | POST | Execute (**NDJSON** stream). Optional `branchKey` pins dev steps to a feature branch (default `workflow:<id>`) |
 | `/api/workflows/status` | GET | Runtime status |
 | `/api/workflows/cancel` | POST | Cancel a run |
 | `/api/workflows/generate` | POST | Generate from a description |

@@ -119,20 +119,29 @@ The Claude runner (`claude-runner.ts`) uses `begin`/`build` to provision and gat
 `gitStatus` (`/api/system/git`) folds in `supervisorNextChanges` so a delegated edit
 shows up even though it's committed in the worktree, not the main checkout.
 
-### Branch continuity (one conversation ↔ one feature branch)
+### Branch continuity (one branch key ↔ one feature branch)
 
-A delegated dev task is anchored to its conversation so "improve the thing we worked
-on" continues on the **same** branch even after a Stop dropped the preview:
+A delegated dev task is anchored by an **opaque branch key** so repeated work —
+"improve the thing we worked on" — continues on the **same** branch even after a Stop
+dropped the preview. The key is any stable string the caller picks: a chat's
+conversation id, a workflow id, an external `gitlab-issue:1234`, etc.
+(`getBranchForKey`/`setBranchForKey` in `src/lib/devharness/thread-branches.ts`,
+stored under canonical `data/devharness/thread-branches.json`; one flat namespace, so
+prefix external ids).
 
-- The client (`SubAgentActions`) sends the active `threadId` to
-  `/api/subagents/delegate`; the runner resolves the branch as **previewed‑branch‑
-  wins → conversation's remembered branch → fresh**: if a preview is active, continue
-  on it; else resume the branch recorded for this `threadId`
-  (`src/lib/devharness/thread-branches.ts`, stored under canonical
-  `data/devharness/thread-branches.json`); else begin a fresh branch. The resolved
-  branch is then re‑anchored to the conversation.
-- Promote deletes the merged branch, so the next delegation in that chat resolves to
-  a fresh branch off the new base (the anchor self‑heals via existence).
+- **Resolution** (`claude-runner.ts`): the key's remembered branch, else a fresh
+  `bos/next-*`; the resolved branch is then re‑anchored to the key. An **interactive**
+  caller additionally lets a currently‑**previewed** branch win first ("improve what
+  I'm viewing"); a **headless** caller's key is **authoritative** and never adopts a
+  human's stray live preview (with no key, each run is fresh).
+- **Who supplies it:** the chat sends its conversation id + `interactive:true`
+  (`SubAgentActions`); the workflow runner sends `workflow:<id>` (or a per‑run
+  override) headless; any integration POSTs its own id — `/api/subagents/delegate`
+  (`branchKey`, legacy alias `threadId`, optional `interactive`) or `/api/workflows/run`
+  (`branchKey`).
+- Promote deletes the merged branch, so the next run on that key resolves to a fresh
+  branch off the new base (the anchor self‑heals — `provisionPreview` re‑creates a
+  missing branch off base).
 
 ### UI
 

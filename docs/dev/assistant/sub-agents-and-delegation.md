@@ -40,16 +40,19 @@ Ephemeral agents run without being persisted.
 
 ## Routing (`subagents/runner.ts`)
 
-`runSubAgent(agent, task, { onEvent?, contentOnly? })`:
+`runSubAgent(agent, task, { onEvent?, contentOnly?, branchKey?, interactive? })`:
 
 - **`type:"local"`** → `runLocal` → `runToolLoop` (`llm.ts`) with the configured
   provider and the agent's tools. A local agent holding repo‑scoped dev tools gets a
   larger step budget (`DEV_MAX_STEPS = 40`) and its files are `git add`‑ed afterward
-  as a backstop. Errors are returned, not thrown.
+  as a backstop. Errors are returned, not thrown. `branchKey`/`interactive` are
+  forwarded to a nested `delegateToDeveloper` so escalated dev work stays on the same
+  feature branch.
 - **`type:"claude"`** → `runClaudeAgent` (`claude-runner.ts`). **No local fallback**
   — development is Claude‑only by design.
 
 `onEvent` streams `{ tool, input }` events live (used by `/api/subagents/delegate`).
+`branchKey` + `interactive` drive feature‑branch selection — see below.
 
 ---
 
@@ -97,11 +100,25 @@ the dev tools implicitly.
 `runClaudeAgent` integrates with live version control:
 
 - If served under the **Supervisor** and the task is **not** `contentOnly`, it
-  resolves the feature branch (**previewed branch wins** → the conversation's
-  remembered branch → fresh) and calls `supervisorBegin(branch)` to provision (or
-  **resume**) the isolated preview worktree (+ data clone), re‑anchors the branch to
-  the conversation (`thread-branches.ts`), points Claude's `cwd` there, runs, then
-  calls `supervisorBuild()` to build + health‑gate the preview.
+  resolves the feature branch from `branchKey` (an **opaque** stable id — a chat's
+  conversation id, a workflow id, an external `gitlab-issue:1234`, …), then calls
+  `supervisorBegin(branch)` to provision (or **resume**) the isolated preview worktree
+  (+ data clone), **re‑anchors the key → branch** (`thread-branches.ts`:
+  `getBranchForKey`/`setBranchForKey`), points Claude's `cwd` there, runs, then calls
+  `supervisorBuild()` to build + health‑gate the preview.
+- **Branch selection depends on `interactive`:**
+  - **interactive** (a chat session): a currently‑**previewed** branch wins ("improve
+    the thing I'm looking at"), then the key's remembered branch, else a fresh
+    `bos/next-*`.
+  - **headless** (workflow / integration): the key is **authoritative** — its own
+    remembered branch (fresh on first use), and it **never** adopts a human's stray
+    live preview. With no key, every run gets a fresh branch.
+- **Who supplies it:** the chat sends the active conversation id as `branchKey` with
+  `interactive:true` (`SubAgentActions`); the workflow runner sends `workflow:<id>`
+  (or a per‑run override) headless; any integration may POST its own id to
+  `/api/subagents/delegate`. Promote deletes the merged branch, so the next run on
+  that key resolves to a fresh branch off the new base (the anchor self‑heals because
+  `provisionPreview` re‑creates a missing branch off base).
 - **`contentOnly:true`** (e.g. generating an app's HTML — a *content* op) MUST NOT
   provision a code candidate; the result is installed via `installApp` onto the
   GitFS `app-candidate` branch instead.

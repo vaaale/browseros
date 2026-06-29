@@ -18,8 +18,15 @@ const DEV_MAX_STEPS = 40;
 const MAX_DELEGATE_DEPTH = 2;
 
 /** The delegate_to_developer tool. Built per-run so it can forward the parent's
- *  event stream (for the nested-agent UI) and carry a depth guard. */
-function makeDelegateTool(parentOnEvent: ((e: SubAgentEvent) => void) | undefined, depth: number): LlmTool {
+ *  event stream (for the nested-agent UI), carry a depth guard, and inherit the
+ *  parent's branch key + interactivity so nested dev work stays on the SAME feature
+ *  branch as the run that spawned it. */
+function makeDelegateTool(
+  parentOnEvent: ((e: SubAgentEvent) => void) | undefined,
+  depth: number,
+  branchKey?: string,
+  interactive?: boolean,
+): LlmTool {
   return {
     description:
       "Delegate an implementation/coding task to the Developer (Claude) sub-agent, which edits BOS source on a feature branch. Use this for `implement` — never write source yourself. Provide a complete task including the relevant spec/plan/tasks context and acceptance criteria.",
@@ -32,7 +39,7 @@ function makeDelegateTool(parentOnEvent: ((e: SubAgentEvent) => void) | undefine
       if (depth >= MAX_DELEGATE_DEPTH) return "Delegation depth limit reached; cannot nest another sub-agent.";
       const dev = await getAgent("developer");
       if (!dev) return "No 'developer' sub-agent is available to implement this.";
-      const res = await runSubAgent(dev, String(input.task ?? ""), { onEvent: parentOnEvent, depth: depth + 1 });
+      const res = await runSubAgent(dev, String(input.task ?? ""), { onEvent: parentOnEvent, depth: depth + 1, branchKey, interactive });
       if (res.error) return `Developer error: ${res.error}`;
       return res.output || "(the developer returned no output)";
     },
@@ -42,7 +49,7 @@ function makeDelegateTool(parentOnEvent: ((e: SubAgentEvent) => void) | undefine
 async function runLocal(
   agent: Agent,
   task: string,
-  opts?: { onEvent?: (e: SubAgentEvent) => void; depth?: number },
+  opts?: { onEvent?: (e: SubAgentEvent) => void; depth?: number; branchKey?: string; interactive?: boolean },
 ): Promise<AgentRunResult> {
   const depth = opts?.depth ?? 0;
   const ids = agent.tools ?? [];
@@ -51,7 +58,7 @@ async function runLocal(
 
   const tools = { ...toolsFor(agent.tools) };
   if (ids.includes(DELEGATE_TO_DEVELOPER)) {
-    tools[DELEGATE_TO_DEVELOPER] = makeDelegateTool(opts?.onEvent, depth);
+    tools[DELEGATE_TO_DEVELOPER] = makeDelegateTool(opts?.onEvent, depth, opts?.branchKey, opts?.interactive);
   }
 
   const result = await runToolLoop({
@@ -81,7 +88,16 @@ async function runLocal(
 export async function runSubAgent(
   agent: Agent,
   task: string,
-  opts?: { onEvent?: (e: SubAgentEvent) => void; contentOnly?: boolean; depth?: number; threadId?: string },
+  opts?: {
+    onEvent?: (e: SubAgentEvent) => void;
+    contentOnly?: boolean;
+    depth?: number;
+    // Opaque key anchoring repeated dev work to one feature branch (conversation id,
+    // workflow id, `gitlab-issue:1234`, …). `interactive` lets a live preview win over
+    // the key; headless callers omit it so their key is authoritative. See claude-runner.
+    branchKey?: string;
+    interactive?: boolean;
+  },
 ): Promise<AgentRunResult> {
   if (agent.type === "claude") {
     // Development must be done by Claude — no local-provider fallback here.

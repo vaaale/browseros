@@ -21,8 +21,9 @@ interface DelegateResult {
 // and an elicitation card to approve a Claude agent for a non-dev task.
 export function SubAgentActions({ group = DEFAULT_GROUP }: { group?: string }) {
   // The active conversation id, read through a ref so the delegate handler always
-  // sends the CURRENT thread (not a stale closure value). It anchors a delegated
-  // dev task to this conversation's feature branch (continuity across Stop).
+  // sends the CURRENT thread (not a stale closure value). It's the chat's `branchKey`:
+  // it anchors a delegated dev task to this conversation's feature branch (continuity
+  // across Stop). The chat delegates as `interactive` so a live preview wins over it.
   const threadId = useActiveConversationId(group);
   const threadIdRef = useRef(threadId);
   useEffect(() => {
@@ -77,7 +78,7 @@ export function SubAgentActions({ group = DEFAULT_GROUP }: { group?: string }) {
       { name: "ephemeralType", type: "string", description: "'local' or 'claude'", required: false },
       { name: "ephemeralSystemPrompt", type: "string", description: "For a one-off agent: its instructions", required: false },
       { name: "ephemeralSubagentType", type: "string", description: "For a one-off 'claude' agent: harness subagent_type (defaults to the name)", required: false },
-      { name: "contentOnly", type: "boolean", description: "Set true when the task only PRODUCES content and does not edit BOS source code (e.g. generating an app's HTML to install). Skips provisioning a BOS-code candidate worktree.", required: false },
+      { name: "contentOnly", type: "boolean", description: "Set true when the task only PRODUCES content and does not edit BOS source code (e.g. generating an app's HTML to install). Skips provisioning a BOS-code preview worktree.", required: false },
     ],
     handler: async ({ agent, task, ephemeralName, ephemeralType, ephemeralSystemPrompt, ephemeralSubagentType, contentOnly }) => {
       const ephemeral = ephemeralName && ephemeralSystemPrompt
@@ -91,7 +92,7 @@ export function SubAgentActions({ group = DEFAULT_GROUP }: { group?: string }) {
         const res = await fetch("/api/subagents/delegate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ agent, task, ephemeral, contentOnly: contentOnly === true, threadId: threadIdRef.current }),
+          body: JSON.stringify({ agent, task, ephemeral, contentOnly: contentOnly === true, branchKey: threadIdRef.current, interactive: true }),
         });
         if (!res.ok) {
           finishDelegation(key, "");

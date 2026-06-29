@@ -51,7 +51,18 @@ export async function POST(req: NextRequest) {
         const result = await runSubAgent(agent, task, {
           onEvent: (ev) => emit({ type: "tool", ...ev }),
           contentOnly: body.contentOnly === true,
-          threadId: typeof body.threadId === "string" ? body.threadId : undefined,
+          // `branchKey` anchors repeated dev work to one feature branch; any caller
+          // (chat, workflow, external integration) may supply an arbitrary stable id
+          // (e.g. `gitlab-issue:1234`). `threadId` is the legacy alias the chat used.
+          branchKey:
+            typeof body.branchKey === "string"
+              ? body.branchKey
+              : typeof body.threadId === "string"
+                ? body.threadId
+                : undefined,
+          // Interactive sessions let a live preview win over the key; omit/false for
+          // headless callers so their key is authoritative (never adopts a stray preview).
+          interactive: body.interactive === true,
         });
         emit({ type: "done", result });
       } catch (err) {

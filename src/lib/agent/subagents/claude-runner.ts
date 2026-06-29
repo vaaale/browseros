@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { connectMcpClient, extractText } from "@/lib/mcp/client";
 import { getHarnessConfig } from "@/lib/devharness/harness-config";
 import { supervisorEnabled, supervisorState, supervisorBegin, supervisorBuild } from "@/lib/devharness/supervisor";
-import { getThreadBranch, setThreadBranch } from "@/lib/devharness/thread-branches";
+import { getBranchForKey, setBranchForKey } from "@/lib/devharness/thread-branches";
 import { stageAll } from "@/lib/system/git";
 import type { McpServerConfig } from "@/lib/mcp/types";
 import type { Agent, AgentRunResult } from "./types";
@@ -173,7 +173,7 @@ async function runViaMcp(agent: Agent, task: string, server: McpServerConfig, on
 export async function runClaudeAgent(
   agent: Agent,
   task: string,
-  opts?: { onEvent?: OnEvent; contentOnly?: boolean; threadId?: string },
+  opts?: { onEvent?: OnEvent; contentOnly?: boolean; branchKey?: string; interactive?: boolean },
 ): Promise<AgentRunResult> {
   const harness = await getHarnessConfig();
   if (harness.mode !== "cli") return runViaMcp(agent, task, harness.server, opts?.onEvent);
@@ -187,22 +187,28 @@ export async function runClaudeAgent(
   let provisioned = false;
   let candidateBranch = "";
   if (supervisorEnabled() && !opts?.contentOnly) {
-    // Resolve which feature branch to work on. "Previewed branch wins": if a preview
-    // is currently active, continue on it; otherwise resume the branch this
-    // conversation last worked on (survives a Stop that dropped the preview);
-    // otherwise begin a fresh branch. The conversation is then (re)anchored to the
-    // branch so a later "improve it" continues here.
-    const st = await supervisorState().catch(() => null);
-    const previewBranch =
-      st && st.preview && typeof st.preview === "object" ? (st.preview as { branch?: string }).branch : undefined;
-    const resume = previewBranch || (opts?.threadId ? await getThreadBranch(opts.threadId) : undefined);
+    // Resolve which feature branch to work on, then (re)anchor the caller's key to it
+    // so repeated work continues on the SAME branch. `branchKey` is opaque — a chat's
+    // conversation id, a workflow id, an external `gitlab-issue:1234`, etc.
+    //   • interactive (a chat session): a currently-PREVIEWED branch wins ("improve
+    //     the thing I'm looking at"), then the key's remembered branch, else fresh.
+    //   • headless (workflow/integration): the supplied key is AUTHORITATIVE — its own
+    //     remembered branch (fresh on first use), never a human's stray live preview.
+    const remembered = opts?.branchKey ? await getBranchForKey(opts.branchKey) : undefined;
+    let resume = remembered;
+    if (opts?.interactive) {
+      const st = await supervisorState().catch(() => null);
+      const previewBranch =
+        st && st.preview && typeof st.preview === "object" ? (st.preview as { branch?: string }).branch : undefined;
+      resume = previewBranch || remembered;
+    }
     const begun = await supervisorBegin(resume);
     const wt = begun && typeof begun.worktree === "string" ? (begun.worktree as string) : "";
     if (wt) {
       cwd = wt;
       provisioned = true;
       candidateBranch = begun && typeof begun.branch === "string" ? (begun.branch as string) : "";
-      if (opts?.threadId && candidateBranch) await setThreadBranch(opts.threadId, candidateBranch);
+      if (opts?.branchKey && candidateBranch) await setBranchForKey(opts.branchKey, candidateBranch);
       opts?.onEvent?.({ tool: "Supervisor: provision preview worktree", input: { worktree: wt, branch: candidateBranch } });
     }
   }

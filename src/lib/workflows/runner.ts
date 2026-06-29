@@ -36,6 +36,10 @@ interface RunContext {
   workflow: Workflow;
   abortSignal: AbortSignal;
   outputs: Map<string, unknown>;
+  // Branch key for dev (claude) delegations, so a workflow does repeated development
+  // on the SAME feature branch (live version control). Headless — never adopts a
+  // human's live preview. See `src/lib/devharness/thread-branches.ts`.
+  branchKey: string;
 }
 
 interface StepResult {
@@ -91,7 +95,7 @@ async function runDelegateStep(step: WorkflowStep, ctx: RunContext): Promise<unk
   const agent = step.agentId ? await resolveSubAgent(step.agentId) : undefined;
   if (!agent) throw new Error(`Sub-agent "${step.agentId}" not found`);
   const task = buildDelegateTask(step, ctx);
-  const result = await runSubAgent(agent, task);
+  const result = await runSubAgent(agent, task, { branchKey: ctx.branchKey });
   if (result.error) throw new Error(result.error);
   return result.output;
 }
@@ -119,7 +123,7 @@ async function runToolStep(step: WorkflowStep, ctx: RunContext): Promise<unknown
     systemPrompt: `${agent.systemPrompt}\n\n[Workflow constraint] You may only invoke the tool "${step.toolName}". Follow the operator's output convention exactly.`,
   };
 
-  const result = await runSubAgent(ephemeral, promptParts);
+  const result = await runSubAgent(ephemeral, promptParts, { branchKey: ctx.branchKey });
   if (result.error) throw new Error(result.error);
   return result.output;
 }
@@ -204,11 +208,17 @@ function buildAdjacency(wf: Workflow) {
   return { remainingDeps, dependents };
 }
 
-/** Run a workflow, yielding NDJSON-style events as the graph executes. */
+/** Run a workflow, yielding NDJSON-style events as the graph executes. `branchKey`
+ *  pins any dev (claude) delegations to one feature branch; if omitted it falls back
+ *  to the workflow's configured key, then `workflow:<id>` (so a workflow keeps its
+ *  own branch across runs). A caller/integration may pass an external id
+ *  (e.g. `gitlab-issue:1234`) to drive repeated development on that feature. */
 export async function* runWorkflowStream(
   wf: Workflow,
+  opts?: { branchKey?: string },
 ): AsyncGenerator<ExecutionEvent, void, void> {
   await clearExecutionLog(wf.id);
+  const branchKey = opts?.branchKey?.trim() || wf.config?.branchKey?.trim() || `workflow:${wf.id}`;
 
   const steps: Record<string, StepRuntimeState> = {};
   for (const s of wf.steps) steps[s.id] = { status: "queued", attempts: 0 };
@@ -245,7 +255,7 @@ export async function* runWorkflowStream(
 
   emit(makeEvent(wf.id, "workflow.start"));
 
-  const ctx: RunContext = { workflow: wf, abortSignal: abort.signal, outputs: new Map() };
+  const ctx: RunContext = { workflow: wf, abortSignal: abort.signal, outputs: new Map(), branchKey };
   const { remainingDeps, dependents } = buildAdjacency(wf);
   const stepsById = new Map(wf.steps.map((s) => [s.id, s]));
   const maxConcurrency = Math.max(1, wf.config?.maxConcurrentSteps ?? 5);
