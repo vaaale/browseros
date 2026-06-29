@@ -13,7 +13,7 @@ import { ConversationPanel } from "@/components/apps/assistant/ConversationPanel
 import { InfoPanel } from "@/components/apps/assistant/InfoPanel";
 import { AgentSelector } from "@/components/apps/assistant/AgentSelector";
 import { CardScopeProvider } from "@/lib/agent/card-collapse";
-import { DEFAULT_GROUP, useConversations, newConversation } from "@/lib/agent/conversations";
+import { DEFAULT_GROUP, useConversations, useActiveConversation, newConversation } from "@/lib/agent/conversations";
 
 const FALLBACK_INSTRUCTIONS = "You are the BrowserOS assistant.";
 
@@ -44,10 +44,16 @@ export interface AssistantChatProps {
 // provider over this sub-tree so it can be pinned to an agent and a conversation
 // group, independent of the Assistant app — reusing the same chat, persistence,
 // tool rendering, and side panels. In `allGroups` mode it follows the selected
-// conversation across groups (a non-default group implies an agent of the same id).
+// conversation across groups; the agent is taken from the conversation itself
+// (per-conversation agentId), falling back to the group name for embeds.
 export function AssistantChat(props: AssistantChatProps) {
   const [group, setGroup] = useState(props.group ?? DEFAULT_GROUP);
-  const agentId = group === DEFAULT_GROUP ? props.agentId : group;
+  const activeConv = useActiveConversation(group);
+  // The active conversation's agent wins; then any explicit pin from the host;
+  // then the group name (embeds were historically pinned to the group's agent);
+  // otherwise let CopilotProvider fall back to the globally active agent.
+  const agentId =
+    activeConv?.agentId ?? props.agentId ?? (group !== DEFAULT_GROUP ? group : undefined);
   return (
     <CopilotProvider group={group} agentId={agentId}>
       {props.children}
@@ -95,7 +101,7 @@ function AssistantChatInner({
         <div className="flex min-w-0 flex-1 flex-col">
           {allGroups && (
             <div className="flex shrink-0 items-center gap-2 border-b border-white/10 bg-white/[0.03] px-2 py-1 text-[11px]">
-              <AgentSelector />
+              <AgentSelector group={group} />
               <span className="ml-auto flex items-center gap-1.5">
                 {isLoading ? (
                   <>

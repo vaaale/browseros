@@ -24,6 +24,10 @@ export interface Conversation {
   title: string;
   createdAt: number;
   group: string;
+  // Per-conversation agent (personality). Optional for back-compat: pre-existing
+  // chats have no agentId and fall back to the group's agent (for embeds) or the
+  // globally active agent (for the Assistant app).
+  agentId?: string;
 }
 
 interface State {
@@ -43,8 +47,8 @@ function newId(): string {
   return "c-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 }
 
-function freshConversation(group: string): Conversation {
-  return { id: newId(), title: DEFAULT_TITLE, createdAt: Date.now(), group };
+function freshConversation(group: string, agentId?: string): Conversation {
+  return { id: newId(), title: DEFAULT_TITLE, createdAt: Date.now(), group, agentId };
 }
 
 function chatPath(id: string): string {
@@ -56,6 +60,7 @@ interface ConversationFile {
   title: string;
   createdAt: number;
   group: string;
+  agentId?: string;
   messages: unknown[];
 }
 
@@ -69,6 +74,7 @@ async function readConversationFile(id: string): Promise<ConversationFile | null
       title: typeof parsed.title === "string" ? parsed.title : "Conversation",
       createdAt: typeof parsed.createdAt === "number" ? parsed.createdAt : 0,
       group: typeof parsed.group === "string" && parsed.group ? parsed.group : DEFAULT_GROUP,
+      agentId: typeof parsed.agentId === "string" && parsed.agentId ? parsed.agentId : undefined,
       messages: Array.isArray(parsed.messages) ? parsed.messages : [],
     };
   } catch {
@@ -121,12 +127,12 @@ async function loadFromVfs(): Promise<void> {
     await fsClient.mkdir(CHATS_DIR).catch(() => {});
     const entries = await fsClient.list(CHATS_DIR);
     const files = entries.filter((e) => e.type === "file" && e.name.endsWith(".json"));
-    const loaded = await Promise.all(
-      files.map(async (e) => {
+    const loaded: (Conversation | null)[] = await Promise.all(
+      files.map(async (e): Promise<Conversation | null> => {
         const id = e.name.replace(/\.json$/, "");
         const file = await readConversationFile(id);
         if (!file) return null;
-        return { id: file.id, title: file.title, createdAt: file.createdAt, group: file.group };
+        return { id: file.id, title: file.title, createdAt: file.createdAt, group: file.group, agentId: file.agentId };
       }),
     );
     conversations = loaded.filter((c): c is Conversation => c !== null);
@@ -171,9 +177,9 @@ function setState(next: State): void {
   notify();
 }
 
-export async function newConversation(group: string = DEFAULT_GROUP): Promise<string> {
+export async function newConversation(group: string = DEFAULT_GROUP, agentId?: string): Promise<string> {
   await ensureLoading();
-  const conv = freshConversation(group);
+  const conv = freshConversation(group, agentId);
   const current = state ?? { conversations: [], activeByGroup: {}, loaded: true };
   persistActiveId(group, conv.id);
   setState({
@@ -187,6 +193,27 @@ export async function newConversation(group: string = DEFAULT_GROUP): Promise<st
     console.error("Failed to persist new conversation", err);
   }
   return conv.id;
+}
+
+/** Reassign a conversation to a different agent (personality). Updates the
+ *  in-memory state immediately so the UI re-renders, then persists the change to
+ *  the conversation's file (preserving its message history). */
+export async function setConversationAgent(id: string, agentId: string): Promise<void> {
+  await ensureLoading();
+  const current = state ?? get();
+  const conv = current.conversations.find((c) => c.id === id);
+  if (!conv || conv.agentId === agentId) return;
+  const next = { ...conv, agentId };
+  setState({
+    ...current,
+    conversations: current.conversations.map((c) => (c.id === id ? next : c)),
+  });
+  try {
+    const file = (await readConversationFile(id)) ?? { ...next, messages: [] };
+    await writeConversationFile({ ...file, agentId });
+  } catch (err) {
+    console.error("Failed to persist conversation agent change", err);
+  }
 }
 
 // id is globally unique; the group is inferred from the conversation.
@@ -273,6 +300,7 @@ export async function saveConversationMessages(id: string, messages: unknown[]):
     title: meta?.title ?? existing?.title ?? "Conversation",
     createdAt: existing?.createdAt ?? meta?.createdAt ?? Date.now(),
     group: meta?.group ?? existing?.group ?? DEFAULT_GROUP,
+    agentId: meta?.agentId ?? existing?.agentId,
     messages,
   };
   await writeConversationFile(file);
@@ -379,4 +407,13 @@ export function useAllConversations(): {
 
 export function useActiveConversationId(group: string = DEFAULT_GROUP): string {
   return useConversations(group).activeId;
+}
+
+/** Active conversation object for a group (the Conversation, not just its id).
+ *  Returns null while loading or if the group has no conversations. */
+export function useActiveConversation(group: string = DEFAULT_GROUP): Conversation | null {
+  const s = useStoreState();
+  const id = s.activeByGroup[group];
+  if (!id) return null;
+  return s.conversations.find((c) => c.id === id) ?? null;
 }
