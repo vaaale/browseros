@@ -14,8 +14,8 @@ export interface ProviderConfig {
   apiKey?: string;
   baseUrl?: string;
   model: string;
-  /** Max tokens the model may generate per response. */
-  maxTokens: number;
+  /** Max tokens the model may generate per response. Omit to let the provider use its own default. */
+  maxTokens?: number;
   /** Context window (max input tokens) used for trimming. Optional. */
   maxInputTokens?: number;
 }
@@ -25,18 +25,19 @@ export interface ProviderConfigView {
   baseUrl: string;
   model: string;
   hasApiKey: boolean;
-  maxTokens: number;
+  maxTokens?: number;
   maxInputTokens?: number;
 }
 
 // Backwards-compatible defaults derived from environment variables.
 function envConfig(): ProviderConfig {
+  const envMax = process.env.BOS_MAX_TOKENS ? Number(process.env.BOS_MAX_TOKENS) : undefined;
   return {
     provider: "anthropic",
     apiKey: process.env.ANTHROPIC_API_KEY || undefined,
     baseUrl: process.env.ANTHROPIC_BASE_URL || undefined,
     model: process.env.BOS_AGENT_MODEL || PROVIDERS.anthropic.defaultModel,
-    maxTokens: Number(process.env.BOS_MAX_TOKENS) || DEFAULT_MAX_TOKENS,
+    maxTokens: envMax && envMax > 0 ? envMax : undefined,
     maxInputTokens: process.env.BOS_MAX_INPUT_TOKENS ? Number(process.env.BOS_MAX_INPUT_TOKENS) : undefined,
   };
 }
@@ -52,7 +53,9 @@ export async function getProviderConfig(): Promise<ProviderConfig> {
       apiKey: saved.apiKey ?? base.apiKey,
       baseUrl: saved.baseUrl ?? base.baseUrl,
       model: saved.model || PROVIDERS[provider]?.defaultModel || base.model,
-      maxTokens: saved.maxTokens && saved.maxTokens > 0 ? saved.maxTokens : base.maxTokens,
+      maxTokens: "maxTokens" in saved
+        ? (saved.maxTokens && saved.maxTokens > 0 ? saved.maxTokens : undefined)
+        : base.maxTokens,
       maxInputTokens: saved.maxInputTokens ?? base.maxInputTokens,
     };
   } catch {
@@ -82,7 +85,10 @@ export async function updateProviderConfig(patch: Partial<ProviderConfig>): Prom
     apiKey: patch.apiKey === undefined ? current.apiKey : patch.apiKey || undefined,
     baseUrl: patch.baseUrl === undefined ? current.baseUrl : patch.baseUrl || undefined,
     model: patch.model || (patch.provider ? PROVIDERS[provider].defaultModel : current.model),
-    maxTokens: patch.maxTokens && patch.maxTokens > 0 ? patch.maxTokens : current.maxTokens,
+    // `null` or 0 clears the value; undefined leaves it unchanged.
+    maxTokens: "maxTokens" in patch
+      ? (typeof patch.maxTokens === "number" && patch.maxTokens > 0 ? patch.maxTokens : undefined)
+      : current.maxTokens,
     maxInputTokens:
       patch.maxInputTokens === undefined ? current.maxInputTokens : patch.maxInputTokens || undefined,
   };

@@ -15,15 +15,19 @@ export async function PATCH(req: NextRequest) {
     if (provider && !PROVIDERS[provider]) {
       return NextResponse.json({ error: `Unknown provider: ${provider}` }, { status: 400 });
     }
-    const config = await updateProviderConfig({
-      provider,
-      apiKey: typeof body.apiKey === "string" ? body.apiKey : undefined,
-      baseUrl: typeof body.baseUrl === "string" ? body.baseUrl : undefined,
-      model: typeof body.model === "string" ? body.model : undefined,
-      maxTokens: typeof body.maxTokens === "number" ? body.maxTokens : undefined,
-      maxInputTokens:
-        body.maxInputTokens === null ? undefined : typeof body.maxInputTokens === "number" ? body.maxInputTokens : undefined,
-    });
+    // Only forward keys the client explicitly set — `null` means "clear",
+    // omitted means "leave unchanged".
+    const patch: Parameters<typeof updateProviderConfig>[0] = { provider };
+    if (typeof body.apiKey === "string") patch.apiKey = body.apiKey;
+    if (typeof body.baseUrl === "string") patch.baseUrl = body.baseUrl;
+    if (typeof body.model === "string") patch.model = body.model;
+    if ("maxTokens" in body) {
+      patch.maxTokens = typeof body.maxTokens === "number" ? body.maxTokens : undefined;
+    }
+    if ("maxInputTokens" in body) {
+      patch.maxInputTokens = typeof body.maxInputTokens === "number" ? body.maxInputTokens : undefined;
+    }
+    const config = await updateProviderConfig(patch);
     return NextResponse.json({ config });
   } catch (err) {
     return NextResponse.json({ error: (err as Error).message }, { status: 400 });

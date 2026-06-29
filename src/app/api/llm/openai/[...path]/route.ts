@@ -114,8 +114,14 @@ async function forward(req: NextRequest, pathParts: string[]): Promise<Response>
       try {
         const body = JSON.parse(bodyText) as Record<string, unknown>;
         wantStream = body.stream === true;
+        // Only inject a token limit when one is configured. Newer OpenAI models
+        // reject `max_tokens` (they require `max_completion_tokens`); local
+        // OpenAI-compatible servers still use `max_tokens`.
         if (body.max_tokens === undefined && body.max_completion_tokens === undefined) {
-          body.max_tokens = cfg.maxTokens;
+          if (typeof cfg.maxTokens === "number" && cfg.maxTokens > 0) {
+            const field = cfg.provider === "openai-compatible" ? "max_tokens" : "max_completion_tokens";
+            body[field] = cfg.maxTokens;
+          }
         }
         bodyText = JSON.stringify(body);
       } catch {
