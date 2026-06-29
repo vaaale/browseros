@@ -36,7 +36,10 @@ are per‑session; everyone else stays on `active`.
 - `buildAndStart()` — commit the worktree, `npm run build`, start `next start -p
   <port>`, then **health‑gate** via `/api/health` (`waitHealthy`, ≤120s). State →
   `building` → `ready` | `failed`.
-- `promote()` — **ff‑merge** the candidate commit into the base branch, **tag**
+- `promote()` — **preconditions first** (fail early with an actionable, surfaced
+  error, not a silent no‑op): the base checkout must be **clean** (an in‑place edit
+  there makes the ff‑merge abort) and the candidate must **fast‑forward** the base.
+  Then **ff‑merge** the candidate commit into the base branch, **tag**
   (`bos/v<timestamp>`), optional push (`BOS_PUSH_MODE=auto-on-promote`), restart the
   candidate **on canonical data** (code‑only), flip routing, retain the old active as
   `previous` (drains in‑flight), discard the candidate's data clone.
@@ -54,8 +57,13 @@ server serves it; promote merges to base, discard drops it. See
 
 ### Control endpoints (`/__supervisor/...`)
 
-`state` · `branches` · `pin` · `begin` · `build` · `activate` · `promote` ·
-`rollback` · `discard` · `app-begin` · `app-promote` · `app-discard` · `push`.
+`state` · `branches` · `next-changes` · `pin` · `begin` · `build` · `activate` ·
+`promote` · `rollback` · `discard` · `app-begin` · `app-promote` · `app-discard` ·
+`push`. `state` also reports **`serving`** (which version the pin routes THIS
+session to) so the UI can tell "previewing the candidate" from "a candidate exists
+but you're still on `active`". `next-changes` lists the candidate's changed files
+(committed in its worktree) so an assistant's `gitStatus` isn't fooled by a clean
+main checkout.
 
 ### Key env vars
 
@@ -71,14 +79,21 @@ server serves it; promote merges to base, discard drops it. See
 A thin client, **active only when `BOS_SUPERVISOR_URL` is set** (otherwise every
 call is a no‑op → in‑place self‑modification, exactly as before):
 
-`supervisorEnabled`, `supervisorState`, `supervisorBegin`, `supervisorBuild`,
-`supervisorAppBegin/Promote/Discard`. The Claude runner uses `begin`/`build` to
-provision and gate a **code** candidate; app installs use the `app-*` flow for a
+`supervisorEnabled`, `supervisorState`, `supervisorNextChanges`, `supervisorBegin`,
+`supervisorBuild`, `supervisorAppBegin/Promote/Discard`. The Claude runner uses
+`begin`/`build` to provision and gate a **code** candidate, then appends a note to
+the delegation result telling the user the change is a **candidate** (Preview →
+Promote), not the active version; app installs use the `app-*` flow for a
 **content** candidate. See [Sub‑agents](../assistant/sub-agents-and-delegation.md).
+`gitStatus` (`/api/system/git`) folds in `supervisorNextChanges` so a delegated edit
+shows up even though it's committed in the worktree, not the main checkout.
 
 `src/components/desktop/VersionControls.tsx` (in the Topbar) reads
 `/__supervisor/branches` + `/state` and drives `activate`/`promote`/`discard` (+ the
-app candidate). The Versions Settings tab (`self-modification` namespace,
+app candidate). A candidate built by a delegated fix is **not auto‑served**, so the
+toolbar offers an explicit **Preview** (pin → reload) and a `previewing` indicator
+(from `serving`); control failures (promote/discard/preview) are **surfaced inline**,
+never silently swallowed. The Versions Settings tab (`self-modification` namespace,
 `VersionsTab`) surfaces the same. **Push** and **rollback** are exposed on the
 `/__supervisor` page.
 
@@ -94,6 +109,10 @@ before it can be promoted. Keep this endpoint cheap and dependency‑free.
 ## Invariants for the developer agent
 
 - Work on a **feature branch**; promote fast‑forwards it into base.
+- Under the Supervisor, edit **only the candidate worktree** (the harness `cwd`).
+  Editing the main checkout in place leaves it dirty, which makes a later **Promote
+  fail** its clean‑base precondition. `gitStatus` reports the candidate, so a clean
+  main checkout means the change is already in the candidate — don't re‑apply it.
 - **Promote is code‑only** — canonical `data/` carries over; the preview clone is
   discarded. Keep `data/` schema changes **backward‑compatible** (rollback runs old
   code on the same data).

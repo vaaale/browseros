@@ -184,19 +184,32 @@ export async function runClaudeAgent(
   // result is installed via installApp onto the app-candidate branch instead.
   let cwd = harness.cwd;
   let provisioned = false;
+  let candidateBranch = "";
   if (supervisorEnabled() && !opts?.contentOnly) {
     const begun = await supervisorBegin();
     const wt = begun && typeof begun.worktree === "string" ? (begun.worktree as string) : "";
     if (wt) {
       cwd = wt;
       provisioned = true;
-      opts?.onEvent?.({ tool: "Supervisor: provision next worktree", input: { worktree: wt } });
+      candidateBranch = begun && typeof begun.branch === "string" ? (begun.branch as string) : "";
+      opts?.onEvent?.({ tool: "Supervisor: provision next worktree", input: { worktree: wt, branch: candidateBranch } });
     }
   }
   const result = await runClaudeCli(agent, task, cwd, opts?.onEvent);
   if (provisioned && !result.error) {
     opts?.onEvent?.({ tool: "Supervisor: build + health-gate candidate", input: {} });
-    await supervisorBuild().catch(() => {});
+    const built = await supervisorBuild().catch(() => null);
+    // Tell the caller the change is a CANDIDATE, not the live/active version — the
+    // user must preview/promote it. Prevents the "fix is in place but the app still
+    // doesn't work" confusion (the user was viewing active) and the bad workaround
+    // of re-editing the main checkout in place (which then breaks Promote).
+    const state = built && typeof built.state === "string" ? (built.state as string) : "";
+    const brand = candidateBranch ? `\`${candidateBranch}\`` : "the next candidate";
+    result.output =
+      (result.output || "") +
+      (state === "ready"
+        ? `\n\n[candidate] Your changes are built as candidate ${brand} — this is NOT yet the active version the user sees. To view it: top-bar **Active ▾** → **Preview**; then **Promote** to make it active (or **Discard**). Do NOT re-apply the change to the main checkout.`
+        : `\n\n[candidate] Built candidate ${brand}, but its health check did not pass (state: ${state || "unknown"}); it is not active. Review before promoting.`);
   }
   return result;
 }

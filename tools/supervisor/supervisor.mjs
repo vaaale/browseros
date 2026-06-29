@@ -218,6 +218,24 @@ async function promote() {
   if (!cand || cand.state !== "ready") throw new Error("no ready candidate to promote");
   const candCommit = await git(["rev-parse", "HEAD"], cand.worktree);
 
+  // Preconditions (fail early with an actionable message rather than letting the
+  // ff-merge below abort cryptically — the failure that made "Promote" look dead):
+  //  - The base checkout (REPO) must be clean. promote runs `git checkout base` +
+  //    `git merge --ff-only` here; an in-place edit (e.g. the agent editing the
+  //    main checkout instead of the candidate worktree) leaves it dirty and the
+  //    merge aborts with "local changes would be overwritten".
+  const dirty = await gitTry(["status", "--porcelain"], REPO);
+  if (dirty) {
+    throw new Error(
+      `base checkout (${REPO}) has uncommitted changes — commit, stash, or discard them before promoting:\n${dirty}`,
+    );
+  }
+  //  - The candidate must fast-forward the base (gitTry → "" when baseBranch is an
+  //    ancestor of candCommit, null when `--is-ancestor` exits non-zero).
+  if ((await gitTry(["merge-base", "--is-ancestor", baseBranch, candCommit], REPO)) === null) {
+    throw new Error(`candidate ${cand.branch} is not a fast-forward of ${baseBranch}; rebase it onto ${baseBranch} before promoting.`);
+  }
+
   // Git integration: fast-forward the base branch to the candidate's commit.
   await git(["checkout", baseBranch], REPO);
   await git(["merge", "--ff-only", candCommit], REPO);
@@ -268,6 +286,23 @@ async function discard() {
   await fs.rm(cand.dataDir, { recursive: true, force: true }).catch(() => {});
   versions.next = null;
   log("discarded candidate");
+}
+
+/** Files changed on the `next` candidate vs the base branch. The agent's edits are
+ *  COMMITTED in the candidate worktree (buildAndStart), so the main checkout looks
+ *  clean — this surfaces the real change so the assistant's gitStatus isn't fooled
+ *  into thinking nothing happened. */
+async function nextChanges() {
+  const cand = versions.next;
+  if (!cand) return { ok: true, candidate: null };
+  const raw = (await gitTry(["diff", "--name-status", `${baseBranch}...HEAD`], cand.worktree)) || "";
+  const files = raw
+    ? raw.split("\n").filter(Boolean).map((l) => {
+        const tab = l.indexOf("\t");
+        return tab < 0 ? { status: l.trim(), path: "" } : { status: l.slice(0, tab).trim(), path: l.slice(tab + 1) };
+      })
+    : [];
+  return { ok: true, candidate: { branch: await liveBranch(cand), base: baseBranch, state: cand.state, commit: cand.commit, files } };
 }
 
 /** Branches selectable from the toolbar dropdown — real branches only, hiding
@@ -420,10 +455,16 @@ function probeOnce(port) {
 }
 
 async function handleControl(req, res, sub) {
-  if (req.method === "GET" && (sub === "" || sub === "state" || sub === "branches")) {
+  if (req.method === "GET" && (sub === "" || sub === "state" || sub === "branches" || sub === "next-changes")) {
     if (sub === "") { res.writeHead(200, { "Content-Type": "text/html" }); res.end(controlPage()); return; }
     if (sub === "branches") return sendJson(res, { ok: true, branches: await listBranches(), base: baseBranch });
-    return sendJson(res, await publicState());
+    if (sub === "next-changes") return sendJson(res, await nextChanges());
+    // state — include which version THIS session is being served (the pin cookie),
+    // so the toolbar can tell "you're viewing the candidate" from "a candidate
+    // exists but you're still on active".
+    const st = await publicState();
+    const sv = pinnedVersion(req);
+    return sendJson(res, { ...st, serving: sv ? { role: sv.role, branch: await liveBranch(sv) } : null });
   }
   const body = await readBody(req);
   const clearPin = { "Set-Cookie": `${PIN_COOKIE}=; Path=/; Max-Age=0` };

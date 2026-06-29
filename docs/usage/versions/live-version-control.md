@@ -33,12 +33,24 @@ When served through the Supervisor, the top bar shows:
 - **Active: `<branch ▾>`** — a dropdown of branches. The current active version is
   marked `(active)`.
 - Choosing a different branch **builds it as a candidate** and **pins your session**
-  to it once it's ready (the page reloads into the candidate). While previewing a
-  candidate you'll see:
+  to it once it's ready (the page reloads into the candidate). When a candidate
+  exists you'll see:
   - **building…** while it builds, or **build failed** if the build broke,
+  - **Preview** — point your session at the candidate (and a **previewing** marker +
+    **Stop** to go back to active without discarding),
   - **Promote** — make the candidate the new active version (when it's ready), and
   - **Discard** — drop the candidate and return to active.
 - Choosing the base branch again takes you **back to the active version**.
+
+> When you ask the assistant to fix BOS itself, its Developer builds the fix as a
+> candidate — it is **not** the active version yet. If you test before previewing,
+> you're still on the old version and "nothing changed": click **Preview** to see
+> the fix, then **Promote** to keep it. (Don't ask it to "apply the fix again" — that
+> edits the live checkout and blocks Promote.)
+
+If a control can't proceed, the reason is shown **inline next to the buttons**
+(e.g. a Promote refused because the live checkout has uncommitted changes) rather
+than the button appearing to do nothing.
 
 If the assistant just built or changed an **app**, you'll also see an **app
 preview** with **Promote app** / **Discard app** (apps are previewed via a branch
@@ -61,7 +73,9 @@ git remote.
 
 - **Promote** — integrates the candidate (fast‑forwards it into the base branch),
   tags it, and flips the active version to it. In‑flight requests on the old
-  version finish before it's retired (so a streaming chat isn't cut off).
+  version finish before it's retired (so a streaming chat isn't cut off). Promote
+  refuses (with a reason shown inline) if the live checkout has uncommitted changes
+  or the candidate isn't a fast‑forward of the base — resolve that, then retry.
 - **Rollback** — return to the previously‑good version.
 - **Discard** — drop the candidate and its isolated data clone.
 

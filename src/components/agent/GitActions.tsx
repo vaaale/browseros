@@ -8,7 +8,8 @@ import { useCopilotAction } from "@/components/agent/gated-action";
 export function GitActions() {
   useCopilotAction({
     name: "gitStatus",
-    description: "Show the current git branch and changed files in the BOS repository.",
+    description:
+      "Show git status of the BOS repo: the main checkout's branch + changed files, AND any pending self-modification `candidate` (a built-but-not-yet-active version living in an isolated worktree). If `candidate` is present, a delegated edit lives THERE (committed) — the main checkout will look clean, so do NOT re-apply the change in place; the user previews/promotes the candidate from the top-bar Active ▾ menu.",
     parameters: [],
     handler: async () => {
       const res = await fetch("/api/system/git").then((r) => r.json());

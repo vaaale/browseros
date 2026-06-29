@@ -1,11 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { status, createFeatureBranch, stageFiles } from "@/lib/system/git";
+import { supervisorNextChanges } from "@/lib/devharness/supervisor";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
   try {
-    return NextResponse.json(await status());
+    // The main checkout's branch + working-tree changes. Under the Supervisor, a
+    // self-modification candidate's edits are COMMITTED in an isolated worktree, so
+    // this looks clean even when an agent just changed something — `candidate`
+    // surfaces that so the assistant doesn't conclude "nothing changed".
+    const base = await status();
+    const sup = await supervisorNextChanges().catch(() => null);
+    const candidate = sup && sup.ok && sup.candidate ? sup.candidate : null;
+    return NextResponse.json({ ...base, candidate });
   } catch (err) {
     return NextResponse.json({ error: (err as Error).message }, { status: 500 });
   }

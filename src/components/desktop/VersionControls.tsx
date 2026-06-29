@@ -12,23 +12,34 @@ interface SupState {
   next: Ver | null;
   previous: Ver | null;
   appCandidate: { branch: string; base: string } | null;
+  // Which running version THIS session is being served (resolved from the pin
+  // cookie). Absent on older Supervisors → treated as "not previewing".
+  serving?: { role: string; branch?: string } | null;
 }
 interface Branches {
   branches: string[];
   base: string;
+}
+interface PostResult {
+  ok?: boolean;
+  error?: string;
 }
 
 // Compact live-version-control surface in the Topbar. Renders nothing unless
 // BrowserOS is served through the Supervisor (so /__supervisor/* resolves).
 //
 // Shape: `Active: <branch ▾>`. The dropdown lists every git branch; choosing one
-// builds it as a candidate and pins this browser session to it. While viewing a
-// non-base branch the candidate's [Promote] / [Discard] controls appear. Base =
-// the running active version (no candidate).
+// builds it as a candidate and pins this session to it. When a candidate exists
+// (from the dropdown OR a delegated developer-agent fix) its [Preview] /
+// [Promote] / [Discard] controls appear: Preview points THIS session at the
+// candidate (an agent-built candidate isn't auto-served — without Preview you'd
+// still be on the active version, which is the "fix is in but nothing changed"
+// trap). Failures are surfaced inline rather than silently swallowed.
 export function VersionControls() {
   const [branches, setBranches] = useState<Branches | null>(null);
   const [state, setState] = useState<SupState | null>(null);
   const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
   // The branch we just asked to activate. Once its candidate finishes building we
   // reload so the session flips into it (the pin only routes once it is ready).
   const pendingRef = useRef<string | null>(null);
@@ -62,7 +73,7 @@ export function VersionControls() {
     }
   }, [state]);
 
-  const post = useCallback(async (p: string, body?: Record<string, unknown>) => {
+  const post = useCallback(async (p: string, body?: Record<string, unknown>): Promise<PostResult> => {
     setBusy(true);
     try {
       const r = await fetch(`/__supervisor/${p}`, {
@@ -70,7 +81,9 @@ export function VersionControls() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body ?? {}),
       });
-      return await r.json();
+      return (await r.json()) as PostResult;
+    } catch (e) {
+      return { ok: false, error: (e as Error).message };
     } finally {
       setBusy(false);
     }
@@ -79,50 +92,86 @@ export function VersionControls() {
   if (!branches) return null;
 
   const cand = state?.next ?? null;
-  const selectedValue = cand?.branch ?? branches.base;
-  const onBase = !cand;
+  const hasCand = !!cand;
   const ready = cand?.state === "ready";
   const building = cand?.state === "idle" || cand?.state === "building";
   const failed = cand?.state === "failed" || cand?.state === "tests-failed";
+  const previewing = hasCand && state?.serving?.role === "next";
+  // What this session is actually being served (not just "a candidate exists").
+  const selectedValue = state?.serving?.branch ?? branches.base;
   const app = state?.appCandidate ?? null;
 
   const onSelect = async (branch: string) => {
     if (branch === selectedValue) return;
+    setErr(null);
     if (branch === branches.base) {
       // Back to the active version — drop any candidate and clear the pin.
       pendingRef.current = null;
-      await post("activate", { branch });
-      window.location.reload();
+      const r = await post("activate", { branch });
+      if (r?.ok) window.location.reload();
+      else setErr(r?.error || "Failed to return to the active version.");
       return;
     }
     // Build the chosen branch as a candidate; the ready-watcher reloads us in.
     pendingRef.current = branch;
-    await post("activate", { branch });
+    const r = await post("activate", { branch });
+    if (!r?.ok) {
+      pendingRef.current = null;
+      setErr(r?.error || `Failed to build branch ${branch}.`);
+    }
     await load();
+  };
+  const onPreview = async () => {
+    setErr(null);
+    const r = await post("pin", { version: "next" });
+    if (r?.ok) window.location.reload();
+    else setErr(r?.error || "Failed to preview the candidate.");
+  };
+  const onStopPreview = async () => {
+    setErr(null);
+    const r = await post("pin", { version: "active" });
+    if (r?.ok) window.location.reload();
+    else setErr(r?.error || "Failed to return to the active version.");
   };
   const onPromote = async () => {
     pendingRef.current = null;
-    // Promote can fail (e.g. a branch that isn't a fast-forward of base); only
-    // flip to the merged active on success, otherwise keep the candidate visible.
+    setErr(null);
+    // Promote can fail (dirty base checkout, not a fast-forward, conflict); surface
+    // the reason instead of silently doing nothing, and keep the candidate visible.
     const r = await post("promote");
     if (r?.ok) window.location.reload();
-    else await load();
+    else {
+      setErr(r?.error || "Promote failed.");
+      await load();
+    }
   };
   const onDiscard = async () => {
     pendingRef.current = null;
-    await post("discard");
-    window.location.reload();
+    setErr(null);
+    const r = await post("discard");
+    if (r?.ok) window.location.reload();
+    else {
+      setErr(r?.error || "Discard failed.");
+      await load();
+    }
+  };
+  const onApp = async (p: "app-promote" | "app-discard") => {
+    setErr(null);
+    const r = await post(p);
+    if (!r?.ok) setErr(r?.error || `${p === "app-promote" ? "Promote" : "Discard"} app failed.`);
+    await load();
   };
 
   const btn = "rounded px-1.5 py-0.5 transition-colors disabled:opacity-40 disabled:cursor-default";
+  const short = (s: string) => (s.length > 80 ? `${s.slice(0, 77)}…` : s);
 
   return (
     <div className="flex items-center gap-1 text-[11px]">
       {app && (
         <>
           <span className="text-white/55" title={`app preview on branch ${app.branch} (base ${app.base})`}>app preview</span>
-          <button disabled={busy} onClick={() => void post("app-promote").then(load)} className={`${btn} bg-emerald-500/25 hover:bg-emerald-500/40`}>Promote app</button>
-          <button disabled={busy} onClick={() => void post("app-discard").then(load)} className={`${btn} bg-white/10 hover:bg-white/20`}>Discard app</button>
+          <button disabled={busy} onClick={() => void onApp("app-promote")} className={`${btn} bg-emerald-500/25 hover:bg-emerald-500/40`}>Promote app</button>
+          <button disabled={busy} onClick={() => void onApp("app-discard")} className={`${btn} bg-white/10 hover:bg-white/20`}>Discard app</button>
           <span className="mx-0.5 text-white/20">|</span>
         </>
       )}
@@ -131,7 +180,7 @@ export function VersionControls() {
         value={selectedValue}
         disabled={busy}
         onChange={(e) => void onSelect(e.target.value)}
-        title={onBase ? "Active version — pick a branch to preview it" : `Previewing branch ${selectedValue}`}
+        title={previewing ? `Previewing branch ${selectedValue}` : "Active version — pick a branch to preview it"}
         className="max-w-[180px] truncate rounded bg-white/10 px-1.5 py-0.5 text-white/90 outline-none transition-colors hover:bg-white/20 disabled:opacity-40"
       >
         {(branches.branches.includes(selectedValue) ? branches.branches : [selectedValue, ...branches.branches]).map((b) => (
@@ -140,14 +189,24 @@ export function VersionControls() {
           </option>
         ))}
       </select>
-      {!onBase && (
+      {hasCand && (
         <>
           {building && <span className="text-amber-300/80">building…</span>}
           {failed && <span className="text-red-300/80">build failed</span>}
-          <button disabled={busy || !ready} onClick={onPromote} className={`${btn} bg-emerald-500/25 hover:bg-emerald-500/40`}>Promote</button>
+          {ready && !previewing && (
+            <button disabled={busy} onClick={onPreview} title="View this candidate in the browser (it is not the active version yet)" className={`${btn} bg-sky-500/25 hover:bg-sky-500/40`}>Preview</button>
+          )}
+          {previewing && (
+            <>
+              <span className="text-emerald-300/80" title="You are viewing the candidate, not the active version">previewing</span>
+              <button disabled={busy} onClick={onStopPreview} className={`${btn} bg-white/10 hover:bg-white/20`}>Stop</button>
+            </>
+          )}
+          <button disabled={busy || !ready} onClick={onPromote} title={ready ? "Make this candidate the active version" : "Candidate must finish building first"} className={`${btn} bg-emerald-500/25 hover:bg-emerald-500/40`}>Promote</button>
           <button disabled={busy} onClick={onDiscard} className={`${btn} bg-white/10 hover:bg-white/20`}>Discard</button>
         </>
       )}
+      {err && <span className="ml-1 max-w-[260px] truncate text-red-300/90" title={err}>{short(err)}</span>}
     </div>
   );
 }

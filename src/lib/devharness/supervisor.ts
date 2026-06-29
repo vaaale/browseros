@@ -28,6 +28,13 @@ export function supervisorState(): Promise<Record<string, unknown> | null> {
   return call("state");
 }
 
+/** Files changed on the `next` candidate vs base (committed in its worktree), so
+ *  the assistant's gitStatus can see a candidate even though the main checkout is
+ *  clean. Returns null when not under the Supervisor. */
+export function supervisorNextChanges(): Promise<Record<string, unknown> | null> {
+  return call("next-changes");
+}
+
 /** Provision the `next` candidate worktree (+ data clone). Returns its path. */
 export function supervisorBegin(): Promise<Record<string, unknown> | null> {
   return call("begin", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
