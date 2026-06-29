@@ -102,7 +102,7 @@ const REGISTRATIONS: ConfigRegistration[] = [
         { key: "model", label: "Model", type: "text" },
         { key: "baseUrl", label: "Base URL", type: "text" },
         { key: "apiKey", label: "API key", type: "password", secret: true },
-        { key: "maxTokens", label: "Max output tokens", type: "number" },
+        { key: "maxTokens", label: "Max output tokens", type: "number", description: "Leave blank to use the provider's default." },
         { key: "maxInputTokens", label: "Context window", type: "number" },
       ],
     },

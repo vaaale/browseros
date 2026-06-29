@@ -1,8 +1,19 @@
 import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
-import { getProviderConfig, type ProviderConfig } from "./provider";
+import { DEFAULT_MAX_TOKENS, getProviderConfig, type ProviderConfig } from "./provider";
 import { familyOf } from "./provider-meta";
+
+// OpenAI deprecated `max_tokens` in favor of `max_completion_tokens` (and
+// rejects the old field on newer models). Local OpenAI-compatible servers
+// (LM Studio, llama.cpp, vLLM, …) still use the legacy `max_tokens`.
+function openaiTokenField(c: ProviderConfig): "max_tokens" | "max_completion_tokens" {
+  return c.provider === "openai-compatible" ? "max_tokens" : "max_completion_tokens";
+}
+
+function openaiTokenParam(c: ProviderConfig, maxTokens: number | undefined): Record<string, number> {
+  return maxTokens && maxTokens > 0 ? { [openaiTokenField(c)]: maxTokens } : {};
+}
 
 export interface LlmTool {
   description?: string;
@@ -36,9 +47,10 @@ export async function complete(opts: { system?: string; prompt: string; maxToken
   const maxTokens = opts.maxTokens ?? c.maxTokens;
 
   if (familyOf(c.provider) === "anthropic") {
+    // Anthropic requires `max_tokens` — fall back to a sensible default when unset.
     const res = await anthropicClient(c).messages.create({
       model: c.model,
-      max_tokens: maxTokens,
+      max_tokens: maxTokens ?? DEFAULT_MAX_TOKENS,
       system: opts.system ? [{ type: "text", text: opts.system }] : undefined,
       messages: [{ role: "user", content: opts.prompt }],
     });
@@ -48,7 +60,11 @@ export async function complete(opts: { system?: string; prompt: string; maxToken
   const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [];
   if (opts.system) messages.push({ role: "system", content: opts.system });
   messages.push({ role: "user", content: opts.prompt });
-  const res = await openaiClient(c).chat.completions.create({ model: c.model, max_tokens: maxTokens, messages });
+  const res = await openaiClient(c).chat.completions.create({
+    model: c.model,
+    messages,
+    ...openaiTokenParam(c, maxTokens),
+  });
   return messageText(res.choices[0]?.message);
 }
 
@@ -79,7 +95,7 @@ async function anthropicToolLoop(
   for (let step = 0; step < maxSteps; step++) {
     const res = await client.messages.create({
       model: c.model,
-      max_tokens: c.maxTokens,
+      max_tokens: c.maxTokens ?? DEFAULT_MAX_TOKENS,
       system: [{ type: "text", text: system, cache_control: { type: "ephemeral" } }],
       messages,
       tools: toolSchemas,
@@ -135,9 +151,9 @@ async function openaiToolLoop(
   for (let step = 0; step < maxSteps; step++) {
     const res = await client.chat.completions.create({
       model: c.model,
-      max_tokens: c.maxTokens,
       messages,
       tools: toolSchemas,
+      ...openaiTokenParam(c, c.maxTokens),
     });
     const msg = res.choices[0]?.message;
     if (msg?.tool_calls?.length) {

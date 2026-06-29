@@ -9,7 +9,7 @@ interface ConfigView {
   baseUrl: string;
   model: string;
   hasApiKey: boolean;
-  maxTokens: number;
+  maxTokens?: number;
   maxInputTokens?: number;
 }
 
@@ -48,7 +48,8 @@ export function ProviderSettings() {
           provider: cfg.provider,
           model: cfg.model,
           baseUrl: cfg.baseUrl,
-          maxTokens: cfg.maxTokens,
+          // `null` clears the field (provider default), otherwise send the number.
+          maxTokens: cfg.maxTokens ?? null,
           maxInputTokens: cfg.maxInputTokens ?? null,
           ...(apiKey ? { apiKey } : {}),
         }),
@@ -121,9 +122,10 @@ export function ProviderSettings() {
         <label className="text-xs text-white/60">Max output tokens</label>
         <input
           type="number"
-          min={256}
-          value={cfg.maxTokens}
-          onChange={(e) => setCfg({ ...cfg, maxTokens: Number(e.target.value) || 0 })}
+          min={0}
+          value={cfg.maxTokens ?? ""}
+          onChange={(e) => setCfg({ ...cfg, maxTokens: e.target.value ? Number(e.target.value) : undefined })}
+          placeholder="provider default (leave blank)"
           className="rounded border border-white/10 bg-black/30 px-2 py-1.5 text-xs outline-none focus:border-white/30"
         />
 
