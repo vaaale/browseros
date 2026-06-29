@@ -192,6 +192,43 @@ function stopProc(v) {
   if (v?.proc && !v.proc.killed) { try { v.proc.kill("SIGTERM"); } catch { /* ignore */ } }
 }
 
+// Predict whether the candidate can be rebased onto base WITHOUT touching the
+// worktree (so a conflict leaves the running candidate previewable). Returns null
+// when the 3-way merge applies cleanly, else the conflict report (which files).
+async function mergeTreeConflicts(cwd, base) {
+  const mb = await gitTry(["merge-base", base, "HEAD"], cwd);
+  if (!mb) return null; // no common base resolvable — let the rebase itself decide
+  try {
+    await exec("git", ["merge-tree", "--write-tree", `--merge-base=${mb}`, base, "HEAD"], { cwd, maxBuffer: 8 * 1024 * 1024 });
+    return null; // exit 0 = clean
+  } catch (e) {
+    // Non-zero exit = conflicts; merge-tree prints the conflicted paths/info.
+    const out = `${String(e.stdout || "")}\n${String(e.stderr || "")}`.trim();
+    return out || "merge conflicts (manual resolution required)";
+  }
+}
+
+// Refresh a stale candidate onto a base that moved under it: rebase its worktree
+// onto base, then REBUILD + re-health-gate so a later FF-promote serves built+tested
+// code (not the stale build). Caller has confirmed a clean merge via
+// mergeTreeConflicts; the rebase still has an abort safety net. Runs in the
+// background (build is slow) — sets v.state building→ready|failed for the toolbar.
+async function refreshCandidateOntoBase(v) {
+  stopProc(v);
+  v.proc = null;
+  v.state = "building";
+  log(`refresh: rebasing ${v.branch} onto ${baseBranch}`);
+  try {
+    await git(["rebase", baseBranch], v.worktree);
+  } catch (e) {
+    await gitTry(["rebase", "--abort"], v.worktree);
+    v.state = "failed";
+    throw new Error(`auto-rebase of ${v.branch} onto ${baseBranch} failed: ${e.message || e}`);
+  }
+  await buildAndStart(v); // (re)commit is a no-op after a clean rebase; build + health-gate
+  log(`refresh: ${v.branch} → ${v.state}`);
+}
+
 // ---------------------------------------------------------------- operations
 /** Provision a fresh `next` candidate worktree (off active's HEAD) + data clone. */
 async function beginNext() {
@@ -215,25 +252,38 @@ async function beginNext() {
  *  restart on canonical data (code-only), flip routing, retain previous, drain. */
 async function promote() {
   const cand = versions.next;
-  if (!cand || cand.state !== "ready") throw new Error("no ready candidate to promote");
+  if (!cand) throw new Error("no candidate to promote");
+  if (cand.state === "idle" || cand.state === "building") {
+    throw new Error(`candidate ${cand.branch} is still building — Promote will be available when it is ready.`);
+  }
+  if (cand.state !== "ready") throw new Error(`candidate ${cand.branch} is not promotable (state: ${cand.state}).`);
   const candCommit = await git(["rev-parse", "HEAD"], cand.worktree);
 
-  // Preconditions (fail early with an actionable message rather than letting the
-  // ff-merge below abort cryptically — the failure that made "Promote" look dead):
-  //  - The base checkout (REPO) must be clean. promote runs `git checkout base` +
-  //    `git merge --ff-only` here; an in-place edit (e.g. the agent editing the
-  //    main checkout instead of the candidate worktree) leaves it dirty and the
-  //    merge aborts with "local changes would be overwritten".
+  // The base checkout (REPO) must be clean: promote runs `git checkout base` +
+  // `git merge --ff-only` here; an in-place edit (e.g. an agent editing the main
+  // checkout instead of the candidate worktree) leaves it dirty and the merge
+  // aborts with "local changes would be overwritten".
   const dirty = await gitTry(["status", "--porcelain"], REPO);
   if (dirty) {
     throw new Error(
       `base checkout (${REPO}) has uncommitted changes — commit, stash, or discard them before promoting:\n${dirty}`,
     );
   }
-  //  - The candidate must fast-forward the base (gitTry → "" when baseBranch is an
-  //    ancestor of candCommit, null when `--is-ancestor` exits non-zero).
+
+  // Promote escalation (005-self-modification): prefer a fast-forward; if the base
+  // moved under the candidate, auto-refresh (rebase onto base → rebuild → re-gate)
+  // so a second Promote is a clean FF of built+tested code; if the rebase would
+  // conflict, report the files for manual resolution (the in-browser 3-way merge is
+  // a deferred capability). gitTry → "" when baseBranch is an ancestor of candCommit
+  // (FF-able), null when it is not.
   if ((await gitTry(["merge-base", "--is-ancestor", baseBranch, candCommit], REPO)) === null) {
-    throw new Error(`candidate ${cand.branch} is not a fast-forward of ${baseBranch}; rebase it onto ${baseBranch} before promoting.`);
+    const conflicts = await mergeTreeConflicts(cand.worktree, baseBranch);
+    if (conflicts) {
+      throw new Error(`candidate ${cand.branch} can't be auto-rebased onto ${baseBranch} — manual merge required:\n${conflicts}`);
+    }
+    cand.state = "building"; // disable Promote immediately so a double-click can't start two refreshes
+    void refreshCandidateOntoBase(cand).catch((e) => log(`refresh failed: ${e.message || e}`));
+    throw new Error(`base "${baseBranch}" moved under candidate ${cand.branch}; rebasing onto ${baseBranch} and rebuilding — Promote again when it is ready.`);
   }
 
   // Git integration: fast-forward the base branch to the candidate's commit.

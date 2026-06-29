@@ -36,13 +36,19 @@ are per‑session; everyone else stays on `active`.
 - `buildAndStart()` — commit the worktree, `npm run build`, start `next start -p
   <port>`, then **health‑gate** via `/api/health` (`waitHealthy`, ≤120s). State →
   `building` → `ready` | `failed`.
-- `promote()` — **preconditions first** (fail early with an actionable, surfaced
-  error, not a silent no‑op): the base checkout must be **clean** (an in‑place edit
-  there makes the ff‑merge abort) and the candidate must **fast‑forward** the base.
-  Then **ff‑merge** the candidate commit into the base branch, **tag**
-  (`bos/v<timestamp>`), optional push (`BOS_PUSH_MODE=auto-on-promote`), restart the
-  candidate **on canonical data** (code‑only), flip routing, retain the old active as
-  `previous` (drains in‑flight), discard the candidate's data clone.
+- `promote()` — **clean‑base precondition** (an in‑place edit there makes the ff‑merge
+  abort), then an **escalation** instead of a hard ff requirement:
+  - **FF** if the candidate already sits on base → ff‑merge.
+  - **base moved under the candidate** (not a ff) + rebases cleanly (`mergeTreeConflicts`
+    pre‑check, no worktree mutation) → `refreshCandidateOntoBase()`: stop the candidate,
+    **rebase its worktree onto base, rebuild + re‑health‑gate** (in the background — build
+    is slow; toolbar shows `building`), so a second Promote is a clean ff of built+tested
+    code. The user is told it's refreshing (not a silent no‑op).
+  - **rebase would conflict** → fail with the conflicting files surfaced (manual merge; the
+    in‑browser 3‑way merge is a **deferred** capability).
+  On a ff: **tag** (`bos/v<timestamp>`), optional push (`BOS_PUSH_MODE=auto-on-promote`),
+  restart the candidate **on canonical data** (code‑only), flip routing, retain the old
+  active as `previous` (drains in‑flight), discard the candidate's data clone.
 - `rollback()` — flip back to `previous`.
 - `discard()` — stop the candidate, remove its worktree + data clone.
 - `activate(branch)` — build an **existing** branch as `next` and pin to it (the

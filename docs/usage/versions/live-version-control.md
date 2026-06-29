@@ -73,9 +73,16 @@ git remote.
 
 - **Promote** — integrates the candidate (fast‑forwards it into the base branch),
   tags it, and flips the active version to it. In‑flight requests on the old
-  version finish before it's retired (so a streaming chat isn't cut off). Promote
-  refuses (with a reason shown inline) if the live checkout has uncommitted changes
-  or the candidate isn't a fast‑forward of the base — resolve that, then retry.
+  version finish before it's retired (so a streaming chat isn't cut off).
+  - If the **active version moved on** since the candidate was built (so it's no
+    longer a straight fast‑forward), Promote **automatically refreshes** the
+    candidate: it rebases it onto the latest and **rebuilds** it. You'll see it go
+    back to *building…*; once it's ready, click **Promote** again to finish (this
+    time it's instant). You can **Preview** the refreshed version first to verify.
+  - If the changes can't be combined automatically (a true conflict), Promote tells
+    you which files need a manual merge. (A built‑in conflict editor is planned.)
+  - Promote also refuses (with the reason shown inline) if the live checkout has
+    uncommitted changes — commit, stash, or discard them, then retry.
 - **Rollback** — return to the previously‑good version.
 - **Discard** — drop the candidate and its isolated data clone.
 
