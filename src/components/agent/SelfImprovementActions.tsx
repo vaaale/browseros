@@ -1,6 +1,6 @@
 "use client";
 
-import { useCopilotAction } from "@copilotkit/react-core";
+import { useCopilotAction } from "@/components/agent/gated-action";
 
 // Self-improvement: run the review after a task (updates memory + skills via a
 // restricted pass), improve a skill from feedback (GEPA), and run the Curator.

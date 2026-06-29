@@ -2,9 +2,9 @@ import "server-only";
 import { runToolLoop, type ToolEvent, type LlmTool } from "@/lib/agent/llm";
 import { toolsFor, DEV_TOOLS, SPEC_TOOLS, DELEGATE_TO_DEVELOPER } from "./tools";
 import { runClaudeAgent } from "./claude-runner";
-import { getSubAgent } from "./store";
+import { getAgent } from "./store";
 import { stageAll } from "@/lib/system/git";
-import type { SubAgent, SubAgentRunResult } from "./types";
+import type { Agent, AgentRunResult } from "./types";
 
 export type SubAgentEvent = ToolEvent;
 
@@ -30,7 +30,7 @@ function makeDelegateTool(parentOnEvent: ((e: SubAgentEvent) => void) | undefine
     },
     execute: async (input) => {
       if (depth >= MAX_DELEGATE_DEPTH) return "Delegation depth limit reached; cannot nest another sub-agent.";
-      const dev = await getSubAgent("developer");
+      const dev = await getAgent("developer");
       if (!dev) return "No 'developer' sub-agent is available to implement this.";
       const res = await runSubAgent(dev, String(input.task ?? ""), { onEvent: parentOnEvent, depth: depth + 1 });
       if (res.error) return `Developer error: ${res.error}`;
@@ -40,10 +40,10 @@ function makeDelegateTool(parentOnEvent: ((e: SubAgentEvent) => void) | undefine
 }
 
 async function runLocal(
-  agent: SubAgent,
+  agent: Agent,
   task: string,
   opts?: { onEvent?: (e: SubAgentEvent) => void; depth?: number },
-): Promise<SubAgentRunResult> {
+): Promise<AgentRunResult> {
   const depth = opts?.depth ?? 0;
   const ids = agent.tools ?? [];
   const isDev = ids.some((id) => DEV_TOOL_IDS.includes(id));
@@ -79,10 +79,10 @@ async function runLocal(
  *  so development is actually done by Claude; local agents run via the configured
  *  provider's tool loop. onEvent streams tool calls live as they happen. */
 export async function runSubAgent(
-  agent: SubAgent,
+  agent: Agent,
   task: string,
   opts?: { onEvent?: (e: SubAgentEvent) => void; contentOnly?: boolean; depth?: number },
-): Promise<SubAgentRunResult> {
+): Promise<AgentRunResult> {
   if (agent.type === "claude") {
     // Development must be done by Claude — no local-provider fallback here.
     return runClaudeAgent(agent, task, opts);

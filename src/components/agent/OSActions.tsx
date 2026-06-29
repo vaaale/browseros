@@ -1,6 +1,7 @@
 "use client";
 
-import { useCopilotAction, useCopilotReadable } from "@copilotkit/react-core";
+import { useCopilotReadable } from "@copilotkit/react-core";
+import { useCopilotAction } from "@/components/agent/gated-action";
 import { useOSStore, useOSStoreApi } from "@/store/os-provider";
 import { fsClient, settingsClient } from "@/lib/os-client";
 import { WALLPAPERS } from "@/os/wallpapers";

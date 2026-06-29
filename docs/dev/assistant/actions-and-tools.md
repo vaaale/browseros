@@ -7,10 +7,38 @@ Each `src/components/agent/*Actions.tsx` registers tools with
 **client‑side** and call BOS `/api/...` routes for server work. `ChatToolRenderer`
 registers a wildcard action (`name:"*"`) to render every tool call as a card.
 
+### Per-agent capability gating (one agent, one allowlist — `specs/016-unified-agents/`)
+
+"Sub-agent" is a role, not a type: an agent has ONE capability allowlist that governs
+it whether it's the **active personality** (main-chat actions) or **delegated to**
+(server `toolsFor()` tools). The single source of truth is the **capability registry**
+(`src/lib/agent/capabilities-registry.ts`): every tool by stable id, tagged with the
+context(s) it runs in (`action` / `tool` / `both`). `tool-manifest.ts` is a view of it.
+
+- Gating the active chat: the `*Actions` import `useCopilotAction` from the
+  `gated-action.ts` **shim**, which (via `AgentCapabilitiesProvider` →
+  `resolveActionGate`) replaces a disallowed action with a **render-only no-op**
+  (`available:"disabled"` + `render:()=>null`, dropping `renderAndWaitForResponse`).
+  Not just `available:"disabled"`: CopilotKit routes a "disabled" action to its
+  RENDER path and calls the action's `render` unconditionally, so a handler-only
+  action (no render) would throw "render is not a function" when its tool-call card
+  rendered. The no-op keeps it out of the model's tool set AND render-safe; a
+  disabled action's own past cards render blank (rare — an agent's conversations
+  normally hold only its allowed calls). The catch-all renderer keeps importing
+  from CopilotKit (never gated).
+- CopilotKit forbids an action's `available` changing after registration, so
+  `CopilotProvider` mounts the actions + chat together only once the pinned/active
+  agent's allowlist has loaded (and remounts on agent switch).
+- Back-compat rule: an action is allowed unless the allowlist names ≥1 action id — so
+  unset/legacy (tool-id-only) allowlists keep all actions.
+- `SpecActions` (client spec ops over `/api/specs`) let an active-personality agent
+  (Build Studio) author specs directly, mirroring the server `SPEC_TOOLS`.
+
 | Component | Actions |
 |---|---|
 | `OSActions` | `launchApp, listApps, closeWindow, changeWallpaper, openWebPage, listFiles, readFile, writeFile, createFolder, deletePath` |
-| `McpActions` | `listMcpServers, addMcpServer, removeMcpServer, probeMcpServer` |
+| `McpActions` | `listMcpServers, findTools, listMcpServerTools, callMcpServerTool, addMcpServer, removeMcpServer` |
+| `SpecActions` | `listSpecs, readSpec, writeSpec, editSpec, searchSpecs` (over `/api/specs`) |
 | `SubAgentActions` | `listSubAgents, createSubAgent, delegateToSubAgent, requestClaudeAgentPermission` (elicitation card) |
 | `MemoryActions` | `memory` (add/replace/remove, batch), `recallMemories` |
 | `DevActions` | `installApp, buildApp, listInstalledApps, uninstallApp, getMyInstructions, updateMyInstructions` |

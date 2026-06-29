@@ -1,6 +1,6 @@
 "use client";
 
-import { useCopilotAction } from "@copilotkit/react-core";
+import { useCopilotAction } from "@/components/agent/gated-action";
 import { encodeNested } from "@/lib/agent/nested-events";
 import { startDelegation, pushDelegationEvent, finishDelegation } from "@/lib/agent/subagent-events";
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCopilotAction } from "@copilotkit/react-core";
+import { useCopilotAction } from "@/components/agent/gated-action";
 
 // The curated memory core (USER profile + agent MEMORY) is injected into the
 // system instructions as a frozen snapshot at session start. These actions let

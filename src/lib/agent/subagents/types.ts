@@ -1,12 +1,12 @@
-export type SubAgentType = "local" | "claude";
+export type AgentType = "local" | "claude";
 
-export interface SubAgent {
+export interface Agent {
   /** Folder/slug name under data/agents. */
   id: string;
   name: string;
   description: string;
   /** local = configured provider; claude = Claude Code MCP harness (for dev tasks). */
-  type: SubAgentType;
+  type: AgentType;
   systemPrompt: string;
   /** Tool ids this sub-agent may use (local agents). Empty = all default tools. */
   tools?: string[];
@@ -22,9 +22,9 @@ export interface SubAgent {
   ephemeral?: boolean;
 }
 
-export interface SubAgentRunResult {
+export interface AgentRunResult {
   agent: string;
-  type: SubAgentType;
+  type: AgentType;
   task: string;
   output: string;
   steps: number;

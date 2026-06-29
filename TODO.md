@@ -4,6 +4,10 @@ Running list of issues to revisit. Each entry: date · context · what to do.
 
 ## Per-agent capability allowlist: `tools` spans two namespaces (revisit)
 
+> **Superseded by `specs/016-unified-agents/` (2026-06-29)** — unifies the agent model
+> (sub-agent = a role, not a type) + a single capability registry so one allowlist gates
+> both the active-chat and delegated contexts, with client-side spec actions for BS.
+
 **Date:** 2026-06-28 · **Specs:** `011-per-agent-capabilities`, `013-build-studio-agentic`
 
 **Issue:** An agent's `tools` allowlist (in `AGENT.md`) currently gates **two

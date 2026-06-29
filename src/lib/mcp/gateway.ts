@@ -3,7 +3,7 @@ import { connectMcpClient, extractText } from "./client";
 import { listMcpServers } from "./store";
 import { makeToolMatcher } from "./match";
 import { isAllowed } from "@/lib/agent/capabilities";
-import { getActiveAgentId, getSubAgent } from "@/lib/agent/subagents/store";
+import { getActiveAgentId, getAgent } from "@/lib/agent/subagents/store";
 import type { McpServerConfig, McpToolDescriptor } from "./types";
 
 // The MCP tool gateway (014-mcp-tool-gateway). Instead of dumping every server's
@@ -17,7 +17,7 @@ const toolCache = new Map<string, { at: number; tools: McpToolDescriptor[] }>();
 // The servers the given agent may use (unset/empty allowlist = all). Matches by
 // name or endpoint so legacy endpoint-based allowlists keep working.
 async function allowedServers(agentId?: string): Promise<McpServerConfig[]> {
-  const agent = await getSubAgent(agentId ?? (await getActiveAgentId()));
+  const agent = await getAgent(agentId ?? (await getActiveAgentId()));
   const allow = agent?.mcp;
   const all = await listMcpServers();
   return all.filter((s) => isAllowed(allow, s.name, s.endpoint ?? ""));

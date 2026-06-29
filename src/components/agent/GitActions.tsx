@@ -1,6 +1,6 @@
 "use client";
 
-import { useCopilotAction } from "@copilotkit/react-core";
+import { useCopilotAction } from "@/components/agent/gated-action";
 
 // Git tooling for the "minimize blast radius" policy. Before modifying BOS
 // itself, the assistant starts a feature branch and stages changed files so the

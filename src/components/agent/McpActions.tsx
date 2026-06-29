@@ -1,6 +1,6 @@
 "use client";
 
-import { useCopilotAction } from "@copilotkit/react-core";
+import { useCopilotAction } from "@/components/agent/gated-action";
 import { parseToolArgs } from "@/lib/mcp/args";
 
 // Lets the agent inspect/manage MCP server connections AND use their tools via the

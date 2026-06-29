@@ -1,6 +1,6 @@
 "use client";
 
-import { useCopilotAction } from "@copilotkit/react-core";
+import { useCopilotAction } from "@/components/agent/gated-action";
 import type { Skill } from "@/lib/agent/skills/store";
 
 // Skill library access for the assistant: load full skill instructions on

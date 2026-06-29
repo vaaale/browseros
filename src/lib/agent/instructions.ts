@@ -1,6 +1,6 @@
 import "server-only";
 import { CORE_POLICY, DEFAULT_PERSONALITY } from "./config";
-import { getActiveAgentId, getSubAgent } from "./subagents/store";
+import { getActiveAgentId, getAgent } from "./subagents/store";
 import { listSkills } from "./skills/store";
 import { memorySnapshot } from "./memory/curated";
 import { listMcpServers } from "@/lib/mcp/store";
@@ -20,7 +20,7 @@ function mcpDescription(s: McpServerConfig): string {
 export async function composeInstructions(agentId?: string): Promise<string> {
   const id = agentId ?? (await getActiveAgentId());
   const [agent, skills, memory, mcpServers] = await Promise.all([
-    getSubAgent(id),
+    getAgent(id),
     listSkills(),
     memorySnapshot(),
     listMcpServers(),

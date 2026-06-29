@@ -1,6 +1,6 @@
 "use client";
 
-import { useCopilotAction } from "@copilotkit/react-core";
+import { useCopilotAction } from "@/components/agent/gated-action";
 import { useOSStoreApi } from "@/store/os-provider";
 import type { AppManifest } from "@/os/types";
 
@@ -88,11 +88,12 @@ export function DevActions() {
 
   useCopilotAction({
     name: "getMyInstructions",
-    description: "Read your own current composed system instructions (core policy + active agent personality + skills).",
+    description:
+      "Read the active agent's EDITABLE base instructions (its personality) — the exact text updateMyInstructions overwrites. This is NOT the fully composed prompt: the always-injected core policy, memory, and skills index are added at runtime and MUST NOT be edited or written back (doing so bakes them into the personality and corrupts the agent).",
     parameters: [],
     handler: async () => {
       const res = await fetch("/api/assistant/agent").then((r) => r.json());
-      return String(res.composed ?? "");
+      return String(res.activeBody ?? "");
     },
   });
 

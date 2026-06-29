@@ -3,7 +3,7 @@ import { promises as fs } from "fs";
 import path from "path";
 import { dataDir } from "@/os/data-dir";
 import { writeFileAtomic } from "@/os/atomic-write";
-import type { SubAgent, SubAgentType } from "./types";
+import type { Agent, AgentType } from "./types";
 import { parseFrontmatter, buildFrontmatter, asString, asList } from "./markdown";
 import { readNamespace, patchNamespace } from "@/lib/config/store";
 import { DEFAULT_PERSONALITY } from "@/lib/agent/config";
@@ -19,7 +19,7 @@ function slugify(name: string): string {
 interface SeedAgent {
   name: string;
   description: string;
-  type: SubAgentType;
+  type: AgentType;
   systemPrompt: string;
   tools?: string[];
   skills?: string[];
@@ -86,7 +86,16 @@ const DEFAULTS: SeedAgent[] = [
     description:
       "Authors and refines BOS specifications using spec-kit, and delegates implementation to the Developer sub-agent.",
     type: "local",
-    tools: ["list_specs", "read_spec", "write_spec", "edit_spec", "search_specs", "delegate_to_developer"],
+    // Unified allowlist (016): server tools (delegated runs) + client actions
+    // (as the active personality). Both contexts filter this one list to their own ids.
+    tools: [
+      // server sub-agent tools (toolsFor, delegated)
+      "list_specs", "read_spec", "write_spec", "edit_spec", "search_specs", "delegate_to_developer",
+      // main-chat actions (gated when active personality)
+      "listSpecs", "readSpec", "writeSpec", "editSpec", "searchSpecs",
+      "openSpecArtifact", "refreshSpecTree",
+      "delegateToSubAgent", "loadSkill", "memory", "recallMemories", "listDocs", "readDoc",
+    ],
     skills: ["build-studio"],
     mcp: [],
     systemPrompt:
@@ -102,16 +111,16 @@ const DEFAULTS: SeedAgent[] = [
   },
 ];
 
-function toMarkdown(a: SubAgent): string {
+function toMarkdown(a: Agent): string {
   return buildFrontmatter(
     { name: a.name, description: a.description, type: a.type, model: a.model, subagent_type: a.subagentType, tools: a.tools, skills: a.skills, mcp: a.mcp },
     a.systemPrompt,
   );
 }
 
-function fromMarkdown(id: string, src: string): SubAgent {
+function fromMarkdown(id: string, src: string): Agent {
   const { meta, body } = parseFrontmatter(src);
-  const type = (asString(meta.type) === "claude" ? "claude" : "local") as SubAgentType;
+  const type = (asString(meta.type) === "claude" ? "claude" : "local") as AgentType;
   return {
     id,
     name: asString(meta.name) || id,
@@ -150,12 +159,35 @@ async function ensureSeed(): Promise<void> {
   for (const d of ADDITIVE_DEFAULTS) {
     if (!existing.includes(slugify(d.name))) await writeSeedAgent(d);
   }
+  // Back-fill Build Studio's unified capability ids on upgraded installs (016):
+  // its allowlist must contain action ids or per-agent action gating can't apply
+  // (the back-compat rule otherwise leaves an action-id-less allowlist fully open).
+  // Union only — never removes a user's customizations.
+  await reconcileBuildStudioTools();
 }
 
-export async function listSubAgents(): Promise<SubAgent[]> {
+async function reconcileBuildStudioTools(): Promise<void> {
+  const seed = DEFAULTS.find((d) => d.name === "Build Studio");
+  if (!seed) return;
+  const id = slugify(seed.name);
+  const file = path.join(DIR, id, "AGENT.md");
+  let src: string;
+  try {
+    src = await fs.readFile(file, "utf8");
+  } catch {
+    return;
+  }
+  const agent = fromMarkdown(id, src);
+  const have = new Set(agent.tools ?? []);
+  const missing = (seed.tools ?? []).filter((t) => !have.has(t));
+  if (missing.length === 0) return;
+  await writeFileAtomic(file, toMarkdown({ ...agent, tools: [...(agent.tools ?? []), ...missing] }));
+}
+
+export async function listSubAgents(): Promise<Agent[]> {
   await ensureSeed();
   const dirs = await fs.readdir(DIR, { withFileTypes: true }).catch(() => []);
-  const agents: SubAgent[] = [];
+  const agents: Agent[] = [];
   for (const d of dirs) {
     if (!d.isDirectory()) continue;
     try {
@@ -168,7 +200,7 @@ export async function listSubAgents(): Promise<SubAgent[]> {
   return agents;
 }
 
-export async function getSubAgent(idOrName: string): Promise<SubAgent | undefined> {
+export async function getAgent(idOrName: string): Promise<Agent | undefined> {
   const key = idOrName.toLowerCase();
   return (await listSubAgents()).find((a) => a.id.toLowerCase() === key || a.name.toLowerCase() === key);
 }
@@ -176,22 +208,22 @@ export async function getSubAgent(idOrName: string): Promise<SubAgent | undefine
 export async function createSubAgent(input: {
   name: string;
   description: string;
-  type?: SubAgentType;
+  type?: AgentType;
   systemPrompt: string;
   tools?: string[];
   model?: string;
   subagentType?: string;
-}): Promise<SubAgent> {
+}): Promise<Agent> {
   await ensureSeed();
   const id = slugify(input.name);
-  const agent: SubAgent = { id, type: input.type ?? "local", ...input };
+  const agent: Agent = { id, type: input.type ?? "local", ...input };
   await fs.mkdir(path.join(DIR, id), { recursive: true });
   await writeFileAtomic(path.join(DIR, id, "AGENT.md"), toMarkdown(agent));
   return agent;
 }
 
 export async function removeSubAgent(idOrName: string): Promise<void> {
-  const agent = await getSubAgent(idOrName);
+  const agent = await getAgent(idOrName);
   if (agent) await fs.rm(path.join(DIR, agent.id), { recursive: true, force: true });
 }
 
@@ -212,15 +244,15 @@ export async function setActiveAgentId(id: string): Promise<void> {
 /** The active agent's system prompt — used to compose the assistant's instructions. */
 export async function getActiveAgentBody(): Promise<string> {
   await ensureSeed();
-  const agent = await getSubAgent(await getActiveAgentId());
+  const agent = await getAgent(await getActiveAgentId());
   return agent?.systemPrompt?.trim() || DEFAULT_PERSONALITY;
 }
 
 /** Replace an agent's system prompt (its instructions/personality), preserving its metadata. */
-export async function setAgentSystemPrompt(id: string, systemPrompt: string): Promise<SubAgent | undefined> {
-  const agent = await getSubAgent(id);
+export async function setAgentSystemPrompt(id: string, systemPrompt: string): Promise<Agent | undefined> {
+  const agent = await getAgent(id);
   if (!agent) return undefined;
-  const updated: SubAgent = { ...agent, systemPrompt };
+  const updated: Agent = { ...agent, systemPrompt };
   await writeFileAtomic(path.join(DIR, agent.id, "AGENT.md"), toMarkdown(updated));
   return updated;
 }
@@ -230,10 +262,10 @@ export async function setAgentSystemPrompt(id: string, systemPrompt: string): Pr
 export async function setAgentCapabilities(
   id: string,
   caps: { tools?: string[]; skills?: string[]; mcp?: string[] },
-): Promise<SubAgent | undefined> {
-  const agent = await getSubAgent(id);
+): Promise<Agent | undefined> {
+  const agent = await getAgent(id);
   if (!agent) return undefined;
-  const updated: SubAgent = {
+  const updated: Agent = {
     ...agent,
     tools: caps.tools ?? agent.tools,
     skills: caps.skills ?? agent.skills,

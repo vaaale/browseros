@@ -13,8 +13,15 @@ interface AgentMeta {
   mcp: string[];
 }
 
+interface Capability {
+  id: string;
+  group: string;
+  description: string;
+  context: "action" | "tool" | "both";
+}
+
 interface Catalog {
-  tools: string[];
+  tools: Capability[];
   skills: { id: string; name: string }[];
   mcp: { name: string; endpoint: string }[];
 }
@@ -77,12 +84,15 @@ export function AssistantTab() {
   const [skills, setSkills] = useState<Set<string>>(new Set());
   const [mcp, setMcp] = useState<Set<string>>(new Set());
 
-  const toolItems = useMemo<CatalogItem[]>(() => catalog.tools.map((t) => ({ id: t, label: t })), [catalog]);
+  const toolItems = useMemo<CatalogItem[]>(
+    () => catalog.tools.map((c) => ({ id: c.id, label: c.id, sub: `${c.group} · ${c.context}` })),
+    [catalog],
+  );
   const skillItems = useMemo<CatalogItem[]>(() => catalog.skills.map((s) => ({ id: s.id, label: s.name })), [catalog]);
   const mcpItems = useMemo<CatalogItem[]>(() => catalog.mcp.map((m) => ({ id: m.name, label: m.name, sub: m.endpoint })), [catalog]);
 
   const loadCaps = useCallback((agent: AgentMeta | undefined, cat: Catalog) => {
-    setTools(initChecked(agent?.tools ?? [], cat.tools));
+    setTools(initChecked(agent?.tools ?? [], cat.tools.map((c) => c.id)));
     setSkills(initChecked(agent?.skills ?? [], cat.skills.map((s) => s.id)));
     setMcp(initChecked(agent?.mcp ?? [], cat.mcp.map((m) => m.name)));
   }, []);
@@ -220,13 +230,14 @@ export function AssistantTab() {
           Capabilities {activeAgent ? `· ${activeAgent.name}` : ""}
         </h4>
         <p className="mb-2 text-[10px] text-white/40">
-          Check the tools, skills, and MCP servers this agent may use. Leaving a group fully checked means
-          &ldquo;all allowed&rdquo;. (Tools here are sub-agent tools; main-chat action scoping is tracked separately.)
+          Check the capabilities, skills, and MCP servers this agent may use. Leaving a group fully checked means
+          &ldquo;all allowed&rdquo;. One capability list governs the agent in both contexts — as the active personality
+          (main-chat actions) and when delegated to (sub-agent tools); each item is tagged with its group and context.
         </p>
         <div className="space-y-3">
           <CapabilityGroup title="Skills" items={skillItems} checked={skills} onToggle={(id) => toggle(skills, setSkills, id)} />
           <CapabilityGroup title="MCP servers" items={mcpItems} checked={mcp} onToggle={(id) => toggle(mcp, setMcp, id)} />
-          <CapabilityGroup title="Tools" items={toolItems} checked={tools} onToggle={(id) => toggle(tools, setTools, id)} />
+          <CapabilityGroup title="Capabilities" items={toolItems} checked={tools} onToggle={(id) => toggle(tools, setTools, id)} />
         </div>
         <div className="mt-2 flex items-center gap-2">
           <button onClick={saveCaps} className="rounded bg-white/10 px-3 py-1.5 text-xs hover:bg-white/20">Save capabilities</button>

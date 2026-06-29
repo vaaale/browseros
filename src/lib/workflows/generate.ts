@@ -1,7 +1,7 @@
 import "server-only";
 import { complete } from "@/lib/agent/llm";
 import { listSubAgents } from "@/lib/agent/subagents/store";
-import type { SubAgent } from "@/lib/agent/subagents/types";
+import type { Agent } from "@/lib/agent/subagents/types";
 import { generateWorkflowId } from "./store";
 import type { Workflow } from "./types";
 
@@ -37,7 +37,7 @@ Hard rules:
 - Outputs go in /Workflows/results/. Set outputConvention accordingly.
 - Return ONLY the JSON in a fenced \`\`\`json block.`;
 
-function buildAgentList(agents: SubAgent[]): string {
+function buildAgentList(agents: Agent[]): string {
   return agents
     .map((a) => `- ${a.id} (${a.type}) — ${a.description || "no description"}`)
     .join("\n");
@@ -56,7 +56,7 @@ function extractJson(text: string): string {
 /** Generate a workflow JSON from a natural-language task description. */
 export async function generateWorkflowFromTask(
   task: string,
-  availableAgents?: SubAgent[],
+  availableAgents?: Agent[],
 ): Promise<Workflow> {
   const agents = availableAgents ?? (await listSubAgents());
   const prompt = `Task:\n${task}\n\nAvailable sub-agents:\n${buildAgentList(agents)}\n\nReturn the workflow JSON now.`;

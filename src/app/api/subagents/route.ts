@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { listSubAgents, createSubAgent, removeSubAgent } from "@/lib/agent/subagents/store";
-import type { SubAgentType } from "@/lib/agent/subagents/types";
+import type { AgentType } from "@/lib/agent/subagents/types";
 
 export const dynamic = "force-dynamic";
 
@@ -17,7 +17,7 @@ export async function POST(req: NextRequest) {
     const agent = await createSubAgent({
       name: String(body.name),
       description: String(body.description ?? ""),
-      type: body.type === "claude" ? "claude" : ("local" as SubAgentType),
+      type: body.type === "claude" ? "claude" : ("local" as AgentType),
       systemPrompt: String(body.systemPrompt),
       tools: Array.isArray(body.tools) ? body.tools.map(String) : undefined,
       model: body.model ? String(body.model) : undefined,

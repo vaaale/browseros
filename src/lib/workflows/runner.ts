@@ -1,7 +1,7 @@
 import "server-only";
 import { runSubAgent } from "@/lib/agent/subagents/runner";
-import { getSubAgent } from "@/lib/agent/subagents/store";
-import type { SubAgent } from "@/lib/agent/subagents/types";
+import { getAgent } from "@/lib/agent/subagents/store";
+import type { Agent } from "@/lib/agent/subagents/types";
 import {
   appendExecutionLog,
   clearExecutionLog,
@@ -53,8 +53,8 @@ function makeEvent(
   return { type, workflowId, ts: Date.now(), ...patch };
 }
 
-async function resolveSubAgent(agentId: string): Promise<SubAgent | undefined> {
-  return getSubAgent(agentId);
+async function resolveSubAgent(agentId: string): Promise<Agent | undefined> {
+  return getAgent(agentId);
 }
 
 function isTransientError(err: unknown): boolean {
@@ -111,7 +111,7 @@ async function runToolStep(step: WorkflowStep, ctx: RunContext): Promise<unknown
     `When the tool returns, briefly summarize its result in plain text.`,
   ].filter(Boolean).join("\n");
 
-  const ephemeral: SubAgent = {
+  const ephemeral: Agent = {
     ...agent,
     id: `${agent.id}-tool-step`,
     name: `${agent.name} (tool: ${step.toolName ?? "unknown"})`,

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCopilotAction } from "@copilotkit/react-core";
+import { useCopilotAction } from "@/components/agent/gated-action";
 
 // Lets the assistant switch which agent's instructions it uses as its active
 // personality. (Use listSubAgents to see the available agents.)

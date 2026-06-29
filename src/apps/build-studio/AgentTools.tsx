@@ -1,6 +1,6 @@
 "use client";
 
-import { useCopilotAction } from "@copilotkit/react-core";
+import { useCopilotAction } from "@/components/agent/gated-action";
 
 // Frontend tools the Build Studio agent can call to DRIVE the app's UI. They are
 // registered inside the app's embedded chat provider (via AssistantChat's children

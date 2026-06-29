@@ -10,17 +10,20 @@ import {
 import { composeInstructions } from "@/lib/agent/instructions";
 import { listSkills } from "@/lib/agent/skills/store";
 import { listMcpServers } from "@/lib/mcp/store";
-import { SUBAGENT_TOOLS, DEV_TOOLS, SPEC_TOOLS, DELEGATE_TO_DEVELOPER } from "@/lib/agent/subagents/tools";
+import { CAPABILITIES } from "@/lib/agent/capabilities-registry";
 
 export const dynamic = "force-dynamic";
 
-// The catalog of capabilities the Settings UI offers per agent. `tools` here are
-// the sub-agent tool ids (server-known); main-chat action names are gated client-
-// side (see AgentCapabilities) — separating those namespaces is tracked in TODO.md.
+// The catalog of capabilities the Settings UI offers per agent. `tools` is the
+// unified capability registry (016): one allowlist governs an agent in both
+// contexts — server tools (toolsFor) and main-chat actions (gated client-side via
+// AgentCapabilities). Each item is { id, group, description, context }.
 async function buildCatalog() {
   const [skills, mcp] = await Promise.all([listSkills(), listMcpServers()]);
   return {
-    tools: [...Object.keys(SUBAGENT_TOOLS), ...Object.keys(DEV_TOOLS), ...Object.keys(SPEC_TOOLS), DELEGATE_TO_DEVELOPER],
+    // The unified capability registry (016): one allowlist governs an agent in both
+    // contexts. Each item is { id, group, description, context }.
+    tools: CAPABILITIES,
     skills: skills.map((s) => ({ id: s.id, name: s.name })),
     mcp: mcp.map((m) => ({
       name: m.name,

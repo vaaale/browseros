@@ -5,7 +5,7 @@ import { getHarnessConfig } from "@/lib/devharness/harness-config";
 import { supervisorEnabled, supervisorBegin, supervisorBuild } from "@/lib/devharness/supervisor";
 import { stageAll } from "@/lib/system/git";
 import type { McpServerConfig } from "@/lib/mcp/types";
-import type { SubAgent, SubAgentRunResult } from "./types";
+import type { Agent, AgentRunResult } from "./types";
 
 // Marks an error as "the harness couldn't run the agent" (vs. a task failure).
 export const HARNESS_UNAVAILABLE = "harness-unavailable:";
@@ -27,7 +27,7 @@ interface StreamEvent {
 // repo. Claude itself is the autonomous coding agent (its own Read/Edit/Write/
 // Bash tools); we stream its tool_use events for the live UI and return its
 // final result. Uses --dangerously-skip-permissions so it runs non-interactively.
-function runClaudeCli(agent: SubAgent, task: string, cwd: string, onEvent?: OnEvent): Promise<SubAgentRunResult> {
+function runClaudeCli(agent: Agent, task: string, cwd: string, onEvent?: OnEvent): Promise<AgentRunResult> {
   const base = { agent: agent.name, type: "claude" as const, task, steps: 0, toolCalls: [] as { tool: string; input: unknown }[] };
   onEvent?.({ tool: "Claude Code (headless)", input: { task } });
 
@@ -40,7 +40,7 @@ function runClaudeCli(agent: SubAgent, task: string, cwd: string, onEvent?: OnEv
   ];
   if (agent.model) args.push("--model", agent.model);
 
-  return new Promise<SubAgentRunResult>((resolve) => {
+  return new Promise<AgentRunResult>((resolve) => {
     const child = spawn("claude", args, { cwd, env: process.env });
     const toolCalls: { tool: string; input: unknown }[] = [];
     let steps = 0;
@@ -50,7 +50,7 @@ function runClaudeCli(agent: SubAgent, task: string, cwd: string, onEvent?: OnEv
     let buf = "";
     let settled = false;
 
-    const finish = (r: SubAgentRunResult) => {
+    const finish = (r: AgentRunResult) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -119,7 +119,7 @@ function parseAvailableAgents(text: string): string[] {
 
 // Run a Claude sub-agent via a Claude Code MCP harness (the Agent tool). Kept for
 // remote/stdio harness setups; returns HARNESS_UNAVAILABLE if it can't spawn.
-async function runViaMcp(agent: SubAgent, task: string, server: McpServerConfig, onEvent?: OnEvent): Promise<SubAgentRunResult> {
+async function runViaMcp(agent: Agent, task: string, server: McpServerConfig, onEvent?: OnEvent): Promise<AgentRunResult> {
   const requestedType = agent.subagentType || agent.id;
   const base = { agent: agent.name, type: "claude" as const, task, steps: 0, toolCalls: [] as { tool: string; input: unknown }[] };
   onEvent?.({ tool: `Claude:${requestedType}`, input: { task } });
@@ -170,10 +170,10 @@ async function runViaMcp(agent: SubAgent, task: string, server: McpServerConfig,
 
 // Entry point: run a Claude sub-agent using whichever harness mode is configured.
 export async function runClaudeAgent(
-  agent: SubAgent,
+  agent: Agent,
   task: string,
   opts?: { onEvent?: OnEvent; contentOnly?: boolean },
-): Promise<SubAgentRunResult> {
+): Promise<AgentRunResult> {
   const harness = await getHarnessConfig();
   if (harness.mode !== "cli") return runViaMcp(agent, task, harness.server, opts?.onEvent);
 

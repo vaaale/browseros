@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSubAgent } from "@/lib/agent/subagents/store";
+import { getAgent } from "@/lib/agent/subagents/store";
 import { runSubAgent } from "@/lib/agent/subagents/runner";
-import type { SubAgent } from "@/lib/agent/subagents/types";
+import type { Agent } from "@/lib/agent/subagents/types";
 
 export const dynamic = "force-dynamic";
 // A local dev tool-loop can run many steps; the NDJSON stream keeps the
@@ -21,7 +21,7 @@ export async function POST(req: NextRequest) {
   const task = String(body.task ?? "");
   if (!task) return NextResponse.json({ error: "task is required" }, { status: 400 });
 
-  let def: SubAgent | undefined;
+  let def: Agent | undefined;
   const e = body.ephemeral as Record<string, unknown> | undefined;
   if (e && e.name && e.systemPrompt) {
     def = {
@@ -35,7 +35,7 @@ export async function POST(req: NextRequest) {
       ephemeral: true,
     };
   } else if (body.agent) {
-    def = await getSubAgent(String(body.agent));
+    def = await getAgent(String(body.agent));
   }
 
   if (!def) {
