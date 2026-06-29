@@ -25,7 +25,8 @@ under `./apps`.
 - **LLM SDKs**: `@anthropic-ai/sdk`, `openai`.
 - **MCP**: `@modelcontextprotocol/sdk` (streamable‑HTTP, SSE, and **stdio** transports).
 - **esbuild** for bundling installed app projects.
-- **Claude Code** CLI for development tasks (headless `claude -p`).
+- **Claude Code** CLI for development tasks (headless `claude -p`); **OpenCode** CLI
+  (`opencode run`) is a provider‑agnostic alternative dev‑harness backend.
 - **Playwright** for e2e self‑testing and (optionally) browser automation.
 
 ---

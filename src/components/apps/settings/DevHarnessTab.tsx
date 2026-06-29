@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { Loader2, PlugZap, Plug, Save, Check } from "lucide-react";
 
-type Transport = "cli" | "stdio" | "http" | "sse";
+type Transport = "cli" | "opencode" | "stdio" | "http" | "sse";
 interface Values {
   transport: Transport;
   command: string;
@@ -13,6 +13,7 @@ interface Values {
 interface TestResult {
   ok: boolean;
   mode?: string;
+  tool?: string;
   version?: string;
   tools?: string[];
   error?: string;
@@ -83,8 +84,8 @@ export function DevHarnessTab() {
     <div className="max-w-xl space-y-4 text-xs">
       <p className="text-white/50">
         How the <b>developer</b> sub-agent runs. <b>Claude CLI</b> spawns Claude Code headless (<code>claude -p</code>) inside this
-        repository, so Claude itself reads and edits BrowserOS&apos;s source. The MCP modes instead drive a <code>claude mcp serve</code>
-        {" "}or remote harness.
+        repository, so Claude itself reads and edits BrowserOS&apos;s source. <b>OpenCode CLI</b> does the same with <code>opencode run</code>
+        {" "}(a provider-agnostic alternative). The MCP modes instead drive a <code>claude mcp serve</code> or remote harness.
       </p>
 
       <label className="grid grid-cols-[120px_1fr] items-center gap-2">
@@ -95,13 +96,14 @@ export function DevHarnessTab() {
           className="rounded border border-white/10 bg-black/30 px-2 py-1.5 outline-none focus:border-white/30"
         >
           <option value="cli">Claude CLI (headless, recommended)</option>
+          <option value="opencode">OpenCode CLI (headless)</option>
           <option value="stdio">MCP stdio (claude mcp serve)</option>
           <option value="http">MCP HTTP (remote)</option>
           <option value="sse">MCP SSE (remote)</option>
         </select>
       </label>
 
-      {(v.transport === "cli" || v.transport === "stdio") && (
+      {(v.transport === "cli" || v.transport === "opencode" || v.transport === "stdio") && (
         <label className="grid grid-cols-[120px_1fr] items-center gap-2">
           <span className="text-white/60">Working dir</span>
           <input
@@ -137,10 +139,10 @@ export function DevHarnessTab() {
         </label>
       )}
 
-      {v.transport === "cli" && (
+      {(v.transport === "cli" || v.transport === "opencode") && (
         <p className="rounded border border-amber-400/20 bg-amber-400/10 px-3 py-2 text-amber-100/80">
-          Claude runs with <code>--dangerously-skip-permissions</code> (no edit/command prompts). Intended to be sandboxed (e.g.
-          Docker). It works on a git feature branch so changes stay reversible.
+          {v.transport === "opencode" ? "OpenCode" : "Claude"} runs with <code>--dangerously-skip-permissions</code> (no edit/command
+          prompts). Intended to be sandboxed (e.g. Docker). It works on a git feature branch so changes stay reversible.
         </p>
       )}
 
@@ -165,7 +167,7 @@ export function DevHarnessTab() {
           <span>
             {test.ok
               ? test.mode === "cli"
-                ? `Claude CLI ready — ${test.version ?? "installed"}.`
+                ? `${test.tool === "opencode" ? "OpenCode" : "Claude"} CLI ready — ${test.version ?? "installed"}.`
                 : `Connected — ${test.tools?.length ?? 0} tools${test.tools?.includes("Agent") ? " (Agent available)" : ""}.`
               : `Not available: ${test.error}`}
           </span>

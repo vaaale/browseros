@@ -38,9 +38,10 @@ The first time you open BOS, a **setup wizard** appears. It collects three thing
    (**Anthropic**, **OpenAI**, **OpenAI Codex**, or a **local OpenAI‑compatible**
    server), a model, an optional base URL, and an API key. Local/self‑hosted
    models that speak the OpenAI API are supported (and usually need no key).
-2. **Claude Dev Harness** (optional) — how the assistant runs *Claude Code* for
+2. **Dev Harness** (optional) — how the assistant runs an autonomous coder for
    development tasks. The default, **Claude CLI (headless)**, runs Claude Code on
-   the machine hosting BOS. You can also point it at an MCP harness.
+   the machine hosting BOS; **OpenCode CLI (headless)** is a provider‑agnostic
+   alternative. You can also point it at an MCP harness.
 3. **Data Isolation** — how a previewed BOS version's data is kept separate from
    your live data during self‑modification. The wizard defaults to the best method
    your filesystem supports.

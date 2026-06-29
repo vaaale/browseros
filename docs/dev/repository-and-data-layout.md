@@ -53,8 +53,9 @@ src/
     apps/                       store.ts (install/uninstall/restore/purge), build.ts (esbuild)
     gitfs/store.ts              Thin git layer for the content repo
     datafs/                     clone.ts (preview clone backends), probe.ts (fs capabilities)
-    devharness/                 harness-config.ts (cli|mcp), supervisor.ts (client),
-                                thread-branches.ts (conversation→feature-branch map)
+    devharness/                 harness-config.ts (cli: claude|opencode, or mcp),
+                                supervisor.ts (client),
+                                thread-branches.ts (branch-key→feature-branch map)
     docs/store.ts               Read-only reader of the project docs/ trees (usage + dev)
     system/git.ts               Scoped git helper (branch/add/status)
     dev/repo-fs.ts              Repo-scoped source FS (jailed; local dev sub-agents)

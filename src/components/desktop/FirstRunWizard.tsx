@@ -10,7 +10,7 @@ export function FirstRunWizard() {
   const [model, setModel] = useState(PROVIDERS.anthropic.defaultModel);
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
-  const [harnessTransport, setHarnessTransport] = useState<"cli" | "stdio" | "http" | "sse">("cli");
+  const [harnessTransport, setHarnessTransport] = useState<"cli" | "opencode" | "stdio" | "http" | "sse">("cli");
   const [harnessCommand, setHarnessCommand] = useState("claude mcp serve");
   const [harnessUrl, setHarnessUrl] = useState("");
   const [dataFsMethod, setDataFsMethod] = useState("auto");
@@ -28,7 +28,7 @@ export function FirstRunWizard() {
       .then((d) => {
         const harness = (d.schemas ?? []).find((s: { namespace: string }) => s.namespace === "dev-harness");
         if (harness) {
-          setHarnessTransport((harness.values.transport as "cli" | "stdio" | "http" | "sse") ?? "cli");
+          setHarnessTransport((harness.values.transport as "cli" | "opencode" | "stdio" | "http" | "sse") ?? "cli");
           setHarnessCommand(String(harness.values.command ?? "claude mcp serve"));
           setHarnessUrl(String(harness.values.url ?? ""));
         }
@@ -88,7 +88,7 @@ export function FirstRunWizard() {
           <Sparkles size={18} className="text-violet-300" />
           <h2 className="text-base font-semibold">Welcome to BrowserOS</h2>
         </div>
-        <p className="mb-4 text-xs text-white/50">Configure your AI model and (optionally) the Claude dev harness to get started.</p>
+        <p className="mb-4 text-xs text-white/50">Configure your AI model and (optionally) the dev harness to get started.</p>
 
         <div className="space-y-3">
           <h3 className="text-xs font-semibold uppercase tracking-wide text-white/50">AI Provider</h3>
@@ -105,11 +105,12 @@ export function FirstRunWizard() {
             <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder={meta.keyRequired ? "Required" : "Optional for local"} className="rounded border border-white/10 bg-black/30 px-2 py-1.5 text-xs outline-none" />
           </div>
 
-          <h3 className="pt-1 text-xs font-semibold uppercase tracking-wide text-white/50">Claude Dev Harness (optional)</h3>
+          <h3 className="pt-1 text-xs font-semibold uppercase tracking-wide text-white/50">Dev Harness (optional)</h3>
           <div className="grid grid-cols-[110px_1fr] items-center gap-2">
             <label className="text-xs text-white/60">Mode</label>
-            <select value={harnessTransport} onChange={(e) => setHarnessTransport(e.target.value as "cli" | "stdio" | "http" | "sse")} className="rounded border border-white/10 bg-black/30 px-2 py-1.5 text-xs outline-none">
+            <select value={harnessTransport} onChange={(e) => setHarnessTransport(e.target.value as "cli" | "opencode" | "stdio" | "http" | "sse")} className="rounded border border-white/10 bg-black/30 px-2 py-1.5 text-xs outline-none">
               <option value="cli">Claude CLI (headless, recommended)</option>
+              <option value="opencode">OpenCode CLI (headless)</option>
               <option value="stdio">MCP stdio (claude mcp serve)</option>
               <option value="http">MCP HTTP (remote)</option>
               <option value="sse">MCP SSE (remote)</option>

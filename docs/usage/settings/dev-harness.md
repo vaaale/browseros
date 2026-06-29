@@ -1,8 +1,9 @@
 # Settings → Dev Harness
 
-The **Dev Harness** controls **how Claude Code runs** for development tasks
-(building apps and modifying BOS). All coding in BOS is done by Claude, and this
-tab decides *how* Claude is launched.
+The **Dev Harness** controls **how the developer agent runs** for development tasks
+(building apps and modifying BOS). All coding in BOS is done by an autonomous coding
+agent — Claude Code or OpenCode — and this tab decides *which* one and *how* it is
+launched.
 
 ---
 
@@ -15,6 +16,13 @@ tab decides *how* Claude is launched.
   captures the result. Because it runs non‑interactively (permissions skipped), it
   is intended to run in a **sandboxed** environment (e.g. Docker).
   - **Working directory** — where Claude runs (defaults to the BOS repo).
+- **OpenCode CLI (headless)** — a provider‑agnostic alternative that spawns OpenCode
+  non‑interactively (`opencode run … --format json --dangerously-skip-permissions`)
+  in the BOS repo. **OpenCode itself** is the autonomous coder; BOS streams its tool
+  activity and captures the result, exactly like the Claude CLI. OpenCode uses its
+  **own** provider/model auth (configure it via OpenCode, e.g. `opencode auth login`
+  or its config), independent of the BOS AI‑provider setting. Same sandbox advice.
+  - **Working directory** — where OpenCode runs (defaults to the BOS repo).
 - **MCP stdio (`claude mcp serve`)** — connect to a local Claude Code MCP server.
   - **Command** — the command to spawn (default `claude mcp serve`).
 - **MCP HTTP (remote)** / **MCP SSE (remote)** — connect to a remote Claude Code
@@ -29,8 +37,9 @@ tab decides *how* Claude is launched.
 
 ## Testing
 
-Use the tab's **Test** action to probe the configured harness (e.g. the CLI
-version, or the tools a remote harness exposes) so you know it's reachable before
+Use the tab's **Test** action to probe the configured harness — for CLI modes it
+checks the selected binary (`claude --version` or `opencode --version`); for MCP
+modes it lists the tools a remote harness exposes — so you know it's reachable before
 relying on it.
 
 ---
@@ -46,7 +55,7 @@ of the first‑run wizard).
 
 ## Sandboxing note
 
-Headless CLI mode runs Claude with permissions skipped so it's fully
-non‑interactive. Run BOS in a sandbox (e.g. Docker) for development use; combined
-with BOS's feature‑branch and (when enabled) version‑isolation safeguards, code
-changes stay contained.
+Headless CLI mode runs the coder (Claude or OpenCode) with permissions skipped so
+it's fully non‑interactive. Run BOS in a sandbox (e.g. Docker) for development use;
+combined with BOS's feature‑branch and (when enabled) version‑isolation safeguards,
+code changes stay contained.

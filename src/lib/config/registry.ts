@@ -116,7 +116,7 @@ const REGISTRATIONS: ConfigRegistration[] = [
       namespace: "dev-harness",
       title: "Dev Harness",
       description:
-        "How the Claude developer sub-agent runs. 'Claude CLI' spawns Claude Code headless (`claude -p`) inside this repo so Claude itself edits BOS source — recommended. The MCP modes connect to a `claude mcp serve` (stdio) or a remote harness instead.",
+        "How the developer sub-agent runs. 'Claude CLI' spawns Claude Code headless (`claude -p`) inside this repo so Claude itself edits BOS source — recommended. 'OpenCode CLI' spawns OpenCode headless (`opencode run`) instead — a provider-agnostic alternative. The MCP modes connect to a `claude mcp serve` (stdio) or a remote harness.",
       order: 30,
       customComponent: "dev-harness",
       fields: [
@@ -124,9 +124,10 @@ const REGISTRATIONS: ConfigRegistration[] = [
           key: "transport",
           label: "Mode",
           type: "select",
-          description: "Claude CLI runs Claude Code headless in the repo; the MCP modes drive a harness's Agent tool.",
+          description: "Claude/OpenCode CLI run a coding agent headless in the repo; the MCP modes drive a harness's Agent tool.",
           options: [
             { value: "cli", label: "Claude CLI (headless, recommended)" },
+            { value: "opencode", label: "OpenCode CLI (headless)" },
             { value: "stdio", label: "MCP stdio (claude mcp serve)" },
             { value: "http", label: "MCP HTTP (remote)" },
             { value: "sse", label: "MCP SSE (remote)" },

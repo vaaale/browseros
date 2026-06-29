@@ -10,15 +10,18 @@ export const maxDuration = 60;
 const exec = promisify(execFile);
 
 // Connectivity check for the configured dev harness. For CLI mode it verifies the
-// `claude` binary is installed; for MCP modes it connects and lists tools.
+// selected binary (`claude` or `opencode`) is installed; for MCP modes it connects
+// and lists tools.
 export async function GET() {
   const h = await getHarnessConfig();
   if (h.mode === "cli") {
+    const bin = h.tool === "opencode" ? "opencode" : "claude";
+    const label = h.tool === "opencode" ? "OpenCode" : "Claude";
     try {
-      const { stdout } = await exec("claude", ["--version"], { timeout: 10_000 });
-      return NextResponse.json({ mode: "cli", ok: true, version: stdout.trim(), cwd: h.cwd });
+      const { stdout } = await exec(bin, ["--version"], { timeout: 10_000 });
+      return NextResponse.json({ mode: "cli", tool: h.tool, ok: true, version: stdout.trim(), cwd: h.cwd });
     } catch (e) {
-      return NextResponse.json({ mode: "cli", ok: false, error: `Claude CLI not available: ${(e as Error).message}`, cwd: h.cwd });
+      return NextResponse.json({ mode: "cli", tool: h.tool, ok: false, error: `${label} CLI not available: ${(e as Error).message}`, cwd: h.cwd });
     }
   }
   const result = await probeMcpServer(h.server);

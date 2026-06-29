@@ -76,22 +76,31 @@ the dev tools implicitly.
 
 ---
 
-## How Claude Code runs (`claude-runner.ts` + `devharness/harness-config.ts`)
+## How the dev agent runs (`claude-runner.ts` + `devharness/harness-config.ts`)
 
 `getHarnessConfig()` resolves the `dev-harness` namespace to
-`{ mode:"cli", cwd } | { mode:"mcp", server }`:
+`{ mode:"cli", tool:"claude"|"opencode", cwd } | { mode:"mcp", server }`. Both CLI
+tools spawn a headless coder that edits source in `cwd`; only the binary and event
+parsing differ — the Supervisor worktree, build‑gate, and staging are harness‑agnostic.
 
-- **`cli` (default & recommended):** spawn
+- **`cli` tool `claude` (default & recommended):** spawn
   `claude -p <task> --append-system-prompt <agent prompt> --output-format
-  stream-json --verbose --dangerously-skip-permissions` with `cwd = repo`. Claude is
-  the autonomous coder (its own Read/Edit/Write/Bash). BOS parses the stream‑json
+  stream-json --verbose --dangerously-skip-permissions`. BOS parses the stream‑json
   (`type:"assistant"` → `content[].tool_use` for live events; `type:"result"` →
-  `result`/`is_error`). Permissions are skipped → **run sandboxed (e.g. Docker)**.
-  Files are `git add`‑ed afterward as a backstop. ~590s timeout.
+  `result`/`is_error`).
+- **`cli` tool `opencode`:** spawn `opencode run <prompt> --format json
+  --dangerously-skip-permissions [--model …]`. OpenCode has no inline system‑prompt
+  flag, so the agent prompt is **prepended to the message** (like the MCP path) to
+  avoid writing an `opencode.json` the Supervisor would commit. BOS parses the
+  newline‑delimited events (`tool_use` → `part` `ToolPart` for live events, de‑duped
+  by `callID`; `text` → cumulative `part.text` per id = final output; `error`).
+- Both CLI tools: permissions skipped → **run sandboxed (e.g. Docker)**; files are
+  `git add`‑ed afterward as a backstop; ~590s timeout.
 - **`mcp`:** connect to a Claude Code MCP server (stdio `claude mcp serve` or remote
   HTTP/SSE) and drive its `Agent` tool with a generated `subagent_type`. ⚠️ The
   `Agent` tool only spawns sub‑agent types **registered at the harness's startup**;
   if none match it returns `HARNESS_UNAVAILABLE` and the CLI path is preferred.
+  (OpenCode is **CLI‑only** here — it isn't exposed over this MCP `Agent` path.)
 
 ---
 

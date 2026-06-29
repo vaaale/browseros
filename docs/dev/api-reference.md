@@ -28,7 +28,7 @@ delimited JSON), not a single body.
 | `/apps/[[...slug]]` | GET | **Serve** installed‑app files (iframe content; `dist/` if built) |
 
 ## Assistant / agents
-
+delegate
 | Route | Methods | Purpose |
 |---|---|---|
 | `/api/copilotkit` | POST | CopilotKit runtime (per‑request adapter + MCP) |

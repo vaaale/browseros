@@ -112,6 +112,116 @@ function runClaudeCli(agent: Agent, task: string, cwd: string, onEvent?: OnEvent
   });
 }
 
+interface OcPart {
+  type?: string;
+  id?: string;
+  callID?: string;
+  tool?: string;
+  state?: { input?: unknown; status?: string };
+  text?: string;
+  synthetic?: boolean;
+  ignored?: boolean;
+}
+interface OcEvent {
+  type?: string; // "tool_use" | "step_start" | "step_finish" | "text" | "error"
+  part?: OcPart;
+  error?: unknown;
+}
+
+// Run a dev sub-agent by spawning OpenCode headless (`opencode run --format json`)
+// in the repo. OpenCode itself is the autonomous coding agent (its own read/edit/
+// write/bash tools); we stream its tool events for the live UI and accumulate its
+// final text. OpenCode has no inline system-prompt flag, so — like the MCP path —
+// we prepend the agent's prompt to the task message (avoids writing an opencode.json
+// into the worktree, which the Supervisor would commit). `--dangerously-skip-
+// permissions` runs it non-interactively, matching the Claude CLI path.
+function runOpenCodeCli(agent: Agent, task: string, cwd: string, onEvent?: OnEvent): Promise<AgentRunResult> {
+  const base = { agent: agent.name, type: "claude" as const, task, steps: 0, toolCalls: [] as { tool: string; input: unknown }[] };
+  onEvent?.({ tool: "OpenCode (headless)", input: { task } });
+
+  const args = [
+    "run", `${agent.systemPrompt}\n\n## Task\n${task}`,
+    "--format", "json",
+    "--dangerously-skip-permissions",
+  ];
+  if (agent.model) args.push("--model", agent.model);
+
+  return new Promise<AgentRunResult>((resolve) => {
+    const child = spawn("opencode", args, { cwd, env: process.env });
+    const toolCalls: { tool: string; input: unknown }[] = [];
+    const seenCalls = new Set<string>();
+    // Text parts arrive as cumulative updates keyed by part id; last-write-wins per
+    // id, joined in order, yields the final assistant message.
+    const texts = new Map<string, string>();
+    let steps = 0;
+    let errorText = "";
+    let stderr = "";
+    let buf = "";
+    let settled = false;
+
+    const finalText = () => [...texts.values()].join("").trim();
+    const finish = (r: AgentRunResult) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(r);
+    };
+    const timer = setTimeout(() => {
+      try { child.kill("SIGTERM"); } catch { /* ignore */ }
+      finish({ ...base, output: finalText(), steps, toolCalls, error: `OpenCode CLI timed out after ${CLI_TIMEOUT_MS}ms.` });
+    }, CLI_TIMEOUT_MS);
+
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      buf += chunk;
+      const lines = buf.split("\n");
+      buf = lines.pop() ?? "";
+      for (const line of lines) {
+        const s = line.trim();
+        if (!s) continue;
+        let ev: OcEvent;
+        try { ev = JSON.parse(s) as OcEvent; } catch { continue; }
+        const part = ev.part;
+        if (ev.type === "tool_use" && part) {
+          // A tool part is emitted on each state change; count/stream each callID once.
+          const cid = typeof part.callID === "string" ? part.callID : "";
+          if (cid && seenCalls.has(cid)) continue;
+          if (cid) seenCalls.add(cid);
+          steps++;
+          const call = { tool: part.tool ?? "tool", input: part.state?.input ?? {} };
+          toolCalls.push(call);
+          onEvent?.(call);
+        } else if (ev.type === "text" && part && part.synthetic !== true && part.ignored !== true) {
+          const id = typeof part.id === "string" ? part.id : String(texts.size);
+          if (typeof part.text === "string") texts.set(id, part.text);
+        } else if (ev.type === "error") {
+          errorText = typeof ev.error === "string" ? ev.error : JSON.stringify(ev.error);
+        }
+      }
+    });
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (c: string) => { stderr += c; });
+    child.on("error", (e) =>
+      finish({ ...base, output: "", error: `${HARNESS_UNAVAILABLE} failed to spawn opencode (${e.message}). Is the OpenCode CLI installed and on PATH?` }),
+    );
+    child.on("close", async (code) => {
+      if (errorText || code !== 0) {
+        finish({ ...base, output: finalText(), steps, toolCalls, error: errorText || stderr.trim() || `opencode exited with code ${code}.` });
+        return;
+      }
+      // Same deterministic staging backstop as the Claude path.
+      let note = "";
+      try {
+        const r = await stageAll(cwd);
+        if (r.staged > 0) note = `\n\n[harness] Staged ${r.staged} changed file(s)${r.created ? ` (${r.created} new)` : ""}.`;
+      } catch {
+        /* ignore staging errors */
+      }
+      finish({ ...base, output: finalText() + note, steps, toolCalls });
+    });
+  });
+}
+
 function parseAvailableAgents(text: string): string[] {
   const m = text.match(/Available agents:\s*([\s\S]*)$/i);
   if (!m) return [];
@@ -176,7 +286,9 @@ export async function runClaudeAgent(
   opts?: { onEvent?: OnEvent; contentOnly?: boolean; branchKey?: string; interactive?: boolean },
 ): Promise<AgentRunResult> {
   const harness = await getHarnessConfig();
-  if (harness.mode !== "cli") return runViaMcp(agent, task, harness.server, opts?.onEvent);
+  if (harness.mode === "mcp") return runViaMcp(agent, task, harness.server, opts?.onEvent);
+  // Both CLI tools edit source in `cwd`; only the spawned binary + event parsing differ.
+  const cliRun = harness.tool === "opencode" ? runOpenCodeCli : runClaudeCli;
 
   // Under the Supervisor (live version control), do the work in the isolated
   // `next` worktree and gate it behind a build; otherwise run in-place.
@@ -212,7 +324,7 @@ export async function runClaudeAgent(
       opts?.onEvent?.({ tool: "Supervisor: provision preview worktree", input: { worktree: wt, branch: candidateBranch } });
     }
   }
-  const result = await runClaudeCli(agent, task, cwd, opts?.onEvent);
+  const result = await cliRun(agent, task, cwd, opts?.onEvent);
   if (provisioned && !result.error) {
     opts?.onEvent?.({ tool: "Supervisor: build + health-gate candidate", input: {} });
     const built = await supervisorBuild().catch(() => null);
