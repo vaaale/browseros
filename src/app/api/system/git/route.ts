@@ -21,6 +21,21 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   try {
+    // Under the Supervisor the live checkout IS the running base; branching/staging
+    // it would break the running version and block promote. The Supervisor owns
+    // version branches and the developer sub-agent edits an isolated preview
+    // worktree, so these in-place ops are refused here (specs/005, 017 diagnosis).
+    if ((process.env.BOS_SUPERVISOR_URL || "").trim()) {
+      return NextResponse.json(
+        {
+          error:
+            "Branching/staging the main checkout is disabled under the Supervisor. " +
+            "Delegate source changes to the developer sub-agent — they are made on an " +
+            "isolated preview worktree, then previewed/promoted from the top bar.",
+        },
+        { status: 409 },
+      );
+    }
     const body = await req.json();
     if (body.op === "branch") {
       if (!body.name) return NextResponse.json({ error: "name is required" }, { status: 400 });

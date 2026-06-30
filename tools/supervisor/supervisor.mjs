@@ -119,6 +119,43 @@ async function gitTry(args, cwd = REPO) {
   try { return await git(args, cwd); } catch { return null; }
 }
 
+// Post-condition safety gate: verify the live checkout (REPO) is still on the
+// expected base branch and has no uncommitted changes. If either invariant is
+// violated we log a loud ERROR and attempt a safe restore (checkout baseBranch +
+// reset --hard) so the running base is never left in a dirty/wrong-branch state.
+// This catches any remaining path that accidentally edits or branches the main
+// checkout instead of the isolated preview worktree.
+async function assertRepoIntegrity(context = "") {
+  try {
+    const branch = await gitTry(["rev-parse", "--abbrev-ref", "HEAD"]);
+    const dirty = await gitTry(["status", "--porcelain"]);
+    const violated = branch !== baseBranch || !!dirty;
+    if (!violated) return; // fast path — everything is fine
+
+    const msg =
+      `SAFETY GATE VIOLATED${context ? ` (${context})` : ""}: ` +
+      `REPO branch="${branch}" (expected "${baseBranch}"), dirty="${dirty || ""}". ` +
+      `Something edited or branched the live checkout instead of the isolated preview worktree. ` +
+      `Attempting safe restore.`;
+    slog("error", "safety-gate", msg, { branch, baseBranch, dirty: dirty || "" });
+
+    // Attempt restore: switch back to baseBranch and discard any uncommitted changes.
+    if (branch !== baseBranch) {
+      await gitTry(["checkout", baseBranch]).catch(() => {});
+    }
+    if (dirty) {
+      await gitTry(["reset", "--hard", "HEAD"]).catch(() => {});
+      await gitTry(["clean", "-fd"]).catch(() => {});
+    }
+
+    const afterBranch = await gitTry(["rev-parse", "--abbrev-ref", "HEAD"]);
+    const afterDirty = await gitTry(["status", "--porcelain"]);
+    slog("warn", "safety-gate", `restore complete: branch="${afterBranch}", dirty="${afterDirty || ""}"`);
+  } catch (e) {
+    slog("error", "safety-gate", `assertRepoIntegrity check itself failed: ${e.message || e}`);
+  }
+}
+
 // ---------------------------------------------------------------- data clone (reads the datafs setting)
 async function isolationMethod() {
   try {
@@ -284,6 +321,8 @@ async function buildAndStart(v, ctx = {}) {
   await git(["add", "-A"], v.worktree).catch(() => {});
   await git(["commit", "-m", `BOS candidate (${v.branch})`], v.worktree).catch(() => {});
   v.commit = await git(["rev-parse", "HEAD"], v.worktree).catch(() => v.commit);
+  // Safety gate: the worktree commit must never have leaked into the main checkout.
+  await assertRepoIntegrity(`build ${v.branch}`);
   v.state = "building";
   v.buildError = "";
   const lctx = { branch: v.branch, versionLabel: v.role, ...(ctx.sessionId ? { sessionId: ctx.sessionId } : {}) };
@@ -733,6 +772,8 @@ refresh();
 async function main() {
   if (!baseBranch) baseBranch = await git(["rev-parse", "--abbrev-ref", "HEAD"]);
   await reconcileWorktrees();
+  // Post-start safety gate: assert (and restore) the live checkout before accepting traffic.
+  await assertRepoIntegrity("startup");
 
   // Logging retention (best-effort from the `logging` config namespace) + periodic prune.
   try {

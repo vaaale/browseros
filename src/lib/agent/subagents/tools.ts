@@ -95,16 +95,11 @@ export const DEV_TOOLS: Record<string, LlmTool> = {
       return `[${r.command}] ${r.ok ? "OK" : `FAILED (exit ${r.exitCode})`}\n${r.output}`;
     },
   },
-  git_branch: {
-    description: "Create or switch to a bos/<name> feature branch before modifying BOS (minimizes blast radius).",
-    parameters: { type: "object", properties: { name: { type: "string" } }, required: ["name"] },
-    execute: async (input) => `On branch ${await git.createFeatureBranch(input.name as string)}`,
-  },
-  git_stage: {
-    description: "Stage specific repo files (git add) so changes are tracked and reversible.",
-    parameters: { type: "object", properties: { paths: { type: "array", items: { type: "string" } } }, required: ["paths"] },
-    execute: async (input) => `Staged ${await git.stageFiles((input.paths as string[]) || [])} file(s)`,
-  },
+  // NOTE: git_branch / git_stage were removed. Under the Supervisor the live
+  // checkout is the running base; branching/staging it breaks the running version
+  // and blocks promote. The Supervisor owns version branches and commits the
+  // developer's edits on the isolated preview worktree automatically — sub-agents
+  // must NOT run git against the main checkout (specs/005, 017 diagnosis).
   git_status: {
     description: "Show the current git branch and changed files.",
     parameters: { type: "object", properties: {} },

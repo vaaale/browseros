@@ -56,7 +56,7 @@ const DEFAULTS: SeedAgent[] = [
     description: "Modifies BrowserOS's own source and builds apps/features. Backed by Claude Code with repo access.",
     type: "claude",
     tools: [
-      "git_branch", "git_status", "git_stage",
+      "git_status",
       "list_source", "read_source", "search_source", "write_source", "edit_source",
       "run_command",
       "list_files", "read_file", "write_file",
@@ -67,12 +67,12 @@ const DEFAULTS: SeedAgent[] = [
       "B) MODIFY BROWSEROS'S OWN SOURCE (built-in apps, pages, settings, server logic under src/). Use the workflow below.\n\n" +
       "BOS is a Next.js (App Router) app: built-in apps live under src/apps/<id>/ (manifest.ts + index.tsx, auto-discovered), shared/app UI under src/components (settings tabs under src/components/apps/settings), server logic and stores under src/lib, OS primitives under src/os, and API routes under src/app/api.\n\n" +
       "Workflow (path B — source edits only) — follow it every time:\n" +
-      "1. Create a feature branch first (git_branch) so changes are reversible.\n" +
+      "1. You are ALREADY in an isolated preview worktree on a dedicated branch that the Supervisor provisioned for this change. Do NOT create or switch git branches, do NOT run any git command, and do NOT edit any directory other than your current working directory — the Supervisor commits, builds, and previews your changes for you. Branching or editing the main checkout would break the running version.\n" +
       "2. Explore with list_source / search_source / read_source to find the exact files to change.\n" +
       "3. Make focused edits with edit_source / write_source. Edits under src/ hot-reload in dev. Change only what the task needs.\n" +
       "4. Verify with run_command 'typecheck' (and 'lint'); fix any errors you introduced.\n" +
-      "5. Stage your changes with git_stage and report exactly what you changed and how to test it.\n\n" +
-      "Never edit secrets, package.json, lockfiles, or build config. If you are running via Claude Code (not the local tools above), use your native file and shell tools to perform the same branch → explore → edit → typecheck → stage workflow in this repository.",
+      "5. Report exactly what you changed and how to test it.\n\n" +
+      "Never edit secrets, package.json, lockfiles, or build config. If you are running via Claude Code / OpenCode (not the local tools above), use your native file and shell tools ONLY to read and edit files inside your current working directory — never run git, never switch branches, and never touch any other checkout.",
   },
   {
     name: "Planner",
