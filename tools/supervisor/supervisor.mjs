@@ -18,6 +18,7 @@ import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 import { LogStore } from "./log-store.mjs";
 
 const exec = promisify(execFile);
@@ -78,7 +79,18 @@ const slog = (level, component, msg, extra = {}) => {
 
 function worktreePath(branch) { return path.join(WORKTREES, branch); }
 function clonePath(branch) { return path.join(CLONES, branch); }
-function newPreviewBranch() { return `bos/next-${Date.now().toString(36)}`; }
+// Deterministic branch name from conversation ID so the mapping survives restarts:
+// on startup we scan `git branch --list 'bos/next-*'`, extract the hash, and know
+// which conversation each branch belongs to — no persistence file needed.
+const PREVIEW_PREFIX = "bos/next-";
+function branchForConversation(conversationId) {
+  const h = crypto.createHash("sha256").update(conversationId).digest("hex").slice(0, 12);
+  return `${PREVIEW_PREFIX}${h}`;
+}
+function conversationFromBranch(branch) {
+  if (!branch.startsWith(PREVIEW_PREFIX)) return null;
+  return branch.slice(PREVIEW_PREFIX.length);
+}
 function tagStamp() {
   const d = new Date();
   const z = (n) => String(n).padStart(2, "0");
@@ -111,6 +123,34 @@ async function publicState() {
   const b = await pick(base);
   const ps = await Promise.all([...previews.values()].map(pick));
   return { base: b, previews: ps, appCandidate, pushMode: PUSH_MODE, baseBranch };
+}
+
+// On startup, scan git for bos/next-* branches and re-provision their worktrees.
+// The branch name encodes the conversation ID (deterministic hash), so no
+// persistence file is needed — git branches ARE the persistent state.
+// Servers are NOT started (state "stopped"); the user can resume via Preview/Pin.
+async function restorePreviews() {
+  const raw = (await gitTry(["branch", "--list", `${PREVIEW_PREFIX}*`, "--format=%(refname:short)"])) || "";
+  const branches = raw.split("\n").map((s) => s.trim()).filter(Boolean);
+  if (!branches.length) return;
+  for (const branch of branches) {
+    const cid = conversationFromBranch(branch);
+    if (!cid) continue;
+    // Skip if already in the map (e.g. provisioned during this run).
+    if (previews.has(cid)) continue;
+    try {
+      const wt = await addWorktreeForBranch(branch);
+      const clone = clonePath(branch);
+      await provisionClone(clone);
+      const port = await allocPreviewPort();
+      const p = { role: "preview", conversationId: cid, branch, worktree: wt, dataDir: clone, port, state: "stopped", proc: null, commit: await gitTry(["rev-parse", "HEAD"], wt) };
+      previews.set(cid, p);
+      log(`restored preview ${branch} for ${cid} (stopped) on port ${port}`);
+    } catch (e) {
+      slog("warn", "restore", `failed to restore preview ${branch}: ${e.message || e}`, {});
+    }
+  }
+  if (previews.size) log(`restored ${previews.size} preview(s) from git branches`);
 }
 
 // ---------------------------------------------------------------- git
@@ -335,7 +375,7 @@ async function buildAndStart(v, ctx = {}) {
   await stopProc(v);
   await git(["add", "-A"], v.worktree).catch(() => {});
   await git([...GIT_IDENTITY, "commit", "-m", `BOS candidate (${v.branch})`], v.worktree).catch((e) => {
-    const detail = String(e?.stderr || e?.message || e || "");
+    const detail = String(e?.stderr || e?.stdout || e?.message || e || "");
     if (detail && !/nothing to commit|no changes added/.test(detail))
       slog("warn", "build", `git commit failed in ${v.branch}: ${detail}`, { branch: v.branch, versionLabel: v.role });
   });
@@ -414,7 +454,7 @@ async function provisionPreview(conversationId, branch) {
       return existing;
     }
   }
-  if (!branch || branch === baseBranch) branch = newPreviewBranch();
+  if (!branch || branch === baseBranch) branch = branchForConversation(conversationId);
   const exists = await gitTry(["rev-parse", "--verify", `refs/heads/${branch}`]);
   if (!exists) {
     const from = base?.commit || (await git(["rev-parse", "HEAD"]));
@@ -946,6 +986,9 @@ async function main() {
   } else {
     await buildAndStartBase(await git(["rev-parse", "HEAD"]));
   }
+
+  // Restore previews from git branches (deterministic conversation→branch mapping).
+  await restorePreviews();
 
   const server = http.createServer((req, res) => {
     const url = new URL(req.url, "http://localhost");
