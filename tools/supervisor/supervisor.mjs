@@ -239,6 +239,10 @@ function startProc(v) {
     // preview clone, so it survives Stop/promote.
     env: { ...process.env, PORT: String(v.port), BOS_DATA_DIR: v.dataDir, BOS_CANONICAL_DATA: CANONICAL_DATA, BOS_VERSION_LABEL: v.role },
     stdio: "inherit",
+    // detached: true puts the child in its own process group so stopProc can
+    // kill the ENTIRE group (npx + its next-server child) via negative PID.
+    // Without this, killing npx orphans the next process which keeps the port.
+    detached: true,
   });
   v.proc.on("exit", (code) => {
     slog(code === 0 || code === null ? "info" : "warn", "process", `version "${v.role}" (${v.branch}) process exited (${code})`, { branch: v.branch, versionLabel: v.role, data: { code } });
@@ -255,9 +259,17 @@ function stopProc(v) {
   return new Promise((resolve) => {
     const p = v?.proc;
     if (!p || p.killed || p.exitCode !== null || p.signalCode) { if (v) v.proc = null; return resolve(); }
+    const pid = p.pid;
     p.once("exit", () => { v.proc = null; resolve(); });
-    try { p.kill("SIGTERM"); } catch { v.proc = null; return resolve(); }
-    setTimeout(() => { try { if (p.exitCode === null && !p.signalCode) p.kill("SIGKILL"); } catch { /* ignore */ } }, 5000);
+    // Kill the entire process group (negative PID) so child processes spawned by
+    // npx (i.e. next-server) are also terminated. Without this, npx exits but
+    // next-server is orphaned and keeps holding the port → EADDRINUSE on rebuild.
+    const killGroup = (sig) => {
+      try { process.kill(-pid, sig); }
+      catch { try { p.kill(sig); } catch { /* already gone */ } }
+    };
+    killGroup("SIGTERM");
+    setTimeout(() => { try { if (p.exitCode === null && !p.signalCode) killGroup("SIGKILL"); } catch { /* ignore */ } }, 5000);
   });
 }
 
@@ -323,9 +335,9 @@ async function buildAndStart(v, ctx = {}) {
   await stopProc(v);
   await git(["add", "-A"], v.worktree).catch(() => {});
   await git([...GIT_IDENTITY, "commit", "-m", `BOS candidate (${v.branch})`], v.worktree).catch((e) => {
-    const msg = String(e?.message || e || "");
-    if (msg && !/nothing to commit|no changes added/.test(msg))
-      slog("warn", "build", `git commit failed in ${v.branch}: ${msg}`, { branch: v.branch, versionLabel: v.role });
+    const detail = String(e?.stderr || e?.message || e || "");
+    if (detail && !/nothing to commit|no changes added/.test(detail))
+      slog("warn", "build", `git commit failed in ${v.branch}: ${detail}`, { branch: v.branch, versionLabel: v.role });
   });
   v.commit = await git(["rev-parse", "HEAD"], v.worktree).catch(() => v.commit);
   // Safety gate: the worktree commit must never have leaked into the main checkout.
