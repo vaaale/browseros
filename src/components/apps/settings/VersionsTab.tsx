@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { sessionHeader } from "@/lib/logging/client/session";
+import { sessionHeader, getSessionId } from "@/lib/logging/client/session";
 
 interface Ver {
   role: string;
@@ -10,12 +10,14 @@ interface Ver {
   commit?: string;
   reused?: boolean;
   buildError?: string;
+  conversationId?: string;
 }
 interface SupState {
   base: Ver | null;
-  preview: Ver | null;
+  previews: Ver[];
   pushMode?: string;
   baseBranch?: string;
+  serving?: { role: string; branch?: string; conversationId?: string } | null;
 }
 
 function VersionRow({ v }: { v: Ver | null }) {
@@ -84,7 +86,8 @@ export function VersionsTab() {
   }
   if (!state) return <p className="text-xs text-white/40">Loading…</p>;
 
-  const preview = state.preview;
+  const cid = getSessionId();
+  const preview = state.previews?.find((v) => v.conversationId === cid) ?? null;
   const ready = preview?.state === "ready";
   const btn = "rounded px-2 py-1 text-xs disabled:opacity-40";
   return (
@@ -94,13 +97,14 @@ export function VersionsTab() {
       </p>
       <div className="space-y-1 rounded border border-white/10 bg-black/20 p-3">
         <VersionRow v={state.base} />
-        <VersionRow v={state.preview} />
+        {state.previews?.map((p) => <VersionRow key={p.conversationId || p.branch} v={p} />)}
       </div>
       <div className="flex flex-wrap gap-1.5">
-        <button disabled={busy || !ready} onClick={() => act("pin", { version: "preview" })} className={`${btn} bg-violet-500/30 hover:bg-violet-500/45`}>Preview</button>
+        <button disabled={busy || !ready} onClick={() => act("pin", { version: "preview", conversationId: cid })} className={`${btn} bg-violet-500/30 hover:bg-violet-500/45`}>Preview</button>
         <button disabled={busy} onClick={() => act("pin", { version: "base" })} className={`${btn} bg-white/10 hover:bg-white/20`}>Back to base</button>
-        <button disabled={busy || !ready} onClick={() => act("promote")} className={`${btn} bg-emerald-500/25 hover:bg-emerald-500/40`}>Promote</button>
-        <button disabled={busy || !preview} onClick={() => act("discard")} className={`${btn} bg-white/10 hover:bg-white/20`}>Stop</button>
+        <button disabled={busy || !ready} onClick={() => act("promote", { conversationId: cid })} className={`${btn} bg-emerald-500/25 hover:bg-emerald-500/40`}>Promote</button>
+        <button disabled={busy || !preview} onClick={() => act("stop", { conversationId: cid })} className={`${btn} bg-white/10 hover:bg-white/20`} title="Stop the server but keep the worktree + branch">Stop</button>
+        <button disabled={busy || !preview} onClick={() => act("discard", { conversationId: cid })} className={`${btn} bg-red-500/20 hover:bg-red-500/35`} title="Destroy worktree + delete the feature branch">Discard</button>
         <button disabled={busy} onClick={() => act("push")} className={`${btn} bg-white/10 hover:bg-white/20`}>Push to remote</button>
         <button disabled={busy} onClick={() => load()} className={`${btn} bg-white/10 hover:bg-white/20`}>Refresh</button>
       </div>

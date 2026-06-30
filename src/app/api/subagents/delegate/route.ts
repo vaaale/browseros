@@ -57,12 +57,12 @@ export async function POST(req: NextRequest) {
         const result = await runSubAgent(agent, task, {
           onEvent: (ev) => emit({ type: "tool", ...ev }),
           contentOnly: body.contentOnly === true,
-          // `branchKey` anchors repeated dev work to one feature branch; any caller
-          // (chat, workflow, external integration) may supply an arbitrary stable id
-          // (e.g. `gitlab-issue:1234`). `threadId` is the legacy alias the chat used.
-          branchKey:
-            typeof body.branchKey === "string"
-              ? body.branchKey
+          // `conversationId` anchors repeated dev work to one feature branch; any caller
+          // (chat, workflow, external integration) may supply an arbitrary stable id.
+          // `threadId` is the legacy alias the chat used.
+          conversationId:
+            typeof body.conversationId === "string"
+              ? body.conversationId
               : typeof body.threadId === "string"
                 ? body.threadId
                 : undefined,

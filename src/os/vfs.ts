@@ -10,8 +10,8 @@ const VFS_ROOT = path.join(dataDir(), "vfs");
 // control, specs/005-self-modification), so they are rooted in CANONICAL data
 // rather than this version's per-process data dir. Chat conversations are the prime
 // case: history written while viewing a preview must not vanish when that preview's
-// clone is deleted on Stop. (Mirrors thread-branches.json, canonical for the same
-// reason; outside the Supervisor BOS_CANONICAL_DATA is unset and this is a no-op.)
+// clone is deleted on Stop. (Mirrors the canonical data root convention; outside
+// the Supervisor BOS_CANONICAL_DATA is unset and this is a no-op.)
 const CANONICAL_VFS_ROOT = path.join(process.env.BOS_CANONICAL_DATA?.trim() || dataDir(), "vfs");
 const CANONICAL_SUBPATHS = ["Documents/Chats"];
 

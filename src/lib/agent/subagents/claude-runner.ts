@@ -2,8 +2,7 @@ import "server-only";
 import { spawn } from "node:child_process";
 import { connectMcpClient, extractText } from "@/lib/mcp/client";
 import { getHarnessConfig } from "@/lib/devharness/harness-config";
-import { supervisorEnabled, supervisorState, supervisorBegin, supervisorBuild, supervisorBranches } from "@/lib/devharness/supervisor";
-import { getBranchForKey, setBranchForKey } from "@/lib/devharness/thread-branches";
+import { supervisorEnabled, supervisorState, supervisorBegin, supervisorBuild } from "@/lib/devharness/supervisor";
 import { stageAll } from "@/lib/system/git";
 import type { McpServerConfig } from "@/lib/mcp/types";
 import type { Agent, AgentRunResult } from "./types";
@@ -287,7 +286,7 @@ async function runViaMcp(agent: Agent, task: string, server: McpServerConfig, on
 export async function runClaudeAgent(
   agent: Agent,
   task: string,
-  opts?: { onEvent?: OnEvent; contentOnly?: boolean; branchKey?: string; interactive?: boolean },
+  opts?: { onEvent?: OnEvent; contentOnly?: boolean; conversationId?: string; interactive?: boolean },
 ): Promise<AgentRunResult> {
   const harness = await getHarnessConfig();
   if (harness.mode === "mcp") return runViaMcp(agent, task, harness.server, opts?.onEvent);
@@ -302,38 +301,30 @@ export async function runClaudeAgent(
   let cwd = harness.cwd;
   let provisioned = false;
   let candidateBranch = "";
-  if (supervisorEnabled() && !opts?.contentOnly) {
-    // Resolve which feature branch to work on, then (re)anchor the caller's key to it
-    // so repeated work continues on the SAME branch. `branchKey` is opaque — a chat's
-    // conversation id, a workflow id, an external `gitlab-issue:1234`, etc.
+  if (supervisorEnabled() && !opts?.contentOnly && opts?.conversationId) {
+    // Provision (or resume) the preview worktree for this conversation. The
+    // Supervisor tracks previews by conversationId, so repeated work continues
+    // on the SAME branch automatically — no external mapping needed.
     //   • interactive (a chat session): a currently-PREVIEWED branch wins ("improve
-    //     the thing I'm looking at"), then the key's remembered branch, else fresh.
-    //   • headless (workflow/integration): the supplied key is AUTHORITATIVE — its own
-    //     remembered branch (fresh on first use), never a human's stray live preview.
-    let remembered = opts?.branchKey ? await getBranchForKey(opts.branchKey) : undefined;
-    // Don't resurrect a remembered branch that no longer exists (e.g. the user
-    // manually deleted it, or it was promoted then deleted): start fresh instead.
-    // Only drop it when the Supervisor positively reports the branch is gone — a
-    // failed lookup keeps the resume so a transient blip doesn't fork a new branch.
-    if (remembered) {
-      const list = await supervisorBranches().catch(() => null);
-      const known = list && Array.isArray(list.branches) ? (list.branches as unknown[]).map(String) : null;
-      if (known && !known.includes(remembered)) remembered = undefined;
-    }
-    let resume = remembered;
+    //     the thing I'm looking at"), then the conversation's existing preview.
+    //   • headless (workflow/integration): the conversation's existing preview is
+    //     AUTHORITATIVE — never adopts a human's stray live preview.
+    let resume: string | undefined;
     if (opts?.interactive) {
       const st = await supervisorState().catch(() => null);
-      const previewBranch =
-        st && st.preview && typeof st.preview === "object" ? (st.preview as { branch?: string }).branch : undefined;
-      resume = previewBranch || remembered;
+      const serving = st && st.serving && typeof st.serving === "object" ? (st.serving as { conversationId?: string }).conversationId : undefined;
+      // If THIS conversation is already being served as a preview, reuse it.
+      if (serving === opts.conversationId) {
+        const previewBranch = st && st.serving && typeof st.serving === "object" ? (st.serving as { branch?: string }).branch : undefined;
+        resume = previewBranch;
+      }
     }
-    const begun = await supervisorBegin(resume);
+    const begun = await supervisorBegin(opts.conversationId, resume);
     const wt = begun && typeof begun.worktree === "string" ? (begun.worktree as string) : "";
     if (wt) {
       cwd = wt;
       provisioned = true;
       candidateBranch = begun && typeof begun.branch === "string" ? (begun.branch as string) : "";
-      if (opts?.branchKey && candidateBranch) await setBranchForKey(opts.branchKey, candidateBranch);
       opts?.onEvent?.({ tool: "Supervisor: provision preview worktree", input: { worktree: wt, branch: candidateBranch } });
     } else {
       // Provisioning the isolated worktree FAILED. We must NOT fall back to editing
@@ -358,9 +349,9 @@ export async function runClaudeAgent(
     }
   }
   const result = await cliRun(agent, task, cwd, opts?.onEvent);
-  if (provisioned && !result.error) {
+  if (provisioned && !result.error && opts?.conversationId) {
     opts?.onEvent?.({ tool: "Supervisor: build + health-gate candidate", input: {} });
-    const built = await supervisorBuild().catch(() => null);
+    const built = await supervisorBuild(opts.conversationId).catch(() => null);
     // Tell the caller the change is a CANDIDATE, not the live/active version — the
     // user must preview/promote it. Prevents the "fix is in place but the app still
     // doesn't work" confusion (the user was viewing active) and the bad workaround

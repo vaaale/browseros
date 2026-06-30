@@ -51,11 +51,11 @@ export interface WorkflowConfig {
   maxConcurrentSteps?: number;
   defaultRetryLimit?: number;
   defaultTimeout?: number;
-  /** Branch key for dev (claude) delegations: anchors repeated development to one
-   *  feature branch (live version control). Defaults to `workflow:<id>` so each
+  /** Conversation ID for dev (claude) delegations: anchors repeated development to
+   *  one feature branch (live version control). Defaults to `workflow:<id>` so each
    *  workflow keeps its own branch across runs; a run may override it (e.g.
-   *  `gitlab-issue:1234`). See `src/lib/devharness/thread-branches.ts`. */
-  branchKey?: string;
+   *  `gitlab-issue:1234`). */
+  conversationId?: string;
 }
 
 export interface WorkflowUiSpec {

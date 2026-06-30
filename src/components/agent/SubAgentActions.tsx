@@ -22,9 +22,10 @@ interface DelegateResult {
 // and an elicitation card to approve a Claude agent for a non-dev task.
 export function SubAgentActions({ group = DEFAULT_GROUP }: { group?: string }) {
   // The active conversation id, read through a ref so the delegate handler always
-  // sends the CURRENT thread (not a stale closure value). It's the chat's `branchKey`:
-  // it anchors a delegated dev task to this conversation's feature branch (continuity
-  // across Stop). The chat delegates as `interactive` so a live preview wins over it.
+  // sends the CURRENT thread (not a stale closure value). It's the chat's
+  // `conversationId`: it anchors a delegated dev task to this conversation's feature
+  // branch (continuity across Stop). The chat delegates as `interactive` so a live
+  // preview wins over it.
   const threadId = useActiveConversationId(group);
   const threadIdRef = useRef(threadId);
   useEffect(() => {
@@ -93,7 +94,7 @@ export function SubAgentActions({ group = DEFAULT_GROUP }: { group?: string }) {
         const res = await fetch("/api/subagents/delegate", {
           method: "POST",
           headers: { "Content-Type": "application/json", ...sessionHeader() },
-          body: JSON.stringify({ agent, task, ephemeral, contentOnly: contentOnly === true, branchKey: threadIdRef.current, interactive: true }),
+          body: JSON.stringify({ agent, task, ephemeral, contentOnly: contentOnly === true, conversationId: threadIdRef.current, interactive: true }),
         });
         if (!res.ok) {
           finishDelegation(key, "");
