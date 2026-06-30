@@ -105,7 +105,8 @@ export function VersionControls() {
   const hasCand = !!cand;
   const ready = cand?.state === "ready";
   const building = cand?.state === "idle" || cand?.state === "building";
-  const failed = cand?.state === "failed" || cand?.state === "stopped";
+  const failed = cand?.state === "failed";
+  const stopped = cand?.state === "stopped";
   const previewing = hasCand && state?.serving?.conversationId === cid;
   // What this session is actually being served (not just "a preview exists").
   const selectedValue = state?.serving?.branch ?? branches.base;
@@ -211,14 +212,17 @@ export function VersionControls() {
               build failed{cand?.buildError ? `: ${short((cand.buildError.split("\n").pop() || cand.buildError).trim())}` : ""}
             </span>
           )}
-          {ready && !previewing && (
-            <button disabled={busy} onClick={onPreview} title="View this preview in the browser (it is not the base version yet)" className={`${btn} bg-sky-500/25 hover:bg-sky-500/40`}>Preview</button>
+          {stopped && !previewing && (
+            <span className="text-white/50" title="Preview server stopped — worktree + branch kept">stopped</span>
+          )}
+          {(ready || stopped) && !previewing && (
+            <button disabled={busy} onClick={onPreview} title={stopped ? "Resume the stopped preview server and view it" : "View this preview in the browser (it is not the base version yet)"} className={`${btn} bg-sky-500/25 hover:bg-sky-500/40`}>Preview</button>
           )}
           {previewing && (
             <span className="text-emerald-300/80" title="You are viewing the preview, not the base version">previewing</span>
           )}
           <button disabled={busy || !ready} onClick={onPromote} title={ready ? "Make this preview the base version" : "Preview must finish building first"} className={`${btn} bg-emerald-500/25 hover:bg-emerald-500/40`}>Promote</button>
-          <button disabled={busy} onClick={onStop} title="Stop the preview server but keep the worktree + branch (can resume via Preview)" className={`${btn} bg-white/10 hover:bg-white/20`}>Stop</button>
+          <button disabled={busy || stopped} onClick={onStop} title="Stop the preview server but keep the worktree + branch (can resume via Preview)" className={`${btn} bg-white/10 hover:bg-white/20`}>Stop</button>
           <button disabled={busy} onClick={onDiscard} title="Destroy the worktree and delete the feature branch permanently" className={`${btn} bg-red-500/20 hover:bg-red-500/35`}>Discard</button>
         </>
       )}

@@ -851,11 +851,15 @@ async function handleControl(req, res, sub) {
       return sendJson(res, { ok: true, ...(await promote(cid)) }, 200, clearPin);
     }
     // stop = stop the preview server but KEEP worktree + branch (can resume via /pin).
+    // Order matters: clear the pin (→ switch to base) BEFORE killing the preview
+    // process, so the user is never routed to a dead port. The response (with
+    // clearPin) is sent immediately; stopPreview runs in the background.
     if (sub === "stop" && req.method === "POST") {
       const cid = String(body.conversationId || "");
       if (!cid) return sendJson(res, { ok: false, error: "conversationId required" }, 400);
-      await stopPreview(cid);
-      return sendJson(res, { ok: true }, 200, clearPin);
+      sendJson(res, { ok: true }, 200, clearPin);
+      void stopPreview(cid).catch((e) => slog("error", "control:stop", `background stop failed: ${String(e?.message || e)}`, { ...(sessionId ? { sessionId } : {}) }));
+      return;
     }
     // discard = destroy everything including the feature branch.
     if (sub === "discard" && req.method === "POST") {
