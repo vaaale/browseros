@@ -545,6 +545,47 @@ async function reconcileWorktrees() {
   await gitTry(["worktree", "prune"]);
 }
 
+// On supervisor restart any previously-spawned preview servers may still be
+// listening on their pool ports (e.g. when the supervisor was SIGKILL'd). We
+// probe each preview port and, for any that responds, find the owning PID via
+// `ss -tlnp` (Linux) and send it SIGTERM (escalating to SIGKILL after 5 s).
+// Ports that don't respond are already free — nothing to do.
+// BASE_PORT itself is NOT touched here; buildAndStartBase will start fresh there.
+async function reapOrphanedPreviewServers() {
+  const reaped = [];
+  for (let p = BASE_PORT + 1; p <= BASE_PORT + POOL_SIZE; p++) {
+    if (!(await probeOnce(p))) continue; // nothing listening — free
+    // Find PID(s) via `ss`. Output lines look like:
+    //   LISTEN 0 511 *:<port> *:* users:(("next-server",pid=12345,fd=6))
+    let pid = null;
+    try {
+      const { stdout } = await exec("ss", ["-tlnp", `sport = :${p}`], { maxBuffer: 256 * 1024 });
+      const m = stdout.match(/pid=(\d+)/);
+      if (m) pid = Number(m[1]);
+    } catch {
+      // ss not available or failed — fall back to fuser
+      try {
+        const { stdout } = await exec("fuser", [`${p}/tcp`], { maxBuffer: 64 * 1024 });
+        const m = stdout.trim().match(/\d+/);
+        if (m) pid = Number(m[0]);
+      } catch { /* can't determine PID — skip */ }
+    }
+    if (!pid) {
+      log(`reap: port ${p} occupied but could not determine PID — skipping`);
+      continue;
+    }
+    slog("warn", "reap", `reaping orphaned preview server on port ${p} (pid ${pid})`, { data: { port: p, pid } });
+    try {
+      process.kill(pid, "SIGTERM");
+      // Give it 5 s then escalate
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+      try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
+    } catch { /* pid already gone */ }
+    reaped.push({ port: p, pid });
+  }
+  if (reaped.length) log(`reaped ${reaped.length} orphaned preview server(s): ${reaped.map((r) => `port ${r.port} pid ${r.pid}`).join(", ")}`);
+}
+
 // ---------------------------------------------------------------- app content candidate (GitFS)
 async function appsRepoExists() {
   try { await fs.access(path.join(APPS_REPO, ".git")); return true; } catch { return false; }
@@ -772,6 +813,7 @@ refresh();
 async function main() {
   if (!baseBranch) baseBranch = await git(["rev-parse", "--abbrev-ref", "HEAD"]);
   await reconcileWorktrees();
+  await reapOrphanedPreviewServers();
   // Post-start safety gate: assert (and restore) the live checkout before accepting traffic.
   await assertRepoIntegrity("startup");
 
