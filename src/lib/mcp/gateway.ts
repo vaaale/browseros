@@ -2,9 +2,19 @@ import "server-only";
 import { connectMcpClient, extractText } from "./client";
 import { listMcpServers } from "./store";
 import { makeToolMatcher } from "./match";
+import { validateToolArguments } from "./validate";
 import { isAllowed } from "@/lib/agent/capabilities";
 import { getActiveAgentId, getAgent } from "@/lib/agent/subagents/store";
 import type { McpServerConfig, McpToolDescriptor } from "./types";
+
+type ArgumentAdapter = (args: Record<string, unknown>) => Record<string, unknown>;
+
+const argumentAdapters: Record<string, ArgumentAdapter> = {};
+
+function applyAdapter(server: string, tool: string, args: Record<string, unknown>): Record<string, unknown> {
+  const adapter = argumentAdapters[`${server}.${tool}`];
+  return adapter ? adapter(args) : args;
+}
 
 // The MCP tool gateway (014-mcp-tool-gateway). Instead of dumping every server's
 // tools into the agent's context, the agent gets a tiny fixed tool set that
@@ -78,15 +88,34 @@ export async function findTools(
   return Object.keys(errors).length ? { tools, errors } : { tools };
 }
 
-/** Execute a tool on a server, enforcing the agent's allowlist. */
+/** Get the inputSchema for a single tool on a server. */
+export async function getToolSchema(
+  server: string,
+  tool: string,
+  agentId?: string,
+): Promise<{ schema?: unknown; error?: string }> {
+  const res = await listServerTools(server, agentId);
+  if (res.error) return { error: res.error };
+  const found = res.tools?.find((t) => t.name === tool);
+  if (!found) return { error: `Tool '${tool}' not found on MCP server '${server}'` };
+  return { schema: found.schema };
+}
+
+/** Execute a tool on a server, enforcing the agent's allowlist.
+ *  `args` must be a JSON object matching the tool's MCP inputSchema.
+ *  The proxy validates against the schema and forwards unchanged (after any
+ *  registered per-tool adapter). */
 export async function callServerTool(
   server: string,
   tool: string,
-  args: unknown,
+  args: Record<string, unknown>,
   agentId?: string,
 ): Promise<{ result?: string; error?: string }> {
   const cfg = (await allowedServers(agentId)).find((s) => s.name === server);
   if (!cfg) return { error: `No MCP server "${server}" available to this agent.` };
+
+  const toolArgs = args ?? {};
+
   let client;
   try {
     client = await connectMcpClient(cfg);
@@ -94,8 +123,21 @@ export async function callServerTool(
     return { error: (err as Error).message };
   }
   try {
+    const { tools } = await client.listTools();
+    const toolDef = tools.find((t) => t.name === tool);
+    if (!toolDef) {
+      return { error: `Tool '${tool}' not found on MCP server '${server}'` };
+    }
+
+    const validation = validateToolArguments(server, tool, toolDef.inputSchema, toolArgs);
+    if (!validation.valid) {
+      return { error: `Invalid arguments for ${server}.${tool}: ${validation.error}` };
+    }
+
+    const adaptedArgs = applyAdapter(server, tool, toolArgs);
+
     const res = await client.callTool(
-      { name: tool, arguments: (args as Record<string, unknown>) ?? {} },
+      { name: tool, arguments: adaptedArgs },
       undefined,
       { timeout: 280_000, resetTimeoutOnProgress: true },
     );

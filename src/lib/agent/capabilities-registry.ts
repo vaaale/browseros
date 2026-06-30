@@ -63,9 +63,12 @@ export const CAPABILITIES: Capability[] = [
 
   // MCP
   { id: "listMcpServers", group: "MCP", context: "action", description: "List connected MCP servers (with descriptions)." },
-  { id: "findTools", group: "MCP", context: "action", description: "Search MCP tools across all servers (returns schemas)." },
+  { id: "searchMcpTools", group: "MCP", context: "action", description: "Search MCP tools across all servers or on a specific server." },
   { id: "listMcpServerTools", group: "MCP", context: "action", description: "List a server's tools with their input schemas." },
-  { id: "callMcpServerTool", group: "MCP", context: "action", description: "Call a tool on an MCP server." },
+  { id: "getMcpToolSchema", group: "MCP", context: "action", description: "Get the input JSON schema for a single MCP tool." },
+  { id: "callMcpTool", group: "MCP", context: "action", description: "Call a tool on an MCP server with schema-validated arguments." },
+  { id: "findTools", group: "MCP", context: "action", description: "Search MCP tools across all servers (legacy alias for searchMcpTools)." },
+  { id: "callMcpServerTool", group: "MCP", context: "action", description: "Call a tool on an MCP server (legacy alias for callMcpTool)." },
   { id: "addMcpServer", group: "MCP", context: "action", description: "Connect an MCP server." },
   { id: "removeMcpServer", group: "MCP", context: "action", description: "Disconnect an MCP server." },
 

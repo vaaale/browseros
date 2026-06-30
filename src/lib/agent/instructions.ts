@@ -41,7 +41,7 @@ export async function composeInstructions(agentId?: string): Promise<string> {
   const allowedMcp = mcpServers.filter((s) => isAllowed(agent?.mcp, s.name, s.endpoint ?? ""));
   if (allowedMcp.length > 0) {
     const index = allowedMcp.map((s) => `- ${s.name}: ${mcpDescription(s)}`).join("\n");
-    out += `\n\n## MCP servers\nExternal tools are available through MCP servers — their tools are NOT listed as direct functions. To use one: call findTools to search across servers, or listMcpServerTools for a specific server (both return input schemas), then call the chosen tool with callMcpServerTool.\n${index}`;
+    out += `\n\n## MCP servers\nExternal tools are available through MCP servers — their tools are NOT listed as direct functions. To use one: call searchMcpTools to find the right tool, getMcpToolSchema to inspect its input schema, then callMcpTool with arguments matching that schema. You can also listMcpServerTools for a full server listing.\n${index}`;
   }
   return out;
 }

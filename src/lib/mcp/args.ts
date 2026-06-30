@@ -1,11 +1,13 @@
-// Parse the `args` a model passes to callMcpServerTool (014-mcp-tool-gateway).
+// Parse the `args` a model passes to callMcpTool (014-mcp-tool-gateway).
 //
-// The arguments MUST travel as a JSON STRING, not an object parameter: CopilotKit
-// converts an `object`-typed action parameter that has no declared sub-properties
-// into a closed JSON schema ({ type: "object" } with no properties /
-// additionalProperties), so the model's keys get stripped to `{}` before the call
-// is made. A string passes through untouched; we parse it here. Pure (no deps) so
-// it's unit-testable and usable from the client action handler.
+// The arguments MUST travel as a JSON STRING at the CopilotKit layer, not an object
+// parameter: CopilotKit converts an `object`-typed action parameter that has no
+// declared sub-properties into a closed JSON schema ({ type: "object" } with no
+// properties / additionalProperties), so the model's keys get stripped to `{}`
+// before the call is made. A string passes through untouched; we parse it here and
+// send the resulting object as `arguments` to the backend proxy. The backend proxy
+// (gateway.ts) then validates and forwards the object unchanged to the MCP server.
+// Pure (no deps) so it's unit-testable and usable from the client action handler.
 export function parseToolArgs(raw: unknown): { args?: Record<string, unknown>; error?: string } {
   if (raw == null || raw === "") return { args: {} };
   // Defensive: if some path already handed us an object, use it as-is.
