@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { sessionHeader, getSessionId } from "@/lib/logging/client/session";
+import { useActiveConversationId } from "@/lib/agent/conversations";
 
 interface Ver {
   role: string;
@@ -40,9 +41,11 @@ interface PostResult {
 // Preview); Discard destroys the worktree and deletes the branch; Promote makes
 // it the new base. Failures are surfaced inline rather than silently swallowed.
 //
-// The Topbar has no conversation context, so the browser session ID is used as
-// the conversationId for preview operations — each browser tab gets its own slot.
+// The conversationId for preview operations is the active chat conversation ID
+// (same one the agent uses), so the UI and agent share the same preview slot.
+// Falls back to the browser session ID when no conversation is active.
 export function VersionControls() {
+  const activeConversationId = useActiveConversationId();
   const [branches, setBranches] = useState<Branches | null>(null);
   const [state, setState] = useState<SupState | null>(null);
   const [busy, setBusy] = useState(false);
@@ -74,9 +77,11 @@ export function VersionControls() {
   // Flip the session into a freshly-built preview as soon as it is ready.
   useEffect(() => {
     const target = pendingRef.current;
-    const cid = getSessionId();
-    const p = state?.previews?.find((v) => v.conversationId === cid);
-    if (target && p?.branch === target && p.state === "ready") {
+    if (!target) return;
+    // Match by branch name — activate() may reuse a preview owned by a different
+    // conversationId (e.g. one created by the agent).
+    const p = state?.previews?.find((v) => v.branch === target);
+    if (p?.state === "ready") {
       pendingRef.current = null;
       window.location.reload();
     }
@@ -100,7 +105,7 @@ export function VersionControls() {
 
   if (!branches) return null;
 
-  const cid = getSessionId();
+  const cid = activeConversationId || getSessionId();
   const cand = state?.previews?.find((v) => v.conversationId === cid) ?? null;
   const hasCand = !!cand;
   const ready = cand?.state === "ready";

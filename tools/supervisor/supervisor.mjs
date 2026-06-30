@@ -514,6 +514,11 @@ async function buildPreview(conversationId, ctx = {}) {
 // Otherwise provision + build in the background; the pin only routes once it reports ready.
 async function activate(conversationId, branch) {
   if (!branch || branch === baseBranch) { await stopPreview(conversationId); return { base: true }; }
+  // Check if any existing preview already has this branch (e.g. created by an agent
+  // with a different conversationId). Reuse it instead of creating a duplicate.
+  for (const [existingCid, p] of previews) {
+    if (p.branch === branch) return { branch, state: p.state, conversationId: existingCid };
+  }
   const existing = previews.get(conversationId);
   if (existing && existing.branch === branch && existing.state === "ready") return { branch, state: "ready" };
   await beginPreview(conversationId, branch);
@@ -892,9 +897,10 @@ async function handleControl(req, res, sub) {
       if (!cid) return sendJson(res, { ok: false, error: "conversationId required" }, 400);
       const branch = String(body.branch || "");
       const result = await activate(cid, branch);
+      const pinCid = result.conversationId || cid;
       const cookie = !branch || branch === baseBranch
         ? clearPin
-        : { "Set-Cookie": `${PIN_COOKIE}=${encodeURIComponent(cid)}; Path=/; HttpOnly` };
+        : { "Set-Cookie": `${PIN_COOKIE}=${encodeURIComponent(pinCid)}; Path=/; HttpOnly` };
       return sendJson(res, { ok: true, ...result }, 200, cookie);
     }
     if (sub === "promote" && req.method === "POST") {
