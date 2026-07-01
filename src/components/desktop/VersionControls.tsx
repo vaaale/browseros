@@ -105,14 +105,29 @@ export function VersionControls() {
 
   if (!branches) return null;
 
-  const cid = activeConversationId || getSessionId();
-  const cand = state?.previews?.find((v) => v.conversationId === cid) ?? null;
+  const activeCid = activeConversationId || getSessionId();
+  const serving = state?.serving ?? null;
+  const servedPreview = serving?.role === "preview"
+    ? state?.previews?.find((v) =>
+      (serving.conversationId && v.conversationId === serving.conversationId) ||
+      (serving.branch && v.branch === serving.branch),
+    ) ?? null
+    : null;
+  const activeCand = state?.previews?.find((v) => v.conversationId === activeCid) ?? null;
+  // Prefer the preview this tab is actually viewing. The active chat can change
+  // while a preview is open, and existing branch previews may be owned by another
+  // conversation id.
+  const cand = servedPreview ?? activeCand;
+  const cid = cand?.conversationId ?? activeCid;
   const hasCand = !!cand;
   const ready = cand?.state === "ready";
   const building = cand?.state === "idle" || cand?.state === "building";
   const failed = cand?.state === "failed";
   const stopped = cand?.state === "stopped";
-  const previewing = hasCand && state?.serving?.conversationId === cid;
+  const previewing = hasCand && serving?.role === "preview" && (
+    (!!cand?.conversationId && serving.conversationId === cand.conversationId) ||
+    (!!cand?.branch && serving.branch === cand.branch)
+  );
   // What this session is actually being served (not just "a preview exists").
   const selectedValue = state?.serving?.branch ?? branches.base;
   const app = state?.appCandidate ?? null;
