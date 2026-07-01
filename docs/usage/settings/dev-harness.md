@@ -15,14 +15,13 @@ launched.
   own read/edit/write/shell tools); BOS streams its activity into the chat and
   captures the result. Because it runs non‑interactively (permissions skipped), it
   is intended to run in a **sandboxed** environment (e.g. Docker).
-  - **Working directory** — where Claude runs (defaults to the BOS repo).
 - **OpenCode CLI (headless)** — a provider‑agnostic alternative that spawns OpenCode
-  non‑interactively (`opencode run … --format json --dangerously-skip-permissions`)
-  in the BOS repo. **OpenCode itself** is the autonomous coder; BOS streams its tool
-  activity and captures the result, exactly like the Claude CLI. OpenCode uses its
-  **own** provider/model auth (configure it via OpenCode, e.g. `opencode auth login`
-  or its config), independent of the BOS AI‑provider setting. Same sandbox advice.
-  - **Working directory** — where OpenCode runs (defaults to the BOS repo).
+  non‑interactively (`opencode run … --format json --dir <worktree> --auto`) in the
+  BOS repo or Supervisor preview worktree. **OpenCode itself** is the autonomous
+  coder; BOS streams its tool activity and captures the result, exactly like the
+  Claude CLI. OpenCode uses its **own** provider/model auth (configure it via
+  OpenCode, e.g. `opencode auth login` or its config), independent of the BOS
+  AI‑provider setting. Same sandbox advice.
 - **MCP stdio (`claude mcp serve`)** — connect to a local Claude Code MCP server.
   - **Command** — the command to spawn (default `claude mcp serve`).
 - **MCP HTTP (remote)** / **MCP SSE (remote)** — connect to a remote Claude Code
@@ -59,3 +58,7 @@ Headless CLI mode runs the coder (Claude or OpenCode) with permissions skipped s
 it's fully non‑interactive. Run BOS in a sandbox (e.g. Docker) for development use;
 combined with BOS's feature‑branch and (when enabled) version‑isolation safeguards,
 code changes stay contained.
+
+For BOS source edits, version isolation is mandatory: the Developer harness refuses
+to run unless the Supervisor can provision an isolated feature-branch worktree. Run
+BOS with `npm run supervisor` for self-modification work.

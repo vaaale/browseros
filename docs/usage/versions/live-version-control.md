@@ -7,8 +7,9 @@ branch behind a stable **Supervisor**, so you can **preview** a change, then
 **promote** or **stop** it.
 
 > This feature is active only when BOS is started through its **Supervisor**
-> (`npm run supervisor`). Run normally, BOS just applies changes in place and the
-> version controls are hidden.
+> (`npm run supervisor`). Run normally, the version controls are hidden and the
+> Developer refuses BOS source edits because it cannot provision an isolated
+> feature-branch worktree.
 
 ---
 
@@ -49,9 +50,8 @@ When served through the Supervisor, the top bar shows:
 > When you ask the assistant to fix BOS itself, its Developer builds the fix as a
 > preview — it is **not** the base version yet. If you test before previewing, you're
 > still on the old version and "nothing changed": click **Preview** to see the fix,
-> then **Promote** to keep it. (Don't ask it to "apply the fix again" — that edits the
-> live checkout and blocks Promote.) If you **Stop** to refine it, just ask the
-> assistant to improve it again — it continues on the **same** feature branch.
+> then **Promote** to keep it. If you **Stop** to refine it, just ask the assistant to
+> improve it again — it continues on the **same** feature branch.
 
 If a control can't proceed, the reason is shown **inline next to the buttons** (e.g.
 a Promote refused because the live checkout has uncommitted changes) rather than the

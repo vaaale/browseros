@@ -3,8 +3,9 @@ import { getLogContext } from "@/lib/logging/context";
 
 // Thin client the BOS app uses to talk to the Supervisor control plane
 // (tools/supervisor). Enabled only when BOS_SUPERVISOR_URL is set (i.e. the app
-// is running under the Supervisor); otherwise every call is a no-op so the app
-// works exactly as before (in-place self-modification).
+// is running under the Supervisor); otherwise every call is a no-op. Source-edit
+// developer harness runs fail closed when this client is disabled, so BOS never
+// falls back to modifying the live checkout in place.
 
 function baseUrl(): string {
   return (process.env.BOS_SUPERVISOR_URL || "").replace(/\/$/, "");

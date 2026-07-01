@@ -7,7 +7,6 @@ type Transport = "cli" | "opencode" | "stdio" | "http" | "sse";
 interface Values {
   transport: Transport;
   command: string;
-  cwd: string;
   url: string;
 }
 interface TestResult {
@@ -35,7 +34,6 @@ export function DevHarnessTab() {
         setV({
           transport: (vals.transport as Transport) || "cli",
           command: vals.command || "claude mcp serve",
-          cwd: vals.cwd || "",
           url: vals.url || "",
         });
       })
@@ -53,7 +51,7 @@ export function DevHarnessTab() {
     await fetch("/api/config", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ namespace: "dev-harness", values: v }),
+      body: JSON.stringify({ namespace: "dev-harness", values: { ...v, cwd: undefined } }),
     });
   };
 
@@ -103,18 +101,6 @@ export function DevHarnessTab() {
         </select>
       </label>
 
-      {(v.transport === "cli" || v.transport === "opencode" || v.transport === "stdio") && (
-        <label className="grid grid-cols-[120px_1fr] items-center gap-2">
-          <span className="text-white/60">Working dir</span>
-          <input
-            value={v.cwd}
-            onChange={(e) => set({ cwd: e.target.value })}
-            placeholder="(repo root)"
-            className="rounded border border-white/10 bg-black/30 px-2 py-1.5 outline-none focus:border-white/30"
-          />
-        </label>
-      )}
-
       {v.transport === "stdio" && (
         <label className="grid grid-cols-[120px_1fr] items-center gap-2">
           <span className="text-white/60">stdio command</span>
@@ -141,8 +127,8 @@ export function DevHarnessTab() {
 
       {(v.transport === "cli" || v.transport === "opencode") && (
         <p className="rounded border border-amber-400/20 bg-amber-400/10 px-3 py-2 text-amber-100/80">
-          {v.transport === "opencode" ? "OpenCode" : "Claude"} runs with <code>--dangerously-skip-permissions</code> (no edit/command
-          prompts). Intended to be sandboxed (e.g. Docker). It works on a git feature branch so changes stay reversible.
+          {v.transport === "opencode" ? "OpenCode" : "Claude"} runs with <code>{v.transport === "opencode" ? "--auto" : "--dangerously-skip-permissions"}</code> (no edit/command
+          prompts). Intended to be sandboxed (e.g. Docker). BOS source edits require Supervisor isolation and run only in a feature-branch worktree.
         </p>
       )}
 

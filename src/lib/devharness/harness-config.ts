@@ -9,8 +9,9 @@ import type { McpServerConfig } from "@/lib/mcp/types";
 //    OpenCode is the autonomous coding agent — a provider-agnostic alternative.
 //  - "mcp": connect to a Claude Code MCP harness (stdio `claude mcp serve` or a
 //    remote HTTP/SSE server) and drive its Agent tool. Kept for remote setups.
-// Both CLI tools spawn a headless agent that edits source in `cwd`; the rest of the
-// flow (Supervisor worktree, build-gate, staging) is harness-agnostic.
+// Both CLI tools spawn a headless agent; source edits are later re-pointed to the
+// Supervisor preview worktree by `claude-runner.ts`. The configured namespace does
+// not expose a cwd knob because users must not choose where BOS source edits land.
 export type HarnessConfig =
   | { mode: "cli"; tool: "claude" | "opencode"; cwd: string }
   | { mode: "mcp"; server: McpServerConfig };
@@ -19,7 +20,7 @@ export async function getHarnessConfig(): Promise<HarnessConfig> {
   const reg = getRegistration("dev-harness");
   const v = (reg ? await reg.load() : {}) as Record<string, unknown>;
   const transport = ["cli", "opencode", "stdio", "http", "sse"].includes(v.transport as string) ? (v.transport as string) : "cli";
-  const cwd = (typeof v.cwd === "string" && v.cwd.trim()) || process.cwd();
+  const cwd = process.cwd();
 
   if (transport === "cli") return { mode: "cli", tool: "claude", cwd };
   if (transport === "opencode") return { mode: "cli", tool: "opencode", cwd };

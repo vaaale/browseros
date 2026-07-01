@@ -79,25 +79,32 @@ the dev tools implicitly.
 ## How the dev agent runs (`claude-runner.ts` + `devharness/harness-config.ts`)
 
 `getHarnessConfig()` resolves the `dev-harness` namespace to
-`{ mode:"cli", tool:"claude"|"opencode", cwd } | { mode:"mcp", server }`. Both CLI
-tools spawn a headless coder that edits source in `cwd`; only the binary and event
-parsing differ — the Supervisor worktree, build‑gate, and staging are harness‑agnostic.
+`{ mode:"cli", tool:"claude"|"opencode", cwd } | { mode:"mcp", server }`, where
+`cwd` is derived from the running BOS process. The user cannot configure it; source
+edits are always re-pointed to the Supervisor preview worktree before the harness
+starts. Only the binary and event parsing differ — the Supervisor worktree,
+build‑gate, and staging are harness‑agnostic.
 
 - **`cli` tool `claude` (default & recommended):** spawn
   `claude -p <task> --append-system-prompt <agent prompt> --output-format
   stream-json --verbose --dangerously-skip-permissions`. BOS parses the stream‑json
   (`type:"assistant"` → `content[].tool_use` for live events; `type:"result"` →
   `result`/`is_error`).
-- **`cli` tool `opencode`:** spawn `opencode run <prompt> --format json
-  --dangerously-skip-permissions [--model …]`. OpenCode has no inline system‑prompt
-  flag, so the agent prompt is **prepended to the message** (like the MCP path) to
-  avoid writing an `opencode.json` the Supervisor would commit. BOS parses the
-  newline‑delimited events (`tool_use` → `part` `ToolPart` for live events, de‑duped
-  by `callID`; `text` → cumulative `part.text` per id = final output; `error`).
+- **`cli` tool `opencode`:** spawn `opencode run <prompt> --format json --dir <cwd>
+  --auto [--model …]`. OpenCode has no inline system‑prompt flag, so the agent
+  prompt is **prepended to the message** (like the MCP path) to avoid writing an
+  `opencode.json` the Supervisor would commit. BOS also aligns `PWD` with `<cwd>` so
+  OpenCode cannot resolve the base checkout when the Supervisor supplied an isolated
+  preview worktree. BOS parses the newline‑delimited events (`tool_use` → `part`
+  `ToolPart` for live events, de‑duped by `callID`; `text` → cumulative `part.text`
+  per id = final output; `error`).
 - Both CLI tools: permissions skipped → **run sandboxed (e.g. Docker)**; files are
   `git add`‑ed afterward as a backstop; ~590s timeout.
 - **`mcp`:** connect to a Claude Code MCP server (stdio `claude mcp serve` or remote
-  HTTP/SSE) and drive its `Agent` tool with a generated `subagent_type`. ⚠️ The
+  HTTP/SSE) and drive its `Agent` tool with a generated `subagent_type`. For source
+  edits, only stdio MCP is allowed because BOS can spawn it in the Supervisor's
+  preview worktree; remote MCP is refused because BOS cannot enforce its working
+  directory. ⚠️ The
   `Agent` tool only spawns sub‑agent types **registered at the harness's startup**;
   if none match it returns `HARNESS_UNAVAILABLE` and the CLI path is preferred.
   (OpenCode is **CLI‑only** here — it isn't exposed over this MCP `Agent` path.)
@@ -108,12 +115,14 @@ parsing differ — the Supervisor worktree, build‑gate, and staging are harnes
 
 `runClaudeAgent` integrates with live version control:
 
-- If served under the **Supervisor** and the task is **not** `contentOnly`, it
-  resolves the feature branch from `branchKey` (an **opaque** stable id — a chat's
-  conversation id, a workflow id, an external `gitlab-issue:1234`, …), then calls
-  `supervisorBegin(branch)` to provision (or **resume**) the isolated preview worktree
-  (+ data clone), **re‑anchors the key → branch** (`thread-branches.ts`:
-  `getBranchForKey`/`setBranchForKey`), points Claude's `cwd` there, runs, then calls
+- For source edits, `runClaudeAgent` refuses to run unless BOS is served under the
+  **Supervisor** and the caller supplied a branch key (`conversationId`/legacy
+  `threadId`). There is no in-place fallback: the harness must edit an isolated
+  feature-branch worktree or fail without applying changes.
+- It resolves the feature branch from the branch key (an **opaque** stable id — a
+  chat's conversation id, a workflow id, an external `gitlab-issue:1234`, …), then
+  calls `supervisorBegin` to provision (or **resume**) the isolated preview worktree
+  (+ data clone), points the dev harness's `cwd` there, runs, then calls
   `supervisorBuild()` to build + health‑gate the preview.
 - **Branch selection depends on `interactive`:**
   - **interactive** (a chat session): a currently‑**previewed** branch wins ("improve
@@ -121,7 +130,7 @@ parsing differ — the Supervisor worktree, build‑gate, and staging are harnes
     `bos/next-*`.
   - **headless** (workflow / integration): the key is **authoritative** — its own
     remembered branch (fresh on first use), and it **never** adopts a human's stray
-    live preview. With no key, every run gets a fresh branch.
+    live preview. With no key, source edits are refused.
 - **Who supplies it:** the chat sends the active conversation id as `branchKey` with
   `interactive:true` (`SubAgentActions`); the workflow runner sends `workflow:<id>`
   (or a per‑run override) headless; any integration may POST its own id to

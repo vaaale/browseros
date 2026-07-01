@@ -133,7 +133,6 @@ const REGISTRATIONS: ConfigRegistration[] = [
             { value: "sse", label: "MCP SSE (remote)" },
           ],
         },
-        { key: "cwd", label: "Working directory", type: "text", placeholder: process.cwd() },
         { key: "command", label: "MCP stdio command", type: "text", placeholder: HARNESS_DEFAULT_COMMAND },
         { key: "url", label: "MCP harness URL", type: "text", placeholder: HARNESS_DEFAULT_URL },
       ],
@@ -143,7 +142,6 @@ const REGISTRATIONS: ConfigRegistration[] = [
       return {
         transport: (stored.transport as string) || "cli",
         command: (stored.command as string) || HARNESS_DEFAULT_COMMAND,
-        cwd: (stored.cwd as string) || process.cwd(),
         url: (stored.url as string) || HARNESS_DEFAULT_URL,
       };
     },

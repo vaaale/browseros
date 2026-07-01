@@ -108,7 +108,9 @@ map) persists to canonical data even from a preview's throwaway clone.
 ## The app side (`src/lib/devharness/supervisor.ts`)
 
 A thin client, **active only when `BOS_SUPERVISOR_URL` is set** (otherwise every
-call is a no‑op → in‑place self‑modification, exactly as before):
+call is a no‑op). Source-edit developer harness runs refuse to proceed without the
+Supervisor, so BOS never falls back to in-place self-modification of the live
+checkout:
 
 `supervisorEnabled`, `supervisorState`, `supervisorNextChanges` (→ `preview-changes`),
 `supervisorBegin(branch?)`, `supervisorBuild`, `supervisorAppBegin/Promote/Discard`.
@@ -130,10 +132,10 @@ stored under canonical `data/devharness/thread-branches.json`; one flat namespac
 prefix external ids).
 
 - **Resolution** (`claude-runner.ts`): the key's remembered branch, else a fresh
-  `bos/next-*`; the resolved branch is then re‑anchored to the key. An **interactive**
+  `bos/next-*`. Source edits without a key are refused. An **interactive**
   caller additionally lets a currently‑**previewed** branch win first ("improve what
   I'm viewing"); a **headless** caller's key is **authoritative** and never adopts a
-  human's stray live preview (with no key, each run is fresh).
+  human's stray live preview.
 - **Who supplies it:** the chat sends its conversation id + `interactive:true`
   (`SubAgentActions`); the workflow runner sends `workflow:<id>` (or a per‑run
   override) headless; any integration POSTs its own id — `/api/subagents/delegate`

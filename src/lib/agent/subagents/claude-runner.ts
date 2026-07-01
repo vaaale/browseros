@@ -15,6 +15,10 @@ type OnEvent = (e: { tool: string; input: unknown }) => void;
 // Headless Claude can run for a while; cap below the delegate route's budget.
 const CLI_TIMEOUT_MS = 590_000;
 
+function envForCwd(cwd: string): NodeJS.ProcessEnv {
+  return { ...process.env, PWD: cwd };
+}
+
 interface StreamEvent {
   type?: string;
   subtype?: string;
@@ -41,7 +45,7 @@ function runClaudeCli(agent: Agent, task: string, cwd: string, onEvent?: OnEvent
   if (agent.model) args.push("--model", agent.model);
 
   return new Promise<AgentRunResult>((resolve) => {
-    const child = spawn("claude", args, { cwd, env: process.env });
+    const child = spawn("claude", args, { cwd, env: envForCwd(cwd) });
     const toolCalls: { tool: string; input: unknown }[] = [];
     let steps = 0;
     let resultText = "";
@@ -132,8 +136,8 @@ interface OcEvent {
 // write/bash tools); we stream its tool events for the live UI and accumulate its
 // final text. OpenCode has no inline system-prompt flag, so — like the MCP path —
 // we prepend the agent's prompt to the task message (avoids writing an opencode.json
-// into the worktree, which the Supervisor would commit). `--dangerously-skip-
-// permissions` runs it non-interactively, matching the Claude CLI path.
+// into the worktree, which the Supervisor would commit). `--auto` runs it
+// non-interactively, matching the Claude CLI path.
 function runOpenCodeCli(agent: Agent, task: string, cwd: string, onEvent?: OnEvent): Promise<AgentRunResult> {
   const base = { agent: agent.name, type: "claude" as const, task, steps: 0, toolCalls: [] as { tool: string; input: unknown }[] };
   onEvent?.({ tool: "OpenCode (headless)", input: { task } });
@@ -141,7 +145,8 @@ function runOpenCodeCli(agent: Agent, task: string, cwd: string, onEvent?: OnEve
   const args = [
     "run", `${agent.systemPrompt}\n\n## Task\n${task}`,
     "--format", "json",
-    "--dangerously-skip-permissions",
+    "--dir", cwd,
+    "--auto",
   ];
   if (agent.model) args.push("--model", agent.model);
 
@@ -150,7 +155,7 @@ function runOpenCodeCli(agent: Agent, task: string, cwd: string, onEvent?: OnEve
     // EOF when stdin is a non-TTY pipe (Node's spawn default), which would hang the
     // harness forever. Closing stdin lets it proceed immediately. (Claude Code's
     // `claude -p` doesn't read stdin, so runClaudeCli doesn't need this.)
-    const child = spawn("opencode", args, { cwd, env: process.env, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn("opencode", args, { cwd, env: envForCwd(cwd), stdio: ["ignore", "pipe", "pipe"] });
     const toolCalls: { tool: string; input: unknown }[] = [];
     const seenCalls = new Set<string>();
     // Text parts arrive as cumulative updates keyed by part id; last-write-wins per
@@ -289,67 +294,107 @@ export async function runClaudeAgent(
   opts?: { onEvent?: OnEvent; contentOnly?: boolean; conversationId?: string; interactive?: boolean },
 ): Promise<AgentRunResult> {
   const harness = await getHarnessConfig();
-  if (harness.mode === "mcp") return runViaMcp(agent, task, harness.server, opts?.onEvent);
-  // Both CLI tools edit source in `cwd`; only the spawned binary + event parsing differ.
-  const cliRun = harness.tool === "opencode" ? runOpenCodeCli : runClaudeCli;
 
-  // Under the Supervisor (live version control), do the work in the isolated
-  // `next` worktree and gate it behind a build; otherwise run in-place.
-  // `contentOnly` tasks (e.g. generating an app's HTML — a GitFS content
-  // operation, not a BOS-source edit) MUST NOT provision a code candidate: the
-  // result is installed via installApp onto the app-candidate branch instead.
-  let cwd = harness.cwd;
-  let provisioned = false;
+  if (opts?.contentOnly) {
+    if (harness.mode === "mcp") return runViaMcp(agent, task, harness.server, opts?.onEvent);
+    const cliRun = harness.tool === "opencode" ? runOpenCodeCli : runClaudeCli;
+    return cliRun(agent, task, harness.cwd, opts?.onEvent);
+  }
+
+  // Source edits must never run in the live checkout. The Supervisor is the only
+  // supported source-edit path because it deterministically provisions an isolated
+  // feature-branch worktree and builds it as a candidate before promotion.
+  if (!supervisorEnabled()) {
+    return {
+      agent: agent.name,
+      type: "claude",
+      task,
+      output: "",
+      steps: 0,
+      toolCalls: [],
+      error:
+        "Refusing to run the developer harness against the live checkout. Source edits require the Supervisor so BOS can provision an isolated feature-branch worktree. Start BOS with `npm run supervisor` and retry.",
+    };
+  }
+  if (!opts?.conversationId) {
+    return {
+      agent: agent.name,
+      type: "claude",
+      task,
+      output: "",
+      steps: 0,
+      toolCalls: [],
+      error:
+        "Refusing to run the developer harness without a branch key. Source edits require a conversationId/branchKey so the Supervisor can bind the work to an isolated feature branch.",
+    };
+  }
+  if (harness.mode === "mcp" && harness.server.transport !== "stdio") {
+    return {
+      agent: agent.name,
+      type: "claude",
+      task,
+      output: "",
+      steps: 0,
+      toolCalls: [],
+      error:
+        "Refusing to run a remote MCP developer harness for source edits. BOS cannot force a remote harness to use the Supervisor's preview worktree. Use Claude CLI, OpenCode CLI, or MCP stdio under the Supervisor.",
+    };
+  }
+
+  let cwd = "";
   let candidateBranch = "";
-  if (supervisorEnabled() && !opts?.contentOnly && opts?.conversationId) {
-    // Provision (or resume) the preview worktree for this conversation. The
-    // Supervisor tracks previews by conversationId, so repeated work continues
-    // on the SAME branch automatically — no external mapping needed.
-    //   • interactive (a chat session): a currently-PREVIEWED branch wins ("improve
-    //     the thing I'm looking at"), then the conversation's existing preview.
-    //   • headless (workflow/integration): the conversation's existing preview is
-    //     AUTHORITATIVE — never adopts a human's stray live preview.
-    let resume: string | undefined;
-    if (opts?.interactive) {
-      const st = await supervisorState().catch(() => null);
-      const serving = st && st.serving && typeof st.serving === "object" ? (st.serving as { conversationId?: string }).conversationId : undefined;
-      // If THIS conversation is already being served as a preview, reuse it.
-      if (serving === opts.conversationId) {
-        const previewBranch = st && st.serving && typeof st.serving === "object" ? (st.serving as { branch?: string }).branch : undefined;
-        resume = previewBranch;
-      }
-    }
-    const begun = await supervisorBegin(opts.conversationId, resume);
-    const wt = begun && typeof begun.worktree === "string" ? (begun.worktree as string) : "";
-    if (wt) {
-      cwd = wt;
-      provisioned = true;
-      candidateBranch = begun && typeof begun.branch === "string" ? (begun.branch as string) : "";
-      opts?.onEvent?.({ tool: "Supervisor: provision preview worktree", input: { worktree: wt, branch: candidateBranch } });
-    } else {
-      // Provisioning the isolated worktree FAILED. We must NOT fall back to editing
-      // the live checkout in place: under the Supervisor the running version is
-      // served from it (in dev, `next dev` hot-recompiles it), so in-place edits can
-      // crash the running BOS and pollute the base checkout (breaking Promote). Fail
-      // loudly with the reason instead of silently doing damage. (specs/005, 017)
-      const reason =
-        begun && typeof begun.error === "string" && begun.error
-          ? begun.error
-          : "the Supervisor did not return a preview worktree";
-      opts?.onEvent?.({ tool: "Supervisor: provision FAILED — change not applied", input: { reason } });
-      return {
-        agent: agent.name,
-        type: "claude",
-        task,
-        output: "",
-        steps: 0,
-        toolCalls: [],
-        error: `Could not provision an isolated preview worktree, so your change was NOT applied (refusing to edit the live version in place). Reason: ${reason}. Use Stop in the top bar to clear any stuck preview and try again; if it persists, restart the Supervisor.`,
-      };
+
+  // Provision (or resume) the preview worktree for this conversation. The
+  // Supervisor tracks previews by conversationId, so repeated work continues
+  // on the SAME branch automatically — no external mapping needed.
+  //   • interactive (a chat session): a currently-PREVIEWED branch wins ("improve
+  //     the thing I'm looking at"), then the conversation's existing preview.
+  //   • headless (workflow/integration): the conversation's existing preview is
+  //     AUTHORITATIVE — never adopts a human's stray live preview.
+  let resume: string | undefined;
+  if (opts?.interactive) {
+    const st = await supervisorState().catch(() => null);
+    const serving = st && st.serving && typeof st.serving === "object" ? (st.serving as { conversationId?: string }).conversationId : undefined;
+    // If THIS conversation is already being served as a preview, reuse it.
+    if (serving === opts.conversationId) {
+      const previewBranch = st && st.serving && typeof st.serving === "object" ? (st.serving as { branch?: string }).branch : undefined;
+      resume = previewBranch;
     }
   }
-  const result = await cliRun(agent, task, cwd, opts?.onEvent);
-  if (provisioned && !result.error && opts?.conversationId) {
+  const begun = await supervisorBegin(opts.conversationId, resume);
+  const wt = begun && typeof begun.worktree === "string" ? (begun.worktree as string) : "";
+  if (wt) {
+    cwd = wt;
+    candidateBranch = begun && typeof begun.branch === "string" ? (begun.branch as string) : "";
+    opts?.onEvent?.({ tool: "Supervisor: provision preview worktree", input: { worktree: wt, branch: candidateBranch } });
+  } else {
+    // Provisioning the isolated worktree FAILED. We must NOT fall back to editing
+    // the live checkout in place: under the Supervisor the running version is
+    // served from it (in dev, `next dev` hot-recompiles it), so in-place edits can
+    // crash the running BOS and pollute the base checkout (breaking Promote). Fail
+    // loudly with the reason instead of silently doing damage. (specs/005, 017)
+    const reason =
+      begun && typeof begun.error === "string" && begun.error
+        ? begun.error
+        : "the Supervisor did not return a preview worktree";
+    opts?.onEvent?.({ tool: "Supervisor: provision FAILED — change not applied", input: { reason } });
+    return {
+      agent: agent.name,
+      type: "claude",
+      task,
+      output: "",
+      steps: 0,
+      toolCalls: [],
+      error: `Could not provision an isolated preview worktree, so your change was NOT applied (refusing to edit the live version in place). Reason: ${reason}. Use Stop in the top bar to clear any stuck preview and try again; if it persists, restart the Supervisor.`,
+    };
+  }
+
+  const result =
+    harness.mode === "mcp"
+      ? await runViaMcp(agent, task, { ...harness.server, cwd, env: { ...(harness.server.env ?? {}), PWD: cwd } }, opts?.onEvent)
+      : await (harness.tool === "opencode" ? runOpenCodeCli : runClaudeCli)(agent, task, cwd, opts?.onEvent);
+
+  if (!result.error) {
     opts?.onEvent?.({ tool: "Supervisor: build + health-gate candidate", input: {} });
     const built = await supervisorBuild(opts.conversationId).catch(() => null);
     // Tell the caller the change is a CANDIDATE, not the live/active version — the
