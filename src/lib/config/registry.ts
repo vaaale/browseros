@@ -238,7 +238,7 @@ const REGISTRATIONS: ConfigRegistration[] = [
       namespace: "logging",
       title: "Logs",
       description:
-        "Central logging: each browser session's frontend, backend, and Supervisor activity is collected into one time-ordered timeline (the Supervisor is the sink). View the whole system or one session and filter by stream/level. Build failures capture their full output.",
+        "Central logging: each browser session's frontend, backend, Supervisor, and conversation activity is collected into one time-ordered timeline (the Supervisor is the sink). View the whole system or one session and filter by stream/level/component/conversation. Build failures capture their full output.",
       order: 38,
       customComponent: "logging",
       fields: [
@@ -256,6 +256,7 @@ const REGISTRATIONS: ConfigRegistration[] = [
         { key: "retentionDays", label: "Retention (days)", type: "number" },
         { key: "maxSizeMb", label: "Max total size (MB)", type: "number" },
         { key: "frontendCapture", label: "Capture frontend logs", type: "boolean" },
+        { key: "logPayload", label: "Log payload", type: "boolean" },
       ],
     },
     load: async () => {
@@ -265,6 +266,7 @@ const REGISTRATIONS: ConfigRegistration[] = [
         retentionDays: typeof s.retentionDays === "number" ? s.retentionDays : 7,
         maxSizeMb: typeof s.maxSizeMb === "number" ? s.maxSizeMb : 512,
         frontendCapture: s.frontendCapture !== false,
+        logPayload: s.logPayload === true,
       };
     },
     save: async (patch) => {

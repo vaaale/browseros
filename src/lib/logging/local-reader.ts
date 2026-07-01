@@ -40,6 +40,8 @@ export async function readLocalLogs(q: LogQuery): Promise<LogRecord[]> {
       }
       if (q.stream && rec.stream !== q.stream) continue;
       if (minLevel > 0 && LEVELS.indexOf(rec.level) < minLevel) continue;
+      if (q.component && !rec.component.toLowerCase().includes(q.component.toLowerCase())) continue;
+      if (q.conversation && !(rec.conversation ?? "").toLowerCase().includes(q.conversation.toLowerCase())) continue;
       if (q.since && rec.ts < q.since) continue;
       out.push(rec);
     }

@@ -140,6 +140,9 @@ build‑gate, and staging are harness‑agnostic.
 - **`contentOnly:true`** (e.g. generating an app's HTML — a *content* op) MUST NOT
   provision a code candidate; the result is installed via `installApp` onto the
   GitFS `app-candidate` branch instead.
+- BrowserOS source analysis or implementation MUST NOT use `contentOnly:true`.
+  `contentOnly` is reserved for standalone app content generation, and the
+  runner refuses source-shaped tasks submitted through that bypass.
 
 See [Live version control](../self-modification/live-version-control.md).
 

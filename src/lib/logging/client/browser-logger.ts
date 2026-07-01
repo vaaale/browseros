@@ -14,6 +14,7 @@ interface ClientRecord {
   level: LogLevel;
   stream: "frontend";
   component: string;
+  conversation?: string;
   msg: string;
   sessionId: string;
   data?: unknown;
@@ -48,13 +49,14 @@ function stringifyArg(a: unknown): string {
   }
 }
 
-export function clog(level: LogLevel, component: string, msg: string, data?: unknown, err?: unknown): void {
+export function clog(level: LogLevel, component: string, msg: string, data?: unknown, err?: unknown, conversation?: string): void {
   try {
     buffer.push({
       ts: Date.now(),
       level,
       stream: "frontend",
       component,
+      ...(conversation ? { conversation } : {}),
       msg: String(msg).slice(0, 8000),
       sessionId: getSessionId(),
       ...(data !== undefined ? { data } : {}),

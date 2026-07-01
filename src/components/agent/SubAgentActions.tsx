@@ -80,7 +80,7 @@ export function SubAgentActions({ group = DEFAULT_GROUP }: { group?: string }) {
       { name: "ephemeralType", type: "string", description: "'local' or 'claude'", required: false },
       { name: "ephemeralSystemPrompt", type: "string", description: "For a one-off agent: its instructions", required: false },
       { name: "ephemeralSubagentType", type: "string", description: "For a one-off 'claude' agent: harness subagent_type (defaults to the name)", required: false },
-      { name: "contentOnly", type: "boolean", description: "Set true when the task only PRODUCES content and does not edit BOS source code (e.g. generating an app's HTML to install). Skips provisioning a BOS-code preview worktree.", required: false },
+      { name: "contentOnly", type: "boolean", description: "Set true ONLY for standalone app content generation, such as producing a self-contained index.html or writing an iframe app project into a staging directory for buildApp. Never set this for BrowserOS source analysis or implementation; source work must use the Supervisor preview worktree.", required: false },
     ],
     handler: async ({ agent, task, ephemeralName, ephemeralType, ephemeralSystemPrompt, ephemeralSubagentType, contentOnly }) => {
       const ephemeral = ephemeralName && ephemeralSystemPrompt

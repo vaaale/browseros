@@ -19,6 +19,43 @@ function envForCwd(cwd: string): NodeJS.ProcessEnv {
   return { ...process.env, PWD: cwd };
 }
 
+function isStandaloneContentTask(task: string): boolean {
+  const t = task.toLowerCase();
+  return [
+    "standalone app",
+    "iframe app",
+    "single static file",
+    "self-contained index.html",
+    "self contained index.html",
+    "output only a single self-contained",
+    "output only a single self contained",
+    "write a bos app project",
+    "staging directory",
+    "staging dir",
+    "installapp",
+    "buildapp",
+  ].some((needle) => t.includes(needle));
+}
+
+function isBosSourceTask(task: string): boolean {
+  const t = task.toLowerCase();
+  return [
+    "browseros source",
+    "browseros's own source",
+    "bos source",
+    "bos's own source",
+    "built-in app",
+    "built in app",
+    "settings tab",
+    "api route",
+    "server logic",
+    "gitlab issue",
+    "issue #",
+    "specs/",
+    "docs/dev/",
+  ].some((needle) => t.includes(needle)) || /\bsrc\/(app|apps|components|lib|os|store)\//.test(t);
+}
+
 interface StreamEvent {
   type?: string;
   subtype?: string;
@@ -296,6 +333,18 @@ export async function runClaudeAgent(
   const harness = await getHarnessConfig();
 
   if (opts?.contentOnly) {
+    if (!isStandaloneContentTask(task) || isBosSourceTask(task)) {
+      return {
+        agent: agent.name,
+        type: "claude",
+        task,
+        output: "",
+        steps: 0,
+        toolCalls: [],
+        error:
+          "Refusing contentOnly developer harness run. `contentOnly:true` is only for standalone app content generation; BrowserOS source analysis or implementation must run through the Supervisor feature-branch worktree with contentOnly omitted/false.",
+      };
+    }
     if (harness.mode === "mcp") return runViaMcp(agent, task, harness.server, opts?.onEvent);
     const cliRun = harness.tool === "opencode" ? runOpenCodeCli : runClaudeCli;
     return cliRun(agent, task, harness.cwd, opts?.onEvent);

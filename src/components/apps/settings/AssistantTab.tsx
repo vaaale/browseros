@@ -83,6 +83,7 @@ export function AssistantTab() {
   const [tools, setTools] = useState<Set<string>>(new Set());
   const [skills, setSkills] = useState<Set<string>>(new Set());
   const [mcp, setMcp] = useState<Set<string>>(new Set());
+  const [logPayload, setLogPayload] = useState(false);
 
   const toolItems = useMemo<CatalogItem[]>(
     () => catalog.tools.map((c) => ({ id: c.id, label: c.id, sub: `${c.group} · ${c.context}` })),
@@ -108,6 +109,13 @@ export function AssistantTab() {
         setBody(res.activeBody ?? "");
         setCatalog(cat);
         loadCaps(list.find((a) => a.id === res.active), cat);
+      })
+      .catch(() => {});
+    fetch("/api/config")
+      .then((r) => r.json())
+      .then((d) => {
+        const s = (d.schemas ?? []).find((x: { namespace: string }) => x.namespace === "logging");
+        setLogPayload(s?.values?.logPayload === true);
       })
       .catch(() => {});
   }, [loadCaps]);
@@ -164,6 +172,16 @@ export function AssistantTab() {
     load();
   };
 
+  const saveLogPayload = async (enabled: boolean) => {
+    setLogPayload(enabled);
+    await fetch("/api/config", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ namespace: "logging", values: { logPayload: enabled } }),
+    });
+    setStatus(enabled ? "Chat payload logging enabled." : "Chat payload logging disabled.");
+  };
+
   const toggle = (set: Set<string>, setter: (s: Set<string>) => void, id: string) => {
     const next = new Set(set);
     if (next.has(id)) next.delete(id);
@@ -209,6 +227,17 @@ export function AssistantTab() {
             <Plus size={13} /> New
           </button>
         </div>
+      </div>
+
+      <div>
+        <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-white/50">Conversation logging</h4>
+        <label className="flex cursor-pointer items-start gap-2 rounded border border-white/10 bg-black/20 p-2 text-xs hover:bg-white/5">
+          <input type="checkbox" checked={logPayload} onChange={(e) => void saveLogPayload(e.target.checked)} className="mt-0.5 accent-[#5b8cff]" />
+          <span>
+            <span className="block font-medium text-white/80">Log payload</span>
+            <span className="text-white/40">When enabled, conversation logs include full chat and tool payloads. When disabled, logs keep only metadata.</span>
+          </span>
+        </label>
       </div>
 
       <div>

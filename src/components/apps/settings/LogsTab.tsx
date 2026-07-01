@@ -13,6 +13,7 @@ interface LogRec {
   level: string;
   stream: string;
   component?: string;
+  conversation?: string;
   msg: string;
   sessionId?: string;
   versionLabel?: string;
@@ -30,6 +31,7 @@ interface Settings {
   retentionDays: number;
   maxSizeMb: number;
   frontendCapture: boolean;
+  logPayload: boolean;
 }
 
 const LEVELS = ["debug", "info", "warn", "error"];
@@ -56,6 +58,8 @@ export function LogsTab() {
   const [session, setSession] = useState<string>(""); // "" = whole-system timeline
   const [stream, setStream] = useState<string>("");
   const [level, setLevel] = useState<string>("");
+  const [component, setComponent] = useState<string>("");
+  const [conversation, setConversation] = useState<string>("");
   const [records, setRecords] = useState<LogRec[]>([]);
   const [loading, setLoading] = useState(false);
   const [auto, setAuto] = useState(true);
@@ -78,6 +82,8 @@ export function LogsTab() {
       if (session) qs.set("session", session);
       if (stream) qs.set("stream", stream);
       if (level) qs.set("level", level);
+      if (component.trim()) qs.set("component", component.trim());
+      if (conversation.trim()) qs.set("conversation", conversation.trim());
       qs.set("limit", "500");
       const r = await fetch(`/api/logs?${qs.toString()}`).then((res) => res.json());
       setRecords(Array.isArray(r.records) ? r.records : []);
@@ -86,7 +92,7 @@ export function LogsTab() {
     } finally {
       setLoading(false);
     }
-  }, [session, stream, level]);
+  }, [session, stream, level, component, conversation]);
 
   useEffect(() => {
     fetch("/api/config")
@@ -99,6 +105,7 @@ export function LogsTab() {
           retentionDays: typeof v.retentionDays === "number" ? v.retentionDays : 7,
           maxSizeMb: typeof v.maxSizeMb === "number" ? v.maxSizeMb : 512,
           frontendCapture: v.frontendCapture !== false,
+          logPayload: v.logPayload === true,
         });
       })
       .catch(() => {});
@@ -165,6 +172,20 @@ export function LogsTab() {
             </option>
           ))}
         </select>
+        <input
+          value={component}
+          onChange={(e) => setComponent(e.target.value)}
+          placeholder="component contains…"
+          className={`${selectClass} w-36`}
+          title="Component filter"
+        />
+        <input
+          value={conversation}
+          onChange={(e) => setConversation(e.target.value)}
+          placeholder="conversation contains…"
+          className={`${selectClass} w-40`}
+          title="Conversation filter"
+        />
         <button onClick={() => void load()} className="flex items-center gap-1 rounded bg-white/10 px-2 py-1 hover:bg-white/20">
           {loading ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />} Refresh
         </button>
@@ -187,10 +208,12 @@ export function LogsTab() {
                 <span className={`shrink-0 rounded px-1 ${STREAM_COLOR[r.stream] ?? "bg-white/10 text-white/70"}`}>{r.stream}</span>
                 {r.versionLabel && <span className="shrink-0 text-white/35">{r.versionLabel}</span>}
                 <span className="shrink-0 text-white/45">{r.component}</span>
+                {r.conversation && <span className="shrink-0 text-white/35">{r.conversation}</span>}
                 <span className="truncate text-white/85">{r.msg}</span>
               </summary>
               <div className="mt-1 space-y-1 whitespace-pre-wrap break-words pl-4 text-white/60">
                 {r.sessionId && <div className="text-white/35">session: {r.sessionId}</div>}
+                {r.conversation && <div className="text-white/35">conversation: {r.conversation}</div>}
                 {r.branch && <div className="text-white/35">branch: {r.branch}</div>}
                 {r.err && <div className="text-red-300/80">{r.err.message}{r.err.stack ? `\n${r.err.stack}` : ""}</div>}
                 {r.data !== undefined && <div>{safeJson(r.data)}</div>}
@@ -223,6 +246,9 @@ export function LogsTab() {
           </label>
           <label className="flex items-center gap-1 text-white/60">
             <input type="checkbox" checked={settings.frontendCapture} onChange={(e) => setSettings({ ...settings, frontendCapture: e.target.checked })} /> capture frontend
+          </label>
+          <label className="flex items-center gap-1 text-white/60" title="Include full chat/tool payloads in conversation logs.">
+            <input type="checkbox" checked={settings.logPayload} onChange={(e) => setSettings({ ...settings, logPayload: e.target.checked })} /> log payload
           </label>
           <button onClick={saveSettings} className="flex items-center gap-1 rounded bg-white/10 px-2 py-1 hover:bg-white/20">
             <Save size={12} /> {savedAt ? "Saved" : "Save"}

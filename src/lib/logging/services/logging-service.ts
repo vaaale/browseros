@@ -25,6 +25,7 @@ export class LoggingService {
         level: input.level,
         stream: input.stream ?? "backend",
         component: input.component || ctx.component || "",
+        ...(input.conversation ? { conversation: input.conversation } : {}),
         msg: input.msg,
         ...(input.data !== undefined ? { data: input.data } : {}),
         ...(input.err ? { err: input.err } : {}),

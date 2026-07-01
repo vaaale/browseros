@@ -17,6 +17,7 @@ export interface LogErr {
 export interface LogRecordInput {
   level: LogLevel;
   component: string;
+  conversation?: string;
   msg: string;
   data?: unknown;
   err?: LogErr;
@@ -33,6 +34,7 @@ export interface LogRecord {
   level: LogLevel;
   stream: LogStream;
   component: string;
+  conversation?: string;
   msg: string;
   data?: unknown;
   err?: LogErr;
@@ -50,6 +52,8 @@ export interface LogQuery {
   session?: string;
   stream?: LogStream;
   level?: LogLevel;
+  component?: string;
+  conversation?: string;
   since?: number;
   limit?: number;
 }

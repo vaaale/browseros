@@ -42,7 +42,7 @@ export async function POST(req: Request) {
   return NextResponse.json({ ok: true, n: records.length });
 }
 
-// GET: read the timeline for the viewer (filters: session, stream, level, since, limit).
+// GET: read the timeline for the viewer (filters: session, stream, level, component, conversation, since, limit).
 export async function GET(req: Request) {
   const qs = new URL(req.url).searchParams;
   const sup = supervisorBase();
@@ -61,6 +61,8 @@ export async function GET(req: Request) {
     session: qs.get("session") || undefined,
     stream: (qs.get("stream") as LogStream) || undefined,
     level: (qs.get("level") as LogLevel) || undefined,
+    component: qs.get("component") || undefined,
+    conversation: qs.get("conversation") || undefined,
     since: qs.get("since") ? Number(qs.get("since")) : undefined,
     limit: qs.get("limit") ? Number(qs.get("limit")) : undefined,
   });
