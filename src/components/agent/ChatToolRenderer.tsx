@@ -8,10 +8,9 @@ import { parseNested, type NestedEvent } from "@/lib/agent/nested-events";
 import { useDelegation } from "@/lib/agent/subagent-events";
 import { registerCard, toggleCard, useCardOpen, useCardScope } from "@/lib/agent/card-collapse";
 
-function preview(value: unknown, max = 600): string {
+function formatFull(value: unknown): string {
   if (value === undefined || value === null) return "";
-  const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
-  return text.length > max ? `${text.slice(0, max)}…` : text;
+  return typeof value === "string" ? value : JSON.stringify(value, null, 2);
 }
 
 function McpUiView({ html, url }: { html?: string; url?: string }) {
@@ -33,7 +32,7 @@ function NestedEvents({ events, output, running }: { events: NestedEvent[]; outp
           <div key={i} className="my-0.5 flex items-center gap-1.5 text-[11px] text-white/55">
             <span className="h-1 w-1 rounded-full bg-emerald-400/70" />
             <span className="font-mono">{e.tool}</span>
-            {e.input != null ? <span className="truncate text-white/35">{preview(e.input, 80)}</span> : null}
+            {e.input != null ? <span className="min-w-0 flex-1 whitespace-pre-wrap break-words text-white/35">{formatFull(e.input)}</span> : null}
           </div>
         ))}
         {running && (
@@ -56,7 +55,7 @@ function EventCard({ name, status, args, result }: { name: string; status: strin
   // No stable tool-call id is available from the catch-all render props, so the
   // id is content-derived. It changes while args stream in (keeping the live card
   // the newest/open one) and stabilizes once the call completes.
-  const cardId = `${name}:${preview(args, 120)}`;
+  const cardId = `${name}:${formatFull(args).slice(0, 120)}`;
   const scope = useCardScope();
   const open = useCardOpen(scope, cardId);
   const busy = status !== "complete";
@@ -70,8 +69,9 @@ function EventCard({ name, status, args, result }: { name: string; status: strin
   const liveKey = name === "delegateToSubAgent" ? String((args as { task?: string })?.task ?? "") : "";
   const live = useDelegation(liveKey);
 
-  const argText = preview(args, 300);
+  const argText = formatFull(args);
   const resultStr = typeof result === "string" ? result : "";
+  const resultText = formatFull(result);
   const mcpUi = status === "complete" ? parseMcpUi(resultStr) : null;
   const nested = status === "complete" ? parseNested(resultStr) : null;
   const liveEvents = live && (live.events.length > 0 || !live.done) ? live : null;
@@ -103,27 +103,42 @@ function EventCard({ name, status, args, result }: { name: string; status: strin
         <span className="ml-auto shrink-0 text-white/40">{busy ? status : "done"}</span>
       </button>
 
-      {open && (
-        <div className="max-h-64 overflow-auto px-2 pb-2">
-          {argText && argText !== "{}" && (
-            <pre className="overflow-x-auto whitespace-pre-wrap break-words text-[11px] text-white/55">{argText}</pre>
-          )}
-          {liveEvents ? (
-            <NestedEvents events={liveEvents.events} output={liveEvents.done ? liveEvents.output ?? "" : ""} running={!liveEvents.done} />
-          ) : nested ? (
-            <NestedEvents events={nested.events} output={nested.output} />
-          ) : mcpUi ? (
-            <McpUiView html={mcpUi.html} url={mcpUi.url} />
-          ) : (
-            status === "complete" &&
-            result !== undefined && (
-              <pre className="mt-1 overflow-x-auto whitespace-pre-wrap break-words border-t border-white/10 pt-1 text-[11px] text-white/70">
-                {preview(result)}
-              </pre>
-            )
-          )}
+      <div className={`grid transition-[grid-template-rows] duration-200 ease-out ${open ? "grid-rows-[1fr]" : "grid-rows-[0fr]"}`}>
+        <div className={`min-h-0 overflow-hidden transition-opacity duration-150 ease-out ${open ? "opacity-100" : "opacity-0"}`}>
+          <div className="max-h-64 overflow-auto overscroll-contain px-2 pb-2">
+            {argText && argText !== "{}" && (
+              <section>
+                <div className="mb-0.5 text-[10px] font-medium uppercase tracking-wide text-white/35">Request</div>
+                <pre className="overflow-x-auto whitespace-pre-wrap break-words text-[11px] text-white/55">{argText}</pre>
+              </section>
+            )}
+            {liveEvents ? (
+              <section className={argText && argText !== "{}" ? "mt-1" : undefined}>
+                <div className="mb-0.5 text-[10px] font-medium uppercase tracking-wide text-white/35">Response</div>
+                <NestedEvents events={liveEvents.events} output={liveEvents.done ? liveEvents.output ?? "" : ""} running={!liveEvents.done} />
+              </section>
+            ) : nested ? (
+              <section className={argText && argText !== "{}" ? "mt-1" : undefined}>
+                <div className="mb-0.5 text-[10px] font-medium uppercase tracking-wide text-white/35">Response</div>
+                <NestedEvents events={nested.events} output={nested.output} />
+              </section>
+            ) : mcpUi ? (
+              <section className={argText && argText !== "{}" ? "mt-1" : undefined}>
+                <div className="mb-0.5 text-[10px] font-medium uppercase tracking-wide text-white/35">Response</div>
+                <McpUiView html={mcpUi.html} url={mcpUi.url} />
+              </section>
+            ) : (
+              status === "complete" &&
+              result !== undefined && (
+                <section className={argText && argText !== "{}" ? "mt-1" : undefined}>
+                  <div className="mb-0.5 text-[10px] font-medium uppercase tracking-wide text-white/35">Response</div>
+                  <pre className="overflow-x-auto whitespace-pre-wrap break-words text-[11px] text-white/70">{resultText}</pre>
+                </section>
+              )
+            )}
+          </div>
         </div>
-      )}
+      </div>
     </div>
   );
 }
