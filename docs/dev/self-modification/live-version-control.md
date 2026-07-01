@@ -50,7 +50,10 @@ everyone else stays on `base`.
 - `buildAndStart(v)` — **stop any existing server for this version first** (so a
   rebuild never collides on its port), commit the worktree, `npm run build`, start
   `next start -p <pooled port>`, then **health‑gate** via `/api/health`
-  (`waitHealthy`, ≤120s). State → `building` → `ready` | `failed`.
+  (`waitHealthy`, ≤120s). Before building, the Supervisor checks that the live
+  checkout is still clean and on the base branch. If the developer harness touched
+  the live checkout, the Supervisor restores it and fails the candidate instead of
+  reporting a misleading ready preview. State → `building` → `ready` | `failed`.
 - `activate(branch)` — toolbar selection. Base → drop the preview, back to base. An
   already‑`ready` preview of the same branch → just re‑pin. Otherwise provision +
   build in the background; the pin routes once it is `ready`.

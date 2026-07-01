@@ -166,14 +166,15 @@ async function gitTry(args, cwd = REPO) {
 // expected base branch and has no uncommitted changes. If either invariant is
 // violated we log a loud ERROR and attempt a safe restore (checkout baseBranch +
 // reset --hard) so the running base is never left in a dirty/wrong-branch state.
-// This catches any remaining path that accidentally edits or branches the main
-// checkout instead of the isolated preview worktree.
+// Returns true when a violation was detected. Callers must fail the candidate:
+// restoring the live checkout means the agent edited the wrong tree, so reporting
+// a successful preview would be misleading.
 async function assertRepoIntegrity(context = "") {
   try {
     const branch = await gitTry(["rev-parse", "--abbrev-ref", "HEAD"]);
     const dirty = await gitTry(["status", "--porcelain"]);
     const violated = branch !== baseBranch || !!dirty;
-    if (!violated) return; // fast path — everything is fine
+    if (!violated) return false; // fast path — everything is fine
 
     const msg =
       `SAFETY GATE VIOLATED${context ? ` (${context})` : ""}: ` +
@@ -194,8 +195,10 @@ async function assertRepoIntegrity(context = "") {
     const afterBranch = await gitTry(["rev-parse", "--abbrev-ref", "HEAD"]);
     const afterDirty = await gitTry(["status", "--porcelain"]);
     slog("warn", "safety-gate", `restore complete: branch="${afterBranch}", dirty="${afterDirty || ""}"`);
+    return true;
   } catch (e) {
     slog("error", "safety-gate", `assertRepoIntegrity check itself failed: ${e.message || e}`);
+    return true;
   }
 }
 
@@ -381,7 +384,14 @@ async function buildAndStart(v, ctx = {}) {
   });
   v.commit = await git(["rev-parse", "HEAD"], v.worktree).catch(() => v.commit);
   // Safety gate: the worktree commit must never have leaked into the main checkout.
-  await assertRepoIntegrity(`build ${v.branch}`);
+  const liveCheckoutWasTouched = await assertRepoIntegrity(`build ${v.branch}`);
+  if (liveCheckoutWasTouched) {
+    v.state = "failed";
+    v.buildError =
+      "developer harness edited the live checkout instead of the isolated preview worktree; the live checkout was restored and this candidate was not built";
+    slog("error", "build", `build BLOCKED: ${v.branch}`, { branch: v.branch, versionLabel: v.role, err: { message: v.buildError } });
+    return v.state;
+  }
   v.state = "building";
   v.buildError = "";
   const lctx = { branch: v.branch, versionLabel: v.role, ...(ctx.sessionId ? { sessionId: ctx.sessionId } : {}) };
