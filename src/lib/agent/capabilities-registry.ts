@@ -39,6 +39,10 @@ export const CAPABILITIES: Capability[] = [
   { id: "create_folder", group: "Files", context: "tool", description: "Create a directory (sub-agent)." },
   { id: "web_fetch", group: "Files", context: "tool", description: "Fetch a URL (sub-agent)." },
 
+  // Web
+  { id: "webSearch", group: "Web", context: "action", description: "Search the web with Anthropic native web search." },
+  { id: "web_search", group: "Web", context: "tool", description: "Search the web with Anthropic native web search (sub-agent)." },
+
   // Config
   { id: "listConfigurableSettings", group: "Config", context: "action", description: "List configurable settings." },
   { id: "updateSetting", group: "Config", context: "action", description: "Update a configuration value." },

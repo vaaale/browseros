@@ -1,6 +1,7 @@
 import "server-only";
 import * as vfs from "@/os/vfs";
 import { fetchText } from "@/lib/net";
+import { webSearch, formatWebSearchForModel } from "@/lib/agent/web-search";
 import * as repo from "@/lib/dev/repo-fs";
 import { runDevCommand, ALLOWED_COMMANDS } from "@/lib/dev/run-command";
 import * as git from "@/lib/system/git";
@@ -43,6 +44,23 @@ export const SUBAGENT_TOOLS: Record<string, LlmTool> = {
     description: "Fetch a web page and return its readable text content.",
     parameters: { type: "object", properties: { url: { type: "string" } }, required: ["url"] },
     execute: async (input) => fetchText(input.url as string),
+  },
+  web_search: {
+    description: "Search the web using Anthropic native web search. Use for current facts and cite returned source URLs.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Search query, 2-1000 characters." },
+        allowed_domains: { type: "array", items: { type: "string" }, description: "Optional domain allowlist. Do not combine with blocked_domains." },
+        blocked_domains: { type: "array", items: { type: "string" }, description: "Optional domain blocklist. Do not combine with allowed_domains." },
+      },
+      required: ["query"],
+    },
+    execute: async (input) => formatWebSearchForModel(await webSearch({
+      query: input.query as string,
+      allowed_domains: input.allowed_domains as string[] | undefined,
+      blocked_domains: input.blocked_domains as string[] | undefined,
+    })),
   },
 };
 

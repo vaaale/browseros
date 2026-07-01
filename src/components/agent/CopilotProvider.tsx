@@ -15,6 +15,7 @@ import { DocsActions } from "./DocsActions";
 import { GitActions } from "./GitActions";
 import { WorkflowActions } from "./WorkflowActions";
 import { SpecActions } from "./SpecActions";
+import { WebSearchActions } from "./WebSearchActions";
 import { ToolCallRetry } from "./ToolCallRetry";
 import { AgentCapabilitiesProvider } from "./agent-capabilities";
 import { useActiveConversationId, DEFAULT_GROUP } from "@/lib/agent/conversations";
@@ -82,6 +83,7 @@ export function CopilotProvider({
         <AgentCapabilitiesProvider allow={allow}>
           <OSActions />
           <McpActions agentId={agentId} />
+          <WebSearchActions />
           <SubAgentActions group={group} />
           <MemoryActions />
           <DevActions />

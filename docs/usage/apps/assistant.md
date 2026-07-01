@@ -38,9 +38,24 @@ Almost anything in BOS, including:
 - Read and write your files.
 - Change any setting.
 - Connect MCP servers and use their tools.
+- Search the web for current information when Anthropic is the configured AI provider.
 - **Build a new app** from a description, and install it to your desktop.
 - **Modify BOS itself** (edit the OS's own code, safely on a branch).
 - Remember durable facts and improve its own skills.
 
 If no AI provider is configured, the chat shows a banner with a shortcut to open
 **Settings**.
+
+## Web Search
+
+The assistant can search the web for current, source-backed information through
+Anthropic native web search. Ask naturally, for example: "search the web for the
+latest Next.js release notes and summarize the breaking changes."
+
+Notes:
+
+- Web search currently works only when the AI provider is Anthropic and an Anthropic
+  API key is configured.
+- For answers based on web search, the assistant should cite the source URLs it used.
+- If you already know the page URL, the assistant may use its existing `web_fetch`
+  ability instead of running a search.

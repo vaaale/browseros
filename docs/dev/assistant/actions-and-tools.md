@@ -38,6 +38,7 @@ context(s) it runs in (`action` / `tool` / `both`). `tool-manifest.ts` is a view
 |---|---|
 | `OSActions` | `launchApp, listApps, closeWindow, changeWallpaper, openWebPage, listFiles, readFile, writeFile, createFolder, deletePath` |
 | `McpActions` | `listMcpServers, findTools, listMcpServerTools, callMcpServerTool, addMcpServer, removeMcpServer` |
+| `WebSearchActions` | `webSearch` (Anthropic native web search over `/api/web-search`) |
 | `SpecActions` | `listSpecs, readSpec, writeSpec, editSpec, searchSpecs` (over `/api/specs`) |
 | `SubAgentActions` | `listSubAgents, createSubAgent, delegateToSubAgent, requestClaudeAgentPermission` (elicitation card) |
 | `MemoryActions` | `memory` (add/replace/remove, batch), `recallMemories` |
@@ -108,3 +109,32 @@ tools).
    for server work.
 2. Mirror it in `tool-manifest.ts` (Tools panel).
 3. Prefer extending an existing grouping over creating new components.
+
+---
+
+## Web Search
+
+`src/lib/agent/web-search.ts` is the shared server-only implementation for native
+web search. It validates `WebSearchInput`, calls Anthropic
+`client.beta.messages.create()` with the `web_search_20250305` server tool, parses
+`web_search_tool_result`, `server_tool_use`, and `text` response blocks, and formats
+results for model consumption.
+
+Entry points:
+
+- Main chat action: `webSearch` in `src/components/agent/WebSearchActions.tsx`.
+- Sub-agent tool: `web_search` in `src/lib/agent/subagents/tools.ts`.
+- API route: `POST /api/web-search` in `src/app/api/web-search/route.ts`.
+
+Constraints:
+
+- Native web search is currently Anthropic-only and requires an Anthropic API key.
+- `query` is required, trimmed, and limited to 2-1000 characters.
+- `allowed_domains` and `blocked_domains` are mutually exclusive, max 20 domains,
+  max 253 characters per domain, and must be domains rather than URLs.
+- The API route accepts `application/json` only and applies a simple in-memory limit
+  of about 20 searches per client per 10 minutes.
+- Any answer that uses web search results must cite the relevant source URLs.
+
+`web_fetch` remains unchanged: use it when the agent already has a specific URL to
+read. Use `webSearch`/`web_search` when the agent needs to discover current sources.
