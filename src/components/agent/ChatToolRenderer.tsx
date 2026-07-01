@@ -104,7 +104,7 @@ function EventCard({ name, status, args, result }: { name: string; status: strin
       </button>
 
       {open && (
-        <div className="px-2 pb-2">
+        <div className="max-h-64 overflow-auto px-2 pb-2">
           {argText && argText !== "{}" && (
             <pre className="overflow-x-auto whitespace-pre-wrap break-words text-[11px] text-white/55">{argText}</pre>
           )}
