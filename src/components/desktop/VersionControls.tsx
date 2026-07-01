@@ -1,24 +1,22 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { sessionHeader, getSessionId } from "@/lib/logging/client/session";
-import { useActiveConversationId } from "@/lib/agent/conversations";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { FileText } from "lucide-react";
+import { sessionHeader } from "@/lib/logging/client/session";
+
+type PreviewState = "not-built" | "idle" | "building" | "ready" | "failed" | "stopped" | string;
 
 interface Ver {
   role: string;
   branch?: string;
-  state: string;
+  state: PreviewState;
   buildError?: string;
-  buildLog?: string;
-  conversationId?: string;
 }
 interface SupState {
   base: Ver | null;
   previews: Ver[];
   appCandidate: { branch: string; base: string } | null;
-  // Which running version THIS session is being served (resolved from the pin
-  // cookie). Absent on older Supervisors → treated as "not previewing".
-  serving?: { role: string; branch?: string; conversationId?: string } | null;
+  serving?: { role: string; branch?: string } | null;
 }
 interface Branches {
   branches: string[];
@@ -27,32 +25,66 @@ interface Branches {
 interface PostResult {
   ok?: boolean;
   error?: string;
+  state?: string;
+}
+interface LogRecord {
+  ts?: number;
+  level?: string;
+  source?: string;
+  msg?: string;
+  message?: string;
 }
 
-// Compact live-version-control surface in the Topbar. Renders nothing unless
-// BrowserOS is served through the Supervisor (so /__supervisor/* resolves).
-//
-// Shape: `Base: <branch ▾>`. The dropdown lists every git branch; choosing one
-// builds it as a preview and pins this session to it. While a preview exists its
-// [Preview] / [Stop] / [Discard] / [Promote] controls appear: Preview points THIS
-// session at the preview (an agent-built preview isn't auto-served — without
-// Preview you'd still be on base, the "fix is in but nothing changed" trap); Stop
-// stops the preview server but keeps the worktree + branch (can resume via
-// Preview); Discard destroys the worktree and deletes the branch; Promote makes
-// it the new base. Failures are surfaced inline rather than silently swallowed.
-//
-// The conversationId for preview operations is the active chat conversation ID
-// (same one the agent uses), so the UI and agent share the same preview slot.
-// Falls back to the browser session ID when no conversation is active.
+function short(s: string): string {
+  return s.length > 80 ? `${s.slice(0, 77)}...` : s;
+}
+
+function SupervisorLogPopover({ onClose }: { onClose: () => void }) {
+  const [records, setRecords] = useState<LogRecord[]>([]);
+
+  useEffect(() => {
+    let alive = true;
+    fetch("/__supervisor/logs?stream=supervisor&limit=80")
+      .then((r) => r.json())
+      .then((d) => {
+        if (alive) setRecords(Array.isArray(d.records) ? d.records : []);
+      })
+      .catch(() => alive && setRecords([]));
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  return (
+    <div className="absolute right-0 top-7 z-[100001] w-[520px] max-w-[80vw] rounded border border-white/15 bg-neutral-950 p-2 text-[11px] text-white/80 shadow-2xl">
+      <div className="mb-2 flex items-center justify-between">
+        <span className="font-medium text-white">Supervisor log</span>
+        <button onClick={onClose} className="rounded bg-white/10 px-2 py-0.5 hover:bg-white/20">Close</button>
+      </div>
+      <div className="max-h-[320px] overflow-auto rounded bg-black/35 p-2 font-mono">
+        {records.length === 0 ? (
+          <div className="text-white/45">No supervisor log records.</div>
+        ) : (
+          records.map((r, i) => (
+            <div key={i} className="whitespace-pre-wrap border-b border-white/5 py-1 last:border-b-0">
+              <span className="text-white/35">{r.ts ? new Date(r.ts).toLocaleTimeString() : "--:--:--"}</span>{" "}
+              <span className="text-white/50">{r.level ?? "info"}</span>{" "}
+              <span>{r.msg ?? r.message ?? ""}</span>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function VersionControls() {
-  const activeConversationId = useActiveConversationId();
   const [branches, setBranches] = useState<Branches | null>(null);
   const [state, setState] = useState<SupState | null>(null);
+  const [selectedBranch, setSelectedBranch] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  // The branch we just asked to build. Once its preview finishes building we
-  // reload so the session flips into it (the pin only routes once it is ready).
-  const [pendingBranch, setPendingBranch] = useState<string | null>(null);
+  const [showLogs, setShowLogs] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -60,35 +92,31 @@ export function VersionControls() {
         fetch("/__supervisor/branches"),
         fetch("/__supervisor/state"),
       ]);
-      if (bRes.ok) setBranches((await bRes.json()) as Branches);
-      if (sRes.ok) setState((await sRes.json()) as SupState);
+      if (!bRes.ok || !sRes.ok) return;
+      const nextBranches = (await bRes.json()) as Branches;
+      const nextState = (await sRes.json()) as SupState;
+      setBranches(nextBranches);
+      setState(nextState);
+      const servingBranch = nextState.serving?.branch;
+      setSelectedBranch((current) => current || servingBranch || nextBranches.base);
     } catch {
-      // Keep the last good snapshot on a transient poll failure.
+      // Supervisor endpoints do not exist when BOS is not served through it.
     }
   }, []);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void load();
-    const id = setInterval(load, 2500);
-    return () => clearInterval(id);
+    const initial = setTimeout(() => void load(), 0);
+    const interval = setInterval(load, 2500);
+    return () => {
+      clearTimeout(initial);
+      clearInterval(interval);
+    };
   }, [load]);
 
-  // Flip the session into a freshly-built preview as soon as it is ready.
-  useEffect(() => {
-    if (!pendingBranch) return;
-    // Match by branch name — activate() may reuse a preview owned by a different
-    // conversationId (e.g. one created by the agent).
-    const p = state?.previews?.find((v) => v.branch === pendingBranch);
-    if (p?.state === "ready") {
-      window.location.reload();
-    }
-  }, [pendingBranch, state]);
-
-  const post = useCallback(async (p: string, body?: Record<string, unknown>): Promise<PostResult> => {
+  const post = useCallback(async (path: string, body?: Record<string, unknown>): Promise<PostResult> => {
     setBusy(true);
     try {
-      const r = await fetch(`/__supervisor/${p}`, {
+      const r = await fetch(`/__supervisor/${path}`, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...sessionHeader() },
         body: JSON.stringify(body ?? {}),
@@ -101,109 +129,103 @@ export function VersionControls() {
     }
   }, []);
 
-  if (!branches) return null;
-
-  const activeCid = activeConversationId || getSessionId();
-  const serving = state?.serving ?? null;
-  const servedPreview = serving?.role === "preview"
-    ? state?.previews?.find((v) =>
-      (serving.conversationId && v.conversationId === serving.conversationId) ||
-      (serving.branch && v.branch === serving.branch),
-    ) ?? null
-    : null;
-  const activeCand = state?.previews?.find((v) => v.conversationId === activeCid) ?? null;
-  const pendingCand = pendingBranch ? state?.previews?.find((v) => v.branch === pendingBranch) ?? null : null;
-  const soleCand = state?.previews?.length === 1 ? state.previews[0] : null;
-  // Prefer the preview this tab is actually viewing. The active chat can change
-  // while a preview is open, and existing branch previews may be owned by another
-  // conversation id. After Supervisor restarts, restored previews use a branch
-  // hash as their synthetic conversation id, so a single known preview is still
-  // actionable from Base even when the active chat id no longer matches.
-  const cand = servedPreview ?? activeCand ?? pendingCand ?? soleCand;
-  const cid = cand?.conversationId ?? activeCid;
-  const hasCand = !!cand;
-  const ready = cand?.state === "ready";
-  const building = cand?.state === "idle" || cand?.state === "building";
-  const failed = cand?.state === "failed";
-  const stopped = cand?.state === "stopped";
-  const previewing = hasCand && serving?.role === "preview" && (
-    (!!cand?.conversationId && serving.conversationId === cand.conversationId) ||
-    (!!cand?.branch && serving.branch === cand.branch)
+  const preview = useMemo(
+    () => state?.previews.find((p) => p.branch === selectedBranch) ?? null,
+    [selectedBranch, state?.previews],
   );
-  // What this session is actually being served (not just "a preview exists").
-  const selectedValue = pendingBranch ?? state?.serving?.branch ?? branches.base;
-  const app = state?.appCandidate ?? null;
+
+  if (!branches || !state) return null;
+
+  const baseBranch = branches.base;
+  const viewingBase = state.serving?.role !== "preview";
+  const previewingSelected = state.serving?.role === "preview" && state.serving.branch === selectedBranch;
+  const isBaseSelection = selectedBranch === baseBranch;
+  const stateText = viewingBase ? "BASE" : "PREVIEW";
+  const building = preview?.state === "idle" || preview?.state === "building";
+  const ready = preview?.state === "ready";
+  const stopped = preview?.state === "stopped";
+  const failed = preview?.state === "failed";
+  const notBuilt = preview?.state === "not-built";
+  const hasFeatureSelection = !isBaseSelection && !!selectedBranch;
+  const selectDisabled = busy || building;
+  const app = state.appCandidate;
 
   const onSelect = async (branch: string) => {
-    if (branch === selectedValue) return;
+    setSelectedBranch(branch);
     setErr(null);
-    if (branch === branches.base) {
-      // Back to base — stop any preview for this tab and clear the pin.
-      setPendingBranch(null);
-      const r = await post("activate", { conversationId: cid, branch });
-      if (r?.ok) window.location.reload();
-      else setErr(r?.error || "Failed to return to base.");
+    if (branch === baseBranch) {
+      const r = await post("pin", { version: "base" });
+      if (r.ok) window.location.reload();
+      else setErr(r.error || "Failed to switch to base.");
       return;
     }
-    // Build the chosen branch as a preview; the ready-watcher reloads us in.
-    setPendingBranch(branch);
-    const r = await post("activate", { conversationId: cid, branch });
-    if (!r?.ok) {
-      setPendingBranch(null);
-      setErr(r?.error || `Failed to build branch ${branch}.`);
+
+    const existing = state.previews.find((p) => p.branch === branch);
+    if (existing?.state === "ready") {
+      const r = await post("pin", { version: "preview", branch });
+      if (r.ok) window.location.reload();
+      else setErr(r.error || `Failed to switch to ${branch}.`);
+      return;
     }
-    await load();
-  };
-  const onPreview = async () => {
-    setErr(null);
-    const r = await post("pin", { version: "preview", conversationId: cid });
-    if (r?.ok) window.location.reload();
-    else setErr(r?.error || "Failed to preview.");
-  };
-  const onStop = async () => {
-    setErr(null);
-    // Stop = stop the preview server but KEEP worktree + branch (can resume).
-    const r = await post("stop", { conversationId: cid });
-    if (r?.ok) window.location.reload();
-    else {
-      setErr(r?.error || "Stop failed.");
-      await load();
-    }
-  };
-  const onDiscard = async () => {
-    setErr(null);
-    // Discard = destroy worktree + delete the feature branch.
-    const r = await post("discard", { conversationId: cid });
-    if (r?.ok) window.location.reload();
-    else {
-      setErr(r?.error || "Discard failed.");
-      await load();
-    }
-  };
-  const onPromote = async () => {
-    setPendingBranch(null);
-    setErr(null);
-    // Promote can fail (dirty base checkout, conflict, failed health check); surface
-    // the reason instead of silently doing nothing, and keep the preview visible.
-    const r = await post("promote", { conversationId: cid });
-    if (r?.ok) window.location.reload();
-    else {
-      setErr(r?.error || "Promote failed.");
-      await load();
-    }
-  };
-  const onApp = async (p: "app-promote" | "app-discard") => {
-    setErr(null);
-    const r = await post(p);
-    if (!r?.ok) setErr(r?.error || `${p === "app-promote" ? "Promote" : "Discard"} app failed.`);
+
+    const r = await post("activate", { branch });
+    if (!r.ok) setErr(r.error || `Failed to build ${branch}.`);
     await load();
   };
 
-  const btn = "rounded px-1.5 py-0.5 transition-colors disabled:opacity-40 disabled:cursor-default";
-  const short = (s: string) => (s.length > 80 ? `${s.slice(0, 77)}…` : s);
+  const pinPreview = async () => {
+    setErr(null);
+    const r = await post("pin", { version: "preview", branch: selectedBranch });
+    if (r.ok) window.location.reload();
+    else setErr(r.error || "Failed to preview.");
+  };
+  const stopPreview = async () => {
+    setErr(null);
+    const r = await post("stop", { branch: selectedBranch });
+    if (r.ok) window.location.reload();
+    else {
+      setErr(r.error || "Stop failed.");
+      await load();
+    }
+  };
+  const discardPreview = async () => {
+    setErr(null);
+    const r = await post("discard", { branch: selectedBranch });
+    if (r.ok) window.location.reload();
+    else {
+      setErr(r.error || "Discard failed.");
+      await load();
+    }
+  };
+  const promotePreview = async () => {
+    setErr(null);
+    const r = await post("promote", { branch: selectedBranch });
+    if (r.ok) window.location.reload();
+    else {
+      setErr(r.error || "Promote failed.");
+      await load();
+    }
+  };
+  const retryBuild = async () => {
+    setErr(null);
+    const r = await post("build", { branch: selectedBranch });
+    if (!r.ok) setErr(r.error || "Build failed.");
+    await load();
+  };
+  const onApp = async (path: "app-promote" | "app-discard") => {
+    setErr(null);
+    const r = await post(path);
+    if (!r.ok) setErr(r.error || `${path === "app-promote" ? "Promote" : "Discard"} app failed.`);
+    await load();
+  };
+
+  const btn = "rounded px-1.5 py-0.5 transition-colors disabled:cursor-default disabled:opacity-40";
 
   return (
-    <div className="flex items-center gap-1 text-[11px]">
+    <div className="relative flex items-center gap-1 text-[11px]">
+      <span className={`px-2 text-sm font-semibold tracking-wide ${viewingBase ? "text-sky-200" : "text-amber-200"}`}>
+        {stateText}
+      </span>
       {app && (
         <>
           <span className="text-white/55" title={`app preview on branch ${app.branch} (base ${app.base})`}>app preview</span>
@@ -212,43 +234,50 @@ export function VersionControls() {
           <span className="mx-0.5 text-white/20">|</span>
         </>
       )}
-      <span className="text-white/55">Base:</span>
       <select
-        value={selectedValue}
-        disabled={busy}
+        value={selectedBranch || baseBranch}
+        disabled={selectDisabled}
         onChange={(e) => void onSelect(e.target.value)}
-        title={previewing ? `Previewing branch ${selectedValue}` : "Base version — pick a branch to preview it"}
-        className="max-w-[180px] truncate rounded bg-white/10 px-1.5 py-0.5 text-white/90 outline-none transition-colors hover:bg-white/20 disabled:opacity-40"
+        title={viewingBase ? "Base version - pick a feature branch to build or preview it" : "Preview version - pick a running branch or base"}
+        className="max-w-[220px] truncate rounded bg-white/10 px-1.5 py-0.5 text-white/90 outline-none transition-colors hover:bg-white/20 disabled:opacity-40"
       >
-        {(branches.branches.includes(selectedValue) ? branches.branches : [selectedValue, ...branches.branches]).map((b) => (
+        {(branches.branches.includes(selectedBranch) || !selectedBranch ? branches.branches : [selectedBranch, ...branches.branches]).map((b) => (
           <option key={b} value={b} className="bg-neutral-900 text-white">
-            {b === branches.base ? `${b} (base)` : b}
+            {b === baseBranch ? `${b} (base)` : b}
           </option>
         ))}
       </select>
-      {hasCand && (
+      {hasFeatureSelection && (
         <>
-          {building && <span className="text-amber-300/80">building…</span>}
+          {building && <span className="text-amber-300/90">building {selectedBranch}...</span>}
+          {notBuilt && <span className="text-white/50">not built</span>}
           {failed && (
-            <span className="max-w-[280px] truncate text-red-300/80" title={cand?.buildError || "build failed"}>
-              build failed{cand?.buildError ? `: ${short((cand.buildError.split("\n").pop() || cand.buildError).trim())}` : ""}
+            <span className="max-w-[260px] truncate text-red-300/90" title={preview?.buildError || "build failed"}>
+              failed{preview?.buildError ? `: ${short((preview.buildError.split("\n").pop() || preview.buildError).trim())}` : ""}
             </span>
           )}
-          {stopped && !previewing && (
-            <span className="text-white/50" title="Preview server stopped — worktree + branch kept">stopped</span>
+          {stopped && <span className="text-white/50">stopped</span>}
+          {!previewingSelected && (
+            <button disabled={busy || (!ready && !stopped)} onClick={pinPreview} className={`${btn} bg-sky-500/25 hover:bg-sky-500/40`}>Preview</button>
           )}
-          {(ready || stopped) && !previewing && (
-            <button disabled={busy} onClick={onPreview} title={stopped ? "Resume the stopped preview server and view it" : "View this preview in the browser (it is not the base version yet)"} className={`${btn} bg-sky-500/25 hover:bg-sky-500/40`}>Preview</button>
-          )}
-          {previewing && (
-            <span className="text-emerald-300/80" title="You are viewing the preview, not the base version">previewing</span>
-          )}
-          <button disabled={busy || !ready} onClick={onPromote} title={ready ? "Make this preview the base version" : "Preview must finish building first"} className={`${btn} bg-emerald-500/25 hover:bg-emerald-500/40`}>Promote</button>
-          <button disabled={busy || stopped} onClick={onStop} title="Stop the preview server but keep the worktree + branch (can resume via Preview)" className={`${btn} bg-white/10 hover:bg-white/20`}>Stop</button>
-          <button disabled={busy} onClick={onDiscard} title="Destroy the worktree and delete the feature branch permanently" className={`${btn} bg-red-500/20 hover:bg-red-500/35`}>Discard</button>
+          {previewingSelected && <span className="text-emerald-300/90">previewing</span>}
+          {failed && <button disabled={busy} onClick={retryBuild} className={`${btn} bg-amber-500/25 hover:bg-amber-500/40`}>Retry</button>}
+          <button disabled={busy || building || failed} onClick={promotePreview} title="Build if needed, then make this branch the base version" className={`${btn} bg-emerald-500/25 hover:bg-emerald-500/40`}>Promote</button>
+          <button disabled={busy || building || stopped || notBuilt} onClick={stopPreview} title="Stop the preview server but keep the branch/worktree" className={`${btn} bg-white/10 hover:bg-white/20`}>Stop</button>
+          <button disabled={busy || building} onClick={discardPreview} title="Destroy the worktree and delete the feature branch" className={`${btn} bg-red-500/20 hover:bg-red-500/35`}>Discard</button>
         </>
       )}
+      <button
+        disabled={busy}
+        onClick={() => setShowLogs((v) => !v)}
+        title="Show Supervisor log"
+        className={`${btn} flex items-center gap-1 bg-white/10 hover:bg-white/20`}
+      >
+        <FileText size={12} />
+        Log
+      </button>
       {err && <span className="ml-1 max-w-[260px] truncate text-red-300/90" title={err}>{short(err)}</span>}
+      {showLogs && <SupervisorLogPopover onClose={() => setShowLogs(false)} />}
     </div>
   );
 }

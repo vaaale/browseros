@@ -18,7 +18,6 @@ import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import crypto from "node:crypto";
 import { LogStore } from "./log-store.mjs";
 
 const exec = promisify(execFile);
@@ -70,26 +69,26 @@ const slog = (level, component, msg, extra = {}) => {
 // ---------------------------------------------------------------- version registry
 // Only two roles: the always-on BASE (a singleton, a detached worktree at the base
 // commit so it never conflicts with REPO's own checkout of baseBranch) and zero or
-// more PREVIEWs (feature branches in branch-named worktrees), keyed by conversationId.
+// more PREVIEWs (feature branches in branch-named worktrees), keyed by branch name.
 /** @typedef {{role:string,branch?:string,worktree?:string,dataDir?:string,port:number,state:string,proc?:import('node:child_process').ChildProcess|null,commit?:string,reused?:boolean}} Version */
 /** @type {Version|null} */ let base = null;
-/** @type {Map<string, Version>} */ const previews = new Map(); // conversationId → preview
+/** @type {Map<string, Version>} */ const previews = new Map(); // branch → preview
 
-/** @typedef {Version & {conversationId:string}} Preview */
+/** @typedef {Version & {branch:string}} Preview */
 
 function worktreePath(branch) { return path.join(WORKTREES, branch); }
 function clonePath(branch) { return path.join(CLONES, branch); }
-// Deterministic branch name from conversation ID so the mapping survives restarts:
-// on startup we scan `git branch --list 'bos/next-*'`, extract the hash, and know
-// which conversation each branch belongs to — no persistence file needed.
-const PREVIEW_PREFIX = "bos/next-";
-function branchForConversation(conversationId) {
-  const h = crypto.createHash("sha256").update(conversationId).digest("hex").slice(0, 12);
-  return `${PREVIEW_PREFIX}${h}`;
+const FEATURE_BRANCH_PREFIX = "bos/";
+const FEATURE_BRANCH_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+){0,3}$/;
+function isFeatureBranch(branch) {
+  if (typeof branch !== "string" || !branch.startsWith(FEATURE_BRANCH_PREFIX) || branch === baseBranch) return false;
+  return FEATURE_BRANCH_SLUG.test(branch.slice(FEATURE_BRANCH_PREFIX.length));
 }
-function conversationFromBranch(branch) {
-  if (!branch.startsWith(PREVIEW_PREFIX)) return null;
-  return branch.slice(PREVIEW_PREFIX.length);
+function requireFeatureBranch(branch) {
+  if (!isFeatureBranch(branch)) {
+    throw new Error(`feature branch must match ${FEATURE_BRANCH_PREFIX}<kebab-name> with 1-4 lowercase dash-separated segments`);
+  }
+  return branch;
 }
 function tagStamp() {
   const d = new Date();
@@ -119,33 +118,31 @@ async function liveBranch(v) {
 }
 async function publicState() {
   const pick = async (v) =>
-    v ? { role: v.role, branch: await liveBranch(v), port: v.port, state: v.state, commit: v.commit, reused: !!v.reused, ...(v.conversationId ? { conversationId: v.conversationId } : {}), ...(v.buildError ? { buildError: v.buildError } : {}), ...(v.buildLog ? { buildLog: v.buildLog } : {}) } : null;
+    v ? { role: v.role, branch: await liveBranch(v), port: v.port, state: v.state, commit: v.commit, reused: !!v.reused, ...(v.buildError ? { buildError: v.buildError } : {}), ...(v.buildLog ? { buildLog: v.buildLog } : {}) } : null;
   const b = await pick(base);
   const ps = await Promise.all([...previews.values()].map(pick));
   return { base: b, previews: ps, appCandidate, pushMode: PUSH_MODE, baseBranch };
 }
 
-// On startup, scan git for bos/next-* branches and re-provision their worktrees.
-// The branch name encodes the conversation ID (deterministic hash), so no
-// persistence file is needed — git branches ARE the persistent state.
-// Servers are NOT started (state "stopped"); the user can resume via Preview/Pin.
+// On startup, scan git for bos/* feature branches and re-provision their
+// worktrees. Runtime state is intentionally not persisted: restored previews are
+// treated as not-built and can be rebuilt or resumed explicitly.
 async function restorePreviews() {
-  const raw = (await gitTry(["branch", "--list", `${PREVIEW_PREFIX}*`, "--format=%(refname:short)"])) || "";
-  const branches = raw.split("\n").map((s) => s.trim()).filter(Boolean);
+  const raw = (await gitTry(["branch", "--list", `${FEATURE_BRANCH_PREFIX}*`, "--format=%(refname:short)"])) || "";
+  const branches = raw.split("\n").map((s) => s.trim()).filter((s) => s && s !== "HEAD");
   if (!branches.length) return;
   for (const branch of branches) {
-    const cid = conversationFromBranch(branch);
-    if (!cid) continue;
+    if (!isFeatureBranch(branch)) continue;
     // Skip if already in the map (e.g. provisioned during this run).
-    if (previews.has(cid)) continue;
+    if (previews.has(branch)) continue;
     try {
       const wt = await addWorktreeForBranch(branch);
       const clone = clonePath(branch);
       await provisionClone(clone);
       const port = await allocPreviewPort();
-      const p = { role: "preview", conversationId: cid, branch, worktree: wt, dataDir: clone, port, state: "stopped", proc: null, commit: await gitTry(["rev-parse", "HEAD"], wt) };
-      previews.set(cid, p);
-      log(`restored preview ${branch} for ${cid} (stopped) on port ${port}`);
+      const p = { role: "preview", branch, worktree: wt, dataDir: clone, port, state: "not-built", proc: null, commit: await gitTry(["rev-parse", "HEAD"], wt) };
+      previews.set(branch, p);
+      log(`restored preview ${branch} (not-built) on port ${port}`);
     } catch (e) {
       slog("warn", "restore", `failed to restore preview ${branch}: ${e.message || e}`, {});
     }
@@ -277,10 +274,10 @@ async function addWorktreeForBranch(branch) {
 function startProc(v) {
   v.proc = spawn("npx", ["next", "start", "-p", String(v.port)], {
     cwd: v.worktree,
-    // BOS_CANONICAL_DATA lets a version persist cross-version state (e.g. the
-    // conversation→branch map) to canonical data even when it runs on a throwaway
+    // BOS_CANONICAL_DATA lets a version persist cross-version state (e.g. chat
+    // conversation metadata) to canonical data even when it runs on a throwaway
     // preview clone, so it survives Stop/promote.
-    env: { ...process.env, PORT: String(v.port), BOS_DATA_DIR: v.dataDir, BOS_CANONICAL_DATA: CANONICAL_DATA, BOS_VERSION_LABEL: v.role },
+    env: { ...process.env, PORT: String(v.port), BOS_DATA_DIR: v.dataDir, BOS_CANONICAL_DATA: CANONICAL_DATA, BOS_VERSION_LABEL: v.role, BOS_BASE_BRANCH: baseBranch },
     stdio: "inherit",
     // detached: true puts the child in its own process group so stopProc can
     // kill the ENTIRE group (npx + its next-server child) via negative PID.
@@ -345,7 +342,7 @@ async function waitHealthy(port, v) {
 // and I couldn't see why" black box (specs/017): the real compiler output is now
 // persisted and the reason is surfaced. Resolves { ok, code, reason, relPath }.
 const BUILD_TIMEOUT_MS = 600_000;
-function runBuild(cwd, branch, ctx = {}) {
+function runBuild(cwd, branch) {
   return new Promise((resolve) => {
     const blob = logStore.openBuildLog(branch);
     let child;
@@ -455,22 +452,14 @@ async function mergeTreeConflicts(cwd, ref) {
 }
 
 // ---------------------------------------------------------------- operations
-// Provision (or resume) a PREVIEW for `conversationId`: branch-named worktree + data
-// clone + a pooled port. An existing branch is checked out with its committed history
-// (continuity after a Stop or restart); a missing one is created off base. Does NOT
-// build — the developer agent edits the worktree, then /build runs.
-async function provisionPreview(conversationId, branch) {
-  if (!conversationId) return null;
-  const existing = previews.get(conversationId);
-  if (existing) {
-    // If a specific different branch is requested, discard the old one and provision fresh.
-    if (branch && existing.branch !== branch && branch !== baseBranch) {
-      await discardPreview(conversationId);
-    } else {
-      return existing;
-    }
-  }
-  if (!branch || branch === baseBranch) branch = branchForConversation(conversationId);
+// Provision a PREVIEW for `branch`: branch-named worktree + data clone + a pooled
+// port. An existing branch is checked out with its committed history; a missing
+// branch is created off base. Does NOT build — the developer agent edits the
+// worktree, then /build runs.
+async function provisionPreview(branch) {
+  requireFeatureBranch(branch);
+  const existing = previews.get(branch);
+  if (existing) return existing;
   const exists = await gitTry(["rev-parse", "--verify", `refs/heads/${branch}`]);
   if (!exists) {
     const from = base?.commit || (await git(["rev-parse", "HEAD"]));
@@ -480,16 +469,16 @@ async function provisionPreview(conversationId, branch) {
   const clone = clonePath(branch);
   await provisionClone(clone);
   const port = await allocPreviewPort();
-  const p = { role: "preview", conversationId, branch, worktree: wt, dataDir: clone, port, state: "idle", proc: null, commit: await gitTry(["rev-parse", "HEAD"], wt) };
-  previews.set(conversationId, p);
-  log(`preview ${branch} provisioned for ${conversationId} on port ${port}`);
+  const p = { role: "preview", branch, worktree: wt, dataDir: clone, port, state: "not-built", proc: null, commit: await gitTry(["rev-parse", "HEAD"], wt) };
+  previews.set(branch, p);
+  log(`preview ${branch} provisioned on port ${port}`);
   return p;
 }
 
 // Stop a preview's server but KEEP the worktree, branch, and data clone.
-// The preview can be resumed later via /begin or /pin.
-async function stopPreview(conversationId) {
-  const p = previews.get(conversationId);
+async function stopPreview(branch) {
+  requireFeatureBranch(branch);
+  const p = previews.get(branch);
   if (!p) return;
   await stopProc(p);
   p.state = "stopped";
@@ -499,10 +488,15 @@ async function stopPreview(conversationId) {
 
 // Destroy a preview entirely: stop server, remove worktree + data clone, DELETE the
 // feature branch. Only called on explicit Discard or after a successful Promote.
-async function discardPreview(conversationId) {
-  const p = previews.get(conversationId);
-  if (!p) return;
-  previews.delete(conversationId);
+async function discardPreview(branch) {
+  requireFeatureBranch(branch);
+  const p = previews.get(branch);
+  previews.delete(branch);
+  if (!p) {
+    await gitTry(["branch", "-D", branch]);
+    log(`discarded preview ${branch} (branch deleted)`);
+    return;
+  }
   await stopProc(p);
   await gitTry(["worktree", "remove", "--force", p.worktree]);
   await fs.rm(p.dataDir, { recursive: true, force: true }).catch(() => {});
@@ -510,55 +504,44 @@ async function discardPreview(conversationId) {
   log(`discarded preview ${p.branch} (branch deleted)`);
 }
 
-// /begin — provision (or resume) the preview worktree for the developer agent.
-// Reuses the existing preview for this conversation when the branch matches (or none
-// is given, e.g. an agent iterating mid-session) so its uncommitted edits aren't wiped.
-async function beginPreview(conversationId, branch) {
-  const existing = previews.get(conversationId);
-  if (existing && (!branch || existing.branch === branch)) return existing;
-  return await provisionPreview(conversationId, branch);
+async function beginPreview(branch) {
+  return await provisionPreview(branch);
 }
 
-async function buildPreview(conversationId, ctx = {}) {
-  const p = previews.get(conversationId);
-  if (!p) throw new Error("no preview to build for this conversation");
+async function buildPreview(branch, ctx = {}) {
+  const p = previews.get(requireFeatureBranch(branch)) || (await provisionPreview(branch));
   return await buildAndStart(p, ctx);
 }
 
-// Toolbar branch selection. Base → stop any preview for this conversation, back to
-// base. An already-ready preview of the same branch → just (re)pin (no rebuild).
-// Otherwise provision + build in the background; the pin only routes once it reports ready.
-async function activate(conversationId, branch) {
-  if (!branch || branch === baseBranch) { await stopPreview(conversationId); return { base: true }; }
-  // Check if any existing preview already has this branch (e.g. created by an agent
-  // with a different conversationId). Reuse it instead of creating a duplicate.
-  for (const [existingCid, p] of previews) {
-    if (p.branch === branch) {
-      if (p.state === "stopped") {
-        p.state = "building";
-        void resumePreview(existingCid).catch((e) => {
-          p.state = "failed";
-          p.buildError = String(e?.message || e);
-          log(`resume failed for ${p.branch}: ${p.buildError}`);
-        });
-      }
-      return { branch, state: p.state, conversationId: existingCid };
-    }
+// Toolbar branch selection. Base only clears the pin. A ready preview can be pinned
+// immediately. Missing/not-built/stopped previews are provisioned and built in the
+// background; the current request keeps serving base until Preview pins it.
+async function activate(branch, ctx = {}) {
+  if (!branch || branch === baseBranch) return { base: true, state: "ready" };
+  const p = await provisionPreview(branch);
+  if (p.state === "ready") return { branch, state: "ready" };
+  if (p.state !== "building") {
+    p.state = "building";
+    void buildAndStart(p, ctx).catch((e) => {
+      p.state = "failed";
+      p.buildError = String(e?.message || e);
+      log(`activate build failed for ${p.branch}: ${p.buildError}`);
+    });
   }
-  const existing = previews.get(conversationId);
-  if (existing && existing.branch === branch && existing.state === "ready") return { branch, state: "ready" };
-  await beginPreview(conversationId, branch);
-  void buildPreview(conversationId).catch((e) => { const p = previews.get(conversationId); if (p) p.state = "failed"; log(`activate build failed: ${e.message || e}`); });
-  return { branch, state: "building" };
+  return { branch, state: p.state };
 }
 
 // Promote the preview to BASE. Safe ordering: do every fallible step (rebase, build,
 // off-port health-gate) while base still serves; only AFTER the new code is healthy
 // on the base port do we advance the base branch ref + tag (the point of no return).
 // A failure before that leaves the base branch untouched and restores the old base.
-async function promote(conversationId) {
-  const cand = previews.get(conversationId);
-  if (!cand) throw new Error("no preview to promote for this conversation");
+async function promote(branch) {
+  const cand = previews.get(requireFeatureBranch(branch));
+  if (!cand) throw new Error(`no preview to promote for ${branch}`);
+  if (cand.state === "stopped" || cand.state === "not-built") {
+    const state = await buildAndStart(cand);
+    if (state !== "ready") throw new Error(`preview ${cand.branch} is not ready (state: ${state}).`);
+  }
   if (cand.state !== "ready") throw new Error(`preview ${cand.branch} is not ready (state: ${cand.state}).`);
 
   const dirty = await gitTry(["status", "--porcelain"], REPO);
@@ -613,7 +596,7 @@ async function promote(conversationId) {
   if (oldBase?.worktree && oldBase.worktree !== swapped.worktree) await gitTry(["worktree", "remove", "--force", oldBase.worktree]);
   await fs.rm(cand.dataDir, { recursive: true, force: true }).catch(() => {});
   await gitTry(["branch", "-D", cand.branch]); // merged into base; the preview is gone
-  previews.delete(conversationId);
+  previews.delete(cand.branch);
   log(`promoted ${cand.branch} → base (tag ${tag})`);
   return { tag, branch: cand.branch };
 }
@@ -621,8 +604,8 @@ async function promote(conversationId) {
 // Files changed on the preview vs the base branch. The agent's edits are COMMITTED
 // in the preview worktree (buildAndStart), so the main checkout looks clean — this
 // surfaces the real change so the assistant's gitStatus isn't fooled.
-async function previewChanges(conversationId) {
-  const p = conversationId ? previews.get(conversationId) : null;
+async function previewChanges(branch) {
+  const p = branch ? previews.get(branch) : null;
   if (!p) return { ok: true, candidate: null };
   const raw = (await gitTry(["diff", "--name-status", `${baseBranch}...HEAD`], p.worktree)) || "";
   const files = raw
@@ -638,7 +621,7 @@ async function previewChanges(conversationId) {
 // orphaned preview from a previous run can be re-selected). Base is always present.
 async function listBranches() {
   const raw = (await gitTry(["branch", "--format=%(refname:short)"])) || "";
-  const branches = raw.split("\n").map((s) => s.trim()).filter(Boolean);
+  const branches = raw.split("\n").map((s) => s.trim()).filter((s) => s && s !== "HEAD");
   if (!branches.includes(baseBranch)) branches.unshift(baseBranch);
   return branches;
 }
@@ -751,16 +734,16 @@ async function pushNow() {
 // Resume a STOPPED preview: start its server from the existing build output (no
 // rebuild). Falls back to a full buildAndStart if the server doesn't come up (e.g.
 // the .next output was deleted). Throws on failure.
-async function resumePreview(conversationId) {
-  const p = previews.get(conversationId);
-  if (!p) throw new Error("no preview to resume for this conversation");
+async function resumePreview(branch) {
+  const p = previews.get(requireFeatureBranch(branch));
+  if (!p) throw new Error(`no preview to resume for ${branch}`);
   if (p.state === "ready" && p.proc) return p;
   startProc(p);
   p.state = "building";
   if (await waitHealthy(p.port, p)) {
     p.state = "ready";
     p.buildError = "";
-    log(`resumed preview ${p.branch} for ${conversationId}`);
+    log(`resumed preview ${p.branch}`);
     return p;
   }
   // No existing build output — full rebuild.
@@ -779,9 +762,9 @@ function parseCookies(req) {
   return out;
 }
 
-// Resolve which running version serves this request. The pin cookie holds a
-// conversationId; it is only honored while that preview is "ready" (a still-
-// building or stopped preview falls back to base, never a 502).
+// Resolve which running version serves this request. The pin cookie holds a branch
+// name; it is only honored while that preview is "ready" (a still-building or
+// stopped preview falls back to base, never a 502).
 function pinnedVersion(req) {
   const pin = parseCookies(req)[PIN_COOKIE];
   if (!pin || pin === "base") return base;
@@ -868,15 +851,15 @@ async function handleControl(req, res, sub) {
     if (sub === "") { res.writeHead(200, { "Content-Type": "text/html" }); res.end(controlPage()); return; }
     if (sub === "branches") return sendJson(res, { ok: true, branches: await listBranches(), base: baseBranch });
     if (sub === "preview-changes" || sub === "next-changes") {
-      const cid = new URL(req.url, "http://localhost").searchParams.get("conversationId") || undefined;
-      return sendJson(res, await previewChanges(cid));
+      const branch = new URL(req.url, "http://localhost").searchParams.get("branch") || undefined;
+      return sendJson(res, await previewChanges(branch));
     }
     // state — include which version THIS session is being served (the pin cookie),
     // so the toolbar can tell "you're viewing the preview" from "a preview exists
     // but you're still on base".
     const st = await publicState();
     const sv = pinnedVersion(req);
-    return sendJson(res, { ...st, serving: sv ? { role: sv.role, branch: await liveBranch(sv), ...(sv.conversationId ? { conversationId: sv.conversationId } : {}) } : null });
+    return sendJson(res, { ...st, serving: sv ? { role: sv.role, branch: await liveBranch(sv) } : null });
   }
   const body = await readBody(req);
   slog("info", `control:${sub}`, `${sub} requested`, { ...(sessionId ? { sessionId } : {}), ...(body && Object.keys(body).length ? { data: body } : {}) });
@@ -884,72 +867,68 @@ async function handleControl(req, res, sub) {
   try {
     if (sub === "pin" && req.method === "POST") {
       const v = String(body.version || "base");
-      const cid = String(body.conversationId || "");
+      const branch = String(body.branch || "");
       if (v === "base") return sendJson(res, { ok: true, pinned: "base" }, 200, clearPin);
-      if (cid) {
-        const p = previews.get(cid);
+      if (branch) {
+        requireFeatureBranch(branch);
+        const p = previews.get(branch);
         if (p && p.state === "ready") {
-          return sendJson(res, { ok: true, pinned: cid }, 200, { "Set-Cookie": `${PIN_COOKIE}=${encodeURIComponent(cid)}; Path=/; HttpOnly` });
+          return sendJson(res, { ok: true, pinned: branch }, 200, { "Set-Cookie": `${PIN_COOKIE}=${encodeURIComponent(branch)}; Path=/; HttpOnly` });
         }
         // If the preview is stopped, resume its server (no rebuild) then pin.
         if (p && p.state === "stopped") {
-          await resumePreview(cid);
+          await resumePreview(branch);
           if (p.state === "ready") {
-            return sendJson(res, { ok: true, pinned: cid }, 200, { "Set-Cookie": `${PIN_COOKIE}=${encodeURIComponent(cid)}; Path=/; HttpOnly` });
+            return sendJson(res, { ok: true, pinned: branch }, 200, { "Set-Cookie": `${PIN_COOKIE}=${encodeURIComponent(branch)}; Path=/; HttpOnly` });
           }
           return sendJson(res, { ok: false, error: `preview resume failed (state: ${p.state})` }, 400);
         }
-        return sendJson(res, { ok: false, error: `preview for "${cid}" is not ready (state: ${p?.state || "absent"})` }, 400);
+        return sendJson(res, { ok: false, error: `preview for "${branch}" is not ready (state: ${p?.state || "absent"})` }, 400);
       }
-      return sendJson(res, { ok: false, error: `conversationId required to pin` }, 400);
+      return sendJson(res, { ok: false, error: `branch required to pin` }, 400);
     }
     if (sub === "begin" && req.method === "POST") {
-      const cid = String(body.conversationId || "");
-      if (!cid) return sendJson(res, { ok: false, error: "conversationId required" }, 400);
-      const branch = body.branch ? String(body.branch) : undefined;
-      const v = await beginPreview(cid, branch);
-      return sendJson(res, { ok: true, branch: v.branch, worktree: v.worktree, conversationId: cid });
+      const branch = String(body.branch || "");
+      if (!branch) return sendJson(res, { ok: false, error: "branch required" }, 400);
+      const v = await beginPreview(branch);
+      return sendJson(res, { ok: true, branch: v.branch, worktree: v.worktree });
     }
     if (sub === "build" && req.method === "POST") {
-      const cid = String(body.conversationId || "");
-      if (!cid) return sendJson(res, { ok: false, error: "conversationId required" }, 400);
-      const p = previews.get(cid);
-      if (!p) return sendJson(res, { ok: false, error: "no preview for this conversation" }, 400);
-      const state = await buildPreview(cid, { sessionId });
+      const branch = String(body.branch || "");
+      if (!branch) return sendJson(res, { ok: false, error: "branch required" }, 400);
+      const p = previews.get(branch) || (await provisionPreview(branch));
+      const state = await buildPreview(branch, { sessionId });
       return sendJson(res, { ok: state === "ready", state, ...(p.buildError ? { error: p.buildError } : {}), ...(p.buildLog ? { buildLog: p.buildLog } : {}) });
     }
     if (sub === "activate" && req.method === "POST") {
-      const cid = String(body.conversationId || "");
-      if (!cid) return sendJson(res, { ok: false, error: "conversationId required" }, 400);
       const branch = String(body.branch || "");
-      const result = await activate(cid, branch);
-      const pinCid = result.conversationId || cid;
+      const result = await activate(branch, { sessionId });
       const cookie = !branch || branch === baseBranch
         ? clearPin
-        : { "Set-Cookie": `${PIN_COOKIE}=${encodeURIComponent(pinCid)}; Path=/; HttpOnly` };
+        : {};
       return sendJson(res, { ok: true, ...result }, 200, cookie);
     }
     if (sub === "promote" && req.method === "POST") {
-      const cid = String(body.conversationId || "");
-      if (!cid) return sendJson(res, { ok: false, error: "conversationId required" }, 400);
-      return sendJson(res, { ok: true, ...(await promote(cid)) }, 200, clearPin);
+      const branch = String(body.branch || "");
+      if (!branch) return sendJson(res, { ok: false, error: "branch required" }, 400);
+      return sendJson(res, { ok: true, ...(await promote(branch)) }, 200, clearPin);
     }
     // stop = stop the preview server but KEEP worktree + branch (can resume via /pin).
     // Order matters: clear the pin (→ switch to base) BEFORE killing the preview
     // process, so the user is never routed to a dead port. The response (with
     // clearPin) is sent immediately; stopPreview runs in the background.
     if (sub === "stop" && req.method === "POST") {
-      const cid = String(body.conversationId || "");
-      if (!cid) return sendJson(res, { ok: false, error: "conversationId required" }, 400);
+      const branch = String(body.branch || "");
+      if (!branch) return sendJson(res, { ok: false, error: "branch required" }, 400);
       sendJson(res, { ok: true }, 200, clearPin);
-      void stopPreview(cid).catch((e) => slog("error", "control:stop", `background stop failed: ${String(e?.message || e)}`, { ...(sessionId ? { sessionId } : {}) }));
+      void stopPreview(branch).catch((e) => slog("error", "control:stop", `background stop failed: ${String(e?.message || e)}`, { ...(sessionId ? { sessionId } : {}) }));
       return;
     }
     // discard = destroy everything including the feature branch.
     if (sub === "discard" && req.method === "POST") {
-      const cid = String(body.conversationId || "");
-      if (!cid) return sendJson(res, { ok: false, error: "conversationId required" }, 400);
-      await discardPreview(cid);
+      const branch = String(body.branch || "");
+      if (!branch) return sendJson(res, { ok: false, error: "branch required" }, 400);
+      await discardPreview(branch);
       return sendJson(res, { ok: true }, 200, clearPin);
     }
     if (sub === "app-begin" && req.method === "POST") return sendJson(res, { ok: true, ...(await appBegin()) });
@@ -973,14 +952,15 @@ button:hover{background:#262a35}pre{background:#0b0d12;border:1px solid #2a2d36;
 <h1>BrowserOS Supervisor</h1>
 <p>Version-independent control surface. Always reachable even if a BOS version's UI is broken.</p>
 <div class="row">
-  <button onclick="act('pin',{version:'preview'})">Preview</button>
+  <button onclick="branchAct('pin',{version:'preview'})">Preview branch</button>
   <button onclick="act('pin',{version:'base'})">Back to base</button>
 </div>
 <div class="row">
-  <button onclick="act('build')">Build preview</button>
-  <button onclick="act('promote')">Promote</button>
-  <button onclick="act('stop')">Stop (keep branch)</button>
-  <button onclick="act('discard')">Discard (delete branch)</button>
+  <button onclick="branchAct('activate')">Build/start branch</button>
+  <button onclick="branchAct('build')">Retry build</button>
+  <button onclick="branchAct('promote')">Promote</button>
+  <button onclick="branchAct('stop')">Stop (keep branch)</button>
+  <button onclick="branchAct('discard')">Discard (delete branch)</button>
   <button onclick="act('push')">Push to remote</button>
   <button onclick="refresh()">Refresh</button>
 </div>
@@ -988,6 +968,7 @@ button:hover{background:#262a35}pre{background:#0b0d12;border:1px solid #2a2d36;
 <script>
 async function refresh(){const r=await fetch('/__supervisor/state');document.getElementById('state').textContent=JSON.stringify(await r.json(),null,2);}
 async function act(p,b){const r=await fetch('/__supervisor/'+p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b||{})});const j=await r.json();if(j.pinned!==undefined){location.href='/';return;}alert(JSON.stringify(j));refresh();}
+function branchAct(p,b){const branch=prompt('Feature branch (bos/<kebab-name>)');if(!branch)return;act(p,Object.assign({},b||{},{branch}));}
 refresh();
 </script></body></html>`;
 }
@@ -1019,7 +1000,7 @@ async function main() {
     await buildAndStartBase(await git(["rev-parse", "HEAD"]));
   }
 
-  // Restore previews from git branches (deterministic conversation→branch mapping).
+  // Restore previews from git branches. Runtime state is reconstructed, not persisted.
   await restorePreviews();
 
   const server = http.createServer((req, res) => {

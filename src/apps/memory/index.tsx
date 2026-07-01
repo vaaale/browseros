@@ -2,11 +2,10 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Brain, Trash2, Plus, UserCircle } from "lucide-react";
-import type { AppProps } from "@/components/apps/types";
 
 type Target = "user" | "memory";
 
-export default function MemoryApp(_props: AppProps) {
+export default function MemoryApp() {
   const [user, setUser] = useState<string[]>([]);
   const [memory, setMemory] = useState<string[]>([]);
 
@@ -17,7 +16,8 @@ export default function MemoryApp(_props: AppProps) {
   }, []);
 
   useEffect(() => {
-    load();
+    const id = setTimeout(() => void load(), 0);
+    return () => clearTimeout(id);
   }, [load]);
 
   const add = async (target: Target, content: string) => {

@@ -92,7 +92,7 @@ export function CopilotProvider({
           <SkillsActions />
           <SelfImprovementActions />
           <DocsActions />
-          <GitActions />
+          <GitActions group={group} />
           <WorkflowActions />
           <SpecActions />
           <ToolCallRetry />

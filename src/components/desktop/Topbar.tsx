@@ -29,13 +29,15 @@ export function Topbar() {
   const focused = windows.find((w) => w.id === focusedId);
 
   return (
-    <div className="absolute inset-x-0 top-0 z-[100000] flex h-8 items-center justify-between border-b border-white/10 bg-black/30 px-4 text-xs text-white/80 backdrop-blur-xl select-none">
-      <div className="flex items-center gap-3">
+    <div className="absolute inset-x-0 top-0 z-[100000] grid h-8 grid-cols-[1fr_auto_1fr] items-center border-b border-white/10 bg-black/30 px-4 text-xs text-white/80 backdrop-blur-xl select-none">
+      <div className="flex min-w-0 items-center gap-3">
         <span className="font-semibold tracking-tight text-white">BrowserOS</span>
-        <span className="text-white/60">{focused?.title ?? "Desktop"}</span>
+        <span className="truncate text-white/60">{focused?.title ?? "Desktop"}</span>
       </div>
-      <div className="flex items-center gap-3">
+      <div className="justify-self-center">
         <VersionControls />
+      </div>
+      <div className="justify-self-end">
         <Clock />
       </div>
     </div>

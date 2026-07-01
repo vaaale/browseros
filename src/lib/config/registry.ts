@@ -1,6 +1,6 @@
 import "server-only";
 import type { ConfigSchema } from "./types";
-import { readNamespace, patchNamespace } from "./store";
+import { readNamespace, patchNamespace, writeNamespace } from "./store";
 import { getProviderConfig, updateProviderConfig, type ProviderConfig } from "@/lib/agent/provider";
 import { PROVIDER_LIST } from "@/lib/agent/provider-meta";
 import { getSettings, updateSettings } from "@/os/settings";
@@ -146,7 +146,9 @@ const REGISTRATIONS: ConfigRegistration[] = [
       };
     },
     save: async (patch) => {
-      await patchNamespace("dev-harness", patch);
+      const next = { ...(await readNamespace("dev-harness")), ...patch };
+      delete next.cwd;
+      await writeNamespace("dev-harness", next);
     },
   },
   {

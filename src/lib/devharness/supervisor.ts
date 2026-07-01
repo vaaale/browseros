@@ -37,10 +37,8 @@ export function supervisorState(): Promise<Record<string, unknown> | null> {
   return call("state");
 }
 
-/** All git branches the Supervisor knows about. Used to check that a remembered
- *  branch-key still exists before trying to resume it, so a manually-deleted (or
- *  promoted-and-deleted) branch starts fresh instead of being resurrected. Returns
- *  null when not under the Supervisor. */
+/** All git branches the Supervisor knows about. Returns null when not under the
+ *  Supervisor. */
 export function supervisorBranches(): Promise<Record<string, unknown> | null> {
   return call("branches");
 }
@@ -48,25 +46,23 @@ export function supervisorBranches(): Promise<Record<string, unknown> | null> {
 /** Files changed on the preview vs base (committed in its worktree), so the
  *  assistant's gitStatus can see a preview even though the main checkout is clean.
  *  Returns null when not under the Supervisor. */
-export function supervisorNextChanges(conversationId?: string): Promise<Record<string, unknown> | null> {
-  const qs = conversationId ? `?conversationId=${encodeURIComponent(conversationId)}` : "";
+export function supervisorNextChanges(branch?: string): Promise<Record<string, unknown> | null> {
+  const qs = branch ? `?branch=${encodeURIComponent(branch)}` : "";
   return call(`preview-changes${qs}`);
 }
 
-/** Provision (or resume) the preview worktree (+ data clone) for a conversation.
- *  When `branch` is given, that branch is checked out with its history (continuity /
- *  resume); otherwise a fresh `bos/next-*` branch is created. Returns `{ branch, worktree }`. */
-export function supervisorBegin(conversationId: string, branch?: string): Promise<Record<string, unknown> | null> {
+/** Provision the preview worktree (+ data clone) for a feature branch. */
+export function supervisorBegin(branch: string): Promise<Record<string, unknown> | null> {
   return call("begin", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ conversationId, ...(branch ? { branch } : {}) }),
+    body: JSON.stringify({ branch }),
   });
 }
 
-/** Build + health-gate the preview for a conversation. */
-export function supervisorBuild(conversationId: string): Promise<Record<string, unknown> | null> {
-  return call("build", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ conversationId }) });
+/** Build + health-gate the preview for a feature branch. */
+export function supervisorBuild(branch: string): Promise<Record<string, unknown> | null> {
+  return call("build", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ branch }) });
 }
 
 /**

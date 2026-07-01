@@ -28,6 +28,8 @@ export interface Conversation {
   // chats have no agentId and fall back to the group's agent (for embeds) or the
   // globally active agent (for the Assistant app).
   agentId?: string;
+  // Branch the conversation's developer harness work targets.
+  activeFeatureBranch?: string;
 }
 
 interface State {
@@ -73,6 +75,7 @@ interface ConversationFile {
   createdAt: number;
   group: string;
   agentId?: string;
+  activeFeatureBranch?: string;
   messages: unknown[];
 }
 
@@ -87,6 +90,7 @@ async function readConversationFile(id: string): Promise<ConversationFile | null
       createdAt: typeof parsed.createdAt === "number" ? parsed.createdAt : 0,
       group: typeof parsed.group === "string" && parsed.group ? parsed.group : DEFAULT_GROUP,
       agentId: typeof parsed.agentId === "string" && parsed.agentId ? parsed.agentId : undefined,
+      activeFeatureBranch: typeof parsed.activeFeatureBranch === "string" && parsed.activeFeatureBranch ? parsed.activeFeatureBranch : undefined,
       messages: Array.isArray(parsed.messages) ? parsed.messages : [],
     };
   } catch {
@@ -144,7 +148,7 @@ async function loadFromVfs(): Promise<void> {
         const id = e.name.replace(/\.json$/, "");
         const file = await readConversationFile(id);
         if (!file) return null;
-        return { id: file.id, title: file.title, createdAt: file.createdAt, group: file.group, agentId: file.agentId };
+        return { id: file.id, title: file.title, createdAt: file.createdAt, group: file.group, agentId: file.agentId, activeFeatureBranch: file.activeFeatureBranch };
       }),
     );
     conversations = loaded.filter((c): c is Conversation => c !== null);
@@ -210,11 +214,46 @@ export async function newConversation(group: string = DEFAULT_GROUP, agentId?: s
       messages: [],
     };
     if (conv.agentId) file.agentId = conv.agentId;
+    if (conv.activeFeatureBranch) file.activeFeatureBranch = conv.activeFeatureBranch;
     await writeConversationFile(file);
   } catch (err) {
     console.error("Failed to persist new conversation", err);
   }
   return conv.id;
+}
+
+/** Set which feature branch this conversation's developer harness work targets.
+ *  The empty string clears the selection. */
+export async function setConversationActiveFeatureBranch(id: string, branch: string): Promise<void> {
+  await ensureLoading();
+  const normalized = branch.trim();
+  const activeFeatureBranch = normalized.length > 0 ? normalized : undefined;
+  const current = state ?? get();
+  const conv = current.conversations.find((c) => c.id === id);
+  if (!conv || conv.activeFeatureBranch === activeFeatureBranch) return;
+  const next = activeFeatureBranch
+    ? { ...conv, activeFeatureBranch }
+    : (() => {
+        const rest = { ...conv };
+        delete rest.activeFeatureBranch;
+        return rest;
+      })();
+  setState({
+    ...current,
+    conversations: current.conversations.map((c) => (c.id === id ? next : c)),
+  });
+  try {
+    const file = (await readConversationFile(id)) ?? { ...next, messages: [] };
+    if (activeFeatureBranch) {
+      await writeConversationFile({ ...file, activeFeatureBranch });
+    } else {
+      const rest = { ...file };
+      delete rest.activeFeatureBranch;
+      await writeConversationFile(rest);
+    }
+  } catch (err) {
+    console.error("Failed to persist active feature branch change", err);
+  }
 }
 
 /** Reassign a conversation to a different agent (personality). Updates the
@@ -323,6 +362,7 @@ export async function saveConversationMessages(id: string, messages: unknown[]):
     createdAt: existing?.createdAt ?? meta?.createdAt ?? Date.now(),
     group: meta?.group ?? existing?.group ?? DEFAULT_GROUP,
     agentId: meta?.agentId ?? existing?.agentId,
+    activeFeatureBranch: meta?.activeFeatureBranch ?? existing?.activeFeatureBranch,
     messages,
   };
   await writeConversationFile(file);

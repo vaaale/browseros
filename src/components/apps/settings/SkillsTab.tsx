@@ -46,7 +46,8 @@ export function SkillsTab() {
   }, []);
 
   useEffect(() => {
-    loadList();
+    const id = setTimeout(() => void loadList(), 0);
+    return () => clearTimeout(id);
   }, [loadList]);
 
   const back = useCallback(() => {

@@ -25,7 +25,8 @@ export function AppsTab() {
   }, []);
 
   useEffect(() => {
-    load();
+    const id = setTimeout(() => void load(), 0);
+    return () => clearTimeout(id);
   }, [load]);
 
   const uninstall = async (id: string) => {

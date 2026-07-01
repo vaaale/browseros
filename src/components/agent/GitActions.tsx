@@ -1,6 +1,7 @@
 "use client";
 
 import { useCopilotAction } from "@/components/agent/gated-action";
+import { DEFAULT_GROUP, useActiveConversation } from "@/lib/agent/conversations";
 
 // Read-only git status for the assistant. Self-modification is owned by the
 // Supervisor: the developer sub-agent edits an ISOLATED preview worktree and the
@@ -8,14 +9,19 @@ import { useCopilotAction } from "@/components/agent/gated-action";
 // stages the live checkout (doing so would break the running base and block
 // promote; see specs/005, 017). The old in-place startFeatureBranch/stageChanges
 // actions were removed for that reason.
-export function GitActions() {
+export function GitActions({ group = DEFAULT_GROUP }: { group?: string }) {
+  const activeConversation = useActiveConversation(group);
+
   useCopilotAction({
     name: "gitStatus",
     description:
       "Show git status of the BOS repo: the main checkout's branch + changed files, AND any pending self-modification `candidate` (a built-but-not-yet-active version living in an isolated worktree). If `candidate` is present, a delegated edit lives THERE (committed) — the main checkout will look clean, so do NOT re-apply the change in place; the user previews/promotes the candidate from the top-bar Active ▾ menu.",
     parameters: [],
     handler: async () => {
-      const res = await fetch("/api/system/git").then((r) => r.json());
+      const query = activeConversation?.activeFeatureBranch
+        ? `?branch=${encodeURIComponent(activeConversation.activeFeatureBranch)}`
+        : "";
+      const res = await fetch(`/api/system/git${query}`).then((r) => r.json());
       return res.error ? `Error: ${res.error}` : JSON.stringify(res);
     },
   });

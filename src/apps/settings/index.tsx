@@ -13,7 +13,6 @@ import { McpServersTab } from "@/components/apps/settings/McpServersTab";
 import { LogsTab } from "@/components/apps/settings/LogsTab";
 import { ConfigForm } from "@/components/apps/settings/ConfigForm";
 import { ProviderSettings } from "@/components/apps/ProviderSettings";
-import type { AppProps } from "@/components/apps/types";
 
 // Custom tab components keyed by ConfigSchema.customComponent.
 const CUSTOM_TABS: Record<string, React.ComponentType> = {
@@ -29,7 +28,7 @@ const CUSTOM_TABS: Record<string, React.ComponentType> = {
   logging: LogsTab,
 };
 
-export default function SettingsApp(_props: AppProps) {
+export default function SettingsApp() {
   const [schemas, setSchemas] = useState<ConfigSchemaView[]>([]);
   const [active, setActive] = useState<string>("");
 
@@ -41,8 +40,8 @@ export default function SettingsApp(_props: AppProps) {
   }, []);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    load();
+    const id = setTimeout(() => void load(), 0);
+    return () => clearTimeout(id);
   }, [load]);
 
   const current = schemas.find((s) => s.namespace === active);

@@ -40,19 +40,19 @@ Ephemeral agents run without being persisted.
 
 ## Routing (`subagents/runner.ts`)
 
-`runSubAgent(agent, task, { onEvent?, contentOnly?, branchKey?, interactive? })`:
+`runSubAgent(agent, task, { onEvent?, contentOnly?, featureBranch?, interactive? })`:
 
 - **`type:"local"`** → `runLocal` → `runToolLoop` (`llm.ts`) with the configured
   provider and the agent's tools. A local agent holding repo‑scoped dev tools gets a
   larger step budget (`DEV_MAX_STEPS = 40`) and its files are `git add`‑ed afterward
-  as a backstop. Errors are returned, not thrown. `branchKey`/`interactive` are
-  forwarded to a nested `delegateToDeveloper` so escalated dev work stays on the same
-  feature branch.
+  as a backstop. Errors are returned, not thrown. `featureBranch`/`interactive` are
+  forwarded to a nested `delegateToDeveloper` so escalated dev work stays on the
+  same feature branch.
 - **`type:"claude"`** → `runClaudeAgent` (`claude-runner.ts`). **No local fallback**
   — development is Claude‑only by design.
 
 `onEvent` streams `{ tool, input }` events live (used by `/api/subagents/delegate`).
-`branchKey` + `interactive` drive feature‑branch selection — see below.
+`featureBranch` drives source-edit ownership — see below.
 
 ---
 
@@ -116,27 +116,21 @@ build‑gate, and staging are harness‑agnostic.
 `runClaudeAgent` integrates with live version control:
 
 - For source edits, `runClaudeAgent` refuses to run unless BOS is served under the
-  **Supervisor** and the caller supplied a branch key (`conversationId`/legacy
-  `threadId`). There is no in-place fallback: the harness must edit an isolated
-  feature-branch worktree or fail without applying changes.
-- It resolves the feature branch from the branch key (an **opaque** stable id — a
-  chat's conversation id, a workflow id, an external `gitlab-issue:1234`, …), then
-  calls `supervisorBegin` to provision (or **resume**) the isolated preview worktree
-  (+ data clone), points the dev harness's `cwd` there, runs, then calls
-  `supervisorBuild()` to build + health‑gate the preview.
-- **Branch selection depends on `interactive`:**
-  - **interactive** (a chat session): a currently‑**previewed** branch wins ("improve
-    the thing I'm looking at"), then the key's remembered branch, else a fresh
-    `bos/next-*`.
-  - **headless** (workflow / integration): the key is **authoritative** — its own
-    remembered branch (fresh on first use), and it **never** adopts a human's stray
-    live preview. With no key, source edits are refused.
-- **Who supplies it:** the chat sends the active conversation id as `branchKey` with
-  `interactive:true` (`SubAgentActions`); the workflow runner sends `workflow:<id>`
-  (or a per‑run override) headless; any integration may POST its own id to
-  `/api/subagents/delegate`. Promote deletes the merged branch, so the next run on
-  that key resolves to a fresh branch off the new base (the anchor self‑heals because
-  `provisionPreview` re‑creates a missing branch off base).
+  **Supervisor** and the caller supplied a validated active `featureBranch`
+  (`bos/<kebab-name>`). There is no in-place fallback: the harness must edit an
+  isolated feature-branch worktree or fail without applying changes.
+- The branch is resolved **server-side**, not exposed as an LLM tool parameter. Chat
+  delegation sends the current conversation id only so `/api/subagents/delegate` can
+  load that conversation's `activeFeatureBranch`. Automation may pass
+  `featureBranch` directly to trusted server APIs. If no branch resolves, the route
+  returns an error before Claude/OpenCode/MCP is spawned.
+- It calls `supervisorBegin(featureBranch)` to provision (or **resume**) the
+  isolated preview worktree (+ data clone), points the dev harness's `cwd` there,
+  runs, then calls `supervisorBuild(featureBranch)` to build + health-gate the
+  preview.
+- Promote deletes the merged branch/worktree/instance. On Supervisor restart,
+  `bos/*` branches are rediscovered as `not-built` previews and can be selected
+  again from the toolbar.
 - **`contentOnly:true`** (e.g. generating an app's HTML — a *content* op) MUST NOT
   provision a code candidate; the result is installed via `installApp` onto the
   GitFS `app-candidate` branch instead.

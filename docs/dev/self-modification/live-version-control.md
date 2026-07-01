@@ -17,9 +17,10 @@ A standalone, dependency‑light Node process (Node built‑ins only). Run with
   proxies** to internal `next start` instances. There are only two roles:
   - **BASE** — the current promoted code, **always** running on `BOS_PORT_BASE`
     (default **3000**), against canonical `data/`.
-  - **PREVIEW** — at most **one** feature branch being viewed, on a port drawn from a
-    pool above the base port (`BOS_PORT_BASE+1 … +BOS_PORT_POOL_SIZE`, pool size
-    default **20**), against an isolated data clone.
+  - **PREVIEW** — zero or more feature branches can be built/running at the same
+    time, each on a port drawn from a pool above the base port (`BOS_PORT_BASE+1 …
+    +BOS_PORT_POOL_SIZE`, pool size default **20**) against an isolated data clone.
+    A browser session views at most one preview at a time via its pin cookie.
 - Serves a version‑independent control surface at **`/__supervisor`** (always
   reachable, even if a version's UI is broken).
 - Proxies WebSocket **upgrades** (e.g. HMR) to the pinned version.
@@ -42,11 +43,11 @@ everyone else stays on `base`.
 
 ### Lifecycle (code)
 
-- `beginPreview(branch?)` — provision (or **resume**) the preview worktree for the
-  developer agent to edit. An existing `branch` is checked out **with its history**
-  (continuity / resume after a Stop); a missing/absent one creates a fresh
-  `bos/next-*`. Reuses the current preview when the branch matches (idempotent
-  within a session). Does **not** build.
+- `beginPreview(branch)` — provision (or **resume**) the preview worktree for the
+  developer agent to edit. `branch` is mandatory and must match
+  `bos/<kebab-name>` with one to four lowercase dash-separated segments. An
+  existing branch is checked out **with its history**; a missing branch is created
+  off base. Does **not** build.
 - `buildAndStart(v)` — **stop any existing server for this version first** (so a
   rebuild never collides on its port), commit the worktree, `npm run build`, start
   `next start -p <pooled port>`, then **health‑gate** via `/api/health`
@@ -54,11 +55,15 @@ everyone else stays on `base`.
   checkout is still clean and on the base branch. If the developer harness touched
   the live checkout, the Supervisor restores it and fails the candidate instead of
   reporting a misleading ready preview. State → `building` → `ready` | `failed`.
-- `activate(branch)` — toolbar selection. Base → drop the preview, back to base. An
-  already‑`ready` preview of the same branch → just re‑pin. Otherwise provision +
-  build in the background; the pin routes once it is `ready`.
-- `dropPreview()` — **Stop**: kill its server (awaiting exit), remove its worktree +
-  data clone. The **branch is kept** so the work can be resumed.
+- `activate(branch)` — toolbar selection. Base clears the pin. An already-`ready`
+  preview can be pinned immediately by the UI; missing/not-built/stopped previews
+  are provisioned and built in the background while the current request keeps
+  serving base.
+- `stopPreview(branch)` — **Stop**: kill its server (awaiting exit) but keep the
+  worktree, data clone, and feature branch so the work can be resumed.
+- `discardPreview(branch)` — **Discard**: kill the server, remove worktree + data
+  clone, and delete the feature branch. Promote also destroys the preview after the
+  branch is merged.
 - `promote()` — **safe ordering**: do every fallible step while base still serves,
   advance the base ref **last**:
   1. Require a clean main checkout; make the preview a clean descendant of base in
@@ -75,8 +80,9 @@ everyone else stays on `base`.
   There is **no `rollback`** action (a tag is left on every promote as a durable
   anchor for a future rollback feature).
 - Boot: `reconcileWorktrees()` prunes the Supervisor's leftover worktrees from a
-  previous run (their processes died with it). Branches survive, so an orphaned
-  preview stays selectable from the dropdown.
+  previous run (their processes died with it), then `restorePreviews()` scans
+  `bos/*` branches and recreates branch-owned preview records as `not-built`.
+  Runtime state is reconstructed, not persisted.
 
 ### App-content candidate (GitFS, no extra port)
 
@@ -87,8 +93,8 @@ server serves it; promote merges to base, discard drops it. See
 
 ### Control endpoints (`/__supervisor/...`)
 
-`state` · `branches` · `preview-changes` (alias `next-changes`) · `pin` · `begin` ·
-`build` · `activate` · `promote` · `discard` (alias `stop`) · `app-begin` ·
+`state` · `branches` · `preview-changes` (alias `next-changes`) · `logs` · `pin` ·
+`begin` · `build` · `activate` · `promote` · `stop` · `discard` · `app-begin` ·
 `app-promote` · `app-discard` · `push`. `state` reports `base`, `preview`,
 `appCandidate`, and **`serving`** (which version the pin routes THIS session to) so
 the UI can tell "previewing" from "a preview exists but you're still on base".
@@ -103,8 +109,8 @@ worktree) so an assistant's `gitStatus` isn't fooled by a clean main checkout.
 `BOS_WORKTREES`, `BOS_CANONICAL_DATA`, `BOS_DATA_CLONES`, `BOS_PUSH_MODE` (`manual` |
 `auto-on-promote`), `BOS_REMOTE`, `BOS_HEALTH_TIMEOUT_MS`, `BOS_ACTIVE_REUSE_PORT`
 (dev: reuse a running `npm run dev` as base). The Supervisor passes
-`BOS_CANONICAL_DATA` to every child so cross‑version state (the conversation→branch
-map) persists to canonical data even from a preview's throwaway clone.
+`BOS_CANONICAL_DATA` to every child so code can find canonical runtime data when a
+preview is running from a throwaway clone.
 
 ---
 
@@ -115,8 +121,9 @@ call is a no‑op). Source-edit developer harness runs refuse to proceed without
 Supervisor, so BOS never falls back to in-place self-modification of the live
 checkout:
 
-`supervisorEnabled`, `supervisorState`, `supervisorNextChanges` (→ `preview-changes`),
-`supervisorBegin(branch?)`, `supervisorBuild`, `supervisorAppBegin/Promote/Discard`.
+`supervisorEnabled`, `supervisorState`, `supervisorNextChanges(branch)` (→
+`preview-changes`), `supervisorBegin(branch)`, `supervisorBuild(branch)`,
+`supervisorAppBegin/Promote/Discard`.
 The Claude runner (`claude-runner.ts`) uses `begin`/`build` to provision and gate a
 **code** preview, then appends a note telling the user the change is a **preview**
 (Preview → Promote), not the base; app installs use the `app-*` flow for a
@@ -124,40 +131,37 @@ The Claude runner (`claude-runner.ts`) uses `begin`/`build` to provision and gat
 `gitStatus` (`/api/system/git`) folds in `supervisorNextChanges` so a delegated edit
 shows up even though it's committed in the worktree, not the main checkout.
 
-### Branch continuity (one branch key ↔ one feature branch)
+### Active feature branch
 
-A delegated dev task is anchored by an **opaque branch key** so repeated work —
-"improve the thing we worked on" — continues on the **same** branch even after a Stop
-dropped the preview. The key is any stable string the caller picks: a chat's
-conversation id, a workflow id, an external `gitlab-issue:1234`, etc.
-(`getBranchForKey`/`setBranchForKey` in `src/lib/devharness/thread-branches.ts`,
-stored under canonical `data/devharness/thread-branches.json`; one flat namespace, so
-prefix external ids).
+A delegated dev task is owned by an explicit feature branch, not an opaque branch
+key. Assistant conversations persist `activeFeatureBranch` in
+`data/vfs/Documents/Chats/<id>.json`; the Assistant app header exposes an **Active
+feature branch** selector plus a `New feature branch...` action. Branch creation is
+server-side and enforces `bos/<kebab-name>` (one to four lowercase dash-separated
+segments).
 
-- **Resolution** (`claude-runner.ts`): the key's remembered branch, else a fresh
-  `bos/next-*`. Source edits without a key are refused. An **interactive**
-  caller additionally lets a currently‑**previewed** branch win first ("improve what
-  I'm viewing"); a **headless** caller's key is **authoritative** and never adopts a
-  human's stray live preview.
-- **Who supplies it:** the chat sends its conversation id + `interactive:true`
-  (`SubAgentActions`); the workflow runner sends `workflow:<id>` (or a per‑run
-  override) headless; any integration POSTs its own id — `/api/subagents/delegate`
-  (`branchKey`, legacy alias `threadId`, optional `interactive`) or `/api/workflows/run`
-  (`branchKey`).
-- Promote deletes the merged branch, so the next run on that key resolves to a fresh
-  branch off the new base (the anchor self‑heals — `provisionPreview` re‑creates a
-  missing branch off base).
+`runClaudeAgent` refuses source edits unless the caller has resolved a valid active
+feature branch. The public LLM tool schema does **not** accept a branch parameter;
+`/api/subagents/delegate` resolves it server-side from the current conversation, and
+automation can pass a validated `featureBranch` directly to workflow/delegate
+server APIs. With no active branch, the harness fails before Claude/OpenCode/MCP is
+spawned, so it cannot edit the running checkout by accident.
 
 ### UI
 
 `src/components/desktop/VersionControls.tsx` (Topbar) reads `/__supervisor/branches`
-+ `/state` and drives `activate`/`promote`/`discard`(=Stop) (+ the app candidate). A
-preview built by a delegated fix is **not auto‑served**, so the toolbar offers an
-explicit **Preview** (pin → reload) and a `previewing` indicator (from `serving`);
-**Stop** kills + cleans the preview (branch kept) and returns to base. Control
-failures are **surfaced inline**, never silently swallowed. The Versions Settings tab
-(`self-modification` namespace, `VersionsTab`) surfaces the same. **Push** is exposed
-on the `/__supervisor` page.
++ `/state` and drives branch-owned `activate`/`pin`/`stop`/`discard`/`promote`
+(+ the app candidate). The topbar shows a prominent centered **BASE** or
+**PREVIEW** marker and a dropdown containing the actual base branch name plus all
+git branches. Selecting a non-running feature branch immediately shows
+`building <branch>...` and disabled controls while the build runs; selecting an
+already-ready preview switches to it immediately. **Stop** stops the preview server
+but keeps branch/worktree. **Discard** deletes the branch/worktree. **Promote** is
+available for stopped/not-built previews and builds first if needed. A **Log** button
+opens recent Supervisor logs. Control failures are **surfaced inline**, never
+silently swallowed. The Versions Settings tab (`self-modification` namespace,
+`VersionsTab`) surfaces the same branch-owned operations. **Push** is exposed on the
+`/__supervisor` page.
 
 ---
 

@@ -14,7 +14,6 @@ import {
   Save,
   X,
 } from "lucide-react";
-import type { AppProps } from "@/components/apps/types";
 import type { PipelinePhase, Specification, SpecTreeNode } from "@/lib/specs/types";
 import { AssistantChat } from "@/components/agent/AssistantChat";
 import { ResizeHandle } from "@/components/apps/ResizeHandle";
@@ -83,7 +82,7 @@ function PhaseStrip({ phases }: { phases: PipelinePhase[] }) {
   );
 }
 
-export default function BuildStudioApp(_props: AppProps) {
+export default function BuildStudioApp() {
   const [tree, setTree] = useState<SpecTreeNode[]>([]);
   const [specs, setSpecs] = useState<Specification[]>([]);
   const [activeFeature, setActiveFeature] = useState<string>("");

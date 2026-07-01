@@ -4,7 +4,6 @@ import { useCallback, useEffect, useState } from "react";
 import { Markdown } from "@copilotkit/react-ui";
 import "@copilotkit/react-ui/styles.css";
 import { BookOpen, ChevronDown, ChevronRight, FileText, Folder, FolderOpen } from "lucide-react";
-import type { AppProps } from "@/components/apps/types";
 
 // Read-only viewer of the project documentation tree served by /api/docs:
 // docs/usage/** (end users) and docs/dev/** (developers). Pick the audience with
@@ -30,7 +29,7 @@ function firstFile(nodes: DocNode[]): DocNode | undefined {
   return undefined;
 }
 
-export default function DocsApp(_props: AppProps) {
+export default function DocsApp() {
   const [tree, setTree] = useState<Record<Section, DocNode[]>>({ usage: [], dev: [] });
   const [section, setSection] = useState<Section>("usage");
   const [activePath, setActivePath] = useState<string>("");

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getConversationActiveFeatureBranch, validateFeatureBranch } from "@/lib/agent/conversations-server";
 import { getAgent } from "@/lib/agent/subagents/store";
 import { runSubAgent } from "@/lib/agent/subagents/runner";
 import type { Agent } from "@/lib/agent/subagents/types";
@@ -43,6 +44,31 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: `No sub-agent "${body.agent}" and no ephemeral spec provided` }, { status: 404 });
   }
   const agent = def;
+  const conversationId =
+    typeof body.conversationId === "string"
+      ? body.conversationId
+      : typeof body.threadId === "string"
+        ? body.threadId
+        : undefined;
+  let featureBranch: string | undefined;
+  try {
+    featureBranch =
+      typeof body.featureBranch === "string"
+        ? validateFeatureBranch(body.featureBranch)
+        : await getConversationActiveFeatureBranch(conversationId);
+  } catch (err) {
+    return NextResponse.json({ error: (err as Error).message }, { status: 400 });
+  }
+  if (agent.type === "claude" && body.contentOnly !== true && !featureBranch) {
+    return NextResponse.json(
+      {
+        error:
+          "Developer harness requires an active feature branch. Select or create one in the Assistant app before delegating BOS source edits.",
+      },
+      { status: 400 },
+    );
+  }
+
   // Correlate this delegation (and any Supervisor build it triggers) to the
   // originating browser session — see specs/017-central-logging.
   const sessionId = req.headers.get("x-bos-session") || undefined;
@@ -57,17 +83,8 @@ export async function POST(req: NextRequest) {
         const result = await runSubAgent(agent, task, {
           onEvent: (ev) => emit({ type: "tool", ...ev }),
           contentOnly: body.contentOnly === true,
-          // `conversationId` anchors repeated dev work to one feature branch; any caller
-          // (chat, workflow, external integration) may supply an arbitrary stable id.
-          // `threadId` is the legacy alias the chat used.
-          conversationId:
-            typeof body.conversationId === "string"
-              ? body.conversationId
-              : typeof body.threadId === "string"
-                ? body.threadId
-                : undefined,
-          // Interactive sessions let a live preview win over the key; omit/false for
-          // headless callers so their key is authoritative (never adopts a stray preview).
+          // Resolved server-side; not exposed in the assistant tool schema.
+          featureBranch,
           interactive: body.interactive === true,
         });
         emit({ type: "done", result });

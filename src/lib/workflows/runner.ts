@@ -1,4 +1,5 @@
 import "server-only";
+import { getConversationActiveFeatureBranch, validateFeatureBranch } from "@/lib/agent/conversations-server";
 import { runSubAgent } from "@/lib/agent/subagents/runner";
 import { getAgent } from "@/lib/agent/subagents/store";
 import type { Agent } from "@/lib/agent/subagents/types";
@@ -36,10 +37,8 @@ interface RunContext {
   workflow: Workflow;
   abortSignal: AbortSignal;
   outputs: Map<string, unknown>;
-  // Conversation ID for dev (claude) delegations, so a workflow does repeated
-  // development on the SAME feature branch (live version control). Headless — never
-  // adopts a human's live preview.
-  conversationId: string;
+  // Server-resolved feature branch for dev (claude) delegations.
+  featureBranch?: string;
 }
 
 interface StepResult {
@@ -95,7 +94,7 @@ async function runDelegateStep(step: WorkflowStep, ctx: RunContext): Promise<unk
   const agent = step.agentId ? await resolveSubAgent(step.agentId) : undefined;
   if (!agent) throw new Error(`Sub-agent "${step.agentId}" not found`);
   const task = buildDelegateTask(step, ctx);
-  const result = await runSubAgent(agent, task, { conversationId: ctx.conversationId });
+  const result = await runSubAgent(agent, task, { featureBranch: ctx.featureBranch });
   if (result.error) throw new Error(result.error);
   return result.output;
 }
@@ -123,7 +122,7 @@ async function runToolStep(step: WorkflowStep, ctx: RunContext): Promise<unknown
     systemPrompt: `${agent.systemPrompt}\n\n[Workflow constraint] You may only invoke the tool "${step.toolName}". Follow the operator's output convention exactly.`,
   };
 
-  const result = await runSubAgent(ephemeral, promptParts, { conversationId: ctx.conversationId });
+  const result = await runSubAgent(ephemeral, promptParts, { featureBranch: ctx.featureBranch });
   if (result.error) throw new Error(result.error);
   return result.output;
 }
@@ -208,17 +207,20 @@ function buildAdjacency(wf: Workflow) {
   return { remainingDeps, dependents };
 }
 
-/** Run a workflow, yielding NDJSON-style events as the graph executes. `conversationId`
- *  pins any dev (claude) delegations to one feature branch; if omitted it falls back
- *  to the workflow's configured key, then `workflow:<id>` (so a workflow keeps its
- *  own branch across runs). A caller/integration may pass an external id
- *  (e.g. `gitlab-issue:1234`) to drive repeated development on that feature. */
+/** Run a workflow, yielding NDJSON-style events as the graph executes. Developer
+ *  delegations require an explicit `bos/<kebab-name>` feature branch. A caller may
+ *  provide it directly or via an Assistant conversation's active branch. */
 export async function* runWorkflowStream(
   wf: Workflow,
-  opts?: { conversationId?: string },
+  opts?: { conversationId?: string; featureBranch?: string },
 ): AsyncGenerator<ExecutionEvent, void, void> {
   await clearExecutionLog(wf.id);
-  const conversationId = opts?.conversationId?.trim() || wf.config?.conversationId?.trim() || `workflow:${wf.id}`;
+  const featureBranch =
+    opts?.featureBranch
+      ? validateFeatureBranch(opts.featureBranch)
+      : wf.config?.featureBranch
+        ? validateFeatureBranch(wf.config.featureBranch)
+        : await getConversationActiveFeatureBranch(opts?.conversationId?.trim() || wf.config?.conversationId?.trim());
 
   const steps: Record<string, StepRuntimeState> = {};
   for (const s of wf.steps) steps[s.id] = { status: "queued", attempts: 0 };
@@ -255,7 +257,7 @@ export async function* runWorkflowStream(
 
   emit(makeEvent(wf.id, "workflow.start"));
 
-  const ctx: RunContext = { workflow: wf, abortSignal: abort.signal, outputs: new Map(), conversationId };
+  const ctx: RunContext = { workflow: wf, abortSignal: abort.signal, outputs: new Map(), featureBranch };
   const { remainingDeps, dependents } = buildAdjacency(wf);
   const stepsById = new Map(wf.steps.map((s) => [s.id, s]));
   const maxConcurrency = Math.max(1, wf.config?.maxConcurrentSteps ?? 5);

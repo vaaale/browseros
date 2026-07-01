@@ -11,7 +11,7 @@ import { ReasoningAssistantMessage } from "@/components/agent/ReasoningAssistant
 import { markdownRenderers } from "@/components/agent/MarkdownRenderers";
 import { ConversationPanel } from "@/components/apps/assistant/ConversationPanel";
 import { InfoPanel } from "@/components/apps/assistant/InfoPanel";
-import { AgentSelector } from "@/components/apps/assistant/AgentSelector";
+import { AgentSelector, FeatureBranchSelector } from "@/components/apps/assistant/AgentSelector";
 import { CardScopeProvider } from "@/lib/agent/card-collapse";
 import { DEFAULT_GROUP, useConversations, useActiveConversation, newConversation } from "@/lib/agent/conversations";
 
@@ -102,6 +102,7 @@ function AssistantChatInner({
           {allGroups && (
             <div className="flex shrink-0 items-center gap-2 border-b border-white/10 bg-white/[0.03] px-2 py-1 text-[11px]">
               <AgentSelector group={group} />
+              <FeatureBranchSelector group={group} />
               <span className="ml-auto flex items-center gap-1.5">
                 {isLoading ? (
                   <>

@@ -65,9 +65,10 @@ const SEED: Omit<Skill, "id">[] = [
       "",
       "Shared rules (both use-cases):",
       "1. Do not explore the codebase or VFS yourself and do not try to understand the implementation first - delegate the whole request.",
-      "2. Delegate to the developer sub-agent: delegateToSubAgent with agent 'developer' (Claude - required for all coding). For a large or vague request, optionally delegate to the planner sub-agent first and hand its plan to the developer.",
-      "3. When the developer reports back, summarize what changed and how to try it; the docs are source files under docs/usage (end users) and docs/dev (developers) and must be updated by the developer as part of the change.",
-      "4. If the developer sub-agent or Claude harness is unavailable, tell the user - never fall back to editing code through the VFS or writing it yourself.",
+      "2. Before modifying BOS source, check whether the Assistant header has an Active feature branch selected. If not, ask the user to select or create one before calling the developer harness.",
+      "3. Delegate to the developer sub-agent: delegateToSubAgent with agent 'developer' (Claude - required for all coding). For a large or vague request, optionally delegate to the planner sub-agent first and hand its plan to the developer.",
+      "4. When the developer reports back, summarize what changed and how to try it; the docs are source files under docs/usage (end users) and docs/dev (developers) and must be updated by the developer as part of the change.",
+      "5. If the developer sub-agent or Claude harness is unavailable, tell the user - never fall back to editing code through the VFS or writing it yourself.",
     ].join("\n"),
     references: [
       {
@@ -75,9 +76,9 @@ const SEED: Omit<Skill, "id">[] = [
         content: [
           "Use this when changing BrowserOS's own built-in functionality - a built-in app, a Settings tab/page, the desktop/dock, an API route, or server logic. This edits the BOS source (a Next.js App Router app under src/), not the VFS.",
           "",
-          "Delegate the change: call delegateToSubAgent with agent 'developer'. Give a clear, complete description of the desired change plus acceptance criteria (what the user should see or be able to do afterward). The developer has repo-scoped access: it works on a git feature branch, finds the right files, edits them, runs typecheck/lint, and stages the changes. Edits under src/ hot-reload in the dev server; some changes (new dependencies, server/config) need a restart.",
+          "Delegate the change: first ensure the Assistant conversation has an Active feature branch selected; if not, ask the user to select or create one. Then call delegateToSubAgent with agent 'developer'. Give a clear, complete description of the desired change plus acceptance criteria (what the user should see or be able to do afterward). The developer has repo-scoped access: the harness requires that active feature branch, checks out an isolated worktree for it, finds the right files, edits them, runs typecheck/lint, and stages the changes. Edits under src/ hot-reload in the dev server; some changes (new dependencies, server/config) need a restart.",
           "",
-          "Tell the developer to read docs/dev/ (start at docs/dev/architecture-overview.md - architecture, repo and data/ layout, API routes, extension recipes) and specs/000-browseros-core/spec.md (requirements) before designing, and to follow BOS conventions: keep the server/client boundary (server-only modules behind /api routes), keep app content text-selectable, work on a feature branch, and update docs/usage + docs/dev (and specs/000-browseros-core/spec.md if the architecture changes).",
+          "Tell the developer to read docs/dev/ (start at docs/dev/architecture-overview.md - architecture, repo and data/ layout, API routes, extension recipes) and specs/000-browseros-core/spec.md (requirements) before designing, and to follow BOS conventions: keep the server/client boundary (server-only modules behind /api routes), keep app content text-selectable, keep all source edits on the active feature branch, and update docs/usage + docs/dev (and specs/000-browseros-core/spec.md if the architecture changes).",
           "",
           "Design choices to prefer: make user-editable values a config namespace (a Settings tab) instead of hardcoding, which also exposes them to the assistant as tools; prefer a standalone installed app over a new built-in app when a self-contained app would do; keep changes focused and reversible; do not touch secrets, package.json, lockfiles, or build config unless explicitly asked.",
           "",
@@ -166,7 +167,7 @@ const SEED: Omit<Skill, "id">[] = [
       {
         name: "implement.md",
         content:
-          "Step: implement. Ensure spec.md, plan.md and tasks.md exist. Call delegate_to_developer with a complete task: the feature path (specs/<id>), a summary of the spec and plan, the tasks to execute, and acceptance criteria; instruct the Developer to work on a feature branch, run typecheck/lint, and update docs. You never write code yourself — relay the Developer's result and reflect updated status.",
+          "Step: implement. Ensure spec.md, plan.md and tasks.md exist, and ensure an Active feature branch is selected for this conversation before delegating. Call delegate_to_developer with a complete task: the feature path (specs/<id>), a summary of the spec and plan, the tasks to execute, and acceptance criteria; instruct the Developer to keep edits on that feature branch, run typecheck/lint, and update docs. You never write code yourself — relay the Developer's result and reflect updated status.",
       },
       {
         name: "converge.md",

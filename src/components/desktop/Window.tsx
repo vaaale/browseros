@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, type PointerEvent as ReactPointerEvent } from "react";
+import { createElement, useCallback, useRef, type PointerEvent as ReactPointerEvent } from "react";
 import type { WindowInstance } from "@/os/types";
 import { useOSStore } from "@/store/os-provider";
 import { getAppComponent } from "@/components/apps/registry";
@@ -33,7 +33,6 @@ export function Window({ win }: { win: WindowInstance }) {
   const onDragEnd = useCallback(() => {
     dragState.current = null;
     window.removeEventListener("pointermove", onDragMove);
-    window.removeEventListener("pointerup", onDragEnd);
   }, [onDragMove]);
 
   const startDrag = useCallback(
@@ -42,7 +41,7 @@ export function Window({ win }: { win: WindowInstance }) {
       focus(win.id);
       dragState.current = { pointerId: e.pointerId, offsetX: e.clientX - win.x, offsetY: e.clientY - win.y };
       window.addEventListener("pointermove", onDragMove);
-      window.addEventListener("pointerup", onDragEnd);
+      window.addEventListener("pointerup", onDragEnd, { once: true });
     },
     [focus, onDragEnd, onDragMove, win.id, win.maximized, win.x, win.y],
   );
@@ -62,7 +61,6 @@ export function Window({ win }: { win: WindowInstance }) {
   const onResizeEnd = useCallback(() => {
     resizeState.current = null;
     window.removeEventListener("pointermove", onResizeMove);
-    window.removeEventListener("pointerup", onResizeEnd);
   }, [onResizeMove]);
 
   const startResize = useCallback(
@@ -71,7 +69,7 @@ export function Window({ win }: { win: WindowInstance }) {
       focus(win.id);
       resizeState.current = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, startW: win.width, startH: win.height };
       window.addEventListener("pointermove", onResizeMove);
-      window.addEventListener("pointerup", onResizeEnd);
+      window.addEventListener("pointerup", onResizeEnd, { once: true });
     },
     [focus, onResizeEnd, onResizeMove, win.height, win.id, win.width],
   );
@@ -131,7 +129,7 @@ export function Window({ win }: { win: WindowInstance }) {
         {manifest?.kind === "iframe" ? (
           <IframeApp windowId={win.id} appId={win.appId} params={{ ...win.params, url: manifest.url }} />
         ) : AppComponent ? (
-          <AppComponent windowId={win.id} appId={win.appId} params={win.params} />
+          createElement(AppComponent, { windowId: win.id, appId: win.appId, params: win.params })
         ) : (
           <div className="flex h-full items-center justify-center text-sm text-white/40">
             Unknown app: {win.appId}

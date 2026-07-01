@@ -2,7 +2,7 @@ import "server-only";
 import { spawn } from "node:child_process";
 import { connectMcpClient, extractText } from "@/lib/mcp/client";
 import { getHarnessConfig } from "@/lib/devharness/harness-config";
-import { supervisorEnabled, supervisorState, supervisorBegin, supervisorBuild } from "@/lib/devharness/supervisor";
+import { supervisorEnabled, supervisorBegin, supervisorBuild } from "@/lib/devharness/supervisor";
 import { stageAll } from "@/lib/system/git";
 import type { McpServerConfig } from "@/lib/mcp/types";
 import type { Agent, AgentRunResult } from "./types";
@@ -328,7 +328,7 @@ async function runViaMcp(agent: Agent, task: string, server: McpServerConfig, on
 export async function runClaudeAgent(
   agent: Agent,
   task: string,
-  opts?: { onEvent?: OnEvent; contentOnly?: boolean; conversationId?: string; interactive?: boolean },
+  opts?: { onEvent?: OnEvent; contentOnly?: boolean; featureBranch?: string; interactive?: boolean },
 ): Promise<AgentRunResult> {
   const harness = await getHarnessConfig();
 
@@ -365,7 +365,7 @@ export async function runClaudeAgent(
         "Refusing to run the developer harness against the live checkout. Source edits require the Supervisor so BOS can provision an isolated feature-branch worktree. Start BOS with `npm run supervisor` and retry.",
     };
   }
-  if (!opts?.conversationId) {
+  if (!opts?.featureBranch) {
     return {
       agent: agent.name,
       type: "claude",
@@ -374,7 +374,7 @@ export async function runClaudeAgent(
       steps: 0,
       toolCalls: [],
       error:
-        "Refusing to run the developer harness without a branch key. Source edits require a conversationId/branchKey so the Supervisor can bind the work to an isolated feature branch.",
+        "Refusing to run the developer harness without an active feature branch. Select or create a feature branch in the Assistant app before asking a developer agent to edit BOS source.",
     };
   }
   if (harness.mode === "mcp" && harness.server.transport !== "stdio") {
@@ -391,30 +391,15 @@ export async function runClaudeAgent(
   }
 
   let cwd = "";
-  let candidateBranch = "";
+  const candidateBranch = opts.featureBranch;
 
-  // Provision (or resume) the preview worktree for this conversation. The
-  // Supervisor tracks previews by conversationId, so repeated work continues
-  // on the SAME branch automatically — no external mapping needed.
-  //   • interactive (a chat session): a currently-PREVIEWED branch wins ("improve
-  //     the thing I'm looking at"), then the conversation's existing preview.
-  //   • headless (workflow/integration): the conversation's existing preview is
-  //     AUTHORITATIVE — never adopts a human's stray live preview.
-  let resume: string | undefined;
-  if (opts?.interactive) {
-    const st = await supervisorState().catch(() => null);
-    const serving = st && st.serving && typeof st.serving === "object" ? (st.serving as { conversationId?: string }).conversationId : undefined;
-    // If THIS conversation is already being served as a preview, reuse it.
-    if (serving === opts.conversationId) {
-      const previewBranch = st && st.serving && typeof st.serving === "object" ? (st.serving as { branch?: string }).branch : undefined;
-      resume = previewBranch;
-    }
-  }
-  const begun = await supervisorBegin(opts.conversationId, resume);
+  // Provision (or resume) the preview worktree for the active feature branch.
+  // The branch is resolved server-side from Assistant/workflow state and is not
+  // an LLM-callable argument.
+  const begun = await supervisorBegin(candidateBranch);
   const wt = begun && typeof begun.worktree === "string" ? (begun.worktree as string) : "";
   if (wt) {
     cwd = wt;
-    candidateBranch = begun && typeof begun.branch === "string" ? (begun.branch as string) : "";
     opts?.onEvent?.({ tool: "Supervisor: provision preview worktree", input: { worktree: wt, branch: candidateBranch } });
   } else {
     // Provisioning the isolated worktree FAILED. We must NOT fall back to editing
@@ -445,7 +430,7 @@ export async function runClaudeAgent(
 
   if (!result.error) {
     opts?.onEvent?.({ tool: "Supervisor: build + health-gate candidate", input: {} });
-    const built = await supervisorBuild(opts.conversationId).catch(() => null);
+    const built = await supervisorBuild(candidateBranch).catch(() => null);
     // Tell the caller the change is a CANDIDATE, not the live/active version — the
     // user must preview/promote it. Prevents the "fix is in place but the app still
     // doesn't work" confusion (the user was viewing active) and the bad workaround

@@ -56,8 +56,11 @@ export default function FileBrowser({ windowId, params }: AppProps) {
   }, []);
 
   useEffect(() => {
-    refresh(cwd);
-    setTitle(windowId, `Files — ${cwd}`);
+    const id = setTimeout(() => {
+      void refresh(cwd);
+      setTitle(windowId, `Files — ${cwd}`);
+    }, 0);
+    return () => clearTimeout(id);
   }, [cwd, refresh, setTitle, windowId]);
 
   const openEntry = async (entry: VfsEntry) => {

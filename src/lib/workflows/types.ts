@@ -51,11 +51,10 @@ export interface WorkflowConfig {
   maxConcurrentSteps?: number;
   defaultRetryLimit?: number;
   defaultTimeout?: number;
-  /** Conversation ID for dev (claude) delegations: anchors repeated development to
-   *  one feature branch (live version control). Defaults to `workflow:<id>` so each
-   *  workflow keeps its own branch across runs; a run may override it (e.g.
-   *  `gitlab-issue:1234`). */
+  /** Legacy conversation lookup key for migrations/older integrations. */
   conversationId?: string;
+  /** Explicit `bos/<kebab-name>` branch for dev (claude) delegations. */
+  featureBranch?: string;
 }
 
 export interface WorkflowUiSpec {

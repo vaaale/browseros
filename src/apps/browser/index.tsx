@@ -33,12 +33,15 @@ export default function WebBrowser({ windowId, params }: AppProps) {
   const current = history[index];
 
   useEffect(() => {
-    setDraft(current);
-    try {
-      setTitle(windowId, `Browser — ${new URL(current).hostname}`);
-    } catch {
-      setTitle(windowId, "Browser");
-    }
+    const id = setTimeout(() => {
+      setDraft(current);
+      try {
+        setTitle(windowId, `Browser — ${new URL(current).hostname}`);
+      } catch {
+        setTitle(windowId, "Browser");
+      }
+    }, 0);
+    return () => clearTimeout(id);
   }, [current, setTitle, windowId]);
 
   const go = (rawUrl: string) => {

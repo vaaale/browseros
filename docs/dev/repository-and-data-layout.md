@@ -54,8 +54,7 @@ src/
     gitfs/store.ts              Thin git layer for the content repo
     datafs/                     clone.ts (preview clone backends), probe.ts (fs capabilities)
     devharness/                 harness-config.ts (cli: claude|opencode, or mcp),
-                                supervisor.ts (client),
-                                thread-branches.ts (branch-key→feature-branch map)
+                                supervisor.ts (client)
     docs/store.ts               Read-only reader of the project docs/ trees (usage + dev)
     system/git.ts               Scoped git helper (branch/add/status)
     dev/repo-fs.ts              Repo-scoped source FS (jailed; local dev sub-agents)
@@ -91,7 +90,7 @@ apps/                           Installed apps — standalone git repo (GitFS), 
 
 | Path | Contents |
 |---|---|
-| `data/vfs/` | The user VFS (Documents, Pictures, Desktop). Chat history at `data/vfs/Documents/Chats/<id>.json`; workflows at `data/vfs/Workflows/`. |
+| `data/vfs/` | The user VFS (Documents, Pictures, Desktop). Chat history at `data/vfs/Documents/Chats/<id>.json` (including each conversation's optional `activeFeatureBranch`); workflows at `data/vfs/Workflows/`. |
 | `data/settings.json` | OS settings (wallpaper, accent, theme). |
 | `data/config/<ns>.json` | Generic per‑namespace config (e.g. `dev-harness`, `browser-automation`, `datafs`, `assistant`). |
 | `data/provider.json` | AI provider config incl. the API key — **masked** in API responses. |
@@ -99,7 +98,6 @@ apps/                           Installed apps — standalone git repo (GitFS), 
 | `data/memory/USER.md`, `data/memory/MEMORY.md` | Curated memory surfaces. |
 | `data/skills/<id>/SKILL.md` (+ `scripts/`, `references/`) or `data/skills/<id>.md` | Skill library. `.usage.json` sidecar + `.archive/`. |
 | `data/agents/<id>/AGENT.md` | Agent definitions — sub‑agents AND the assistant's personality agents. |
-| `data/devharness/thread-branches.json` | Durable **branch-key → feature-branch** map (key = conversation id, workflow id, `gitlab-issue:1234`, …) so repeated dev work resumes the same branch after a Stop. Written to **canonical** data so it survives a preview's throwaway clone (the Supervisor passes `BOS_CANONICAL_DATA`). |
 
 > **Schema compatibility:** because the Supervisor shares one canonical `data/`
 > across versions and promote is code‑only, on‑disk `data/` schema changes MUST stay

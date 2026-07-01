@@ -19,12 +19,12 @@ const MAX_DELEGATE_DEPTH = 2;
 
 /** The delegate_to_developer tool. Built per-run so it can forward the parent's
  *  event stream (for the nested-agent UI), carry a depth guard, and inherit the
- *  parent's conversationId + interactivity so nested dev work stays on the SAME feature
- *  branch as the run that spawned it. */
+ *  active feature branch so nested dev work stays on the SAME branch as the run
+ *  that spawned it. */
 function makeDelegateTool(
   parentOnEvent: ((e: SubAgentEvent) => void) | undefined,
   depth: number,
-  conversationId?: string,
+  featureBranch?: string,
   interactive?: boolean,
 ): LlmTool {
   return {
@@ -39,7 +39,7 @@ function makeDelegateTool(
       if (depth >= MAX_DELEGATE_DEPTH) return "Delegation depth limit reached; cannot nest another sub-agent.";
       const dev = await getAgent("developer");
       if (!dev) return "No 'developer' sub-agent is available to implement this.";
-      const res = await runSubAgent(dev, String(input.task ?? ""), { onEvent: parentOnEvent, depth: depth + 1, conversationId, interactive });
+      const res = await runSubAgent(dev, String(input.task ?? ""), { onEvent: parentOnEvent, depth: depth + 1, featureBranch, interactive });
       if (res.error) return `Developer error: ${res.error}`;
       return res.output || "(the developer returned no output)";
     },
@@ -49,7 +49,7 @@ function makeDelegateTool(
 async function runLocal(
   agent: Agent,
   task: string,
-  opts?: { onEvent?: (e: SubAgentEvent) => void; depth?: number; conversationId?: string; interactive?: boolean },
+  opts?: { onEvent?: (e: SubAgentEvent) => void; depth?: number; featureBranch?: string; interactive?: boolean },
 ): Promise<AgentRunResult> {
   const depth = opts?.depth ?? 0;
   const ids = agent.tools ?? [];
@@ -58,7 +58,7 @@ async function runLocal(
 
   const tools = { ...toolsFor(agent.tools) };
   if (ids.includes(DELEGATE_TO_DEVELOPER)) {
-    tools[DELEGATE_TO_DEVELOPER] = makeDelegateTool(opts?.onEvent, depth, opts?.conversationId, opts?.interactive);
+    tools[DELEGATE_TO_DEVELOPER] = makeDelegateTool(opts?.onEvent, depth, opts?.featureBranch, opts?.interactive);
   }
 
   const result = await runToolLoop({
@@ -92,10 +92,9 @@ export async function runSubAgent(
     onEvent?: (e: SubAgentEvent) => void;
     contentOnly?: boolean;
     depth?: number;
-    // Opaque key anchoring repeated dev work to one feature branch (conversation id,
-    // workflow id, `gitlab-issue:1234`, …). `interactive` lets a live preview win over
-    // the key; headless callers omit it so their key is authoritative. See claude-runner.
-    conversationId?: string;
+    // Server-resolved branch for source edits. It is deliberately not part of the
+    // public LLM tool schema; callers resolve it from Assistant/workflow state.
+    featureBranch?: string;
     interactive?: boolean;
   },
 ): Promise<AgentRunResult> {

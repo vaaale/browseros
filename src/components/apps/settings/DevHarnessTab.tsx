@@ -51,7 +51,7 @@ export function DevHarnessTab() {
     await fetch("/api/config", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ namespace: "dev-harness", values: { ...v, cwd: undefined } }),
+      body: JSON.stringify({ namespace: "dev-harness", values: v }),
     });
   };
 

@@ -5,12 +5,11 @@ import { AlertTriangle } from "lucide-react";
 import { useOSStore } from "@/store/os-provider";
 import { PROVIDERS, type ProviderType } from "@/lib/agent/provider-meta";
 import { AssistantChat } from "@/components/agent/AssistantChat";
-import type { AppProps } from "@/components/apps/types";
 
 // The Assistant app is now a consumer of the embeddable <AssistantChat> in
 // "all groups" mode: it shows every conversation group nested and switches the
 // active agent/conversation as you pick one (012-embeddable-assistant).
-export default function ChatApp(_props: AppProps) {
+export default function ChatApp() {
   const launch = useOSStore((s) => s.launch);
   const [needsKey, setNeedsKey] = useState<{ provider: ProviderType } | null>(null);
 

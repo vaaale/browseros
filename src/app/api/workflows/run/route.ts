@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 600;
 
 export async function POST(req: NextRequest) {
-  let body: { id?: string; conversationId?: string };
+  let body: { id?: string; conversationId?: string; featureBranch?: string };
   try {
     body = await req.json();
   } catch {
@@ -17,9 +17,10 @@ export async function POST(req: NextRequest) {
   if (!body.id) return NextResponse.json({ error: "id is required" }, { status: 400 });
   const wf = await getWorkflow(body.id);
   if (!wf) return NextResponse.json({ error: `No workflow "${body.id}"` }, { status: 404 });
-  // Optional conversation ID: pins this run's dev delegations to one feature branch
-  // (e.g. an external `gitlab-issue:1234`). Falls back to the workflow's key, then `workflow:<id>`.
+  // Optional lookup key or explicit branch for dev delegations. The runner only
+  // hands the harness a validated `bos/...` branch, never an arbitrary key.
   const conversationId = typeof body.conversationId === "string" ? body.conversationId : undefined;
+  const featureBranch = typeof body.featureBranch === "string" ? body.featureBranch : undefined;
 
   const validation = await validateWorkflow(wf);
   if (!validation.ok) {
@@ -30,7 +31,7 @@ export async function POST(req: NextRequest) {
     async start(controller) {
       const enc = new TextEncoder();
       try {
-        for await (const ev of runWorkflowStream(wf, { conversationId })) {
+        for await (const ev of runWorkflowStream(wf, { conversationId, featureBranch })) {
           controller.enqueue(enc.encode(JSON.stringify(ev) + "\n"));
         }
       } catch (err) {

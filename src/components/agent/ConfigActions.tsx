@@ -2,7 +2,7 @@
 
 import { useCopilotReadable } from "@copilotkit/react-core";
 import { useCopilotAction } from "@/components/agent/gated-action";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { ConfigSchemaView } from "@/lib/config/types";
 
 // Auto-exposes every registered configuration namespace to the assistant as
@@ -10,17 +10,18 @@ import type { ConfigSchemaView } from "@/lib/config/types";
 export function ConfigActions() {
   const [schemas, setSchemas] = useState<ConfigSchemaView[]>([]);
 
-  const refresh = async () => {
+  const refresh = useCallback(async () => {
     try {
       const res = await fetch("/api/config").then((r) => r.json());
       setSchemas(res.schemas ?? []);
     } catch {
       /* ignore */
     }
-  };
-  useEffect(() => {
-    refresh();
   }, []);
+  useEffect(() => {
+    const id = setTimeout(() => void refresh(), 0);
+    return () => clearTimeout(id);
+  }, [refresh]);
 
   useCopilotReadable({
     description: "Configurable BrowserOS settings the assistant can change (namespaces, fields, current values; secrets hidden).",
