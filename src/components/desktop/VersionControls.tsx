@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { sessionHeader, getSessionId } from "@/lib/logging/client/session";
 import { useActiveConversationId } from "@/lib/agent/conversations";
 
@@ -52,7 +52,7 @@ export function VersionControls() {
   const [err, setErr] = useState<string | null>(null);
   // The branch we just asked to build. Once its preview finishes building we
   // reload so the session flips into it (the pin only routes once it is ready).
-  const pendingRef = useRef<string | null>(null);
+  const [pendingBranch, setPendingBranch] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -76,16 +76,14 @@ export function VersionControls() {
 
   // Flip the session into a freshly-built preview as soon as it is ready.
   useEffect(() => {
-    const target = pendingRef.current;
-    if (!target) return;
+    if (!pendingBranch) return;
     // Match by branch name — activate() may reuse a preview owned by a different
     // conversationId (e.g. one created by the agent).
-    const p = state?.previews?.find((v) => v.branch === target);
+    const p = state?.previews?.find((v) => v.branch === pendingBranch);
     if (p?.state === "ready") {
-      pendingRef.current = null;
       window.location.reload();
     }
-  }, [state]);
+  }, [pendingBranch, state]);
 
   const post = useCallback(async (p: string, body?: Record<string, unknown>): Promise<PostResult> => {
     setBusy(true);
@@ -114,10 +112,14 @@ export function VersionControls() {
     ) ?? null
     : null;
   const activeCand = state?.previews?.find((v) => v.conversationId === activeCid) ?? null;
+  const pendingCand = pendingBranch ? state?.previews?.find((v) => v.branch === pendingBranch) ?? null : null;
+  const soleCand = state?.previews?.length === 1 ? state.previews[0] : null;
   // Prefer the preview this tab is actually viewing. The active chat can change
   // while a preview is open, and existing branch previews may be owned by another
-  // conversation id.
-  const cand = servedPreview ?? activeCand;
+  // conversation id. After Supervisor restarts, restored previews use a branch
+  // hash as their synthetic conversation id, so a single known preview is still
+  // actionable from Base even when the active chat id no longer matches.
+  const cand = servedPreview ?? activeCand ?? pendingCand ?? soleCand;
   const cid = cand?.conversationId ?? activeCid;
   const hasCand = !!cand;
   const ready = cand?.state === "ready";
@@ -129,7 +131,7 @@ export function VersionControls() {
     (!!cand?.branch && serving.branch === cand.branch)
   );
   // What this session is actually being served (not just "a preview exists").
-  const selectedValue = state?.serving?.branch ?? branches.base;
+  const selectedValue = pendingBranch ?? state?.serving?.branch ?? branches.base;
   const app = state?.appCandidate ?? null;
 
   const onSelect = async (branch: string) => {
@@ -137,17 +139,17 @@ export function VersionControls() {
     setErr(null);
     if (branch === branches.base) {
       // Back to base — stop any preview for this tab and clear the pin.
-      pendingRef.current = null;
+      setPendingBranch(null);
       const r = await post("activate", { conversationId: cid, branch });
       if (r?.ok) window.location.reload();
       else setErr(r?.error || "Failed to return to base.");
       return;
     }
     // Build the chosen branch as a preview; the ready-watcher reloads us in.
-    pendingRef.current = branch;
+    setPendingBranch(branch);
     const r = await post("activate", { conversationId: cid, branch });
     if (!r?.ok) {
-      pendingRef.current = null;
+      setPendingBranch(null);
       setErr(r?.error || `Failed to build branch ${branch}.`);
     }
     await load();
@@ -179,7 +181,7 @@ export function VersionControls() {
     }
   };
   const onPromote = async () => {
-    pendingRef.current = null;
+    setPendingBranch(null);
     setErr(null);
     // Promote can fail (dirty base checkout, conflict, failed health check); surface
     // the reason instead of silently doing nothing, and keep the preview visible.

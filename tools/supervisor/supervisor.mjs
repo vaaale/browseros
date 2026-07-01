@@ -292,6 +292,10 @@ function startProc(v) {
     // An unexpected death of a running version must not keep routing traffic to a
     // dead port — mark it so pinnedVersion falls back to base.
     if (v.state === "ready") v.state = "stopped";
+    else if (v.state === "building") {
+      v.state = "failed";
+      v.buildError = `preview process exited before becoming healthy (code ${code ?? "null"})`;
+    }
   });
 }
 
@@ -316,9 +320,11 @@ function stopProc(v) {
   });
 }
 
-async function waitHealthy(port) {
+async function waitHealthy(port, v) {
   const deadline = Date.now() + HEALTH_TIMEOUT_MS;
   while (Date.now() < deadline) {
+    if (v?.proc && (v.proc.exitCode !== null || v.proc.signalCode)) return false;
+    if (v?.state === "failed" && v.buildError) return false;
     const ok = await new Promise((resolve) => {
       const r = http.get({ hostname: "127.0.0.1", port, path: "/api/health", timeout: 4000 }, (res) => {
         let body = "";
@@ -405,7 +411,7 @@ async function buildAndStart(v, ctx = {}) {
     return v.state;
   }
   startProc(v);
-  v.state = (await waitHealthy(v.port)) ? "ready" : "failed";
+  v.state = (await waitHealthy(v.port, v)) ? "ready" : "failed";
   if (v.state === "failed") v.buildError = `health check failed: no healthy /api/health on :${v.port} within ${HEALTH_TIMEOUT_MS}ms`;
   slog(v.state === "ready" ? "info" : "error", "build", `${v.branch} -> ${v.state}`, { ...lctx, buildLog: build.relPath, ...(v.buildError ? { err: { message: v.buildError } } : {}) });
   return v.state;
@@ -428,7 +434,7 @@ async function buildAndStartBase(commit) {
     throw new Error(`base build failed:\n${build.reason}`);
   }
   startProc(base);
-  base.state = (await waitHealthy(BASE_PORT)) ? "ready" : "failed";
+  base.state = (await waitHealthy(BASE_PORT, base)) ? "ready" : "failed";
   slog(base.state === "ready" ? "info" : "error", "build", `base -> ${base.state}`, { ...lctx, buildLog: build.relPath });
   return base.state;
 }
@@ -527,7 +533,17 @@ async function activate(conversationId, branch) {
   // Check if any existing preview already has this branch (e.g. created by an agent
   // with a different conversationId). Reuse it instead of creating a duplicate.
   for (const [existingCid, p] of previews) {
-    if (p.branch === branch) return { branch, state: p.state, conversationId: existingCid };
+    if (p.branch === branch) {
+      if (p.state === "stopped") {
+        p.state = "building";
+        void resumePreview(existingCid).catch((e) => {
+          p.state = "failed";
+          p.buildError = String(e?.message || e);
+          log(`resume failed for ${p.branch}: ${p.buildError}`);
+        });
+      }
+      return { branch, state: p.state, conversationId: existingCid };
+    }
   }
   const existing = previews.get(conversationId);
   if (existing && existing.branch === branch && existing.state === "ready") return { branch, state: "ready" };
@@ -573,10 +589,10 @@ async function promote(conversationId) {
   await stopProc(oldBase);
   const swapped = { role: "base", branch: cand.branch, worktree: cand.worktree, dataDir: CANONICAL_DATA, port: BASE_PORT, state: "building", proc: null, commit: newCommit };
   startProc(swapped);
-  if (!(await waitHealthy(BASE_PORT))) {
+  if (!(await waitHealthy(BASE_PORT, swapped))) {
     // Failure AFTER killing old base but BEFORE moving the base ref → restore old base.
     await stopProc(swapped);
-    if (oldBase) { startProc(oldBase); await waitHealthy(oldBase.port); base = oldBase; }
+    if (oldBase) { startProc(oldBase); await waitHealthy(oldBase.port, oldBase); base = oldBase; }
     throw new Error(`promote failed: ${cand.branch} did not become healthy on the base port; restored the previous base. The base branch was NOT moved.`);
   }
 
@@ -741,7 +757,7 @@ async function resumePreview(conversationId) {
   if (p.state === "ready" && p.proc) return p;
   startProc(p);
   p.state = "building";
-  if (await waitHealthy(p.port)) {
+  if (await waitHealthy(p.port, p)) {
     p.state = "ready";
     p.buildError = "";
     log(`resumed preview ${p.branch} for ${conversationId}`);
