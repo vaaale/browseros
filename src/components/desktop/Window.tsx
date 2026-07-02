@@ -1,6 +1,6 @@
 "use client";
 
-import { createElement, useCallback, useRef, type PointerEvent as ReactPointerEvent } from "react";
+import { createElement, useCallback, useEffect, useRef, type PointerEvent as ReactPointerEvent } from "react";
 import type { WindowInstance } from "@/os/types";
 import { useOSStore } from "@/store/os-provider";
 import { getAppComponent } from "@/components/apps/registry";
@@ -18,28 +18,66 @@ export function Window({ win }: { win: WindowInstance }) {
   const focusedId = useOSStore((s) => s.focusedId);
   const manifest = useOSStore((s) => s.apps.find((a) => a.id === win.appId));
 
-  const dragState = useRef<{ pointerId: number; offsetX: number; offsetY: number } | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const dragState = useRef<{
+    pointerId: number;
+    offsetX: number;
+    offsetY: number;
+    nextX: number;
+    nextY: number;
+    rafId: number | null;
+  } | null>(null);
   const resizeState = useRef<{ pointerId: number; startX: number; startY: number; startW: number; startH: number } | null>(null);
+
+  const applyDragFrame = useCallback(() => {
+    const d = dragState.current;
+    if (!d) return;
+    d.rafId = null;
+    const el = containerRef.current;
+    if (el) {
+      el.style.transform = `translate3d(${d.nextX}px, ${d.nextY}px, 0)`;
+    }
+  }, []);
 
   const onDragMove = useCallback(
     (e: PointerEvent) => {
       const d = dragState.current;
       if (!d || e.pointerId !== d.pointerId) return;
-      move(win.id, e.clientX - d.offsetX, e.clientY - d.offsetY);
+      // Mirror the clamping applied by the store's `move` action so the
+      // imperative transform matches the final React-rendered position.
+      d.nextX = Math.max(0, e.clientX - d.offsetX);
+      d.nextY = Math.max(TOPBAR_H, e.clientY - d.offsetY);
+      if (d.rafId === null) {
+        d.rafId = requestAnimationFrame(applyDragFrame);
+      }
     },
-    [move, win.id],
+    [applyDragFrame],
   );
 
   const onDragEnd = useCallback(() => {
-    dragState.current = null;
+    const d = dragState.current;
     window.removeEventListener("pointermove", onDragMove);
-  }, [onDragMove]);
+    if (!d) return;
+    if (d.rafId !== null) {
+      cancelAnimationFrame(d.rafId);
+      d.rafId = null;
+    }
+    dragState.current = null;
+    move(win.id, d.nextX, d.nextY);
+  }, [move, onDragMove, win.id]);
 
   const startDrag = useCallback(
     (e: ReactPointerEvent) => {
       if (win.maximized) return;
       focus(win.id);
-      dragState.current = { pointerId: e.pointerId, offsetX: e.clientX - win.x, offsetY: e.clientY - win.y };
+      dragState.current = {
+        pointerId: e.pointerId,
+        offsetX: e.clientX - win.x,
+        offsetY: e.clientY - win.y,
+        nextX: win.x,
+        nextY: win.y,
+        rafId: null,
+      };
       window.addEventListener("pointermove", onDragMove);
       window.addEventListener("pointerup", onDragEnd, { once: true });
     },
@@ -74,17 +112,36 @@ export function Window({ win }: { win: WindowInstance }) {
     [focus, onResizeEnd, onResizeMove, win.height, win.id, win.width],
   );
 
+  useEffect(() => {
+    return () => {
+      const d = dragState.current;
+      if (d?.rafId != null) cancelAnimationFrame(d.rafId);
+      window.removeEventListener("pointermove", onDragMove);
+      const r = resizeState.current;
+      if (r) window.removeEventListener("pointermove", onResizeMove);
+    };
+  }, [onDragMove, onResizeMove]);
+
   if (win.minimized) return null;
 
   const AppComponent = getAppComponent(win.appId);
   const isFocused = focusedId === win.id;
 
   const style: React.CSSProperties = win.maximized
-    ? { top: TOPBAR_H + 8, left: 8, right: 8, bottom: 84, zIndex: win.zIndex }
-    : { top: win.y, left: win.x, width: win.width, height: win.height, zIndex: win.zIndex };
+    ? { top: TOPBAR_H + 8, left: 8, right: 8, bottom: 84, zIndex: win.zIndex, willChange: "transform" }
+    : {
+        top: 0,
+        left: 0,
+        width: win.width,
+        height: win.height,
+        transform: `translate3d(${win.x}px, ${win.y}px, 0)`,
+        zIndex: win.zIndex,
+        willChange: "transform",
+      };
 
   return (
     <div
+      ref={containerRef}
       data-testid={`window-${win.appId}`}
       className={`absolute flex flex-col overflow-hidden rounded-xl border bg-[#15171e]/95 shadow-2xl backdrop-blur-md transition-shadow ${
         isFocused ? "border-white/20 ring-1 ring-white/10" : "border-white/10"
