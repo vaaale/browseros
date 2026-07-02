@@ -54,6 +54,7 @@ export async function GET(req: NextRequest) {
       tools: a.tools ?? [],
       skills: a.skills ?? [],
       mcp: a.mcp ?? [],
+      systemPrompt: a.systemPrompt ?? "",
     })),
     active,
     activeBody: activeAgent?.systemPrompt ?? "",
@@ -66,7 +67,16 @@ export async function PATCH(req: NextRequest) {
   try {
     const body = await req.json();
     if (typeof body.active === "string") await setActiveAgentId(body.active);
-    if (typeof body.body === "string") await setAgentSystemPrompt(await getActiveAgentId(), body.body);
+    if (typeof body.body === "string") {
+      // The details pane targets a specific agent (may not be the active one);
+      // legacy callers (main-chat's own personality editor) omit agentId and
+      // implicitly target the active agent.
+      const targetId =
+        typeof body.agentId === "string" && body.agentId
+          ? body.agentId
+          : await getActiveAgentId();
+      await setAgentSystemPrompt(targetId, body.body);
+    }
     if (typeof body.agentId === "string" && (body.tools || body.skills || body.mcp)) {
       await setAgentCapabilities(body.agentId, {
         tools: Array.isArray(body.tools) ? body.tools.map(String) : undefined,

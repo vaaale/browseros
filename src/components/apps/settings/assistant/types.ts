@@ -1,5 +1,5 @@
-// Shape of an agent as returned by GET /api/assistant/agent — a light view of
-// the AGENT.md frontmatter, without the system prompt body.
+// Shape of an agent as returned by GET /api/assistant/agent — the AGENT.md
+// frontmatter plus its system prompt body (needed by the details pane).
 export interface AgentMeta {
   id: string;
   name: string;
@@ -8,6 +8,7 @@ export interface AgentMeta {
   tools: string[];
   skills: string[];
   mcp: string[];
+  systemPrompt: string;
 }
 
 // The default agent slot the main assistant adopts as its personality. It is

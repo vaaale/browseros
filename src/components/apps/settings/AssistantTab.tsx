@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { AgentList, NewAgentDialog, type AgentMeta } from "./assistant";
+import { AgentDetails, AgentList, NewAgentDialog, type AgentMeta } from "./assistant";
 
 /**
  * Master-detail shell for Settings → Assistant. The list on the left drives
@@ -45,11 +45,15 @@ export function AssistantTab() {
         onSelect={setSelectedAgentId}
         onNew={() => setDialogOpen(true)}
       />
-      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+      <div className="flex min-h-0 flex-1 flex-col">
         {selectedAgent ? (
-          <div className="p-4 text-xs text-white/50">
-            Details for &ldquo;{selectedAgent.name}&rdquo; will appear here.
-          </div>
+          // Re-key on the agent id so switching agents resets input drafts
+          // without a bespoke effect inside the details components.
+          <AgentDetails
+            key={selectedAgent.id}
+            agent={selectedAgent}
+            onSaved={load}
+          />
         ) : (
           <div className="flex flex-1 items-center justify-center p-6 text-xs text-white/40">
             Select an agent to view its details.
