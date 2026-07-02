@@ -373,7 +373,7 @@ export async function runClaudeAgent(
       steps: 0,
       toolCalls: [],
       error:
-        "Refusing to run the developer harness without an active feature branch. Select or create a feature branch in the Assistant app before asking a developer agent to edit BOS source.",
+        "Refusing to run the developer harness without an active feature branch. Call the requestFeatureBranch action to set one up (it prompts the user for a name), then retry the delegation.",
     };
   }
   if (harness.mode === "mcp" && harness.server.transport !== "stdio") {

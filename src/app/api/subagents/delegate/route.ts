@@ -63,7 +63,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(
       {
         error:
-          "Developer harness requires an active feature branch. Select or create one in the Assistant app before delegating BOS source edits.",
+          "Developer harness requires an active feature branch. Call the requestFeatureBranch action to set one up (it prompts the user for a name), then retry the delegation.",
       },
       { status: 400 },
     );
