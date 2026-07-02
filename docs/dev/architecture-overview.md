@@ -101,7 +101,7 @@ See [Repository & data layout](repository-and-data-layout.md),
 - **[MCP](mcp/mcp.md)**, **[Browser automation](automation/browser-automation.md)**, **[Web proxy](web-proxy/web-proxy.md)**.
 - **Self‑modification** — [live version control](self-modification/live-version-control.md), [DataFS](self-modification/data-isolation-datafs.md), [testing](self-modification/testing.md).
 - **[Workflows](workflows/workflows.md)**.
-- **[API reference](api-reference.md)**, **[Extending BOS](extending-bos.md)**, **[Design heuristics & gotchas](design-heuristics.md)**.
+- **[API reference](api-reference.md)**, **[Extending BOS](extending-bos.md)**, **[Design heuristics & gotchas](design-heuristics.md)**, **[UI style guide](style-guide/README.md)**.
 
 ---
 
