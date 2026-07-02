@@ -118,7 +118,14 @@ async function allocPreviewPort() {
 // reflected rather than the value captured at registration.
 async function liveBranch(v) {
   if (!v) return undefined;
-  return (await gitTry(["rev-parse", "--abbrev-ref", "HEAD"], v.worktree || REPO)) || v.branch;
+  const b = await gitTry(["rev-parse", "--abbrev-ref", "HEAD"], v.worktree || REPO);
+  // The BASE runs from a DETACHED worktree (detached at its commit so the branch
+  // ref stays free for promote/merge), where `rev-parse --abbrev-ref HEAD` yields
+  // the literal "HEAD". Fall back to the version's logical branch (base →
+  // baseBranch) so the toolbar shows/selects the real branch, not "HEAD" — which
+  // otherwise makes base look like a feature selection and leaves the preview
+  // buttons active.
+  return b && b !== "HEAD" ? b : v.branch || undefined;
 }
 async function publicState() {
   const pick = async (v) =>
