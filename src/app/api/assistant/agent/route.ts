@@ -24,9 +24,10 @@ async function buildCatalog() {
     // The unified capability registry (016): one allowlist governs an agent in both
     // contexts. Each item is { id, group, description, context }.
     tools: CAPABILITIES,
-    skills: skills.map((s) => ({ id: s.id, name: s.name })),
+    skills: skills.map((s) => ({ id: s.id, name: s.name, description: s.description ?? "" })),
     mcp: mcp.map((m) => ({
       name: m.name,
+      description: m.description ?? "",
       endpoint: m.endpoint || [m.command, ...(m.args ?? [])].filter(Boolean).join(" "),
     })),
   };

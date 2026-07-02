@@ -1,18 +1,29 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { AgentDetails, AgentList, NewAgentDialog, type AgentMeta } from "./assistant";
+import {
+  AgentDetails,
+  AgentList,
+  NewAgentDialog,
+  type AgentMeta,
+  type Catalog,
+} from "./assistant";
+
+const EMPTY_CATALOG: Catalog = { tools: [], skills: [], mcp: [] };
 
 /**
  * Master-detail shell for Settings → Assistant. The list on the left drives
- * selection; the right pane will show the selected agent's details in a later
- * phase. Fetches the agent inventory from /api/assistant/agent, which also
- * returns the currently-active agent id (used to render the "Active" pill).
+ * selection; the right pane shows the selected agent's details (name,
+ * description, system prompt, capabilities). Fetches the agent inventory —
+ * and the catalog of every skill/MCP/tool the picker can offer — from
+ * /api/assistant/agent, which also returns the currently-active agent id
+ * (used to render the "Active" pill).
  */
 export function AssistantTab() {
   const [agents, setAgents] = useState<AgentMeta[]>([]);
   const [activeAgentId, setActiveAgentId] = useState<string>("");
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const [catalog, setCatalog] = useState<Catalog>(EMPTY_CATALOG);
   const [dialogOpen, setDialogOpen] = useState(false);
 
   const load = useCallback(async () => {
@@ -22,6 +33,7 @@ export function AssistantTab() {
       const active: string = res.active ?? "";
       setAgents(list);
       setActiveAgentId(active);
+      setCatalog((res.catalog as Catalog | undefined) ?? EMPTY_CATALOG);
       // Default selection to the active agent, but preserve an explicit choice.
       setSelectedAgentId((prev) => prev ?? (active || list[0]?.id) ?? null);
     } catch {
@@ -52,7 +64,14 @@ export function AssistantTab() {
           <AgentDetails
             key={selectedAgent.id}
             agent={selectedAgent}
+            catalog={catalog}
             onSaved={load}
+            onDeleted={() => {
+              // Clearing the selection lets `load` re-seed it from the active
+              // (protected) agent, matching the pre-selection behavior.
+              setSelectedAgentId(null);
+              void load();
+            }}
           />
         ) : (
           <div className="flex flex-1 items-center justify-center p-6 text-xs text-white/40">
