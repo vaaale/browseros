@@ -1206,4 +1206,21 @@ async function main() {
   server.listen(PUBLIC_PORT, () => log(`listening on :${PUBLIC_PORT} (base branch: ${baseBranch}, base port: ${BASE_PORT}, preview pool: ${BASE_PORT + 1}-${BASE_PORT + POOL_SIZE}); control at /__supervisor`));
 }
 
+// Kill the Supervisor's OWNED servers (base + all previews) when it exits. Those
+// children are spawned `detached` (own process group) so stopProc can kill the
+// whole group — but detached also means they would OUTLIVE the Supervisor on
+// Ctrl+C. Reap them here. A reused (external) base has no owned proc and is left
+// alone (it's the user's own process).
+let shuttingDown = false;
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  log(`received ${signal} — stopping owned servers (base + previews)`);
+  try {
+    await Promise.all([stopProc(base), ...[...previews.values()].map((p) => stopProc(p))]);
+  } catch { /* best effort */ }
+  process.exit(0);
+}
+for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(sig, () => void shutdown(sig));
+
 main().catch((e) => { console.error("[supervisor] fatal:", e); process.exit(1); });
