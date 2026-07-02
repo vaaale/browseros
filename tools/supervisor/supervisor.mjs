@@ -226,15 +226,23 @@ async function provisionClone(target) {
 
 // ---------------------------------------------------------------- worktree + process lifecycle
 // Worktrees don't get node_modules (gitignored). A symlink is rejected by
-// Turbopack ("points out of the filesystem root"), so hardlink-clone the repo's
-// node_modules into the worktree — cheap on the same filesystem (shared inodes),
-// falling back to a full copy. Also carry env secrets (also gitignored).
+// Turbopack ("points out of the filesystem root"), so clone the repo's
+// node_modules into the worktree. Use copy-on-write (--reflink=auto): cheap on
+// filesystems that support it (btrfs/XFS/APFS) and a full copy elsewhere. NOT a
+// hardlink farm — hardlinks share inodes with the running base and every other
+// worktree, so an in-place npm/postinstall/patch write to an EXISTING
+// node_modules file would bleed across trees and could corrupt the live base at
+// runtime. CoW breaks the share on first write, so a preview's dependency change
+// stays isolated. Also carry env secrets (also gitignored).
 async function hydrateWorktree(wt) {
   const nm = path.join(wt, "node_modules");
+  const run = (args) => exec("cp", args, { maxBuffer: 64 * 1024 * 1024, timeout: 600_000 });
   try {
-    await exec("cp", ["-al", path.join(REPO, "node_modules"), nm], { maxBuffer: 64 * 1024 * 1024, timeout: 300_000 });
+    await run(["-a", "--reflink=auto", path.join(REPO, "node_modules"), nm]);
   } catch {
-    await exec("cp", ["-a", path.join(REPO, "node_modules"), nm], { maxBuffer: 64 * 1024 * 1024, timeout: 600_000 }).catch(() => {});
+    // `cp` without --reflink support (e.g. BSD/macOS): fall back to a plain copy.
+    await fs.rm(nm, { recursive: true, force: true }).catch(() => {});
+    await run(["-a", path.join(REPO, "node_modules"), nm]).catch(() => {});
   }
   for (const f of [".env", ".env.local"]) {
     await fs.copyFile(path.join(REPO, f), path.join(wt, f)).catch(() => {});
