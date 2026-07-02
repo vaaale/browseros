@@ -17,7 +17,7 @@ export function OSActions() {
   useCopilotReadable({
     description: "Current BrowserOS state: installed apps, open windows, and settings.",
     value: {
-      apps: apps.map((a) => ({ id: a.id, name: a.name })),
+      apps: apps.filter((a) => !a.hidden).map((a) => ({ id: a.id, name: a.name })),
       windows: windows.map((w) => ({ id: w.id, app: w.appId, title: w.title, minimized: w.minimized })),
       wallpaper: settings.wallpaper,
       wallpaperPresets: WALLPAPERS.map((w) => w.id),
@@ -40,7 +40,13 @@ export function OSActions() {
     name: "listApps",
     description: "List installed applications and their ids.",
     parameters: [],
-    handler: async () => JSON.stringify(store.getState().apps.map((a) => ({ id: a.id, name: a.name }))),
+    handler: async () =>
+      JSON.stringify(
+        store
+          .getState()
+          .apps.filter((a) => !a.hidden)
+          .map((a) => ({ id: a.id, name: a.name })),
+      ),
   });
 
   useCopilotAction({
@@ -72,6 +78,26 @@ export function OSActions() {
     handler: async ({ url }) => {
       const id = store.getState().launch("browser", { url });
       return id ? `Opened ${url} in the browser.` : "Could not open the browser.";
+    },
+  });
+
+  useCopilotAction({
+    name: "openPreview",
+    description:
+      "Open a sandboxed HTML preview window. Provide either `html` (a full HTML document) or `url` (a same-origin URL such as /api/fs?path=/foo.html). The preview runs with `sandbox=allow-scripts` and cannot reach BrowserOS APIs.",
+    parameters: [
+      { name: "html", type: "string", description: "Full HTML document to render.", required: false },
+      { name: "url", type: "string", description: "URL to load in the preview iframe.", required: false },
+      { name: "title", type: "string", description: "Optional window title.", required: false },
+    ],
+    handler: async ({ html, url, title }) => {
+      const params: Record<string, unknown> = {};
+      if (typeof html === "string" && html) params.html = html;
+      if (typeof url === "string" && url) params.url = url;
+      if (typeof title === "string" && title) params.title = title;
+      if (!params.html && !params.url) return "Provide either html or url.";
+      const id = store.getState().launch("html-viewer", params);
+      return id ? `Opened HTML preview (window ${id}).` : "Could not open the preview.";
     },
   });
 

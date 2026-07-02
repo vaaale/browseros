@@ -26,6 +26,7 @@ export const CAPABILITIES: Capability[] = [
   { id: "listApps", group: "OS", context: "action", description: "List installed applications." },
   { id: "changeWallpaper", group: "OS", context: "action", description: "Change the desktop wallpaper." },
   { id: "openWebPage", group: "OS", context: "action", description: "Open a URL in the web browser." },
+  { id: "openPreview", group: "OS", context: "action", description: "Open an HTML document or URL in a sandboxed preview window." },
 
   // Files (actions = user VFS; tools = sub-agent VFS)
   { id: "listFiles", group: "Files", context: "action", description: "List a virtual file system directory." },

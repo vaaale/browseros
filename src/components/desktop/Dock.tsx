@@ -23,7 +23,7 @@ export function Dock() {
   return (
     <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[100000] flex justify-center pb-3">
       <div data-testid="dock" className="pointer-events-auto flex select-none items-end gap-2 rounded-2xl border border-white/10 bg-black/30 px-3 py-2 shadow-2xl backdrop-blur-xl">
-        {apps.map((app) => (
+        {apps.filter((app) => !app.hidden).map((app) => (
           <button
             key={app.id}
             data-testid={`dock-${app.id}`}

@@ -14,6 +14,8 @@ export interface AppManifest {
   singleton?: boolean;
   /** Built-in apps ship with the OS; others are installed at runtime. */
   builtin?: boolean;
+  /** Hide from Dock/Desktop grid; launched programmatically via tools. */
+  hidden?: boolean;
   /** How the app renders. "builtin" uses a React component; "iframe" loads a URL. */
   kind?: "builtin" | "iframe";
   /** For iframe apps: the URL to load (e.g. /apps/<id>/). */

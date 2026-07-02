@@ -22,7 +22,7 @@ export function Desktop() {
       <Topbar />
 
       <div className="absolute left-3 top-11 flex select-none flex-col gap-3">
-        {apps.map((app) => (
+        {apps.filter((app) => !app.hidden).map((app) => (
           <button
             key={app.id}
             onDoubleClick={() => launch(app.id)}
