@@ -84,18 +84,39 @@ export function OSActions() {
   useCopilotAction({
     name: "openPreview",
     description:
-      "Open a sandboxed HTML preview window. Provide either `html` (a full HTML document) or `url` (a same-origin URL such as /api/fs?path=/foo.html). The preview runs with `sandbox=allow-scripts` and cannot reach BrowserOS APIs.",
+      "Open a sandboxed HTML preview window. Provide `html` (a full HTML document), `filePath` (an absolute VFS path such as /mockups/file.html), or `url` (a same-origin URL or an absolute VFS path — leading-`/` paths that are not `/api/*` are auto-rewritten to `/api/fs/raw?path=...`). The preview runs with `sandbox=allow-scripts` and cannot reach BrowserOS APIs.",
     parameters: [
       { name: "html", type: "string", description: "Full HTML document to render.", required: false },
-      { name: "url", type: "string", description: "URL to load in the preview iframe.", required: false },
+      {
+        name: "url",
+        type: "string",
+        description:
+          "URL to load in the preview iframe. Absolute VFS paths (e.g. /mockups/file.html) are auto-rewritten to /api/fs/raw?path=... ; already-qualified URLs like /api/fs/raw?path=... or https://... are used as-is.",
+        required: false,
+      },
+      {
+        name: "filePath",
+        type: "string",
+        description: "Absolute VFS path to an HTML file (e.g. /mockups/file.html). Auto-rewritten to /api/fs/raw?path=...",
+        required: false,
+      },
       { name: "title", type: "string", description: "Optional window title.", required: false },
     ],
-    handler: async ({ html, url, title }) => {
+    handler: async ({ html, url, filePath, title }) => {
+      const toRawUrl = (p: string) => `/api/fs/raw?path=${encodeURIComponent(p)}`;
+      const resolve = (value: string): string => {
+        if (value.startsWith("/") && !value.startsWith("/api/")) return toRawUrl(value);
+        return value;
+      };
       const params: Record<string, unknown> = {};
       if (typeof html === "string" && html) params.html = html;
-      if (typeof url === "string" && url) params.url = url;
+      else if (typeof filePath === "string" && filePath) {
+        params.url = filePath.startsWith("/") ? toRawUrl(filePath) : filePath;
+      } else if (typeof url === "string" && url) {
+        params.url = resolve(url);
+      }
       if (typeof title === "string" && title) params.title = title;
-      if (!params.html && !params.url) return "Provide either html or url.";
+      if (!params.html && !params.url) return "Provide either html, filePath, or url.";
       const id = store.getState().launch("html-viewer", params);
       return id ? `Opened HTML preview (window ${id}).` : "Could not open the preview.";
     },
