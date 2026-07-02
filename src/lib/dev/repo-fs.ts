@@ -21,7 +21,10 @@ const READ_DENY: RegExp[] = [
 
 // Writes are confined to source/content trees; never package.json, lockfiles,
 // next.config, .env, .git, etc. (which could break the build or leak secrets).
-const WRITE_ALLOW_PREFIXES = ["src/", "specs/", ".specify/", "public/", "docs/", "data/"];
+// Note: `specs/` is intentionally absent — since 018 specs live in external
+// stores (not the BOS source repo), the developer harness must not write there;
+// spec edits go through Build Studio's spec-fs / the spec stores instead.
+const WRITE_ALLOW_PREFIXES = ["src/", ".specify/", "public/", "docs/", "data/"];
 
 const MAX_READ_BYTES = 512 * 1024;
 const MAX_SEARCH_RESULTS = 200;

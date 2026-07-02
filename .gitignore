@@ -57,6 +57,12 @@ next-env.d.ts
 # of BOS source. Default location; override with BOS_APPS_DIR. Gitignored here
 # so the nested app repo never collides with the BOS source tree.
 /apps
+
+# spec stores container (018-external-spec-store) — each store under here is its
+# own git repo, seeded at runtime from seed/spec-store. Default location;
+# override with BOS_SPECS_ROOT. Gitignored so the nested store repos never
+# collide with the BOS source tree.
+/specs
 .memsearch
 
 # generated: built-in app registry (auto-discovered from src/apps/<id>/ by

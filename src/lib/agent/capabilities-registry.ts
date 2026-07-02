@@ -121,6 +121,8 @@ export const CAPABILITIES: Capability[] = [
   { id: "write_spec", group: "Specs", context: "tool", description: "Write a spec artifact (sub-agent)." },
   { id: "edit_spec", group: "Specs", context: "tool", description: "Edit a spec artifact (sub-agent)." },
   { id: "search_specs", group: "Specs", context: "tool", description: "Search spec artifacts (sub-agent)." },
+  { id: "read_template", group: "Specs", context: "tool", description: "Read a spec-kit template/command prompt (sub-agent)." },
+  { id: "list_templates", group: "Specs", context: "tool", description: "List spec-kit templates (sub-agent)." },
 
   // Build Studio app control (registered in the BS app's embedded chat).
   { id: "openSpecArtifact", group: "Build Studio", context: "action", description: "Open a spec artifact in the Build Studio viewer." },

@@ -61,8 +61,9 @@ function phaseClass(state: PipelinePhase["state"]): string {
   return "border-white/10 bg-white/5 text-white/30";
 }
 
+// A feature is identified by its store-prefixed path prefix `<storeId>/<feature>`.
 function featureIdOf(path: string): string {
-  return path.replace(/^specs\//, "").split("/")[0];
+  return path.split("/").slice(0, 2).join("/");
 }
 
 function PhaseStrip({ phases }: { phases: PipelinePhase[] }) {
@@ -108,7 +109,7 @@ export default function BuildStudioApp() {
     } catch {}
   }, [rightWidth]);
 
-  const specById = useMemo(() => new Map(specs.map((s) => [s.id, s])), [specs]);
+  const specByPath = useMemo(() => new Map(specs.map((s) => [s.path, s])), [specs]);
 
   const loadTree = useCallback(() => {
     fetch("/api/specs")
@@ -181,7 +182,7 @@ export default function BuildStudioApp() {
     }
   }, [activePath, draft, loadTree]);
 
-  const activeSpec = activeFeature ? specById.get(activeFeature) : undefined;
+  const activeSpec = activeFeature ? specByPath.get(activeFeature) : undefined;
   const loading = Boolean(activePath) && loadedKey !== activePath;
 
   return (
@@ -204,55 +205,67 @@ export default function BuildStudioApp() {
           {tree.length === 0 ? (
             <p className="px-3 py-2 text-xs text-white/40">No specs yet. Describe a feature in the chat to create one.</p>
           ) : (
-            tree.map((node) => {
-              if (node.type === "feature") {
-                const isCollapsed = collapsed.has(node.path);
-                const spec = specById.get(node.name);
-                return (
-                  <div key={node.path}>
-                    <button
-                      onClick={() => {
-                        setActiveFeature(node.name);
-                        toggle(node.path);
-                      }}
-                      className={`flex w-full items-center gap-1 rounded px-2 py-1 text-left text-xs font-medium hover:bg-white/5 ${
-                        activeFeature === node.name && !activePath ? "text-white" : "text-white/70"
-                      }`}
-                    >
-                      {isCollapsed ? <ChevronRight size={12} className="shrink-0" /> : <ChevronDown size={12} className="shrink-0" />}
-                      <FolderTree size={12} className="shrink-0 opacity-60" />
-                      <span className="truncate">{spec?.title ?? node.name}</span>
-                    </button>
-                    {!isCollapsed &&
-                      node.children?.map((child) => (
+            tree.map((group) => (
+              <div key={group.path} className="mb-1.5">
+                <div className="flex items-center gap-1.5 px-2 pb-0.5 pt-1 text-[10px] font-semibold uppercase tracking-wide text-white/35">
+                  <span className="truncate">{group.label ?? group.name}</span>
+                  {group.requiresPromote && (
+                    <span title="Edits here require Promote" className="rounded bg-white/10 px-1 text-[9px] normal-case text-white/40">
+                      promote
+                    </span>
+                  )}
+                </div>
+                {group.children?.map((node) => {
+                  if (node.type === "feature") {
+                    const isCollapsed = collapsed.has(node.path);
+                    const spec = specByPath.get(node.path);
+                    return (
+                      <div key={node.path}>
                         <button
-                          key={child.path}
-                          onClick={() => openFile(child.path)}
-                          style={{ paddingLeft: 30 }}
-                          className={`flex w-full items-center gap-1.5 rounded px-2 py-1 text-left text-xs transition-colors ${
-                            activePath === child.path ? "bg-white/15 text-white" : "text-white/65 hover:bg-white/10"
+                          onClick={() => {
+                            setActiveFeature(node.path);
+                            toggle(node.path);
+                          }}
+                          className={`flex w-full items-center gap-1 rounded px-2 py-1 text-left text-xs font-medium hover:bg-white/5 ${
+                            activeFeature === node.path && !activePath ? "text-white" : "text-white/70"
                           }`}
                         >
-                          <FileText size={12} className="shrink-0 opacity-60" />
-                          <span className="truncate">{child.name}</span>
+                          {isCollapsed ? <ChevronRight size={12} className="shrink-0" /> : <ChevronDown size={12} className="shrink-0" />}
+                          <FolderTree size={12} className="shrink-0 opacity-60" />
+                          <span className="truncate">{spec?.title ?? node.name}</span>
                         </button>
-                      ))}
-                  </div>
-                );
-              }
-              return (
-                <button
-                  key={node.path}
-                  onClick={() => openFile(node.path)}
-                  className={`flex w-full items-center gap-1.5 rounded px-2 py-1 text-left text-xs transition-colors ${
-                    activePath === node.path ? "bg-white/15 text-white" : "text-white/65 hover:bg-white/10"
-                  }`}
-                >
-                  <FileText size={12} className="shrink-0 opacity-60" />
-                  <span className="truncate">{node.name}</span>
-                </button>
-              );
-            })
+                        {!isCollapsed &&
+                          node.children?.map((child) => (
+                            <button
+                              key={child.path}
+                              onClick={() => openFile(child.path)}
+                              style={{ paddingLeft: 30 }}
+                              className={`flex w-full items-center gap-1.5 rounded px-2 py-1 text-left text-xs transition-colors ${
+                                activePath === child.path ? "bg-white/15 text-white" : "text-white/65 hover:bg-white/10"
+                              }`}
+                            >
+                              <FileText size={12} className="shrink-0 opacity-60" />
+                              <span className="truncate">{child.name}</span>
+                            </button>
+                          ))}
+                      </div>
+                    );
+                  }
+                  return (
+                    <button
+                      key={node.path}
+                      onClick={() => openFile(node.path)}
+                      className={`flex w-full items-center gap-1.5 rounded px-2 py-1 text-left text-xs transition-colors ${
+                        activePath === node.path ? "bg-white/15 text-white" : "text-white/65 hover:bg-white/10"
+                      }`}
+                    >
+                      <FileText size={12} className="shrink-0 opacity-60" />
+                      <span className="truncate">{node.name}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            ))
           )}
         </div>
       </nav>

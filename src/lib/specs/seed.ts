@@ -80,3 +80,11 @@ export async function ensureStores(): Promise<void> {
   await ensureSystemStore(path.join(root, SYSTEM_STORE_ID));
   await ensureUserStore(path.join(root, USER_STORE_ID));
 }
+
+// Run the seed at most once per server process — cheap to await everywhere the
+// stores are needed (spec-fs, the API) without repeating git work each call.
+let ensured: Promise<void> | null = null;
+export function ensureStoresOnce(): Promise<void> {
+  if (!ensured) ensured = ensureStores().catch((e) => { ensured = null; throw e; });
+  return ensured;
+}

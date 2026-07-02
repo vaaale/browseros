@@ -27,7 +27,7 @@ function flattenFiles(nodes: TreeNode[] = []): string[] {
 export function SpecActions() {
   useCopilotAction({
     name: "listSpecs",
-    description: "List specification artifacts under specs/ (and .specify/): feature folders and their files.",
+    description: "List specification artifacts across the spec stores (e.g. 'bos-system-specs', 'user-specs'): feature folders and their files. Paths returned are store-prefixed (`<storeId>/<feature>/<file>`).",
     parameters: [],
     handler: async () => {
       const res = await fetch("/api/specs").then((r) => r.json());
@@ -39,8 +39,8 @@ export function SpecActions() {
 
   useCopilotAction({
     name: "readSpec",
-    description: "Read a specification artifact by path, e.g. 'specs/016-unified-agents/spec.md' or '.specify/memory/constitution.md'.",
-    parameters: [{ name: "path", type: "string", description: "Artifact path under specs/ or .specify/", required: true }],
+    description: "Read a specification artifact by its STORE-PREFIXED path, e.g. 'bos-system-specs/016-unified-agents/spec.md' or 'bos-system-specs/.specify/memory/constitution.md'.",
+    parameters: [{ name: "path", type: "string", description: "Store-prefixed artifact path, e.g. 'user-specs/003-x/spec.md'", required: true }],
     handler: async ({ path }) => {
       const res = await fetch(`/api/specs?path=${encodeURIComponent(String(path ?? ""))}`).then((r) => r.json());
       return res.error ? `Error: ${res.error}` : String(res.content ?? "");
@@ -49,9 +49,9 @@ export function SpecActions() {
 
   useCopilotAction({
     name: "writeSpec",
-    description: "Create or overwrite a specification artifact (jailed to specs/ and .specify/). Provide the FULL file content.",
+    description: "Create or overwrite a specification artifact by STORE-PREFIXED path. New specs go in the user store; system-store edits require Promote. Provide the FULL file content.",
     parameters: [
-      { name: "path", type: "string", description: "Artifact path under specs/ or .specify/", required: true },
+      { name: "path", type: "string", description: "Store-prefixed artifact path, e.g. 'user-specs/003-x/spec.md'", required: true },
       { name: "content", type: "string", description: "Full file content", required: true },
     ],
     handler: async ({ path, content }) => {

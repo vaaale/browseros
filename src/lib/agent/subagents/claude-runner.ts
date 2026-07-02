@@ -51,7 +51,6 @@ function isBosSourceTask(task: string): boolean {
     "server logic",
     "gitlab issue",
     "issue #",
-    "specs/",
     "docs/dev/",
   ].some((needle) => t.includes(needle)) || /\bsrc\/(app|apps|components|lib|os|store)\//.test(t);
 }

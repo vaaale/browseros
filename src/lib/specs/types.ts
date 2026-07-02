@@ -35,20 +35,29 @@ export interface Artifact {
 export interface Specification {
   /** Feature folder name, e.g. "001-build-studio". */
   id: string;
+  /** The spec store this feature lives in (its directory id under the container root). */
+  store: string;
   /** Derived from spec.md's H1 or the folder name. */
   title: string;
-  /** specs-relative path, e.g. "001-build-studio". */
+  /** Store-prefixed path, e.g. "bos-system-specs/001-build-studio". */
   path: string;
   artifacts: Artifact[];
   phases: PipelinePhase[];
   taskProgress?: { done: number; total: number };
 }
 
+export type StoreOwner = "system" | "user" | "marketplace";
+
 export interface SpecTreeNode {
-  type: "feature" | "file" | "dir";
+  type: "group" | "feature" | "file" | "dir";
   name: string;
-  /** specs-relative path. */
+  /** Store-prefixed path (e.g. "bos-system-specs/001-build-studio/spec.md"); a group's path is its store id. */
   path: string;
+  /** For a "group" node: the store's human label + policy flags. */
+  label?: string;
+  owner?: StoreOwner;
+  writable?: boolean;
+  requiresPromote?: boolean;
   children?: SpecTreeNode[];
 }
 

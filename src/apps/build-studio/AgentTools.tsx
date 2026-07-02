@@ -18,12 +18,12 @@ export function BuildStudioAgentTools({
   useCopilotAction({
     name: "openSpecArtifact",
     description:
-      "Open a specification artifact in the Build Studio viewer (the center pane) so the user can see it. Call this after you create or edit a spec, or when you reference one in the conversation. The path is under specs/ or .specify/, e.g. 'specs/013-build-studio-agentic/spec.md'.",
+      "Open a specification artifact in the Build Studio viewer (the center pane) so the user can see it. Call this after you create or edit a spec, or when you reference one in the conversation. The path is STORE-PREFIXED, e.g. 'bos-system-specs/013-build-studio-agentic/spec.md'.",
     parameters: [
       {
         name: "path",
         type: "string",
-        description: "Artifact path, e.g. 'specs/013-build-studio-agentic/spec.md' or '.specify/memory/constitution.md'",
+        description: "Store-prefixed artifact path, e.g. 'bos-system-specs/013-build-studio-agentic/spec.md'",
         required: true,
       },
     ],

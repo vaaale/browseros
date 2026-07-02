@@ -125,22 +125,23 @@ export const DEV_TOOLS: Record<string, LlmTool> = {
   },
 };
 
-// Spec-scoped tools for Build Studio: read/write specification artifacts confined
-// to specs/ + .specify/ (never BOS source). Opt-in like DEV_TOOLS — an agent must
-// list them in its `tools`.
+// Spec-scoped tools for Build Studio. Specs live in external stores (018): a
+// path is STORE-PREFIXED `<storeId>/<rel>` (list stores with an empty path).
+// Writes go to the addressed store — refused for read-only stores; system-store
+// writes accumulate on a candidate branch until promoted. Opt-in like DEV_TOOLS.
 export const SPEC_TOOLS: Record<string, LlmTool> = {
   list_specs: {
-    description: "List entries in the spec tree (under specs/ or .specify/). Defaults to 'specs'.",
-    parameters: { type: "object", properties: { path: { type: "string", description: "Dir under specs/ or .specify/, defaults to 'specs'" } } },
-    execute: async (input) => JSON.stringify(await specfs.listDir((input.path as string) || "specs")),
+    description: "List entries in the spec stores. An empty/omitted path lists the available stores (e.g. 'bos-system-specs', 'user-specs'); a store-prefixed path like 'user-specs/003-my-feature' lists inside a store.",
+    parameters: { type: "object", properties: { path: { type: "string", description: "Store-prefixed dir, e.g. 'user-specs' or 'user-specs/003-x'. Empty = list stores." } } },
+    execute: async (input) => JSON.stringify(await specfs.listDir((input.path as string) || "")),
   },
   read_spec: {
-    description: "Read a specification artifact or template (path under specs/ or .specify/, e.g. 'specs/001-build-studio/spec.md' or '.specify/templates/spec-template.md').",
+    description: "Read a specification artifact by its STORE-PREFIXED path, e.g. 'bos-system-specs/001-build-studio/spec.md'. For spec-kit templates use read_template instead.",
     parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
     execute: async (input) => specfs.readFile(input.path as string),
   },
   write_spec: {
-    description: "Create or overwrite a specification artifact (path under specs/ or .specify/ ONLY). Build the body from the matching template in .specify/templates.",
+    description: "Create or overwrite a specification artifact by STORE-PREFIXED path (e.g. 'user-specs/003-x/spec.md'). New user specs go in the user store; system specs require promote. Build the body from a template via read_template.",
     parameters: {
       type: "object",
       properties: { path: { type: "string" }, content: { type: "string" } },
@@ -149,7 +150,7 @@ export const SPEC_TOOLS: Record<string, LlmTool> = {
     execute: async (input) => `Wrote ${await specfs.writeFile(input.path as string, (input.content as string) ?? "")}`,
   },
   edit_spec: {
-    description: "Replace a unique snippet of text in a spec artifact (the search text must occur exactly once).",
+    description: "Replace a unique snippet of text in a spec artifact (STORE-PREFIXED path; the search text must occur exactly once).",
     parameters: {
       type: "object",
       properties: { path: { type: "string" }, find: { type: "string" }, replace: { type: "string" } },
@@ -158,13 +159,23 @@ export const SPEC_TOOLS: Record<string, LlmTool> = {
     execute: async (input) => `Edited ${await specfs.editFile(input.path as string, input.find as string, (input.replace as string) ?? "")}`,
   },
   search_specs: {
-    description: "Search the spec tree for a string. Returns matching path:line:text. Optionally restrict to a subdirectory.",
+    description: "Search spec content across all stores for a string. Returns matching path:line:text. Optionally restrict to a store-prefixed subdirectory.",
     parameters: {
       type: "object",
-      properties: { query: { type: "string" }, dir: { type: "string", description: "Subdir to search, defaults to 'specs'" } },
+      properties: { query: { type: "string" }, dir: { type: "string", description: "Store-prefixed subdir to search (e.g. 'user-specs'); omit to search all stores." } },
       required: ["query"],
     },
     execute: async (input) => JSON.stringify(await specfs.search(input.query as string, { dir: input.dir as string | undefined })),
+  },
+  read_template: {
+    description: "Read a spec-kit template or command prompt from the engine at .specify/templates (e.g. 'spec-template.md', 'plan-template.md', 'commands/specify.md'). Read-only.",
+    parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+    execute: async (input) => specfs.readTemplate(input.path as string),
+  },
+  list_templates: {
+    description: "List available spec-kit templates/command prompts under .specify/templates (optionally a subdir like 'commands').",
+    parameters: { type: "object", properties: { path: { type: "string" } } },
+    execute: async (input) => JSON.stringify(await specfs.listTemplates((input.path as string) || "")),
   },
 };
 

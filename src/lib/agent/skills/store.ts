@@ -111,53 +111,54 @@ const SEED: Omit<Skill, "id">[] = [
       "When authoring, refining, planning, analyzing, or implementing a BOS feature through specs — i.e. running any spec-kit step (constitution, specify, clarify, plan, tasks, analyze, implement, converge).",
     pinned: true,
     content: [
-      "The Build Studio skill drives the spec-kit pipeline. BOS adopts spec-kit literally: governing principles live in .specify/memory/constitution.md; per-feature artifacts live in specs/<NNN-feature>/ (spec.md, plan.md, tasks.md, ...); blank templates live in .specify/templates/ and the authoritative command prompts in .specify/templates/commands/.",
+      "The Build Studio skill drives the spec-kit pipeline. Specs live in external git-backed STORES under BOS_SPECS_ROOT — a BOS-owned system store (id 'bos-system-specs') and your writable 'user-specs' store; discover them with list_specs (empty path). Paths are STORE-PREFIXED `<storeId>/<rel>`. Governing principles live in the system store at bos-system-specs/.specify/memory/constitution.md; per-feature artifacts live in <store>/<NNN-feature>/ (spec.md, plan.md, tasks.md, ...). Blank templates and the authoritative command prompts are the spec-kit ENGINE in BOS source at .specify/templates — read them with read_template / list_templates.",
       "",
       "Pipeline (run the step the user asks for; each builds on the previous):",
-      "1. constitution — establish/update project principles (.specify/memory/constitution.md).",
-      "2. specify — turn an idea into specs/<NNN-feature>/spec.md.",
+      "1. constitution — establish/update project principles (bos-system-specs/.specify/memory/constitution.md).",
+      "2. specify — turn an idea into <store>/<NNN-feature>/spec.md (new specs go in user-specs).",
       "3. clarify — resolve ambiguities; append a '## Clarifications' section to spec.md.",
       "4. plan — produce plan.md (+ research/data-model/contracts when warranted).",
       "5. tasks — produce tasks.md (an ordered, dependency-marked checklist).",
       "6. analyze — cross-artifact consistency check (report only).",
       "7. implement — delegate to the Developer to build the feature.",
-      "8. converge — assess code vs spec; append remaining work / record drift in specs/discrepancies.md.",
+      "8. converge — assess code vs spec; record drift in bos-system-specs/discrepancies.md.",
       "",
       "How to run any step:",
       "- Load the matching reference (references/<step>.md) and follow it.",
-      "- Read the authoritative command prompt and template with read_spec (.specify/templates/commands/<step>.md and .specify/templates/<artifact>-template.md), then write the artifact with write_spec / edit_spec. All your file tools are jailed to specs/ and .specify/.",
+      "- Read the command prompt and template with read_template (commands/<step>.md and <artifact>-template.md), then write the artifact with write_spec / edit_spec using a STORE-PREFIXED path. Your file tools only reach the spec stores (never BOS source).",
       "",
       "Golden rules:",
       "- The spec is the source of truth; never get ahead of an agreed spec.",
       "- You NEVER write BOS source. The `implement` step is ALWAYS delegate_to_developer.",
-      "- Keep specs and docs in sync; record drift in specs/discrepancies.md.",
-      "- New feature folders are numbered NNN-slug (next = highest existing number + 1).",
+      "- New specs you author go in the user store (user-specs). Editing a system spec (bos-system-specs) accumulates on a candidate branch and requires Promote; changing the constitution needs extra care.",
+      "- Keep specs and docs in sync; record drift in bos-system-specs/discrepancies.md.",
+      "- New feature folders are numbered NNN-slug (next = highest existing number + 1 within the store).",
     ].join("\n"),
     references: [
       {
         name: "constitution.md",
         content:
-          "Step: constitution. Read .specify/templates/commands/constitution.md and .specify/templates/constitution-template.md. Create or update .specify/memory/constitution.md with the project's governing principles, and bump the version + amended date line. This is global, not per-feature.",
+          "Step: constitution. Read commands/constitution.md and constitution-template.md with read_template. Create or update the constitution at bos-system-specs/.specify/memory/constitution.md (write_spec/edit_spec) and bump the version + amended date line. This is global, not per-feature; it is a system-store edit, so it accumulates on the candidate branch until promoted — treat constitution changes with extra care.",
       },
       {
         name: "specify.md",
         content:
-          "Step: specify. Choose a feature id with the NNN-slug convention (list_specs on 'specs' to find the highest existing number; next = +1). Read .specify/templates/commands/specify.md and .specify/templates/spec-template.md, then write specs/<id>/spec.md following the template: prioritized, independently-testable user stories; functional requirements; measurable success criteria. Mark unknowns with [NEEDS CLARIFICATION].",
+          "Step: specify. Choose a feature id with the NNN-slug convention (list_specs on 'user-specs' to find the highest existing number; next = +1). Read commands/specify.md and spec-template.md with read_template, then write user-specs/<id>/spec.md following the template: prioritized, independently-testable user stories; functional requirements; measurable success criteria. Mark unknowns with [NEEDS CLARIFICATION].",
       },
       {
         name: "clarify.md",
         content:
-          "Step: clarify. Read specs/<id>/spec.md; find ambiguities and [NEEDS CLARIFICATION] markers; ask the user concrete questions. Then append a '## Clarifications' section containing a '### Session <date>' list of Q→A, and update the affected requirements with edit_spec.",
+          "Step: clarify. Read <store>/<id>/spec.md; find ambiguities and [NEEDS CLARIFICATION] markers; ask the user concrete questions. Then append a '## Clarifications' section containing a '### Session <date>' list of Q→A, and update the affected requirements with edit_spec.",
       },
       {
         name: "plan.md",
         content:
-          "Step: plan. Read the spec plus .specify/templates/commands/plan.md and .specify/templates/plan-template.md. Write specs/<id>/plan.md: technical context; a Constitution Check against .specify/memory/constitution.md; concrete project structure (real file paths); and design notes. Add research.md / data-model.md / contracts/ only when warranted.",
+          "Step: plan. Read the spec plus commands/plan.md and plan-template.md via read_template. Write <store>/<id>/plan.md: technical context; a Constitution Check against bos-system-specs/.specify/memory/constitution.md; concrete project structure (real file paths); and design notes. Add research.md / data-model.md / contracts/ only when warranted.",
       },
       {
         name: "tasks.md",
         content:
-          "Step: tasks. Read the spec and plan plus .specify/templates/commands/tasks.md and .specify/templates/tasks-template.md. Write specs/<id>/tasks.md: tasks grouped by user story, dependency-ordered, [P] for parallelizable, with exact file paths.",
+          "Step: tasks. Read the spec and plan plus commands/tasks.md and tasks-template.md via read_template. Write <store>/<id>/tasks.md: tasks grouped by user story, dependency-ordered, [P] for parallelizable, with exact file paths.",
       },
       {
         name: "analyze.md",
@@ -167,12 +168,12 @@ const SEED: Omit<Skill, "id">[] = [
       {
         name: "implement.md",
         content:
-          "Step: implement. Ensure spec.md, plan.md and tasks.md exist, and ensure an Active feature branch is selected for this conversation before delegating. Call delegate_to_developer with a complete task: the feature path (specs/<id>), a summary of the spec and plan, the tasks to execute, and acceptance criteria; instruct the Developer to keep edits on that feature branch, run typecheck/lint, and update docs. You never write code yourself — relay the Developer's result and reflect updated status.",
+          "Step: implement. Ensure spec.md, plan.md and tasks.md exist, and ensure an Active feature branch is selected for this conversation before delegating. Call delegate_to_developer with a complete task: the store-prefixed feature path (<store>/<id>), a summary of the spec and plan, the tasks to execute, and acceptance criteria; note the store is mounted read-only in the Developer's worktree at that same path. Instruct the Developer to keep edits on that feature branch, run typecheck/lint, and update docs. You never write code yourself — relay the Developer's result and reflect updated status.",
       },
       {
         name: "converge.md",
         content:
-          "Step: converge. Compare the implemented code against spec/plan/tasks (delegate investigation to the Developer if needed). Append any remaining work to tasks.md, and record divergences between code and spec in specs/discrepancies.md.",
+          "Step: converge. Compare the implemented code against spec/plan/tasks (delegate investigation to the Developer if needed). Append any remaining work to tasks.md, and record divergences between code and spec in bos-system-specs/discrepancies.md.",
       },
     ],
   },

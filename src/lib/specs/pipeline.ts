@@ -1,5 +1,6 @@
 import "server-only";
 import * as specfs from "@/lib/dev/spec-fs";
+import { listStores } from "@/lib/specs/stores";
 import {
   ARTIFACT_FILES,
   type Artifact,
@@ -10,7 +11,11 @@ import {
   type Task,
 } from "./types";
 
-const CONSTITUTION = ".specify/memory/constitution.md";
+// Post-018 specs live in external stores (one git repo per store) under
+// BOS_SPECS_ROOT. Paths here are STORE-PREFIXED: `<storeId>/<featureId>/...`.
+// The constitution + discrepancies are content of the system store.
+
+const CONSTITUTION_REL = ".specify/memory/constitution.md";
 
 async function readOr(p: string, fallback = ""): Promise<string> {
   try {
@@ -39,21 +44,33 @@ function titleFromSpec(specBody: string, fallback: string): string {
   return h1[1].replace(/^Feature Specification:\s*/i, "").trim() || fallback;
 }
 
+/** The store that owns system-level artifacts (constitution, discrepancies). */
+async function systemStoreId(): Promise<string | undefined> {
+  const stores = await listStores();
+  return (stores.find((s) => s.owner === "system") ?? stores[0])?.id;
+}
+
 let constitutionReady: boolean | undefined;
 async function hasConstitution(): Promise<boolean> {
   if (constitutionReady !== undefined) return constitutionReady;
-  const body = await readOr(CONSTITUTION);
+  const sid = await systemStoreId();
+  const body = sid ? await readOr(`${sid}/${CONSTITUTION_REL}`) : "";
   // "Ready" = present and not the placeholder template (which is full of [TOKENS]).
   constitutionReady = body.length > 0 && !body.includes("[PROJECT_NAME]");
   return constitutionReady;
 }
 
-async function derivePhases(featurePath: string, artifactNames: Set<string>): Promise<PipelinePhase[]> {
+async function derivePhases(
+  featurePath: string,
+  featureId: string,
+  artifactNames: Set<string>,
+): Promise<PipelinePhase[]> {
   const spec = artifactNames.has("spec.md") ? await readOr(`${featurePath}/spec.md`) : "";
   const tasksBody = artifactNames.has("tasks.md") ? await readOr(`${featurePath}/tasks.md`) : "";
   const tasks = parseTasks(tasksBody);
   const done = tasks.filter((t) => t.done).length;
-  const discrepancies = await readOr("specs/discrepancies.md");
+  const sid = await systemStoreId();
+  const discrepancies = sid ? await readOr(`${sid}/discrepancies.md`) : "";
 
   const phase = (id: PhaseId, state: PipelinePhase["state"]): PipelinePhase => ({ id, state });
 
@@ -68,12 +85,12 @@ async function derivePhases(featurePath: string, artifactNames: Set<string>): Pr
     phase("tasks", artifactNames.has("tasks.md") ? "done" : artifactNames.has("plan.md") ? "pending" : "na"),
     phase("analyze", "na"),
     phase("implement", implementState),
-    phase("converge", discrepancies.includes(featurePath.replace(/^specs\//, "")) ? "done" : "na"),
+    phase("converge", discrepancies.includes(featureId) ? "done" : "na"),
   ];
 }
 
-async function buildSpecification(id: string): Promise<Specification> {
-  const featurePath = `specs/${id}`;
+async function buildSpecification(storeId: string, id: string): Promise<Specification> {
+  const featurePath = `${storeId}/${id}`;
   const entries = await specfs.listDir(featurePath).catch(() => []);
   const artifacts: Artifact[] = entries
     .filter((e) => e.type === "file" && e.name.endsWith(".md"))
@@ -86,10 +103,11 @@ async function buildSpecification(id: string): Promise<Specification> {
 
   return {
     id,
+    store: storeId,
     title: titleFromSpec(specBody, id),
     path: featurePath,
     artifacts: artifacts.sort(byArtifactOrder),
-    phases: await derivePhases(featurePath, artifactNames),
+    phases: await derivePhases(featurePath, id, artifactNames),
     taskProgress: tasks.length ? { done: tasks.filter((t) => t.done).length, total: tasks.length } : undefined,
   };
 }
@@ -102,51 +120,77 @@ function byArtifactOrder(a: Artifact, b: Artifact): number {
   return a.name.localeCompare(b.name);
 }
 
-/** All feature folders under specs/, each with derived pipeline status. */
+/** All feature folders across all stores, each with derived pipeline status. */
 export async function listSpecifications(): Promise<Specification[]> {
   constitutionReady = undefined; // re-evaluate per request
-  const top = await specfs.listDir("specs").catch(() => []);
-  const features = top.filter((e) => e.type === "dir");
   const specs: Specification[] = [];
-  for (const f of features) specs.push(await buildSpecification(f.name));
-  return specs.sort((a, b) => a.id.localeCompare(b.id));
-}
-
-export async function getSpecification(id: string): Promise<Specification | undefined> {
-  const safe = id.replace(/[^a-zA-Z0-9._-]/g, "");
-  if (!safe || !(await specfs.exists(`specs/${safe}`))) return undefined;
-  constitutionReady = undefined;
-  return buildSpecification(safe);
-}
-
-/** specs/ as a tree (feature folders flagged), for the app's left panel. */
-export async function specTree(): Promise<SpecTreeNode[]> {
-  const top = await specfs.listDir("specs").catch(() => []);
-  const nodes: SpecTreeNode[] = [];
-  for (const e of top) {
-    if (e.type === "dir") {
-      const children = (await specfs.listDir(e.path).catch(() => []))
-        .filter((c) => c.type === "file")
-        .map<SpecTreeNode>((c) => ({ type: "file", name: c.name, path: c.path }));
-      nodes.push({ type: "feature", name: e.name, path: e.path, children });
-    } else {
-      nodes.push({ type: "file", name: e.name, path: e.path });
+  for (const store of await listStores()) {
+    const top = await specfs.listDir(store.id).catch(() => []);
+    for (const f of top.filter((e) => e.type === "dir")) {
+      specs.push(await buildSpecification(store.id, f.name));
     }
   }
-  return nodes;
+  return specs.sort((a, b) => (a.store === b.store ? a.id.localeCompare(b.id) : a.store.localeCompare(b.store)));
+}
+
+/** Fetch one specification by its store-prefixed path `<storeId>/<featureId>`. */
+export async function getSpecification(fullPath: string): Promise<Specification | undefined> {
+  const safe = fullPath.replace(/[^a-zA-Z0-9._/-]/g, "");
+  const [storeId, id] = safe.split("/");
+  if (!storeId || !id) return undefined;
+  if (!(await specfs.exists(`${storeId}/${id}`))) return undefined;
+  constitutionReady = undefined;
+  return buildSpecification(storeId, id);
+}
+
+/** Every store as a group node (feature folders + loose files as children). */
+export async function specTree(): Promise<SpecTreeNode[]> {
+  const groups: SpecTreeNode[] = [];
+  for (const store of await listStores()) {
+    const top = await specfs.listDir(store.id).catch(() => []);
+    const children: SpecTreeNode[] = [];
+    for (const e of top) {
+      if (e.type === "dir") {
+        const fileChildren = (await specfs.listDir(e.path).catch(() => []))
+          .filter((c) => c.type === "file")
+          .map<SpecTreeNode>((c) => ({ type: "file", name: c.name, path: c.path }));
+        children.push({ type: "feature", name: e.name, path: e.path, children: fileChildren });
+      } else {
+        children.push({ type: "file", name: e.name, path: e.path });
+      }
+    }
+    groups.push({
+      type: "group",
+      name: store.id,
+      label: store.label,
+      path: store.id,
+      owner: store.owner,
+      writable: store.writable,
+      requiresPromote: store.requiresPromote,
+      children,
+    });
+  }
+  return groups;
 }
 
 function slugify(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 40) || "feature";
+  return (
+    name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 40) || "feature"
+  );
 }
 
-/** Next spec-kit feature id: `NNN-slug`, where NNN = max existing + 1. */
-export async function nextFeatureId(name: string): Promise<string> {
-  const top = await specfs.listDir("specs").catch(() => []);
+/** Next spec-kit feature id in a store: `NNN-slug`, NNN = max existing + 1.
+ *  Defaults to the writable user store. Returns `<storeId>/<NNN-slug>`. */
+export async function nextFeatureId(name: string, storeId?: string): Promise<string> {
+  const stores = await listStores();
+  const target = storeId
+    ? stores.find((s) => s.id === storeId)
+    : stores.find((s) => s.owner === "user" && s.writable) ?? stores.find((s) => s.writable);
+  const top = target ? await specfs.listDir(target.id).catch(() => []) : [];
   let max = 0;
   const taken = new Set<string>();
   for (const e of top) {
@@ -160,5 +204,5 @@ export async function nextFeatureId(name: string): Promise<string> {
   let id = `${num}-${slug}`;
   let suffix = 2;
   while (taken.has(id)) id = `${num}-${slug}-${suffix++}`;
-  return id;
+  return target ? `${target.id}/${id}` : id;
 }
