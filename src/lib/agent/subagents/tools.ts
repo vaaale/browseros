@@ -7,8 +7,11 @@ import { runDevCommand, ALLOWED_COMMANDS } from "@/lib/dev/run-command";
 import * as git from "@/lib/system/git";
 import * as specfs from "@/lib/dev/spec-fs";
 import type { LlmTool } from "@/lib/agent/llm";
+import { SCHEDULER_TOOLS } from "@/lib/scheduler/agent-tools";
 
-// Base tools every sub-agent may use: the sandboxed virtual file system + web.
+// Base tools every sub-agent may use: the sandboxed virtual file system, web,
+// and scheduler operations (spread in at module bottom to keep this literal
+// small; scheduler tools live in their own module).
 export const SUBAGENT_TOOLS: Record<string, LlmTool> = {
   list_files: {
     description: "List entries in a virtual file system directory.",
@@ -62,6 +65,10 @@ export const SUBAGENT_TOOLS: Record<string, LlmTool> = {
       blocked_domains: input.blocked_domains as string[] | undefined,
     })),
   },
+  // Scheduler operations — safe (sandboxed under data/scheduler) so they're part
+  // of every sub-agent's base toolkit, letting the assistant help users schedule
+  // tasks via natural conversation with no capability config needed.
+  ...SCHEDULER_TOOLS,
 };
 
 // Repo-scoped developer tools: these operate on the actual BrowserOS source so a
@@ -183,6 +190,10 @@ export const SPEC_TOOLS: Record<string, LlmTool> = {
 // implementation is built per-run in the sub-agent runner (it needs the parent
 // event stream + a depth guard), so it is referenced here only by id.
 export const DELEGATE_TO_DEVELOPER = "delegate_to_developer";
+
+// Re-export scheduler tools for direct access (e.g. UI showing the tool set).
+// They are already merged into SUBAGENT_TOOLS above, so ALL_TOOLS picks them up.
+export { SCHEDULER_TOOLS };
 
 const ALL_TOOLS: Record<string, LlmTool> = { ...SUBAGENT_TOOLS, ...DEV_TOOLS, ...SPEC_TOOLS };
 
