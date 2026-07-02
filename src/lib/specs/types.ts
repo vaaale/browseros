@@ -58,6 +58,8 @@ export interface SpecTreeNode {
   owner?: StoreOwner;
   writable?: boolean;
   requiresPromote?: boolean;
+  /** For a promote-gated "group": whether an unpromoted spec candidate exists. */
+  hasCandidate?: boolean;
   children?: SpecTreeNode[];
 }
 

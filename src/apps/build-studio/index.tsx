@@ -160,6 +160,30 @@ export default function BuildStudioApp() {
     setActiveFeature(featureIdOf(path));
   }, []);
 
+  const runStoreAction = useCallback(
+    async (store: string, action: "promote" | "discard") => {
+      setError("");
+      if (action === "discard" && !window.confirm(`Discard all unpromoted spec changes in "${store}"?`)) return;
+      try {
+        const r = await fetch("/api/specs", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ action, store }),
+        });
+        const res = await r.json();
+        if (!r.ok) throw new Error(res.error || `${action} failed`);
+        loadTree();
+        if (activePath) {
+          const cur = await fetch(`/api/specs?path=${encodeURIComponent(activePath)}`).then((x) => x.json());
+          setContent(cur.content ?? content);
+        }
+      } catch (e) {
+        setError((e as Error).message);
+      }
+    },
+    [loadTree, activePath, content],
+  );
+
   const save = useCallback(async () => {
     if (!activePath) return;
     setSaving(true);
@@ -209,9 +233,27 @@ export default function BuildStudioApp() {
               <div key={group.path} className="mb-1.5">
                 <div className="flex items-center gap-1.5 px-2 pb-0.5 pt-1 text-[10px] font-semibold uppercase tracking-wide text-white/35">
                   <span className="truncate">{group.label ?? group.name}</span>
-                  {group.requiresPromote && (
+                  {group.requiresPromote && !group.hasCandidate && (
                     <span title="Edits here require Promote" className="rounded bg-white/10 px-1 text-[9px] normal-case text-white/40">
                       promote
+                    </span>
+                  )}
+                  {group.requiresPromote && group.hasCandidate && (
+                    <span className="ml-auto flex items-center gap-1">
+                      <button
+                        onClick={() => void runStoreAction(group.name, "promote")}
+                        title="Merge the spec candidate into this store (build-free)"
+                        className="rounded bg-emerald-500/20 px-1 text-[9px] normal-case text-emerald-200 hover:bg-emerald-500/30"
+                      >
+                        Promote
+                      </button>
+                      <button
+                        onClick={() => void runStoreAction(group.name, "discard")}
+                        title="Discard the unpromoted spec changes"
+                        className="rounded bg-white/10 px-1 text-[9px] normal-case text-white/50 hover:bg-white/20"
+                      >
+                        Discard
+                      </button>
                     </span>
                   )}
                 </div>

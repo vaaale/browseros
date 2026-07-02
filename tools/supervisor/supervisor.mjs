@@ -46,6 +46,10 @@ const PIN_COOKIE = "bos_pin";
 // promote merges it to the base branch, discard drops it. Orthogonal to the
 // BOS-code preview flow above and needs no extra port/proxy.
 const APPS_REPO = process.env.BOS_APPS_DIR || path.join(REPO, "apps");
+// Container of external spec stores (018). Mounted read-only into each preview
+// worktree at `specs/` so the developer harness can READ the spec it implements
+// (and the constitution) even though specs no longer live in the source tree.
+const SPECS_ROOT = process.env.BOS_SPECS_ROOT || path.join(REPO, "specs");
 const APP_CANDIDATE_BRANCH = "app-candidate";
 const GIT_IDENTITY = ["-c", "user.name=BrowserOS", "-c", "user.email=bos@localhost"];
 /** @type {{branch:string, base:string}|null} */
@@ -246,6 +250,29 @@ async function hydrateWorktree(wt) {
   }
   for (const f of [".env", ".env.local"]) {
     await fs.copyFile(path.join(REPO, f), path.join(wt, f)).catch(() => {});
+  }
+}
+
+// Mount the external spec stores READ-ONLY into a worktree at `specs/` (018), so
+// the developer harness reads the spec it implements at `specs/<store>/<id>/…`.
+// A copy (reflink where supported): harness edits stay in the worktree copy and
+// never flow back to the store, and because the BOS repo gitignores `specs/`, the
+// mount is excluded from the candidate `git add -A`. Refreshed on every begin so
+// an edited spec is current. No-op when there is no spec store yet.
+async function mountSpecStores(wt) {
+  const dst = path.join(wt, "specs");
+  try {
+    await fs.access(SPECS_ROOT);
+  } catch {
+    return; // no stores to mount
+  }
+  await fs.rm(dst, { recursive: true, force: true }).catch(() => {});
+  const run = (args) => exec("cp", args, { maxBuffer: 32 * 1024 * 1024, timeout: 120_000 });
+  try {
+    await run(["-a", "--reflink=auto", `${SPECS_ROOT}/.`, dst]);
+  } catch {
+    await fs.rm(dst, { recursive: true, force: true }).catch(() => {});
+    await run(["-a", `${SPECS_ROOT}/.`, dst]).catch(() => {});
   }
 }
 
@@ -513,7 +540,11 @@ async function discardPreview(branch) {
 }
 
 async function beginPreview(branch) {
-  return await provisionPreview(branch);
+  const p = await provisionPreview(branch);
+  // (Re)mount the spec stores read-only on every begin — fresh provision or reuse —
+  // so the harness always sees the current spec content.
+  await mountSpecStores(p.worktree).catch((e) => slog("warn", "begin", `spec mount failed for ${branch}: ${e?.message || e}`, { branch }));
+  return p;
 }
 
 async function buildPreview(branch, ctx = {}) {

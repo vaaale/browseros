@@ -168,7 +168,7 @@ const SEED: Omit<Skill, "id">[] = [
       {
         name: "implement.md",
         content:
-          "Step: implement. Ensure spec.md, plan.md and tasks.md exist, and ensure an Active feature branch is selected for this conversation before delegating. Call delegate_to_developer with a complete task: the store-prefixed feature path (<store>/<id>), a summary of the spec and plan, the tasks to execute, and acceptance criteria; note the store is mounted read-only in the Developer's worktree at that same path. Instruct the Developer to keep edits on that feature branch, run typecheck/lint, and update docs. You never write code yourself — relay the Developer's result and reflect updated status.",
+          "Step: implement. Ensure spec.md, plan.md and tasks.md exist, and ensure an Active feature branch is selected for this conversation before delegating. Call delegate_to_developer with a complete task: tell the Developer to read the spec at `specs/<store>/<id>/` in its worktree (all spec stores are mounted read-only under `specs/` there), plus a summary of the spec and plan, the tasks to execute, and acceptance criteria. Instruct the Developer to keep edits on that feature branch, run typecheck/lint, and update docs. You never write code yourself — relay the Developer's result and reflect updated status.",
       },
       {
         name: "converge.md",

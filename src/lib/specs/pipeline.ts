@@ -1,6 +1,7 @@
 import "server-only";
 import * as specfs from "@/lib/dev/spec-fs";
 import { listStores } from "@/lib/specs/stores";
+import { hasCandidate } from "@/lib/specs/store-git";
 import {
   ARTIFACT_FILES,
   type Artifact,
@@ -167,6 +168,7 @@ export async function specTree(): Promise<SpecTreeNode[]> {
       owner: store.owner,
       writable: store.writable,
       requiresPromote: store.requiresPromote,
+      hasCandidate: store.requiresPromote ? await hasCandidate(store.root) : false,
       children,
     });
   }
