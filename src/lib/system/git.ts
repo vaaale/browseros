@@ -43,6 +43,18 @@ export async function status(): Promise<{ branch: string; files: { status: strin
   return { branch, files };
 }
 
+/** List existing `bos/*` feature branch refs (read-only, allowed under the
+ *  Supervisor since the worktrees share one `.git`). Used to offer resumable
+ *  branches in the Assistant. */
+export async function listFeatureBranches(): Promise<string[]> {
+  try {
+    const out = await git(["for-each-ref", "--format=%(refname:short)", "refs/heads/bos"]);
+    return out ? out.split("\n").map((l) => l.trim()).filter(Boolean) : [];
+  } catch {
+    return [];
+  }
+}
+
 function featureBranchName(name: string): string {
   const slug = name.toLowerCase().replace(/[^a-z0-9/_-]+/g, "-").replace(/^-+|-+$/g, "") || "change";
   return slug.startsWith("bos/") ? slug : `bos/${slug}`;

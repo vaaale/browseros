@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useCopilotAction } from "@/components/agent/gated-action";
 import { encodeNested } from "@/lib/agent/nested-events";
 import { startDelegation, pushDelegationEvent, finishDelegation } from "@/lib/agent/subagent-events";
-import { useActiveConversationId, DEFAULT_GROUP } from "@/lib/agent/conversations";
+import { useActiveConversationId, setConversationActiveFeatureBranch, DEFAULT_GROUP } from "@/lib/agent/conversations";
+import { suggestFeatureBranchName } from "@/lib/agent/feature-branch";
 import { sessionHeader } from "@/lib/logging/client/session";
 
 type Choice = "once" | "session" | "local";
@@ -16,6 +17,79 @@ interface DelegateResult {
   output?: string;
   error?: string;
   toolCalls?: { tool: string; input?: unknown }[];
+}
+
+// Elicitation card for the feature-branch gap: when a BOS source change needs a
+// developer delegation but the conversation has no active feature branch, the
+// assistant calls requestFeatureBranch and this card proposes a name (derived
+// from the task, user-editable), then creates + activates it on the conversation
+// so the subsequent delegation succeeds instead of dead-ending.
+function FeatureBranchCard({
+  task,
+  convId,
+  onDone,
+}: {
+  task: string;
+  convId: string;
+  onDone: (result: string) => void;
+}) {
+  const [name, setName] = useState(() => suggestFeatureBranchName(task).replace(/^bos\//, ""));
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const create = async () => {
+    setBusy(true);
+    setErr("");
+    const res = await fetch("/api/assistant/feature-branches", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    })
+      .then((r) => r.json())
+      .catch(() => null);
+    if (!res?.ok || typeof res.branch !== "string") {
+      setErr(res?.error ?? "Could not create feature branch.");
+      setBusy(false);
+      return;
+    }
+    if (convId) await setConversationActiveFeatureBranch(convId, res.branch);
+    onDone(`Active feature branch set to "${res.branch}". Now delegate the source change to the developer sub-agent.`);
+  };
+
+  return (
+    <div className="my-1 rounded-lg border border-sky-400/30 bg-sky-400/10 p-3 text-xs">
+      <div className="mb-2 text-sky-100">
+        This change edits BrowserOS itself, which needs a <b>feature branch</b>. Name it (or accept the suggestion):
+      </div>
+      <div className="mb-2 flex items-center gap-1.5">
+        <span className="text-white/50">bos/</span>
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          disabled={busy}
+          className="min-w-0 flex-1 rounded border border-white/10 bg-black/30 px-2 py-1 text-white/90 outline-none focus:border-white/30"
+          placeholder="my-change"
+        />
+      </div>
+      {err && <div className="mb-2 text-red-300">{err}</div>}
+      <div className="flex flex-wrap gap-2">
+        <button
+          onClick={create}
+          disabled={busy || !name.trim()}
+          className="rounded bg-sky-400/20 px-2.5 py-1 font-medium hover:bg-sky-400/30 disabled:opacity-50"
+        >
+          {busy ? "Creating…" : "Create & continue"}
+        </button>
+        <button
+          onClick={() => onDone("User cancelled feature-branch creation. Do not delegate the source change.")}
+          disabled={busy}
+          className="rounded bg-white/10 px-2.5 py-1 font-medium hover:bg-white/20 disabled:opacity-50"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
 }
 
 // Sub-agent delegation: list/create agents, delegate (existing or ephemeral),
@@ -158,6 +232,28 @@ export function SubAgentActions({ group = DEFAULT_GROUP }: { group?: string }) {
             <button onClick={() => pick("local")} className="rounded bg-white/10 px-2.5 py-1 font-medium hover:bg-white/20">Use Local</button>
           </div>
         </div>
+      );
+    },
+  });
+
+  // Elicitation card: when a BOS source change needs a developer delegation but
+  // no feature branch is active, prompt the user for a name (with a suggestion)
+  // and activate it on this conversation before delegating.
+  useCopilotAction({
+    name: "requestFeatureBranch",
+    description:
+      "Set up the active feature branch required to modify BrowserOS itself (its source under src/). Call this BEFORE delegating a BOS source change to the developer when no active feature branch is set; it proposes a name from the task, lets the user confirm/edit, then creates and activates the bos/<kebab-name> branch on this conversation. Returns a message; only delegate to the developer once a branch is active.",
+    parameters: [{ name: "task", type: "string", description: "The BOS source change you want the developer to make", required: true }],
+    renderAndWaitForResponse: ({ args, status, respond }) => {
+      if (status === "complete") {
+        return <div className="my-1 rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-xs text-white/60">Feature-branch choice recorded.</div>;
+      }
+      return (
+        <FeatureBranchCard
+          task={String(args?.task ?? "")}
+          convId={threadIdRef.current}
+          onDone={(result) => respond?.(result)}
+        />
       );
     },
   });

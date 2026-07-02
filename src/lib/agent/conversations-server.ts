@@ -1,5 +1,6 @@
 import "server-only";
 import * as vfs from "@/os/vfs";
+import { isValidFeatureBranch } from "@/lib/agent/feature-branch";
 
 // Server-only counterpart to the "use client" conversations store. Developer
 // (claude) delegations target a `bos/<kebab-name>` feature branch; the branch is
@@ -8,14 +9,13 @@ import * as vfs from "@/os/vfs";
 // live in the user's VFS at /Documents/Chats/<id>.json.
 
 const CHATS_DIR = "/Documents/Chats";
-const FEATURE_BRANCH_RE = /^bos\/[a-z0-9]+(?:[-/][a-z0-9]+)*$/;
 
 /** Validate a developer feature branch name, returning the trimmed value.
  *  Throws if it is not a `bos/<kebab-name>` branch — the delegate route surfaces
  *  the message as a 400 so the caller can correct it. */
 export function validateFeatureBranch(branch: string): string {
   const trimmed = branch.trim();
-  if (!FEATURE_BRANCH_RE.test(trimmed)) {
+  if (!isValidFeatureBranch(trimmed)) {
     throw new Error(
       `Invalid feature branch "${branch}": expected a lowercase kebab-case name like "bos/my-change".`,
     );

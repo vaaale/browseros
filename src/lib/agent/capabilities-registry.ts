@@ -52,6 +52,7 @@ export const CAPABILITIES: Capability[] = [
   { id: "createSubAgent", group: "Agents", context: "action", description: "Create a reusable agent." },
   { id: "delegateToSubAgent", group: "Agents", context: "action", description: "Delegate a task to an agent." },
   { id: "requestClaudeAgentPermission", group: "Agents", context: "action", description: "Ask to use a Claude agent for a non-dev task." },
+  { id: "requestFeatureBranch", group: "Agents", context: "action", description: "Set up the active feature branch needed to modify BOS source." },
   { id: "delegate_to_developer", group: "Agents", context: "tool", description: "Delegate implementation to the Developer (from a delegated agent)." },
 
   // Memory
