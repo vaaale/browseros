@@ -487,8 +487,21 @@ async function buildAndStartBase(commit) {
 // It serves baseBranch with HMR; the merge on promote updates REPO and (after a
 // restart) base runs the promoted code. Forwards BOS_SUPERVISOR_URL (self) so the
 // base BOS is supervisor-aware, and passes through BOS_DEV_ORIGINS.
+// Regenerate the built-in app registry (src/apps/_*.generated.ts) in REPO. These
+// files are gitignored, so a promote's merge never carries them — after merging a
+// feature that adds/removes a BUILT-IN app we must regenerate, or the app's source
+// lands on base but stays unregistered (invisible). `next dev` then hot-reloads the
+// regenerated .ts. Idempotent + cheap.
+async function regenApps() {
+  await exec("node", ["tools/gen-apps.mjs"], { cwd: REPO, timeout: 60_000, maxBuffer: 8 * 1024 * 1024 }).catch((e) =>
+    slog("warn", "promote", `gen-apps failed: ${e?.message || e}`, {}),
+  );
+}
+
 function startBaseDevProc(v) {
-  v.proc = spawn("npx", ["next", "dev", "-p", String(v.port)], {
+  // Run via `npm run dev` (not `npx next dev`) so the `predev` hook regenerates the
+  // built-in app registry on every start/restart. Pass the port after `--`.
+  v.proc = spawn("npm", ["run", "dev", "--", "-p", String(v.port)], {
     cwd: REPO,
     env: {
       ...process.env,
@@ -669,6 +682,9 @@ async function promote(branch) {
     await git([...GIT_IDENTITY, "tag", "-a", tag, "-m", `promote ${cand.branch}`], REPO);
     if (PUSH_MODE === "auto-on-promote") await gitTry(["push", REMOTE, baseBranch, "--follow-tags"], REPO);
     base.commit = newCommit;
+    // Regenerate the built-in app registry so a merged built-in app (its generated
+    // manifest is gitignored, thus not in the merge) is actually registered on base.
+    await regenApps();
     const changed = (prevBaseCommit ? await gitTry(["diff", "--name-only", `${prevBaseCommit}..${newCommit}`], REPO) : "") || "";
     const depsChanged = /(^|\n)(package(-lock)?\.json|pnpm-lock\.yaml|yarn\.lock)/.test(changed);
     const configChanged = /(^|\n)(next\.config\.|tsconfig|\.env)/.test(changed);
