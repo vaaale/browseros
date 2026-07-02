@@ -612,6 +612,29 @@ async function promote(branch) {
   }
   const newCommit = await git(["rev-parse", "HEAD"], cand.worktree);
 
+  // REUSE / DEV MODE: base is an EXTERNAL `next dev` server the Supervisor does not
+  // own (BOS_ACTIVE_REUSE_PORT), serving the live checkout (REPO). The managed
+  // swap below is wrong here: stopProc can't stop it, a second server can't bind the
+  // occupied base port, and waitHealthy would be fooled by the still-running dev
+  // server. Instead, advance the base branch IN THE LIVE CHECKOUT — `next dev`
+  // hot-recompiles it — and keep base as the reused server. No process swap, no
+  // detached worktree (so base keeps reporting the real branch, not "HEAD").
+  if (base?.reused) {
+    await git(["checkout", baseBranch], REPO);
+    await git(["merge", "--ff-only", newCommit], REPO);
+    const tag = `bos/v${tagStamp()}`;
+    await git([...GIT_IDENTITY, "tag", "-a", tag, "-m", `promote ${cand.branch}`], REPO);
+    if (PUSH_MODE === "auto-on-promote") await gitTry(["push", REMOTE, baseBranch, "--follow-tags"], REPO);
+    base.commit = newCommit;
+    await stopProc(cand); // reap the preview's pool-port server
+    await gitTry(["worktree", "remove", "--force", cand.worktree]);
+    await fs.rm(cand.dataDir, { recursive: true, force: true }).catch(() => {});
+    await gitTry(["branch", "-D", cand.branch]);
+    previews.delete(cand.branch);
+    log(`promoted ${cand.branch} → base via live checkout (reuse/dev mode, tag ${tag})`);
+    return { tag, branch: cand.branch, reused: true };
+  }
+
   // 2) Swap on the base port: stop old base (await exit), start the candidate's code
   //    on BASE_PORT against CANONICAL data, health-gate THERE.
   const oldBase = base;
