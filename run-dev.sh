@@ -1,5 +1,5 @@
-# BOS_SUPERVISOR_URL makes the dev server supervisor-aware: the assistant's
-# self-modifications are provisioned as isolated candidate worktrees (preview +
-# promote) instead of editing this live working tree in-place. Must match the
-# supervisor's public port in run-dev-supervisor.sh (:8090).
-BOS_DEV_ORIGINS=wingman.akhbar.lan BOS_SUPERVISOR_URL=http://127.0.0.1:8090 npm run dev
+# LEGACY / standalone dev server (NO supervisor): plain `next dev`, no preview or
+# promote. For supervised development use run-dev-supervisor.sh instead — the
+# Supervisor now owns and starts the base dev server itself (single process), so
+# you no longer run this alongside it.
+BOS_DEV_ORIGINS=wingman.akhbar.lan npm run dev

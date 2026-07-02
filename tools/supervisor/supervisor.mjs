@@ -37,6 +37,10 @@ const REMOTE = process.env.BOS_REMOTE || "origin";
 const HEALTH_TIMEOUT_MS = Number(process.env.BOS_HEALTH_TIMEOUT_MS || 120_000);
 // Reuse an already-running server as BASE (dev convenience / testing).
 const REUSE_BASE_PORT = process.env.BOS_ACTIVE_REUSE_PORT ? Number(process.env.BOS_ACTIVE_REUSE_PORT) : null;
+// Supervisor-OWNED dev base: the Supervisor spawns `next dev` for base itself
+// (single-process model — just start the Supervisor). Because it owns the process
+// it can npm-install + restart base on promote, with HMR during development.
+const BASE_DEV = /^(1|true|yes)$/i.test(process.env.BOS_BASE_DEV || "");
 const PIN_COOKIE = "bos_pin";
 
 // Apps content repo (GitFS) — versioned user apps, a standalone repo independent
@@ -478,6 +482,44 @@ async function buildAndStartBase(commit) {
   return base.state;
 }
 
+// Spawn (or respawn) the Supervisor-OWNED base `next dev` server on BASE_PORT from
+// the live checkout (REPO). Owned → the Supervisor can stop/restart it on promote.
+// It serves baseBranch with HMR; the merge on promote updates REPO and (after a
+// restart) base runs the promoted code. Forwards BOS_SUPERVISOR_URL (self) so the
+// base BOS is supervisor-aware, and passes through BOS_DEV_ORIGINS.
+function startBaseDevProc(v) {
+  v.proc = spawn("npx", ["next", "dev", "-p", String(v.port)], {
+    cwd: REPO,
+    env: {
+      ...process.env,
+      PORT: String(v.port),
+      BOS_DATA_DIR: CANONICAL_DATA,
+      BOS_CANONICAL_DATA: CANONICAL_DATA,
+      BOS_VERSION_LABEL: "base",
+      BOS_BASE_BRANCH: baseBranch,
+      BOS_SUPERVISOR_URL: `http://127.0.0.1:${PUBLIC_PORT}`,
+    },
+    stdio: "inherit",
+    detached: true,
+  });
+  v.proc.on("exit", (code) => {
+    slog(code === 0 || code === null ? "info" : "warn", "process", `base dev server exited (${code})`, { branch: v.branch, versionLabel: "base", data: { code } });
+    if (v.state === "ready") v.state = "stopped";
+  });
+}
+
+// Start base as a Supervisor-owned `next dev` process (single-process model).
+async function buildAndStartBaseDev() {
+  const commit = await gitTry(["rev-parse", "HEAD"]);
+  base = { role: "base", branch: baseBranch, worktree: REPO, dataDir: CANONICAL_DATA, port: BASE_PORT, state: "building", proc: null, commit, dev: true };
+  slog("info", "build", `starting owned base dev server (${baseBranch}) on :${BASE_PORT}`, { branch: baseBranch, versionLabel: "base" });
+  startBaseDevProc(base);
+  base.state = (await waitHealthy(BASE_PORT, base)) ? "ready" : "failed";
+  if (base.state !== "ready") throw new Error(`base dev server failed to become healthy on :${BASE_PORT}`);
+  log(`owned base dev server ready on :${BASE_PORT} (branch ${baseBranch})`);
+  return base.state;
+}
+
 // Predict whether the candidate can be rebased onto base WITHOUT touching the
 // worktree (so a conflict leaves the running preview intact). Returns null when the
 // 3-way merge applies cleanly, else the conflict report (which files).
@@ -612,14 +654,14 @@ async function promote(branch) {
   }
   const newCommit = await git(["rev-parse", "HEAD"], cand.worktree);
 
-  // REUSE / DEV MODE: base is an EXTERNAL `next dev` server the Supervisor does not
-  // own (BOS_ACTIVE_REUSE_PORT), serving the live checkout (REPO). The managed
-  // swap below is wrong here: stopProc can't stop it, a second server can't bind the
-  // occupied base port, and waitHealthy would be fooled by the still-running dev
-  // server. Instead, advance the base branch IN THE LIVE CHECKOUT — `next dev`
-  // hot-recompiles it — and keep base as the reused server. No process swap, no
-  // detached worktree (so base keeps reporting the real branch, not "HEAD").
-  if (base?.reused) {
+  // LIVE-CHECKOUT BASE: base serves the live checkout (REPO), not a swappable
+  // worktree — either the Supervisor-OWNED dev server (BASE_DEV) or an EXTERNAL
+  // reused one (BOS_ACTIVE_REUSE_PORT). The managed swap below is wrong here (can't
+  // bind the occupied base port; waitHealthy would be fooled by the running server).
+  // Instead advance the base branch IN THE LIVE CHECKOUT, then make base run it:
+  //   - owned dev  → npm install (if deps changed) + restart the base dev server.
+  //   - reused ext → the Supervisor can't restart it; flag needsRestart.
+  if (base?.dev || base?.reused) {
     const prevBaseCommit = base.commit;
     await git(["checkout", baseBranch], REPO);
     await git(["merge", "--ff-only", newCommit], REPO);
@@ -627,24 +669,44 @@ async function promote(branch) {
     await git([...GIT_IDENTITY, "tag", "-a", tag, "-m", `promote ${cand.branch}`], REPO);
     if (PUSH_MODE === "auto-on-promote") await gitTry(["push", REMOTE, baseBranch, "--follow-tags"], REPO);
     base.commit = newCommit;
-    // `next dev` hot-recompiles code edits, but dependency/config changes need a
-    // manual dev-server restart (the Supervisor can't restart an external process).
-    // Flag it so the toolbar can prompt for a restart of run-dev.sh + `npm install`.
     const changed = (prevBaseCommit ? await gitTry(["diff", "--name-only", `${prevBaseCommit}..${newCommit}`], REPO) : "") || "";
-    const needsRestart = /(^|\n)(package(-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|next\.config\.|tsconfig|\.env)/.test(changed);
-    await stopProc(cand); // reap the preview's pool-port server
+    const depsChanged = /(^|\n)(package(-lock)?\.json|pnpm-lock\.yaml|yarn\.lock)/.test(changed);
+    const configChanged = /(^|\n)(next\.config\.|tsconfig|\.env)/.test(changed);
+    // Reap the promoted preview before touching base (frees resources / the branch).
+    await stopProc(cand);
     await gitTry(["worktree", "remove", "--force", cand.worktree]);
     await fs.rm(cand.dataDir, { recursive: true, force: true }).catch(() => {});
     await gitTry(["branch", "-D", cand.branch]);
     previews.delete(cand.branch);
-    log(`promoted ${cand.branch} → base via live checkout (reuse/dev mode, tag ${tag})${needsRestart ? " — DEV SERVER RESTART REQUIRED (deps/config changed)" : ""}`);
+
+    if (base.dev) {
+      // Supervisor owns the base dev server → make the promote deterministic: install
+      // deps when they changed, then restart base so the merged code is definitely live.
+      if (depsChanged) {
+        slog("info", "promote", `installing dependencies after promote (${baseBranch})`, { branch: baseBranch, versionLabel: "base" });
+        await exec("npm", ["install"], { cwd: REPO, timeout: 600_000, maxBuffer: 64 * 1024 * 1024 }).catch((e) =>
+          slog("warn", "promote", `npm install failed: ${e?.message || e}`, { branch: baseBranch, versionLabel: "base" }),
+        );
+      }
+      await stopProc(base);
+      base.state = "building";
+      startBaseDevProc(base);
+      base.state = (await waitHealthy(BASE_PORT, base)) ? "ready" : "failed";
+      log(`promoted ${cand.branch} → base (owned dev, tag ${tag}); base restarted${depsChanged ? " after npm install" : ""}`);
+      return { tag, branch: cand.branch, dev: true };
+    }
+
+    // Reused external server: the Supervisor can't restart it. next dev hot-reloads
+    // code edits; deps/config changes need the user to restart their dev server.
+    const needsRestart = depsChanged || configChanged;
+    log(`promoted ${cand.branch} → base via live checkout (reused, tag ${tag})${needsRestart ? " — DEV SERVER RESTART REQUIRED (deps/config changed)" : ""}`);
     return {
       tag,
       branch: cand.branch,
       reused: true,
       needsRestart,
       ...(needsRestart
-        ? { message: "Dependencies or config changed. Restart run-dev.sh (and run npm install) so base picks up the promoted code." }
+        ? { message: "Dependencies or config changed. Restart your dev server (and run npm install) so base picks up the promoted code." }
         : {}),
     };
   }
@@ -1073,11 +1135,13 @@ async function main() {
   void logStore.prune();
   setInterval(() => void logStore.prune(), 3_600_000);
 
-  if (REUSE_BASE_PORT) {
+  if (BASE_DEV) {
+    await buildAndStartBaseDev();
+  } else if (REUSE_BASE_PORT) {
     base = { role: "base", port: REUSE_BASE_PORT, state: "ready", reused: true, branch: baseBranch, commit: await gitTry(["rev-parse", "HEAD"]) };
     log(`reusing existing server on :${REUSE_BASE_PORT} as base (dev mode)`);
     if (!(await probeOnce(REUSE_BASE_PORT))) {
-      log(`WARNING: nothing is responding on :${REUSE_BASE_PORT}. Reuse mode proxies base there — start \`npm run dev\` on :${REUSE_BASE_PORT} first, or omit BOS_ACTIVE_REUSE_PORT so the Supervisor builds + serves base itself.`);
+      log(`WARNING: nothing is responding on :${REUSE_BASE_PORT}. Reuse mode proxies base there — start \`npm run dev\` on :${REUSE_BASE_PORT} first, or set BOS_BASE_DEV=1 so the Supervisor owns + serves base itself.`);
     }
   } else {
     await buildAndStartBase(await git(["rev-parse", "HEAD"]));
