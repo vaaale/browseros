@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { listSubAgents, createSubAgent, removeSubAgent } from "@/lib/agent/subagents/store";
+import { listSubAgents, createSubAgent, deleteSubAgent, ProtectedAgentError } from "@/lib/agent/subagents/store";
 import type { AgentType } from "@/lib/agent/subagents/types";
 
 export const dynamic = "force-dynamic";
@@ -32,6 +32,13 @@ export async function POST(req: NextRequest) {
 export async function DELETE(req: NextRequest) {
   const id = new URL(req.url).searchParams.get("id");
   if (!id) return NextResponse.json({ error: "id query param required" }, { status: 400 });
-  await removeSubAgent(id);
+  try {
+    await deleteSubAgent(id);
+  } catch (err) {
+    if (err instanceof ProtectedAgentError) {
+      return NextResponse.json({ error: err.message }, { status: 400 });
+    }
+    throw err;
+  }
   return NextResponse.json({ subAgents: await listSubAgents() });
 }

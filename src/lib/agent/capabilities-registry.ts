@@ -130,6 +130,21 @@ export const CAPABILITIES: Capability[] = [
   { id: "refreshSpecTree", group: "Build Studio", context: "action", description: "Reload the Build Studio spec tree." },
 ];
 
+// Tools/actions the UI marks with a warning affordance in the Agent Settings
+// capability picker. Kept as a UI-layer hardcoded list rather than a field on
+// Capability so the registry stays a pure inventory (the "danger" judgement is
+// presentational, not a property of the tool). Add ids here to opt into the
+// warning styling — matching happens by exact id against the capability id.
+const DANGEROUS_TOOL_NAMES: readonly string[] = [
+  "delete_path", // sub-agent VFS delete (spec/mockup example)
+  "deletePath", // corresponding main-chat action id
+];
+
+/** Ids the UI should annotate as dangerous (warning icon + red description). */
+export function getDangerousToolNames(): readonly string[] {
+  return DANGEROUS_TOOL_NAMES;
+}
+
 const ACTION_IDS = new Set(CAPABILITIES.filter((c) => c.context !== "tool").map((c) => c.id));
 
 /** Is this id a main-chat action (gated client-side)? */

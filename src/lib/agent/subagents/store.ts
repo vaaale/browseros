@@ -274,3 +274,43 @@ export async function setAgentCapabilities(
   await writeFileAtomic(path.join(DIR, agent.id, "AGENT.md"), toMarkdown(updated));
   return updated;
 }
+
+/** Update an agent's name and/or description without touching its system prompt
+ *  or capability allowlists. Fields left undefined are preserved as-is. */
+export async function setAgentMeta(
+  id: string,
+  meta: { name?: string; description?: string },
+): Promise<Agent | undefined> {
+  const agent = await getAgent(id);
+  if (!agent) return undefined;
+  const updated: Agent = {
+    ...agent,
+    name: typeof meta.name === "string" ? meta.name : agent.name,
+    description: typeof meta.description === "string" ? meta.description : agent.description,
+  };
+  await writeFileAtomic(path.join(DIR, agent.id, "AGENT.md"), toMarkdown(updated));
+  return updated;
+}
+
+/** The default assistant agent cannot be deleted — the main chat's personality
+ *  slot points at it. Callers should surface this to the user rather than trap
+ *  the error. */
+export class ProtectedAgentError extends Error {
+  constructor(id: string) {
+    super(`Agent "${id}" is protected and cannot be deleted.`);
+    this.name = "ProtectedAgentError";
+  }
+}
+
+export function isProtectedAgentId(id: string): boolean {
+  return id === DEFAULT_AGENT_ID;
+}
+
+/** Delete a sub-agent by id, rejecting the default assistant. Resolves the
+ *  id/name the same way removeSubAgent does. */
+export async function deleteSubAgent(idOrName: string): Promise<void> {
+  const agent = await getAgent(idOrName);
+  if (!agent) return;
+  if (isProtectedAgentId(agent.id)) throw new ProtectedAgentError(agent.id);
+  await fs.rm(path.join(DIR, agent.id), { recursive: true, force: true });
+}
