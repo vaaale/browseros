@@ -3,11 +3,13 @@
 ## Repository map
 
 ```
-specs/                           Canonical requirements/design (keep in sync)
-  bos.md                        Top-level requirements overview
-  memory/ self-improvement/     Per-feature specs
-  self-modification/ automation/
-  discrepancies.md              Where code intentionally diverges from spec
+seed/spec-store/                 Shipped bundle that seeds the system spec store (018)
+.specify/templates/              spec-kit ENGINE (templates + command prompts) — stays in source
+/specs  (BOS_SPECS_ROOT)         External spec stores — GITIGNORED, not tracked; seeded at runtime:
+  bos-system-specs/              BOS-owned system store (own git repo + spec-store.json);
+                                 holds NNN-feature specs, overview.md, discrepancies.md,
+                                 and .specify/memory/constitution.md
+  user-specs/                    User-owned store (own git repo)
 docs/
   usage/                        End-user documentation (this guide's user half)
   dev/                          Developer/agent documentation (this tree)
