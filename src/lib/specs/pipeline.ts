@@ -2,6 +2,7 @@ import "server-only";
 import * as specfs from "@/lib/dev/spec-fs";
 import { listStores } from "@/lib/specs/stores";
 import { hasCandidate } from "@/lib/specs/store-git";
+import { ensureStoresOnce } from "@/lib/specs/seed";
 import {
   ARTIFACT_FILES,
   type Artifact,
@@ -123,6 +124,7 @@ function byArtifactOrder(a: Artifact, b: Artifact): number {
 
 /** All feature folders across all stores, each with derived pipeline status. */
 export async function listSpecifications(): Promise<Specification[]> {
+  await ensureStoresOnce();
   constitutionReady = undefined; // re-evaluate per request
   const specs: Specification[] = [];
   for (const store of await listStores()) {
@@ -146,6 +148,7 @@ export async function getSpecification(fullPath: string): Promise<Specification 
 
 /** Every store as a group node (feature folders + loose files as children). */
 export async function specTree(): Promise<SpecTreeNode[]> {
+  await ensureStoresOnce();
   const groups: SpecTreeNode[] = [];
   for (const store of await listStores()) {
     const top = await specfs.listDir(store.id).catch(() => []);
@@ -188,6 +191,7 @@ function slugify(name: string): string {
 /** Next spec-kit feature id in a store: `NNN-slug`, NNN = max existing + 1.
  *  Defaults to the writable user store. Returns `<storeId>/<NNN-slug>`. */
 export async function nextFeatureId(name: string, storeId?: string): Promise<string> {
+  await ensureStoresOnce();
   const stores = await listStores();
   const target = storeId
     ? stores.find((s) => s.id === storeId)

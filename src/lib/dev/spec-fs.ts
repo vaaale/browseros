@@ -2,7 +2,7 @@ import "server-only";
 import { promises as fs } from "fs";
 import path from "path";
 import { writeFileAtomic } from "@/os/atomic-write";
-import { listStores, getStore, type SpecStore } from "@/lib/specs/stores";
+import { listStores, getStore, STORE_MANIFEST, type SpecStore } from "@/lib/specs/stores";
 import { beginCandidate, commitOnSave } from "@/lib/specs/store-git";
 import { ensureStoresOnce } from "@/lib/specs/seed";
 
@@ -58,7 +58,7 @@ export async function listDir(p = ""): Promise<SpecEntry[]> {
   const names = await fs.readdir(abs, { withFileTypes: true }).catch(() => [] as import("fs").Dirent[]);
   const out: SpecEntry[] = [];
   for (const d of names) {
-    if (d.name.startsWith(".")) continue;
+    if (d.name.startsWith(".") || d.name === STORE_MANIFEST) continue;
     const childRel = path.posix.join(rel, d.name);
     const childPath = path.posix.join(store.id, childRel);
     let size = 0;
