@@ -237,6 +237,25 @@ const REGISTRATIONS: ConfigRegistration[] = [
   },
   {
     schema: {
+      namespace: "system-tools",
+      title: "System Tools",
+      description:
+        "Host-level tools the assistant can invoke directly. The `runBash` action runs `bash -lc <command>` on the BrowserOS host — it has no allowlist, so only enable it if you trust the assistant to run commands with your shell.",
+      order: 37,
+      fields: [
+        { key: "enabled", label: "Bash tool enabled", type: "boolean", description: "Master switch for the assistant's `runBash` action. Off by default." },
+      ],
+    },
+    load: async () => {
+      const s = await readNamespace("system-tools");
+      return { enabled: s.enabled === true };
+    },
+    save: async (patch) => {
+      await patchNamespace("system-tools", patch);
+    },
+  },
+  {
+    schema: {
       namespace: "logging",
       title: "Logs",
       description:

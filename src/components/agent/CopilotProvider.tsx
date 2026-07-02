@@ -13,6 +13,7 @@ import { SkillsActions } from "./SkillsActions";
 import { SelfImprovementActions } from "./SelfImprovementActions";
 import { DocsActions } from "./DocsActions";
 import { GitActions } from "./GitActions";
+import { BashActions } from "./BashActions";
 import { WorkflowActions } from "./WorkflowActions";
 import { SpecActions } from "./SpecActions";
 import { WebSearchActions } from "./WebSearchActions";
@@ -93,6 +94,7 @@ export function CopilotProvider({
           <SelfImprovementActions />
           <DocsActions />
           <GitActions group={group} />
+          <BashActions />
           <WorkflowActions />
           <SpecActions />
           <ToolCallRetry />

@@ -84,6 +84,7 @@ export const CAPABILITIES: Capability[] = [
   { id: "listInstalledApps", group: "Dev", context: "action", description: "List runtime-installed apps." },
   { id: "uninstallApp", group: "Dev", context: "action", description: "Uninstall an app." },
   { id: "gitStatus", group: "Dev", context: "action", description: "Show git branch and changes (read-only)." },
+  { id: "runBash", group: "System", context: "action", description: "Run a shell command via `bash -lc` on the host (must be enabled in Settings → System Tools)." },
   { id: "list_source", group: "Dev", context: "tool", description: "List repo source (sub-agent)." },
   { id: "read_source", group: "Dev", context: "tool", description: "Read repo source (sub-agent)." },
   { id: "search_source", group: "Dev", context: "tool", description: "Search repo source (sub-agent)." },
@@ -138,6 +139,7 @@ export const CAPABILITIES: Capability[] = [
 const DANGEROUS_TOOL_NAMES: readonly string[] = [
   "delete_path", // sub-agent VFS delete (spec/mockup example)
   "deletePath", // corresponding main-chat action id
+  "runBash", // arbitrary shell execution on the host
 ];
 
 /** Ids the UI should annotate as dangerous (warning icon + red description). */
