@@ -26,6 +26,9 @@ interface PostResult {
   ok?: boolean;
   error?: string;
   state?: string;
+  /** Reuse/dev-mode promote: base's `next dev` needs a manual restart (deps/config changed). */
+  needsRestart?: boolean;
+  message?: string;
 }
 interface LogRecord {
   ts?: number;
@@ -200,8 +203,12 @@ export function VersionControls() {
   const promotePreview = async () => {
     setErr(null);
     const r = await post("promote", { branch: selectedBranch });
-    if (r.ok) window.location.reload();
-    else {
+    if (r.ok) {
+      if (r.needsRestart) {
+        window.alert(r.message || "Promoted. Restart your dev server so base picks up the changes.");
+      }
+      window.location.reload();
+    } else {
       setErr(r.error || "Promote failed.");
       await load();
     }

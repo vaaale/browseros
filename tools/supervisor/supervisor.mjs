@@ -620,19 +620,33 @@ async function promote(branch) {
   // hot-recompiles it — and keep base as the reused server. No process swap, no
   // detached worktree (so base keeps reporting the real branch, not "HEAD").
   if (base?.reused) {
+    const prevBaseCommit = base.commit;
     await git(["checkout", baseBranch], REPO);
     await git(["merge", "--ff-only", newCommit], REPO);
     const tag = `bos/v${tagStamp()}`;
     await git([...GIT_IDENTITY, "tag", "-a", tag, "-m", `promote ${cand.branch}`], REPO);
     if (PUSH_MODE === "auto-on-promote") await gitTry(["push", REMOTE, baseBranch, "--follow-tags"], REPO);
     base.commit = newCommit;
+    // `next dev` hot-recompiles code edits, but dependency/config changes need a
+    // manual dev-server restart (the Supervisor can't restart an external process).
+    // Flag it so the toolbar can prompt for a restart of run-dev.sh + `npm install`.
+    const changed = (prevBaseCommit ? await gitTry(["diff", "--name-only", `${prevBaseCommit}..${newCommit}`], REPO) : "") || "";
+    const needsRestart = /(^|\n)(package(-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|next\.config\.|tsconfig|\.env)/.test(changed);
     await stopProc(cand); // reap the preview's pool-port server
     await gitTry(["worktree", "remove", "--force", cand.worktree]);
     await fs.rm(cand.dataDir, { recursive: true, force: true }).catch(() => {});
     await gitTry(["branch", "-D", cand.branch]);
     previews.delete(cand.branch);
-    log(`promoted ${cand.branch} → base via live checkout (reuse/dev mode, tag ${tag})`);
-    return { tag, branch: cand.branch, reused: true };
+    log(`promoted ${cand.branch} → base via live checkout (reuse/dev mode, tag ${tag})${needsRestart ? " — DEV SERVER RESTART REQUIRED (deps/config changed)" : ""}`);
+    return {
+      tag,
+      branch: cand.branch,
+      reused: true,
+      needsRestart,
+      ...(needsRestart
+        ? { message: "Dependencies or config changed. Restart run-dev.sh (and run npm install) so base picks up the promoted code." }
+        : {}),
+    };
   }
 
   // 2) Swap on the base port: stop old base (await exit), start the candidate's code
