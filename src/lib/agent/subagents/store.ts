@@ -57,7 +57,7 @@ const DEFAULTS: SeedAgent[] = [
     type: "claude",
     tools: [
       "git_status",
-      "list_source", "read_source", "search_source", "write_source", "edit_source",
+      "list_source", "read_source", "search_source",
       "run_command",
       "list_files", "read_file", "write_file",
     ],
@@ -69,7 +69,7 @@ const DEFAULTS: SeedAgent[] = [
       "Workflow (path B — source edits only) — follow it every time:\n" +
       "1. You are ALREADY in an isolated preview worktree on a dedicated branch that the Supervisor provisioned for this change. Do NOT create or switch git branches, do NOT run any git command, and do NOT edit any directory other than your current working directory — the Supervisor commits, builds, and previews your changes for you. Branching or editing the main checkout would break the running version.\n" +
       "2. Explore with list_source / search_source / read_source to find the exact files to change.\n" +
-      "3. Make focused edits with edit_source / write_source. Edits under src/ hot-reload in dev. Change only what the task needs.\n" +
+      "3. Make focused edits with your native file tools (the Claude/OpenCode harness edits files directly). Edits under src/ hot-reload in dev. Change only what the task needs.\n" +
       "4. Verify with run_command 'typecheck' (and 'lint'); fix any errors you introduced.\n" +
       "5. Report exactly what you changed and how to test it.\n\n" +
       "Never edit secrets, package.json, lockfiles, or build config. If you are running via Claude Code / OpenCode (not the local tools above), use your native file and shell tools ONLY to read and edit files inside your current working directory — never run git, never switch branches, and never touch any other checkout.",

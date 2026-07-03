@@ -84,12 +84,9 @@ export const CAPABILITIES: Capability[] = [
   { id: "listInstalledApps", group: "Dev", context: "action", description: "List runtime-installed apps." },
   { id: "uninstallApp", group: "Dev", context: "action", description: "Uninstall an app." },
   { id: "gitStatus", group: "Dev", context: "action", description: "Show git branch and changes (read-only)." },
-  { id: "runBash", group: "System", context: "action", description: "Run a shell command via `bash -lc` on the host (must be enabled in Settings → System Tools)." },
   { id: "list_source", group: "Dev", context: "tool", description: "List repo source (sub-agent)." },
   { id: "read_source", group: "Dev", context: "tool", description: "Read repo source (sub-agent)." },
   { id: "search_source", group: "Dev", context: "tool", description: "Search repo source (sub-agent)." },
-  { id: "write_source", group: "Dev", context: "tool", description: "Write repo source (sub-agent)." },
-  { id: "edit_source", group: "Dev", context: "tool", description: "Edit repo source (sub-agent)." },
   { id: "run_command", group: "Dev", context: "tool", description: "Run an allowlisted command (sub-agent)." },
   { id: "git_status", group: "Dev", context: "tool", description: "Git status (sub-agent, read-only)." },
 
@@ -98,7 +95,6 @@ export const CAPABILITIES: Capability[] = [
   { id: "readDoc", group: "Docs", context: "action", description: "Read a documentation page by ref." },
 
   // Assistant
-  { id: "switchAssistantAgent", group: "Assistant", context: "action", description: "Switch the active assistant agent." },
   { id: "getMyInstructions", group: "Assistant", context: "action", description: "Read the active agent's editable personality." },
   { id: "updateMyInstructions", group: "Assistant", context: "action", description: "Rewrite the active agent's personality." },
 
@@ -139,7 +135,6 @@ export const CAPABILITIES: Capability[] = [
 const DANGEROUS_TOOL_NAMES: readonly string[] = [
   "delete_path", // sub-agent VFS delete (spec/mockup example)
   "deletePath", // corresponding main-chat action id
-  "runBash", // arbitrary shell execution on the host
 ];
 
 /** Ids the UI should annotate as dangerous (warning icon + red description). */

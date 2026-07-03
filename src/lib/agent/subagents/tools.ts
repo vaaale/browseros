@@ -94,24 +94,6 @@ export const DEV_TOOLS: Record<string, LlmTool> = {
     },
     execute: async (input) => JSON.stringify(await repo.search(input.query as string, { dir: input.dir as string | undefined })),
   },
-  write_source: {
-    description: "Create or overwrite a source file in the BrowserOS repository. Writes are allowed only under src/, specs/, public/, docs/, data/. src/ edits hot-reload in dev.",
-    parameters: {
-      type: "object",
-      properties: { path: { type: "string" }, content: { type: "string" } },
-      required: ["path", "content"],
-    },
-    execute: async (input) => `Wrote ${await repo.writeFile(input.path as string, (input.content as string) ?? "")}`,
-  },
-  edit_source: {
-    description: "Replace a unique snippet of text in a source file with new text (the search text must occur exactly once).",
-    parameters: {
-      type: "object",
-      properties: { path: { type: "string" }, find: { type: "string" }, replace: { type: "string" } },
-      required: ["path", "find", "replace"],
-    },
-    execute: async (input) => `Edited ${await repo.editFile(input.path as string, input.find as string, (input.replace as string) ?? "")}`,
-  },
   run_command: {
     description: `Run an allowlisted verification command and return its output. Allowed: ${ALLOWED_COMMANDS.join(", ")}.`,
     parameters: { type: "object", properties: { command: { type: "string", enum: ALLOWED_COMMANDS } }, required: ["command"] },

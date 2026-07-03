@@ -240,10 +240,10 @@ const REGISTRATIONS: ConfigRegistration[] = [
       namespace: "system-tools",
       title: "System Tools",
       description:
-        "Host-level tools the assistant can invoke directly. The `runBash` action runs `bash -lc <command>` on the BrowserOS host — it has no allowlist, so only enable it if you trust the assistant to run commands with your shell.",
+        "Host-level command execution for the assistant. The legacy unsandboxed `bash -lc` tool has been removed; a sandboxed `run_command` (with Docker/local backends) replaces it. Leave disabled unless you trust the assistant to run commands in this environment.",
       order: 37,
       fields: [
-        { key: "enabled", label: "Bash tool enabled", type: "boolean", description: "Master switch for the assistant's `runBash` action. Off by default." },
+        { key: "enabled", label: "Command execution enabled", type: "boolean", description: "Master switch for host-level command execution. Off by default." },
       ],
     },
     load: async () => {
