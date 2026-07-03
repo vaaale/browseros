@@ -259,17 +259,17 @@ const REGISTRATIONS: ConfigRegistration[] = [
       namespace: "run-command",
       title: "Command Execution",
       description:
-        "Sandboxed command execution (run_command) for the assistant and sub-agents. The Docker backend runs each browser-session + agent in its own isolated container (non-root, workspace-only writes, network off by default), started on first use and kept alive for the session. The local backend runs directly on the host — only sensible when BOS itself runs inside a container. Off by default.",
+        "Sandboxed command execution (run_command) for the assistant and sub-agents. The Docker backend runs each browser-session + agent in its own isolated container (non-root, network off by default), started on first use and kept alive for the session; /workspace is a folder in your virtual file system, so files the assistant writes and command outputs show up in the Files app. The local backend runs directly on the host — only sensible when BOS itself runs inside a container. Off by default.",
       order: 39,
       fields: [
         { key: "enabled", label: "Enabled", type: "boolean", description: "Master switch for run_command. Off by default." },
         { key: "backend", label: "Backend", type: "select", options: [{ value: "docker", label: "Docker (isolated container)" }, { value: "local", label: "Local (host)" }], description: "docker = isolated container per session+agent (recommended); local = run on the host (only if BOS is itself containerized)." },
-        { key: "dockerImage", label: "Docker image", type: "text", description: "Image for the sandbox container. Must include the runtimes your skills need (e.g. python, node, LibreOffice). Default: node:22-bookworm." },
-        { key: "workspaceDir", label: "Workspace directory (host)", type: "text", description: "Host directory mounted read-write as /workspace (a per-session+agent subdir is created). Defaults to data/run-command/workspaces." },
+        { key: "dockerImage", label: "Docker image", type: "text", description: "Image for the sandbox container. Must include the runtimes your skills need (python, node, LibreOffice, …). Default: browseros/run-command:latest (build: docker build -t browseros/run-command:latest docker/run-command)." },
+        { key: "workspace", label: "Workspace (VFS path)", type: "text", description: "Virtual file system folder mounted read-write as /workspace. Files the assistant writes here and command outputs appear in the Files app. Default: /workspace." },
         { key: "volumes", label: "Extra bind mounts", type: "textarea", description: "One per line: /host/path:ro or /host/path:rw (mounted at the same path in the container). Never mount secrets or BOS source rw." },
         { key: "network", label: "Container network", type: "boolean", description: "Allow the sandbox container network access. Off by default." },
-        { key: "idleTimeoutMs", label: "Idle timeout (ms)", type: "number", description: "Kill a command that produces no output for this long. Default 30000." },
-        { key: "maxTimeoutMs", label: "Max timeout (ms)", type: "number", description: "Hard cap on a single command's total runtime. Default 600000." },
+        { key: "idleTimeoutSec", label: "Idle timeout (seconds)", type: "number", description: "Kill a command that produces no output for this long. Default 120." },
+        { key: "maxTimeoutSec", label: "Max timeout (seconds)", type: "number", description: "Hard cap on a single command's total runtime. Default 600." },
       ],
     },
     load: async () => {
@@ -278,11 +278,11 @@ const REGISTRATIONS: ConfigRegistration[] = [
         enabled: s.enabled === true,
         backend: s.backend === "local" ? "local" : "docker",
         dockerImage: typeof s.dockerImage === "string" ? s.dockerImage : "",
-        workspaceDir: typeof s.workspaceDir === "string" ? s.workspaceDir : "",
+        workspace: typeof s.workspace === "string" ? s.workspace : "",
         volumes: typeof s.volumes === "string" ? s.volumes : "",
         network: s.network === true,
-        idleTimeoutMs: typeof s.idleTimeoutMs === "number" ? s.idleTimeoutMs : 30000,
-        maxTimeoutMs: typeof s.maxTimeoutMs === "number" ? s.maxTimeoutMs : 600000,
+        idleTimeoutSec: typeof s.idleTimeoutSec === "number" ? s.idleTimeoutSec : 120,
+        maxTimeoutSec: typeof s.maxTimeoutSec === "number" ? s.maxTimeoutSec : 600,
       };
     },
     save: async (patch) => {

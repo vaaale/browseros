@@ -2,9 +2,8 @@ import "server-only";
 import { spawn, execFile, execFileSync } from "node:child_process";
 import { promisify } from "node:util";
 import { createHash } from "node:crypto";
-import path from "node:path";
 import { promises as fs } from "node:fs";
-import { dataDir } from "@/os/data-dir";
+import { hostPath } from "@/os/vfs";
 import { readNamespace } from "@/lib/config/store";
 import { stageSkillFiles } from "@/lib/agent/skills/store";
 
@@ -23,8 +22,8 @@ const CONTAINER_LABEL = "bos.run-command=1";
 
 export const NAMESPACE = "run-command";
 
-const DEFAULT_IDLE_MS = 30_000;
-const DEFAULT_MAX_MS = 600_000;
+const DEFAULT_IDLE_SEC = 120;
+const DEFAULT_MAX_SEC = 600;
 const MAX_COLLECT_BYTES = 8 * 1024 * 1024;
 const TRUNCATE_TO_BYTES = 16 * 1024;
 const CONTAINER_TTL_MS = 15 * 60_000; // reap idle containers after 15 min
@@ -52,7 +51,8 @@ interface RcConfig {
   enabled: boolean;
   backend: "local" | "docker";
   dockerImage: string;
-  workspaceDir: string;
+  /** VFS path mounted rw as /workspace (so files + outputs show up in Files). */
+  workspace: string;
   volumes: Volume[];
   network: boolean;
   idleTimeoutMs: number;
@@ -88,14 +88,11 @@ export async function loadRcConfig(): Promise<RcConfig> {
     enabled: s.enabled === true,
     backend,
     dockerImage: typeof s.dockerImage === "string" && s.dockerImage.trim() ? s.dockerImage.trim() : "browseros/run-command:latest",
-    workspaceDir:
-      typeof s.workspaceDir === "string" && s.workspaceDir.trim()
-        ? s.workspaceDir.trim()
-        : path.join(dataDir(), "run-command", "workspaces"),
+    workspace: typeof s.workspace === "string" && s.workspace.trim() ? s.workspace.trim() : "/workspace",
     volumes: parseVolumes(s.volumes),
     network: s.network === true,
-    idleTimeoutMs: positive(s.idleTimeoutMs, DEFAULT_IDLE_MS),
-    maxTimeoutMs: positive(s.maxTimeoutMs, DEFAULT_MAX_MS),
+    idleTimeoutMs: positive(s.idleTimeoutSec, DEFAULT_IDLE_SEC) * 1000,
+    maxTimeoutMs: positive(s.maxTimeoutSec, DEFAULT_MAX_SEC) * 1000,
   };
 }
 
@@ -292,7 +289,7 @@ async function ensureContainer(cfg: RcConfig, sessionKey: string): Promise<strin
     return name;
   }
   containers.delete(sessionKey);
-  const workspaceHost = path.join(cfg.workspaceDir, safeKey(sessionKey));
+  const workspaceHost = hostPath(cfg.workspace);
   await fs.mkdir(workspaceHost, { recursive: true });
   await execFileP("docker", ["rm", "-f", name]).catch(() => {}); // clear any stale container
   const args = [
@@ -339,9 +336,11 @@ export async function runCommand(opts: {
   const maxMs = Math.min(positive(opts.timeoutMs, cfg.maxTimeoutMs), cfg.maxTimeoutMs);
   const [prog, ...args] = argvFor(language, opts.command);
 
-  // The per-(session,agent) workspace: a writable host dir that is the CWD
-  // (local) or bind-mounted at /workspace (docker).
-  const workspaceHost = path.join(cfg.workspaceDir, safeKey(opts.sessionKey));
+  // The workspace: a VFS-backed folder that is the CWD (local) or bind-mounted at
+  // /workspace (docker). Because it's in the VFS, files the agent writes and
+  // command outputs show up in the Files app, and file_write to the same path
+  // targets the same bytes the sandbox sees.
+  const workspaceHost = hostPath(cfg.workspace);
   await fs.mkdir(workspaceHost, { recursive: true }).catch(() => {});
   if (opts.skill) {
     const staged = await stageSkillFiles(opts.skill, workspaceHost).catch(() => false);

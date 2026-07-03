@@ -40,6 +40,13 @@ export function normalizeVfsPath(vfsPath: string): string {
   return path.posix.normalize("/" + (vfsPath || "/"));
 }
 
+/** The real filesystem path backing a VFS path (refusing escapes). Use when a
+ *  subsystem must operate on VFS-backed files at the host level — e.g. run_command
+ *  bind-mounting the VFS workspace into its sandbox. */
+export function hostPath(vfsPath: string): string {
+  return resolveSafe(vfsPath);
+}
+
 async function exists(real: string): Promise<boolean> {
   try {
     await fs.stat(real);

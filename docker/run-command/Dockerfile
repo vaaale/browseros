@@ -33,6 +33,11 @@ RUN pip3 install --no-cache-dir --break-system-packages \
 
 RUN npm install -g pptxgenjs
 
+# Make globally-installed node modules (pptxgenjs) resolvable by scripts run from
+# /workspace, and keep python output unbuffered so the idle watchdog sees progress.
+ENV NODE_PATH=/usr/local/lib/node_modules
+ENV PYTHONUNBUFFERED=1
+
 # node:22-bookworm already ships a uid 1000 user; just make /workspace writable.
 RUN mkdir -p /workspace && chown 1000:1000 /workspace
 WORKDIR /workspace
