@@ -14,7 +14,7 @@ export function WorkflowActions() {
   }, []);
 
   useCopilotAction({
-    name: "createWorkflow",
+    name: "workflow_create",
     description:
       "Generate and persist a new workflow from a natural-language task description. Returns the new workflow's id and a summary.",
     parameters: [
@@ -33,7 +33,7 @@ export function WorkflowActions() {
   });
 
   useCopilotAction({
-    name: "modifyWorkflow",
+    name: "workflow_modify",
     description:
       "Apply a JSON-merge patch to an existing workflow, then re-validate. The 'changes' parameter must be a JSON object representing the patch.",
     parameters: [
@@ -57,7 +57,7 @@ export function WorkflowActions() {
   });
 
   useCopilotAction({
-    name: "runWorkflow",
+    name: "workflow_run",
     description: "Execute a workflow. Streams step events; returns a summary plus the event tree.",
     parameters: [{ name: "workflowId", type: "string", description: "Workflow id", required: true }],
     handler: async ({ workflowId }) => {
@@ -105,7 +105,7 @@ export function WorkflowActions() {
   });
 
   useCopilotAction({
-    name: "getStatus",
+    name: "workflow_status",
     description: "Return the current execution state of a workflow and per-step statuses.",
     parameters: [{ name: "workflowId", type: "string", description: "Workflow id", required: true }],
     handler: async ({ workflowId }) => {
@@ -116,7 +116,7 @@ export function WorkflowActions() {
   });
 
   useCopilotAction({
-    name: "cancelWorkflow",
+    name: "workflow_cancel",
     description: "Cancel a running workflow. In-progress steps are marked cancelled and the scheduler halts.",
     parameters: [{ name: "workflowId", type: "string", description: "Workflow id", required: true }],
     handler: async ({ workflowId }) => {
@@ -130,7 +130,7 @@ export function WorkflowActions() {
   });
 
   useCopilotAction({
-    name: "exportWorkflow",
+    name: "workflow_export",
     description: "Return the workflow's full JSON as a string.",
     parameters: [{ name: "workflowId", type: "string", description: "Workflow id", required: true }],
     handler: async ({ workflowId }) => {
@@ -141,7 +141,7 @@ export function WorkflowActions() {
   });
 
   useCopilotAction({
-    name: "validateWorkflow",
+    name: "workflow_validate",
     description: "Validate a workflow (DAG acyclic, agents exist, dependencies resolvable). Returns { ok, errors[], warnings[] }.",
     parameters: [{ name: "workflowId", type: "string", description: "Workflow id", required: true }],
     handler: async ({ workflowId }) => {

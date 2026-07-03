@@ -26,7 +26,7 @@ function flattenFiles(nodes: TreeNode[] = []): string[] {
 
 export function SpecActions() {
   useCopilotAction({
-    name: "listSpecs",
+    name: "spec_list",
     description: "List specification artifacts across the spec stores (e.g. 'bos-system-specs', 'user-specs'): feature folders and their files. Paths returned are store-prefixed (`<storeId>/<feature>/<file>`).",
     parameters: [],
     handler: async () => {
@@ -38,7 +38,7 @@ export function SpecActions() {
   });
 
   useCopilotAction({
-    name: "readSpec",
+    name: "spec_read",
     description: "Read a specification artifact by its STORE-PREFIXED path, e.g. 'bos-system-specs/016-unified-agents/spec.md' or 'bos-system-specs/.specify/memory/constitution.md'.",
     parameters: [{ name: "path", type: "string", description: "Store-prefixed artifact path, e.g. 'user-specs/003-x/spec.md'", required: true }],
     handler: async ({ path }) => {
@@ -48,7 +48,7 @@ export function SpecActions() {
   });
 
   useCopilotAction({
-    name: "writeSpec",
+    name: "spec_write",
     description: "Create or overwrite a specification artifact by STORE-PREFIXED path. New specs go in the user store; system-store edits require Promote. Provide the FULL file content.",
     parameters: [
       { name: "path", type: "string", description: "Store-prefixed artifact path, e.g. 'user-specs/003-x/spec.md'", required: true },
@@ -65,7 +65,7 @@ export function SpecActions() {
   });
 
   useCopilotAction({
-    name: "editSpec",
+    name: "spec_edit",
     description: "Find-and-replace within a specification artifact. The find text must appear EXACTLY once.",
     parameters: [
       { name: "path", type: "string", description: "Artifact path", required: true },
@@ -92,7 +92,7 @@ export function SpecActions() {
   });
 
   useCopilotAction({
-    name: "searchSpecs",
+    name: "spec_search",
     description: "Search specification artifacts by path/name (case-insensitive substring). Returns matching artifact paths.",
     parameters: [{ name: "query", type: "string", description: "Search text", required: true }],
     handler: async ({ query }) => {

@@ -13,7 +13,7 @@ export function DevActions() {
   const store = useOSStoreApi();
 
   useCopilotAction({
-    name: "installApp",
+    name: "app_install",
     description:
       "Install a BrowserOS app from a single self-contained index.html document, then add it to the dock and open it. Use this AFTER delegating the build to a Claude developer sub-agent (development tasks must not be hand-written). Pass the HTML the sub-agent produced.",
     parameters: [
@@ -39,7 +39,7 @@ export function DevActions() {
   });
 
   useCopilotAction({
-    name: "buildApp",
+    name: "app_build",
     description:
       "Install a multi-file app PROJECT (TypeScript/TSX, may import React) that a Claude developer sub-agent authored into a staging directory. Use this for anything beyond a single static HTML file. First delegate to the developer (contentOnly) to WRITE the project into a fresh staging dir with a src/main.tsx (or src/main.ts) entry; then call buildApp with the app name and that directory. The project is bundled with esbuild and installed as a preview (promote/discard from the Topbar).",
     parameters: [
@@ -63,7 +63,7 @@ export function DevActions() {
   });
 
   useCopilotAction({
-    name: "listInstalledApps",
+    name: "app_list",
     description: "List apps that were installed at runtime (not built-in).",
     parameters: [],
     handler: async () => {
@@ -75,7 +75,7 @@ export function DevActions() {
   });
 
   useCopilotAction({
-    name: "uninstallApp",
+    name: "app_uninstall",
     description:
       "Uninstall a runtime-installed app by id. This hides it from the desktop but keeps its files, so the user can restore it from Settings → Apps (or permanently delete it there with Purge).",
     parameters: [{ name: "id", type: "string", description: "App id", required: true }],
@@ -87,7 +87,7 @@ export function DevActions() {
   });
 
   useCopilotAction({
-    name: "getMyInstructions",
+    name: "agent_prompt_get",
     description:
       "Read the active agent's EDITABLE base instructions (its personality) — the exact text updateMyInstructions overwrites. This is NOT the fully composed prompt: the always-injected core policy, memory, and skills index are added at runtime and MUST NOT be edited or written back (doing so bakes them into the personality and corrupts the agent).",
     parameters: [],
@@ -98,7 +98,7 @@ export function DevActions() {
   });
 
   useCopilotAction({
-    name: "updateMyInstructions",
+    name: "agent_prompt_set",
     description:
       "Rewrite the active agent's base instructions (personality) to improve future behavior. Use sparingly and preserve important existing guidance.",
     parameters: [{ name: "instructions", type: "string", description: "The new agent personality instructions", required: true }],

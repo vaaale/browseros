@@ -106,7 +106,7 @@ export function SubAgentActions({ group = DEFAULT_GROUP }: { group?: string }) {
   }, [threadId]);
 
   useCopilotAction({
-    name: "listSubAgents",
+    name: "agent_list",
     description: "List available sub-agents (id, name, type local|claude, description) you can delegate to.",
     parameters: [],
     handler: async () => {
@@ -122,7 +122,7 @@ export function SubAgentActions({ group = DEFAULT_GROUP }: { group?: string }) {
   });
 
   useCopilotAction({
-    name: "createSubAgent",
+    name: "agent_create",
     description:
       "Create a reusable sub-agent. type must be 'claude' for development/coding agents, otherwise 'local'. Persisted as markdown under data/agents.",
     parameters: [
@@ -143,7 +143,7 @@ export function SubAgentActions({ group = DEFAULT_GROUP }: { group?: string }) {
   });
 
   useCopilotAction({
-    name: "delegateToSubAgent",
+    name: "agent_delegate",
     description:
       "Delegate a task to a sub-agent. Provide an existing 'agent' id/name, OR an 'ephemeral' agent spec to create-and-run a one-off agent. Use a Claude agent (type 'claude') for ALL development tasks; Local otherwise.",
     parameters: [
@@ -211,7 +211,7 @@ export function SubAgentActions({ group = DEFAULT_GROUP }: { group?: string }) {
 
   // Elicitation card: ask the user before using a Claude agent for a NON-dev task.
   useCopilotAction({
-    name: "requestClaudeAgentPermission",
+    name: "agent_request_claude",
     description:
       "Ask the user for permission to use a Claude (Claude Code) sub-agent for a NON-development task. Returns one of: once, session, local. Required before using a Claude agent for anything that isn't development/coding.",
     parameters: [{ name: "task", type: "string", description: "What you want the Claude agent to do", required: true }],
@@ -240,7 +240,7 @@ export function SubAgentActions({ group = DEFAULT_GROUP }: { group?: string }) {
   // no feature branch is active, prompt the user for a name (with a suggestion)
   // and activate it on this conversation before delegating.
   useCopilotAction({
-    name: "requestFeatureBranch",
+    name: "dev_branch_request",
     description:
       "Set up the active feature branch required to modify BrowserOS itself (its source under src/). Call this BEFORE delegating a BOS source change to the developer when no active feature branch is set; it proposes a name from the task, lets the user confirm/edit, then creates and activates the bos/<kebab-name> branch on this conversation. Returns a message; only delegate to the developer once a branch is active.",
     parameters: [{ name: "task", type: "string", description: "The BOS source change you want the developer to make", required: true }],

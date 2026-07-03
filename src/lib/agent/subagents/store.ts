@@ -43,23 +43,23 @@ const DEFAULTS: SeedAgent[] = [
     name: "File Organizer",
     description: "Organizes, renames, and tidies files in the virtual file system.",
     type: "local",
-    systemPrompt: "You are a file organization sub-agent. Inspect the VFS with list_files/read_file and tidy it using write_file/create_folder. Explain what you changed.",
+    systemPrompt: "You are a file organization sub-agent. Inspect the VFS with file_list/file_read and tidy it using file_write/file_mkdir. Explain what you changed.",
   },
   {
     name: "Writer",
     description: "Drafts and edits documents in the virtual file system.",
     type: "local",
-    systemPrompt: "You are a writing sub-agent. Produce clear, well-structured documents and save them to the VFS with write_file when asked.",
+    systemPrompt: "You are a writing sub-agent. Produce clear, well-structured documents and save them to the VFS with file_write when asked.",
   },
   {
     name: "Developer",
     description: "Modifies BrowserOS's own source and builds apps/features. Backed by Claude Code with repo access.",
     type: "claude",
     tools: [
-      "git_status",
-      "list_source", "read_source", "search_source",
+      "dev_git_status",
+      "bos_source_list", "bos_source_read", "bos_source_search",
       "run_command",
-      "list_files", "read_file", "write_file",
+      "file_list", "file_read", "file_write",
     ],
     systemPrompt:
       "You are the BrowserOS developer sub-agent. You handle two DISTINCT kinds of task — identify which before acting.\n\n" +
@@ -68,7 +68,7 @@ const DEFAULTS: SeedAgent[] = [
       "BOS is a Next.js (App Router) app: built-in apps live under src/apps/<id>/ (manifest.ts + index.tsx, auto-discovered), shared/app UI under src/components (settings tabs under src/components/apps/settings), server logic and stores under src/lib, OS primitives under src/os, and API routes under src/app/api.\n\n" +
       "Workflow (path B — source edits only) — follow it every time:\n" +
       "1. You are ALREADY in an isolated preview worktree on a dedicated branch that the Supervisor provisioned for this change. Do NOT create or switch git branches, do NOT run any git command, and do NOT edit any directory other than your current working directory — the Supervisor commits, builds, and previews your changes for you. Branching or editing the main checkout would break the running version.\n" +
-      "2. Explore with list_source / search_source / read_source to find the exact files to change.\n" +
+      "2. Explore with bos_source_list / bos_source_search / bos_source_read to find the exact files to change.\n" +
       "3. Make focused edits with your native file tools (the Claude/OpenCode harness edits files directly). Edits under src/ hot-reload in dev. Change only what the task needs.\n" +
       "4. Verify with run_command 'typecheck' (and 'lint'); fix any errors you introduced.\n" +
       "5. Report exactly what you changed and how to test it.\n\n" +
@@ -89,12 +89,9 @@ const DEFAULTS: SeedAgent[] = [
     // Unified allowlist (016): server tools (delegated runs) + client actions
     // (as the active personality). Both contexts filter this one list to their own ids.
     tools: [
-      // server sub-agent tools (toolsFor, delegated)
-      "list_specs", "read_spec", "write_spec", "edit_spec", "search_specs", "read_template", "list_templates", "delegate_to_developer",
-      // main-chat actions (gated when active personality)
-      "listSpecs", "readSpec", "writeSpec", "editSpec", "searchSpecs",
-      "openSpecArtifact", "refreshSpecTree",
-      "delegateToSubAgent", "loadSkill", "memory", "recallMemories", "listDocs", "readDoc",
+      "spec_list", "spec_read", "spec_write", "spec_edit", "spec_search", "spec_template_read", "spec_template_list",
+      "dev_delegate", "buildstudio_artifact_open", "buildstudio_tree_refresh",
+      "agent_delegate", "skill_load", "memory_save", "memory_recall", "docs_list", "docs_read",
     ],
     skills: ["build-studio"],
     mcp: [],
@@ -102,9 +99,9 @@ const DEFAULTS: SeedAgent[] = [
       "You are Build Studio, the BrowserOS spec-authoring agent. You operate the Software-As-A-Prompt workflow: every feature is defined by a specification under specs/ before it is built.\n\n" +
       'You work through your skills. Load and follow the "Build Studio" skill, which holds the spec-kit pipeline (constitution, specify, clarify, plan, tasks, analyze, implement, converge) and its per-command references.\n\n' +
       "Hard rules:\n" +
-      "- Read and write ONLY specification artifacts via your spec tools. Specs live in external stores: paths are STORE-PREFIXED `<storeId>/<rel>` (call list_specs with no path to see the stores, e.g. 'bos-system-specs', 'user-specs'). New specs you author go in the user store; system-store edits accumulate on a candidate branch until promoted. You CANNOT and MUST NOT modify BOS source.\n" +
-      "- Build artifact bodies from the spec-kit templates via read_template / list_templates (the engine at .specify/templates).\n" +
-      "- For the `implement` step, call delegate_to_developer with the feature's spec/plan/tasks context and acceptance criteria — never write code yourself.\n" +
+      "- Read and write ONLY specification artifacts via your spec tools. Specs live in external stores: paths are STORE-PREFIXED `<storeId>/<rel>` (call spec_list with no path to see the stores, e.g. 'bos-system-specs', 'user-specs'). New specs you author go in the user store; system-store edits accumulate on a candidate branch until promoted. You CANNOT and MUST NOT modify BOS source.\n" +
+      "- Build artifact bodies from the spec-kit templates via spec_template_read / spec_template_list (the engine at .specify/templates).\n" +
+      "- For the `implement` step, call dev_delegate with the feature's spec/plan/tasks context and acceptance criteria — never write code yourself.\n" +
       "- Keep specs and docs in sync; record spec/code drift in the system store's discrepancies.md.\n" +
       "- The constitution (in the system store at .specify/memory/constitution.md) is special: if a request would require changing it, do NOT blindly comply — confirm it is the right call and explore alternatives with the user first.\n" +
       "- After the Developer builds a feature, run analyze + converge; if discrepancies are found, ask the user for confirmation before instructing the Developer to fix them.",

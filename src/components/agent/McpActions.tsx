@@ -15,7 +15,7 @@ export function McpActions({ agentId }: { agentId?: string }) {
   const scope = agentId ? `&agent=${encodeURIComponent(agentId)}` : "";
 
   useCopilotAction({
-    name: "listMcpServers",
+    name: "mcp_server_list",
     description: "List the MCP servers available to you, with their descriptions (what each is for).",
     parameters: [],
     handler: async () => {
@@ -25,7 +25,7 @@ export function McpActions({ agentId }: { agentId?: string }) {
   });
 
   useCopilotAction({
-    name: "searchMcpTools",
+    name: "mcp_tool_search",
     description:
       "Search for MCP tools across all servers available to you, or on a specific server. Returns each tool's server, name, and description (not full schemas). Use getMcpToolSchema to inspect the inputSchema before calling.",
     parameters: [
@@ -47,7 +47,7 @@ export function McpActions({ agentId }: { agentId?: string }) {
   });
 
   useCopilotAction({
-    name: "listMcpServerTools",
+    name: "mcp_server_tools",
     description:
       "List all tools a specific MCP server exposes, each with its description and input JSON schema.",
     parameters: [{ name: "server", type: "string", description: "MCP server name", required: true }],
@@ -58,7 +58,7 @@ export function McpActions({ agentId }: { agentId?: string }) {
   });
 
   useCopilotAction({
-    name: "getMcpToolSchema",
+    name: "mcp_tool_schema",
     description:
       "Get the full input JSON schema for a single MCP tool, so you know exactly what arguments to pass to callMcpTool.",
     parameters: [
@@ -72,7 +72,7 @@ export function McpActions({ agentId }: { agentId?: string }) {
   });
 
   useCopilotAction({
-    name: "callMcpTool",
+    name: "mcp_tool_call",
     description:
       "Call a tool on an MCP server. Discover the server, tool name, and argument schema first via searchMcpTools + getMcpToolSchema, then pass `args` as a JSON object string matching that schema. The proxy validates arguments against the tool's inputSchema before forwarding.",
     parameters: [
@@ -103,7 +103,7 @@ export function McpActions({ agentId }: { agentId?: string }) {
   });
 
   useCopilotAction({
-    name: "addMcpServer",
+    name: "mcp_server_add",
     description:
       "Connect a new MCP server. For 'http' (streamable, default) or 'sse', give an endpoint URL (+ optional apiKey bearer token or custom headers). For 'stdio', give a command and args (e.g. command 'docker', args ['run','-i','--rm', …]) with optional env. Users can also manage these in Settings → MCP Servers.",
     parameters: [
@@ -128,7 +128,7 @@ export function McpActions({ agentId }: { agentId?: string }) {
   });
 
   useCopilotAction({
-    name: "removeMcpServer",
+    name: "mcp_server_remove",
     description: "Disconnect an MCP server by its name.",
     parameters: [{ name: "name", type: "string", description: "MCP server name", required: true }],
     handler: async ({ name }) => {

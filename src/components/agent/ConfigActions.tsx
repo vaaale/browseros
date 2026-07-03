@@ -34,7 +34,7 @@ export function ConfigActions() {
   });
 
   useCopilotAction({
-    name: "listConfigurableSettings",
+    name: "config_list",
     description: "List all configurable settings namespaces and their fields.",
     parameters: [],
     handler: async () => {
@@ -51,7 +51,7 @@ export function ConfigActions() {
   });
 
   useCopilotAction({
-    name: "updateSetting",
+    name: "config_set",
     description: "Update a configuration value. Use listConfigurableSettings to discover namespaces and field keys.",
     parameters: [
       { name: "namespace", type: "string", description: "Config namespace, e.g. ai-provider, appearance, dev-harness", required: true },

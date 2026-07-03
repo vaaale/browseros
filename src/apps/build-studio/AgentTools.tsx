@@ -16,7 +16,7 @@ export function BuildStudioAgentTools({
   onRefresh: () => void;
 }) {
   useCopilotAction({
-    name: "openSpecArtifact",
+    name: "buildstudio_artifact_open",
     description:
       "Open a specification artifact in the Build Studio viewer (the center pane) so the user can see it. Call this after you create or edit a spec, or when you reference one in the conversation. The path is STORE-PREFIXED, e.g. 'bos-system-specs/013-build-studio-agentic/spec.md'.",
     parameters: [
@@ -38,7 +38,7 @@ export function BuildStudioAgentTools({
   });
 
   useCopilotAction({
-    name: "refreshSpecTree",
+    name: "buildstudio_tree_refresh",
     description:
       "Reload the Build Studio spec tree and pipeline status from disk. Call after you create, rename, or delete a spec so the left tree reflects the change.",
     parameters: [],

@@ -15,7 +15,7 @@ interface DocNode {
 
 export function DocsActions() {
   useCopilotAction({
-    name: "listDocs",
+    name: "docs_list",
     description:
       "List documentation pages in the BOS documentation tree (usage = end-user docs, dev = developer docs). Returns refs like 'usage/apps/files.md'.",
     parameters: [],
@@ -34,7 +34,7 @@ export function DocsActions() {
   });
 
   useCopilotAction({
-    name: "readDoc",
+    name: "docs_read",
     description:
       "Read a documentation page by ref, e.g. 'usage/apps/files.md' or 'dev/memory/memory.md' (the first path segment is the section: usage or dev).",
     parameters: [{ name: "ref", type: "string", description: "Doc ref like 'usage/apps/files.md'", required: true }],

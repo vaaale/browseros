@@ -7,7 +7,7 @@ import type { Skill } from "@/lib/agent/skills/store";
 // demand and save new skills it has learned.
 export function SkillsActions() {
   useCopilotAction({
-    name: "loadSkill",
+    name: "skill_load",
     description: "Load the full instructions for a skill by name or id (the system prompt lists available skills).",
     parameters: [{ name: "skill", type: "string", description: "Skill name or id", required: true }],
     handler: async ({ skill }) => {
@@ -18,7 +18,7 @@ export function SkillsActions() {
   });
 
   useCopilotAction({
-    name: "saveSkill",
+    name: "skill_save",
     description:
       "Save a reusable skill (a named, step-by-step procedure) to the library for future sessions. Create one when you discover a generally useful approach.",
     parameters: [

@@ -8,7 +8,7 @@ import { useCopilotAction } from "@/components/agent/gated-action";
 // snapshot itself stays frozen for the session).
 export function MemoryActions() {
   useCopilotAction({
-    name: "memory",
+    name: "memory_save",
     description:
       "Save durable facts to persistent memory (survives across sessions; injected into future conversations). " +
       "target 'user' = who the user is (identity, role, preferences, style); 'memory' = your notes (environment, conventions, lessons). " +
@@ -33,7 +33,7 @@ export function MemoryActions() {
   });
 
   useCopilotAction({
-    name: "recallMemories",
+    name: "memory_recall",
     description:
       "Read the live persistent memory entries (user profile and agent notes). Use to see the current state, e.g. after writing.",
     parameters: [],

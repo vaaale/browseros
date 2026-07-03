@@ -66,7 +66,7 @@ function EventCard({ name, status, args, result }: { name: string; status: strin
   }, [scope, cardId]);
 
   // Live sub-agent events for delegation cards (streamed before completion).
-  const liveKey = name === "delegateToSubAgent" ? String((args as { task?: string })?.task ?? "") : "";
+  const liveKey = name === "agent_delegate" ? String((args as { task?: string })?.task ?? "") : "";
   const live = useDelegation(liveKey);
 
   const argText = formatFull(args);

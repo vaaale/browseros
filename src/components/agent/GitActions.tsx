@@ -13,7 +13,7 @@ export function GitActions({ group = DEFAULT_GROUP }: { group?: string }) {
   const activeConversation = useActiveConversation(group);
 
   useCopilotAction({
-    name: "gitStatus",
+    name: "dev_git_status",
     description:
       "Show git status of the BOS repo: the main checkout's branch + changed files, AND any pending self-modification `candidate` (a built-but-not-yet-active version living in an isolated worktree). If `candidate` is present, a delegated edit lives THERE (committed) — the main checkout will look clean, so do NOT re-apply the change in place; the user previews/promotes the candidate from the top-bar Active ▾ menu.",
     parameters: [],

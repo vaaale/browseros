@@ -27,7 +27,7 @@ import { useAgentCapabilities } from "./agent-capabilities";
 // per-agent allowlist must never be able to silently disable them (that would
 // e.g. drop the feature-branch prompt or the Claude-permission card, leaving the
 // model to flail with no way to ask the user). They are ALWAYS available.
-const ALWAYS_AVAILABLE_ACTIONS = new Set(["requestFeatureBranch", "requestClaudeAgentPermission"]);
+const ALWAYS_AVAILABLE_ACTIONS = new Set(["dev_branch_request", "agent_request_claude"]);
 
 export function useCopilotAction<const T extends Parameter[] | [] = []>(
   action: FrontendAction<T> | CatchAllFrontendAction,

@@ -13,17 +13,17 @@ import { SCHEDULER_TOOLS } from "@/lib/scheduler/agent-tools";
 // and scheduler operations (spread in at module bottom to keep this literal
 // small; scheduler tools live in their own module).
 export const SUBAGENT_TOOLS: Record<string, LlmTool> = {
-  list_files: {
+  file_list: {
     description: "List entries in a virtual file system directory.",
     parameters: { type: "object", properties: { path: { type: "string", description: 'Directory, defaults to "/"' } } },
     execute: async (input) => JSON.stringify(await vfs.list((input.path as string) || "/")),
   },
-  read_file: {
+  file_read: {
     description: "Read a text file from the virtual file system.",
     parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
     execute: async (input) => vfs.readText(input.path as string),
   },
-  write_file: {
+  file_write: {
     description: "Create or overwrite a text file in the virtual file system.",
     parameters: {
       type: "object",
@@ -35,7 +35,7 @@ export const SUBAGENT_TOOLS: Record<string, LlmTool> = {
       return `Wrote ${input.path}`;
     },
   },
-  create_folder: {
+  file_mkdir: {
     description: "Create a directory in the virtual file system.",
     parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
     execute: async (input) => {
@@ -75,17 +75,17 @@ export const SUBAGENT_TOOLS: Record<string, LlmTool> = {
 // developer sub-agent can modify BOS itself. Powerful, so they are NOT part of
 // the default tool set — an agent must opt in by listing them in its `tools`.
 export const DEV_TOOLS: Record<string, LlmTool> = {
-  list_source: {
+  bos_source_list: {
     description: "List files/folders in the BrowserOS source repository (relative to repo root, e.g. 'src/components').",
     parameters: { type: "object", properties: { path: { type: "string", description: "Repo-relative dir, defaults to '.'" } } },
     execute: async (input) => JSON.stringify(await repo.listDir((input.path as string) || ".")),
   },
-  read_source: {
+  bos_source_read: {
     description: "Read a source file from the BrowserOS repository (repo-relative path, e.g. 'src/components/apps/settings/SkillsTab.tsx').",
     parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
     execute: async (input) => repo.readFile(input.path as string),
   },
-  search_source: {
+  bos_source_search: {
     description: "Search BrowserOS source files for a string. Returns matching path:line:text. Optionally restrict to a subdirectory.",
     parameters: {
       type: "object",
@@ -107,7 +107,7 @@ export const DEV_TOOLS: Record<string, LlmTool> = {
   // and blocks promote. The Supervisor owns version branches and commits the
   // developer's edits on the isolated preview worktree automatically — sub-agents
   // must NOT run git against the main checkout (specs/005, 017 diagnosis).
-  git_status: {
+  dev_git_status: {
     description: "Show the current git branch and changed files.",
     parameters: { type: "object", properties: {} },
     execute: async () => JSON.stringify(await git.status()),
@@ -119,17 +119,17 @@ export const DEV_TOOLS: Record<string, LlmTool> = {
 // Writes go to the addressed store — refused for read-only stores; system-store
 // writes accumulate on a candidate branch until promoted. Opt-in like DEV_TOOLS.
 export const SPEC_TOOLS: Record<string, LlmTool> = {
-  list_specs: {
+  spec_list: {
     description: "List entries in the spec stores. An empty/omitted path lists the available stores (e.g. 'bos-system-specs', 'user-specs'); a store-prefixed path like 'user-specs/003-my-feature' lists inside a store.",
     parameters: { type: "object", properties: { path: { type: "string", description: "Store-prefixed dir, e.g. 'user-specs' or 'user-specs/003-x'. Empty = list stores." } } },
     execute: async (input) => JSON.stringify(await specfs.listDir((input.path as string) || "")),
   },
-  read_spec: {
+  spec_read: {
     description: "Read a specification artifact by its STORE-PREFIXED path, e.g. 'bos-system-specs/001-build-studio/spec.md'. For spec-kit templates use read_template instead.",
     parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
     execute: async (input) => specfs.readFile(input.path as string),
   },
-  write_spec: {
+  spec_write: {
     description: "Create or overwrite a specification artifact by STORE-PREFIXED path (e.g. 'user-specs/003-x/spec.md'). New user specs go in the user store; system specs require promote. Build the body from a template via read_template.",
     parameters: {
       type: "object",
@@ -138,7 +138,7 @@ export const SPEC_TOOLS: Record<string, LlmTool> = {
     },
     execute: async (input) => `Wrote ${await specfs.writeFile(input.path as string, (input.content as string) ?? "")}`,
   },
-  edit_spec: {
+  spec_edit: {
     description: "Replace a unique snippet of text in a spec artifact (STORE-PREFIXED path; the search text must occur exactly once).",
     parameters: {
       type: "object",
@@ -147,7 +147,7 @@ export const SPEC_TOOLS: Record<string, LlmTool> = {
     },
     execute: async (input) => `Edited ${await specfs.editFile(input.path as string, input.find as string, (input.replace as string) ?? "")}`,
   },
-  search_specs: {
+  spec_search: {
     description: "Search spec content across all stores for a string. Returns matching path:line:text. Optionally restrict to a store-prefixed subdirectory.",
     parameters: {
       type: "object",
@@ -156,12 +156,12 @@ export const SPEC_TOOLS: Record<string, LlmTool> = {
     },
     execute: async (input) => JSON.stringify(await specfs.search(input.query as string, { dir: input.dir as string | undefined })),
   },
-  read_template: {
+  spec_template_read: {
     description: "Read a spec-kit template or command prompt from the engine at .specify/templates (e.g. 'spec-template.md', 'plan-template.md', 'commands/specify.md'). Read-only.",
     parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
     execute: async (input) => specfs.readTemplate(input.path as string),
   },
-  list_templates: {
+  spec_template_list: {
     description: "List available spec-kit templates/command prompts under .specify/templates (optionally a subdir like 'commands').",
     parameters: { type: "object", properties: { path: { type: "string" } } },
     execute: async (input) => JSON.stringify(await specfs.listTemplates((input.path as string) || "")),
@@ -171,7 +171,7 @@ export const SPEC_TOOLS: Record<string, LlmTool> = {
 // Build Studio delegates implementation to the Developer via this tool. The real
 // implementation is built per-run in the sub-agent runner (it needs the parent
 // event stream + a depth guard), so it is referenced here only by id.
-export const DELEGATE_TO_DEVELOPER = "delegate_to_developer";
+export const DELEGATE_TO_DEVELOPER = "dev_delegate";
 
 // Re-export scheduler tools for direct access (e.g. UI showing the tool set).
 // They are already merged into SUBAGENT_TOOLS above, so ALL_TOOLS picks them up.

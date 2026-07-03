@@ -4,7 +4,7 @@ import { useCopilotAction } from "@/components/agent/gated-action";
 
 export function WebSearchActions() {
   useCopilotAction({
-    name: "webSearch",
+    name: "web_search",
     description:
       "Search the web with Anthropic native web search. Use for current facts, recent events, or source-backed answers. Always cite source URLs from the results.",
     parameters: [

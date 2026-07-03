@@ -6,7 +6,7 @@ import { useCopilotAction } from "@/components/agent/gated-action";
 // restricted pass), improve a skill from feedback (GEPA), and run the Curator.
 export function SelfImprovementActions() {
   useCopilotAction({
-    name: "reflectAndLearn",
+    name: "skill_reflect",
     description:
       "Call this after completing a non-trivial task. Provide a transcript/summary of the task and outcome. Runs the self-improvement review — a separate pass that may update persistent memory and patch/create skills based on what was learned.",
     parameters: [{ name: "transcript", type: "string", description: "Summary of the task, what was done, corrections received, and the outcome", required: true }],
@@ -22,7 +22,7 @@ export function SelfImprovementActions() {
   });
 
   useCopilotAction({
-    name: "runCurator",
+    name: "skill_curate",
     description:
       "Run the skill Curator: archives stale, agent-created, unpinned skills (never deletes — archived skills are restorable). Use occasionally to keep the skill library tidy.",
     parameters: [],
@@ -34,7 +34,7 @@ export function SelfImprovementActions() {
   });
 
   useCopilotAction({
-    name: "improveSkill",
+    name: "skill_improve",
     description: "Improve an existing skill based on feedback (from the user or your own reflection). GEPA-lite reflective optimization.",
     parameters: [
       { name: "skill", type: "string", description: "Skill name or id", required: true },

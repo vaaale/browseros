@@ -25,7 +25,7 @@ export function OSActions() {
   });
 
   useCopilotAction({
-    name: "launchApp",
+    name: "bos_app_launch",
     description: "Open an application window. Use listApps to discover available app ids.",
     parameters: [
       { name: "appId", type: "string", description: "The app id, e.g. files, browser, settings, chat", required: true },
@@ -37,7 +37,7 @@ export function OSActions() {
   });
 
   useCopilotAction({
-    name: "listApps",
+    name: "bos_app_list",
     description: "List installed applications and their ids.",
     parameters: [],
     handler: async () =>
@@ -50,7 +50,7 @@ export function OSActions() {
   });
 
   useCopilotAction({
-    name: "closeWindow",
+    name: "bos_window_close",
     description: "Close an open window by its id.",
     parameters: [{ name: "windowId", type: "string", description: "The window id", required: true }],
     handler: async ({ windowId }) => {
@@ -60,7 +60,7 @@ export function OSActions() {
   });
 
   useCopilotAction({
-    name: "changeWallpaper",
+    name: "bos_wallpaper_set",
     description:
       "Change the desktop wallpaper. Accepts a preset id (aurora, dusk, sunset, ocean, forest, graphite, mono), an image URL, or a VFS image path like /Pictures/bg.png.",
     parameters: [{ name: "wallpaper", type: "string", description: "Preset id, URL, or VFS path", required: true }],
@@ -72,7 +72,7 @@ export function OSActions() {
   });
 
   useCopilotAction({
-    name: "openWebPage",
+    name: "bos_browser_open",
     description: "Open a URL in the BrowserOS web browser.",
     parameters: [{ name: "url", type: "string", description: "The URL or search query", required: true }],
     handler: async ({ url }) => {
@@ -82,7 +82,7 @@ export function OSActions() {
   });
 
   useCopilotAction({
-    name: "openPreview",
+    name: "web_view",
     description:
       "Open a sandboxed HTML preview window. Provide `html` (a full HTML document), `filePath` (an absolute VFS path such as /mockups/file.html), or `url` (a same-origin URL or an absolute VFS path — leading-`/` paths that are not `/api/*` are auto-rewritten to `/api/fs/raw?path=...`). The preview runs with `sandbox=allow-scripts` and cannot reach BrowserOS APIs.",
     parameters: [
@@ -123,7 +123,7 @@ export function OSActions() {
   });
 
   useCopilotAction({
-    name: "listFiles",
+    name: "file_list",
     description:
       "List entries in the USER'S virtual file system (their Documents, Pictures, Desktop, etc.). This is sandboxed user data — it does NOT contain BrowserOS's own source code, apps, or Settings pages. To change BrowserOS itself, delegate to the developer sub-agent (see the 'Modify BrowserOS' skill); do not hunt for source here.",
     parameters: [{ name: "path", type: "string", description: 'Directory path, defaults to "/"', required: false }],
@@ -138,7 +138,7 @@ export function OSActions() {
   });
 
   useCopilotAction({
-    name: "readFile",
+    name: "file_read",
     description: "Read a text file from the user's virtual file system (sandboxed user data, NOT BrowserOS source code).",
     parameters: [{ name: "path", type: "string", description: "File path", required: true }],
     handler: async ({ path }) => {
@@ -151,7 +151,7 @@ export function OSActions() {
   });
 
   useCopilotAction({
-    name: "writeFile",
+    name: "file_write",
     description:
       "Create or overwrite a text file in the user's virtual file system (sandboxed user data, NOT BrowserOS source code). To modify BrowserOS itself, delegate to the developer sub-agent instead.",
     parameters: [
@@ -169,7 +169,7 @@ export function OSActions() {
   });
 
   useCopilotAction({
-    name: "createFolder",
+    name: "file_mkdir",
     description: "Create a directory in the virtual file system.",
     parameters: [{ name: "path", type: "string", description: "Directory path", required: true }],
     handler: async ({ path }) => {
@@ -183,7 +183,7 @@ export function OSActions() {
   });
 
   useCopilotAction({
-    name: "deletePath",
+    name: "file_delete",
     description: "Delete a file or folder from the virtual file system.",
     parameters: [{ name: "path", type: "string", description: "Path to delete", required: true }],
     handler: async ({ path }) => {
