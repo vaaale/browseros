@@ -33,6 +33,7 @@ to `000-browseros-core`.
 | 016 | Unified agent model (sub-agent is a role, not a type) — *Draft* | `specs/016-unified-agents/` |
 | 017 | Central logging (session-partitioned, Supervisor-collected) — *Draft* | `specs/017-central-logging/` |
 | 018 | External spec stores (system + user git repos) — *Draft* | `specs/018-external-spec-store/` |
+| 019 | Tool taxonomy, sandboxed `run_command`, per-conversation agents — *Implemented* | `specs/019-tools-and-sandbox/` |
 
 ## Other artifacts
 

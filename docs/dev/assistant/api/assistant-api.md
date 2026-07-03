@@ -27,7 +27,7 @@ Server endpoints behind the assistant subsystem. See the full table in
 
 | Route | Methods | Purpose |
 |---|---|---|
-| `/api/assistant/agent` | GET, PATCH, POST | GET → agents + the **composed** instructions; PATCH → set the active agent; POST → create an agent. |
+| `/api/assistant/agent` | GET, PATCH, POST | GET (`?agentId`) → agents + that agent's **composed** instructions; PATCH (`agentId` required) → edit an agent's prompt/capabilities; POST → create an agent. No global "active agent". |
 | `/api/assistant/title` | POST | Generate a short conversation title from the first exchange (isolated `complete()`, `maxTokens:256`, sanitized; never enters the chat). Returns 503 if no provider. |
 | `/api/subagents` | GET, POST, DELETE | Sub‑agent registry. |
 | `/api/subagents/delegate` | POST (NDJSON stream) | Run a sub‑agent, streaming `{type:"tool"}` events then `{type:"done"\|"error"}`. |
