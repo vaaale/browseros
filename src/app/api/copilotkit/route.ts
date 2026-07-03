@@ -42,31 +42,29 @@ export async function POST(req: NextRequest) {
   // servers are NOT injected here — the agent uses them via the gateway (014).
   const url = new URL(req.url);
   const origin = url.origin;
-  // The agent is per-conversation and MUST be pinned on the request (the client
-  // sends ?agent=<conversation's agent>). There is no global active-agent
-  // fallback — a missing pin is a bug, so fail loudly rather than composing the
-  // wrong personality.
+  // The agent is per-conversation and pinned on chat requests (the client sends
+  // ?agent=<conversation's agent>). This endpoint is ALSO hit by CopilotKit's
+  // agent-less discovery/runtime-info requests, so we don't reject a missing pin
+  // here — we simply only build the personalized agent WHEN one is pinned.
+  // (composeInstructions itself still throws on an empty id, so the actual
+  // resolution point never silently falls back to the wrong agent.)
   const agentId = url.searchParams.get("agent") || "";
-  if (!agentId) {
-    return new Response("Missing required ?agent= (the conversation's agent id).", { status: 400 });
-  }
-  const [runtimeOptions, serviceAdapter, prompt] = await Promise.all([
+  const [runtimeOptions, serviceAdapter] = await Promise.all([
     buildRuntimeOptions(),
     buildAdapter(origin),
-    composeInstructions(agentId),
   ]);
   // CopilotKit 1.61's v2 path auto-creates the default agent from the service
   // adapter's language model as `new BuiltInAgent({ model })` — with NO prompt —
   // and the client's `instructions` prop is never forwarded to it, so the composed
   // system prompt (core policy + personality + memory + skills) is silently
-  // dropped. Construct the default agent ourselves WITH the composed prompt so it
-  // actually reaches the model. Runtime-level MCP/action tools are still assigned
-  // to this agent by CopilotRuntime. Falls back to the auto-created agent if the
-  // adapter can't expose a language model.
-  const model = serviceAdapter.getLanguageModel?.();
+  // dropped. When an agent is pinned, construct the default agent ourselves WITH
+  // the composed prompt so it actually reaches the model. Runtime-level MCP/action
+  // tools are still assigned to this agent by CopilotRuntime.
+  const model = agentId ? serviceAdapter.getLanguageModel?.() : undefined;
+  const agents = model ? { default: new BuiltInAgent({ model, prompt: await composeInstructions(agentId) }) } : undefined;
   const runtime = new CopilotRuntime({
     ...runtimeOptions,
-    ...(model ? { agents: { default: new BuiltInAgent({ model, prompt }) } } : {}),
+    ...(agents ? { agents } : {}),
   });
   const { handleRequest } = copilotRuntimeNextJSAppRouterEndpoint({
     runtime,
