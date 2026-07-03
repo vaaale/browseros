@@ -60,12 +60,26 @@ export async function complete(opts: { system?: string; prompt: string; maxToken
   const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [];
   if (opts.system) messages.push({ role: "system", content: opts.system });
   messages.push({ role: "user", content: opts.prompt });
-  const res = await openaiClient(c).chat.completions.create({
+  // Stream and accumulate rather than requesting a single JSON body. Some
+  // OpenAI-compatible servers (e.g. llama.cpp) frame non-streaming responses with a
+  // Content-Length that Node's strict `undici` HTTP parser rejects
+  // (`HPE_UNEXPECTED_CONTENT_LENGTH`), surfacing as an opaque "Connection error".
+  // The chunked streaming response has no such framing, so it parses cleanly — this
+  // is the same path the chat proxy already uses successfully against those servers.
+  const stream = await openaiClient(c).chat.completions.create({
     model: c.model,
     messages,
+    stream: true,
     ...openaiTokenParam(c, maxTokens),
   });
-  return messageText(res.choices[0]?.message);
+  let content = "";
+  let reasoning = "";
+  for await (const chunk of stream) {
+    const delta = chunk.choices[0]?.delta as { content?: string | null; reasoning_content?: string } | undefined;
+    if (delta?.content) content += delta.content;
+    else if (delta?.reasoning_content) reasoning += delta.reasoning_content;
+  }
+  return content || reasoning;
 }
 
 // Reads assistant text, falling back to the non-standard `reasoning_content`
