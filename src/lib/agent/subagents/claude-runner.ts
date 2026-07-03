@@ -13,7 +13,7 @@ export const HARNESS_UNAVAILABLE = "harness-unavailable:";
 type OnEvent = (e: { tool: string; input: unknown }) => void;
 
 // Headless Claude can run for a while; cap below the delegate route's budget.
-const CLI_TIMEOUT_MS = 590_000;
+const CLI_TIMEOUT_MS = 1000_000;
 
 function envForCwd(cwd: string): NodeJS.ProcessEnv {
   return { ...process.env, PWD: cwd };
