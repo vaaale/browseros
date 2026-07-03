@@ -8,25 +8,23 @@ import {
   setConversationActiveFeatureBranch,
   useActiveConversation,
 } from "@/lib/agent/conversations";
+import { DEFAULT_AGENT_ID } from "@/lib/agent/agent-ids";
 
 interface AgentMeta {
   id: string;
   name: string;
 }
 
-// The selector reflects (and edits) the ACTIVE conversation's agent. Picking a
-// new agent reassigns the conversation in-place (which moves it under that
-// agent's section in the conversation panel) and also updates the global
-// "active agent" so future new conversations default to the same pick.
+// The selector reflects (and edits) the ACTIVE conversation's agent — the only
+// source of truth. Picking a new agent reassigns THIS conversation in-place
+// (moving it under that agent's section). There is no global "active agent".
 export function AgentSelector({ group = DEFAULT_GROUP }: { group?: string }) {
   const [agents, setAgents] = useState<AgentMeta[]>([]);
-  const [globalActive, setGlobalActive] = useState("");
   const conv = useActiveConversation(group);
 
   const load = useCallback(async () => {
     const res = await fetch("/api/assistant/agent").then((r) => r.json());
     setAgents(res.agents ?? []);
-    setGlobalActive(res.active ?? "");
   }, []);
 
   useEffect(() => {
@@ -34,21 +32,13 @@ export function AgentSelector({ group = DEFAULT_GROUP }: { group?: string }) {
     return () => clearTimeout(id);
   }, [load]);
 
-  // What the dropdown should show: the active conversation's agent if set,
-  // otherwise the global default (back-compat with conversations that predate
-  // per-conversation agents).
-  const shown = conv?.agentId ?? globalActive;
+  // The dropdown shows the active conversation's agent; a conversation that
+  // predates per-conversation agents falls back to the built-in default id only
+  // for display (its runtime agent is resolved from the tagged id going forward).
+  const shown = conv?.agentId ?? DEFAULT_AGENT_ID;
 
   const onChange = async (id: string) => {
-    setGlobalActive(id);
-    // Reassign the active conversation first so the UI (conversation groups +
-    // chat instructions) reflects the change immediately.
     if (conv) await setConversationAgent(conv.id, id);
-    await fetch("/api/assistant/agent", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ active: id }),
-    });
   };
 
   return (

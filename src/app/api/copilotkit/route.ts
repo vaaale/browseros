@@ -42,9 +42,14 @@ export async function POST(req: NextRequest) {
   // servers are NOT injected here — the agent uses them via the gateway (014).
   const url = new URL(req.url);
   const origin = url.origin;
-  // ?agent pins the composed instructions to a specific agent (embedded chats,
-  // 012); otherwise the globally active agent.
-  const agentId = url.searchParams.get("agent") || undefined;
+  // The agent is per-conversation and MUST be pinned on the request (the client
+  // sends ?agent=<conversation's agent>). There is no global active-agent
+  // fallback — a missing pin is a bug, so fail loudly rather than composing the
+  // wrong personality.
+  const agentId = url.searchParams.get("agent") || "";
+  if (!agentId) {
+    return new Response("Missing required ?agent= (the conversation's agent id).", { status: 400 });
+  }
   const [runtimeOptions, serviceAdapter, prompt] = await Promise.all([
     buildRuntimeOptions(),
     buildAdapter(origin),

@@ -4,7 +4,7 @@ import { listMcpServers } from "./store";
 import { makeToolMatcher } from "./match";
 import { validateToolArguments } from "./validate";
 import { isAllowed } from "@/lib/agent/capabilities";
-import { getActiveAgentId, getAgent } from "@/lib/agent/subagents/store";
+import { getAgent } from "@/lib/agent/subagents/store";
 import type { McpServerConfig, McpToolDescriptor } from "./types";
 
 type ArgumentAdapter = (args: Record<string, unknown>) => Record<string, unknown>;
@@ -25,9 +25,12 @@ const CACHE_TTL_MS = 60_000;
 const toolCache = new Map<string, { at: number; tools: McpToolDescriptor[] }>();
 
 // The servers the given agent may use (unset/empty allowlist = all). Matches by
-// name or endpoint so legacy endpoint-based allowlists keep working.
+// name or endpoint so legacy endpoint-based allowlists keep working. `agentId` is
+// required — there is no global active-agent fallback; a missing id is a bug.
 async function allowedServers(agentId?: string): Promise<McpServerConfig[]> {
-  const agent = await getAgent(agentId ?? (await getActiveAgentId()));
+  const id = (agentId ?? "").trim();
+  if (!id) throw new Error("MCP gateway requires an agentId (no active-agent fallback).");
+  const agent = await getAgent(id);
   const allow = agent?.mcp;
   const all = await listMcpServers();
   return all.filter((s) => isAllowed(allow, s.name, s.endpoint ?? ""));

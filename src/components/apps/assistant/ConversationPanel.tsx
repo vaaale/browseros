@@ -11,6 +11,7 @@ import {
   DEFAULT_GROUP,
   type Conversation,
 } from "@/lib/agent/conversations";
+import { DEFAULT_AGENT_ID } from "@/lib/agent/agent-ids";
 
 interface AgentMeta {
   id: string;
@@ -25,13 +26,13 @@ function humanize(id: string): string {
     .join(" ");
 }
 
-// Effective agent for a conversation. Pre-existing chats have no agentId and
-// fall back to the group name (embeds were historically pinned to the group's
-// agent) or the globally active agent (Assistant-app default).
-function effectiveAgent(c: Conversation, globalActive: string): string {
+// Effective agent for a conversation (display bucketing only). New chats are
+// always tagged; a pre-existing untagged chat falls back to its group name
+// (embeds were pinned to the group's agent) or the built-in default id.
+function effectiveAgent(c: Conversation): string {
   if (c.agentId) return c.agentId;
   if (c.group && c.group !== DEFAULT_GROUP) return c.group;
-  return globalActive;
+  return DEFAULT_AGENT_ID;
 }
 
 function ConvRow({ c, active, onPick }: { c: Conversation; active: boolean; onPick?: () => void }) {
@@ -71,7 +72,6 @@ export function ConversationPanel({ group, onPickGroup }: { group?: string; onPi
   const single = useConversations(group ?? DEFAULT_GROUP);
   const all = useAllConversations();
   const [agents, setAgents] = useState<AgentMeta[]>([]);
-  const [globalActive, setGlobalActive] = useState("");
 
   // The agent list is what we group BY in the all-groups view — labels and
   // section ordering come from it. Refetched whenever the conversation set
@@ -85,7 +85,6 @@ export function ConversationPanel({ group, onPickGroup }: { group?: string; onPi
       .then((d) => {
         if (!alive) return;
         setAgents(d.agents ?? []);
-        setGlobalActive(d.active ?? "");
       })
       .catch(() => {});
     return () => {
@@ -123,7 +122,7 @@ export function ConversationPanel({ group, onPickGroup }: { group?: string; onPi
   // hide its conversations.
   const buckets = new Map<string, Conversation[]>();
   for (const c of all.conversations) {
-    const key = effectiveAgent(c, globalActive) || "unassigned";
+    const key = effectiveAgent(c) || "unassigned";
     const list = buckets.get(key) ?? [];
     list.push(c);
     buckets.set(key, list);

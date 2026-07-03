@@ -57,10 +57,9 @@ export function CopilotProvider({
     let alive = true;
     fetch("/api/assistant/agent")
       .then((r) => r.json())
-      .then((d: { agents?: AgentInfo[]; active?: string }) => {
+      .then((d: { agents?: AgentInfo[] }) => {
         if (!alive) return;
-        const id = agentId ?? d.active;
-        const agent = (d.agents ?? []).find((a) => a.id === id);
+        const agent = (d.agents ?? []).find((a) => a.id === agentId);
         setLoaded({ agentId, allow: agent?.tools ?? null });
       })
       .catch(() => alive && setLoaded({ agentId, allow: null }));
@@ -77,8 +76,13 @@ export function CopilotProvider({
   // action set after the chat has rendered makes CopilotKit re-process tool calls,
   // which churns the live event cards.) `ready` resets on agent switch, remounting
   // this subtree with the new agent's allowlist.
+  // Key on the agent so switching agents fully REMOUNTS CopilotKit with a fresh
+  // runtime client bound to the correct `?agent=` URL. CopilotKit creates its
+  // core once and only updates the endpoint via an async effect, so without a
+  // remount a message sent right after an agent switch can still hit the previous
+  // conversation's agent — the "developer answers as Clark" bug.
   return (
-    <CopilotKit runtimeUrl={runtimeUrl} threadId={threadId}>
+    <CopilotKit key={agentId ?? "none"} runtimeUrl={runtimeUrl} threadId={threadId}>
       {ready && (
         <AgentCapabilitiesProvider allow={allow}>
           <OSActions />
@@ -86,7 +90,7 @@ export function CopilotProvider({
           <WebSearchActions />
           <SubAgentActions group={group} />
           <MemoryActions />
-          <DevActions />
+          <DevActions agentId={agentId} />
           <ConfigActions />
           <SkillsActions />
           <SelfImprovementActions />

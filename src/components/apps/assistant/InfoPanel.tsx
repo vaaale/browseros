@@ -14,21 +14,21 @@ function allows(allow: string[] | undefined, id: string): boolean {
   return !allow || allow.length === 0 || allow.includes(id);
 }
 
-export function InfoPanel() {
+export function InfoPanel({ agentId }: { agentId?: string }) {
   const [tab, setTab] = useState<Tab>("tools");
   const [caps, setCaps] = useState<{ skills: string[]; mcp: string[] } | null>(null);
 
-  // Reflect the active agent's scoped skills/MCP. (Tools span two id namespaces —
-  // see TODO.md — so the Tools tab still lists all for now.)
+  // Reflect THIS conversation's agent's scoped skills/MCP (no global active agent).
+  // (Tools span two id namespaces — see TODO.md — so the Tools tab still lists all.)
   useEffect(() => {
     fetch("/api/assistant/agent")
       .then((r) => r.json())
       .then((d) => {
-        const active = (d.agents ?? []).find((a: { id: string }) => a.id === d.active);
-        setCaps({ skills: active?.skills ?? [], mcp: active?.mcp ?? [] });
+        const agent = (d.agents ?? []).find((a: { id: string }) => a.id === agentId);
+        setCaps({ skills: agent?.skills ?? [], mcp: agent?.mcp ?? [] });
       })
       .catch(() => setCaps({ skills: [], mcp: [] }));
-  }, []);
+  }, [agentId]);
 
   return (
     <div className="flex h-full w-56 shrink-0 flex-col border-l border-white/10 bg-white/[0.02]">

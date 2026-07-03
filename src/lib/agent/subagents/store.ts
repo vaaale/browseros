@@ -5,12 +5,10 @@ import { dataDir } from "@/os/data-dir";
 import { writeFileAtomic } from "@/os/atomic-write";
 import type { Agent, AgentType } from "./types";
 import { parseFrontmatter, buildFrontmatter, asString, asList } from "./markdown";
-import { readNamespace, patchNamespace } from "@/lib/config/store";
 import { DEFAULT_PERSONALITY } from "@/lib/agent/config";
+import { DEFAULT_AGENT_ID } from "@/lib/agent/agent-ids";
 
 const DIR = path.join(dataDir(), "agents");
-// The agent whose system prompt is the main assistant's active personality.
-const DEFAULT_AGENT_ID = "assistant";
 
 function slugify(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || `agent-${Date.now().toString(36)}`;
@@ -224,26 +222,10 @@ export async function removeSubAgent(idOrName: string): Promise<void> {
   if (agent) await fs.rm(path.join(DIR, agent.id), { recursive: true, force: true });
 }
 
-// --- The active assistant agent (the main chat's personality) ---
-// The main assistant adopts one agent's system prompt as its personality. It is
-// stored as an id in the "assistant" config namespace; the agents themselves
-// live alongside the delegatable sub-agents (there is no separate "profile").
-
-export async function getActiveAgentId(): Promise<string> {
-  const cfg = await readNamespace("assistant");
-  return (cfg.activeAgent as string) || DEFAULT_AGENT_ID;
-}
-
-export async function setActiveAgentId(id: string): Promise<void> {
-  await patchNamespace("assistant", { activeAgent: id });
-}
-
-/** The active agent's system prompt — used to compose the assistant's instructions. */
-export async function getActiveAgentBody(): Promise<string> {
-  await ensureSeed();
-  const agent = await getAgent(await getActiveAgentId());
-  return agent?.systemPrompt?.trim() || DEFAULT_PERSONALITY;
-}
+// NOTE: there is deliberately no global "active agent". Each conversation carries
+// its own agent id (per-conversation), which is the ONLY source of truth. Agent
+// resolution for a request requires that explicit id (see composeInstructions) —
+// there is no mutable global to fall back to.
 
 /** Replace an agent's system prompt (its instructions/personality), preserving its metadata. */
 export async function setAgentSystemPrompt(id: string, systemPrompt: string): Promise<Agent | undefined> {

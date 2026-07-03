@@ -9,7 +9,7 @@ import type { AppManifest } from "@/os/types";
 // "build" tool — building an app is a development task that goes through the
 // standard agent_delegate (Claude developer sub-agent) + app_install flow
 // (see the "Build App" skill).
-export function DevActions() {
+export function DevActions({ agentId }: { agentId?: string }) {
   const store = useOSStoreApi();
 
   useCopilotAction({
@@ -89,26 +89,29 @@ export function DevActions() {
   useCopilotAction({
     name: "agent_prompt_get",
     description:
-      "Read the active agent's EDITABLE base instructions (its personality) — the exact text agent_prompt_set overwrites. This is NOT the fully composed prompt: the always-injected core policy, memory, and skills index are added at runtime and MUST NOT be edited or written back (doing so bakes them into the personality and corrupts the agent).",
+      "Read THIS conversation's agent's EDITABLE base instructions (its personality) — the exact text agent_prompt_set overwrites. This is NOT the fully composed prompt: the always-injected core policy, memory, and skills index are added at runtime and MUST NOT be edited or written back (doing so bakes them into the personality and corrupts the agent).",
     parameters: [],
     handler: async () => {
+      if (!agentId) return "No agent is associated with this conversation.";
       const res = await fetch("/api/assistant/agent").then((r) => r.json());
-      return String(res.activeBody ?? "");
+      const agent = (res.agents ?? []).find((a: { id: string }) => a.id === agentId);
+      return String(agent?.systemPrompt ?? "");
     },
   });
 
   useCopilotAction({
     name: "agent_prompt_set",
     description:
-      "Rewrite the active agent's base instructions (personality) to improve future behavior. Use sparingly and preserve important existing guidance.",
+      "Rewrite THIS conversation's agent's base instructions (personality) to improve future behavior. Use sparingly and preserve important existing guidance.",
     parameters: [{ name: "instructions", type: "string", description: "The new agent personality instructions", required: true }],
     handler: async ({ instructions }) => {
+      if (!agentId) return "No agent is associated with this conversation.";
       const res = await fetch("/api/assistant/agent", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ body: instructions }),
+        body: JSON.stringify({ agentId, body: instructions }),
       }).then((r) => r.json());
-      return res.error ? `Error: ${res.error}` : "Updated the active agent. It takes effect in the next chat session.";
+      return res.error ? `Error: ${res.error}` : "Updated this conversation's agent. It takes effect in the next chat session.";
     },
   });
 

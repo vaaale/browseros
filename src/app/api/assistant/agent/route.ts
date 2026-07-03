@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   listSubAgents,
-  getActiveAgentId,
-  setActiveAgentId,
   setAgentSystemPrompt,
   setAgentCapabilities,
   createSubAgent,
@@ -33,19 +31,16 @@ async function buildCatalog() {
   };
 }
 
-// The main assistant's personality is the "active agent" — one of the agents in
-// data/agents. (There is no separate "profile" concept.)
+// Agents live in data/agents. There is no global "active agent" — each
+// conversation carries its own. `?agentId` composes that specific agent's
+// instructions (for debugging/preview); omitted → no `composed` is returned.
 export async function GET(req: NextRequest) {
-  // ?agentId composes instructions for a specific agent (embedded chats, 012);
-  // otherwise the globally active agent.
-  const agentId = new URL(req.url).searchParams.get("agentId") || undefined;
-  const [agents, active, composed, catalog] = await Promise.all([
+  const agentId = new URL(req.url).searchParams.get("agentId") || "";
+  const [agents, composed, catalog] = await Promise.all([
     listSubAgents(),
-    getActiveAgentId(),
-    composeInstructions(agentId),
+    agentId ? composeInstructions(agentId) : Promise.resolve(undefined),
     buildCatalog(),
   ]);
-  const activeAgent = agents.find((a) => a.id === active);
   return NextResponse.json({
     agents: agents.map((a) => ({
       id: a.id,
@@ -57,8 +52,6 @@ export async function GET(req: NextRequest) {
       mcp: a.mcp ?? [],
       systemPrompt: a.systemPrompt ?? "",
     })),
-    active,
-    activeBody: activeAgent?.systemPrompt ?? "",
     composed,
     catalog,
   });
@@ -67,25 +60,22 @@ export async function GET(req: NextRequest) {
 export async function PATCH(req: NextRequest) {
   try {
     const body = await req.json();
-    if (typeof body.active === "string") await setActiveAgentId(body.active);
-    if (typeof body.body === "string") {
-      // The details pane targets a specific agent (may not be the active one);
-      // legacy callers (main-chat's own personality editor) omit agentId and
-      // implicitly target the active agent.
-      const targetId =
-        typeof body.agentId === "string" && body.agentId
-          ? body.agentId
-          : await getActiveAgentId();
-      await setAgentSystemPrompt(targetId, body.body);
+    // Editing an agent always targets an explicit agent id (the Settings details
+    // pane / capability picker). No implicit "active agent" target.
+    if (typeof body.agentId !== "string" || !body.agentId) {
+      return NextResponse.json({ error: "agentId is required" }, { status: 400 });
     }
-    if (typeof body.agentId === "string" && (body.tools || body.skills || body.mcp)) {
+    if (typeof body.body === "string") {
+      await setAgentSystemPrompt(body.agentId, body.body);
+    }
+    if (body.tools || body.skills || body.mcp) {
       await setAgentCapabilities(body.agentId, {
         tools: Array.isArray(body.tools) ? body.tools.map(String) : undefined,
         skills: Array.isArray(body.skills) ? body.skills.map(String) : undefined,
         mcp: Array.isArray(body.mcp) ? body.mcp.map(String) : undefined,
       });
     }
-    return NextResponse.json({ active: await getActiveAgentId() });
+    return NextResponse.json({ ok: true });
   } catch (err) {
     return NextResponse.json({ error: (err as Error).message }, { status: 400 });
   }

@@ -128,7 +128,7 @@ function AssistantChatInner({
             />
           </div>
         </div>
-        {showInfo && <InfoPanel />}
+        {showInfo && <InfoPanel agentId={agentId} />}
       </div>
     </CardScopeProvider>
   );

@@ -8,6 +8,7 @@ import {
   type AgentMeta,
   type Catalog,
 } from "./assistant";
+import { DEFAULT_AGENT_ID } from "@/lib/agent/agent-ids";
 
 const EMPTY_CATALOG: Catalog = { tools: [], skills: [], mcp: [] };
 
@@ -30,12 +31,14 @@ export function AssistantTab() {
     try {
       const res = await fetch("/api/assistant/agent").then((r) => r.json());
       const list: AgentMeta[] = res.agents ?? [];
-      const active: string = res.active ?? "";
       setAgents(list);
-      setActiveAgentId(active);
+      // The built-in default agent gets the "default" highlight (there is no
+      // mutable global "active agent").
+      const dflt = list.find((a) => a.id === DEFAULT_AGENT_ID)?.id ?? "";
+      setActiveAgentId(dflt);
       setCatalog((res.catalog as Catalog | undefined) ?? EMPTY_CATALOG);
-      // Default selection to the active agent, but preserve an explicit choice.
-      setSelectedAgentId((prev) => prev ?? (active || list[0]?.id) ?? null);
+      // Default selection to the built-in default agent, but preserve an explicit choice.
+      setSelectedAgentId((prev) => prev ?? (dflt || list[0]?.id) ?? null);
     } catch {
       /* leave state as-is on transient fetch errors */
     }

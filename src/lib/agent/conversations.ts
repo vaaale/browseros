@@ -3,6 +3,7 @@
 import { useSyncExternalStore } from "react";
 import { fsClient } from "@/lib/os-client";
 import { sanitizeLoadedMessages } from "@/lib/agent/conversations-sanitize";
+import { DEFAULT_AGENT_ID } from "@/lib/agent/agent-ids";
 
 /**
  * Conversations live as one JSON file per chat under the user's VFS at
@@ -57,12 +58,12 @@ function normalizeAgentId(agentId?: string): string | undefined {
 
 function freshConversation(group: string, agentId?: string): Conversation {
   const id = newId();
-  const normalized = normalizeAgentId(agentId);
-  // Build the object so `agentId` is OMITTED (not set to undefined) when absent,
-  // and present as a string when supplied. Keeps both runtime shape and JSON
-  // output unambiguous: no `"agentId": undefined` traps for spread/serializers.
-  const base: Conversation = { id, title: DEFAULT_TITLE, createdAt: Date.now(), group };
-  return normalized ? { ...base, agentId: normalized } : base;
+  // Every conversation is ALWAYS tagged with an agent — there is no untagged/
+  // "active-agent-resolved" conversation. An explicit agentId (e.g. the picked
+  // agent, or an embed's group agent) wins; a blank/bootstrap chat starts on the
+  // built-in default agent.
+  const agent = normalizeAgentId(agentId) ?? DEFAULT_AGENT_ID;
+  return { id, title: DEFAULT_TITLE, createdAt: Date.now(), group, agentId: agent };
 }
 
 function chatPath(id: string): string {

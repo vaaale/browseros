@@ -1,6 +1,6 @@
 import "server-only";
 import { CORE_POLICY, DEFAULT_PERSONALITY } from "./config";
-import { getActiveAgentId, getAgent } from "./subagents/store";
+import { getAgent } from "./subagents/store";
 import { listSkills } from "./skills/store";
 import { memorySnapshot } from "./memory/curated";
 import { listMcpServers } from "@/lib/mcp/store";
@@ -15,10 +15,15 @@ function mcpDescription(s: McpServerConfig): string {
 // agent's personality, the curated memory snapshot (frozen for the session),
 // then a skills index (full skill bodies loaded on demand via skill_load). The
 // skills index is filtered to the agent's allowed skills (011-per-agent-capabilities;
-// unset = all). Pass an explicit agentId to compose for an embed's pinned agent
-// (012-embeddable-assistant); defaults to the globally active agent.
-export async function composeInstructions(agentId?: string): Promise<string> {
-  const id = agentId ?? (await getActiveAgentId());
+// unset = all).
+//
+// `agentId` is REQUIRED and must resolve to a real agent — there is no global
+// "active agent" to fall back to. A missing/unknown id is a bug (a request that
+// didn't carry the conversation's agent), so we throw rather than silently
+// composing the wrong personality.
+export async function composeInstructions(agentId: string): Promise<string> {
+  const id = (agentId ?? "").trim();
+  if (!id) throw new Error("composeInstructions requires an agentId (no active-agent fallback).");
   const [agent, skills, memory, mcpServers] = await Promise.all([
     getAgent(id),
     listSkills(),
