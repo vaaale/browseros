@@ -21,31 +21,43 @@ const MAX_EXCERPT = 2000;
 const MAX_TITLE_LEN = 80;
 
 export async function POST(req: NextRequest) {
+  // Validate input first — a genuine client error (bad/missing body) is the only
+  // thing that warrants a 400. Everything downstream (provider unreachable, model
+  // error) is a server/upstream failure and MUST NOT masquerade as a 400, or the
+  // client treats a transient outage as a permanent bad request.
+  let userMessage = "";
+  let assistantMessage = "";
   try {
     const body = await req.json();
-    const userMessage = typeof body?.userMessage === "string" ? body.userMessage : "";
-    const assistantMessage = typeof body?.assistantMessage === "string" ? body.assistantMessage : "";
-    if (!userMessage.trim()) {
-      return NextResponse.json({ error: "userMessage is required" }, { status: 400 });
-    }
-    if (!(await hasCredentials())) {
-      return NextResponse.json({ error: "No AI provider configured." }, { status: 503 });
-    }
+    userMessage = typeof body?.userMessage === "string" ? body.userMessage : "";
+    assistantMessage = typeof body?.assistantMessage === "string" ? body.assistantMessage : "";
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
+  if (!userMessage.trim()) {
+    return NextResponse.json({ error: "userMessage is required" }, { status: 400 });
+  }
+  if (!(await hasCredentials())) {
+    return NextResponse.json({ error: "No AI provider configured." }, { status: 503 });
+  }
 
-    const prompt = [
-      `User: ${stripThinking(userMessage).slice(0, MAX_EXCERPT)}`,
-      "",
-      `Assistant: ${stripThinking(assistantMessage).slice(0, MAX_EXCERPT)}`,
-      "",
-      "Write the title.",
-    ].join("\n");
+  const prompt = [
+    `User: ${stripThinking(userMessage).slice(0, MAX_EXCERPT)}`,
+    "",
+    `Assistant: ${stripThinking(assistantMessage).slice(0, MAX_EXCERPT)}`,
+    "",
+    "Write the title.",
+  ].join("\n");
 
+  try {
     const raw = await complete({ system: TITLE_SYSTEM, prompt, maxTokens: 65535 });
     const title = cleanTitle(raw);
     if (!title) return NextResponse.json({ error: "Empty title" }, { status: 502 });
     return NextResponse.json({ title });
   } catch (err) {
-    return NextResponse.json({ error: (err as Error).message }, { status: 400 });
+    // The provider call failed (unreachable host, model error, timeout). Report it
+    // as a 502 so it's diagnosable and the client can retry on a later turn.
+    return NextResponse.json({ error: `Title generation failed: ${(err as Error).message}` }, { status: 502 });
   }
 }
 
