@@ -17,7 +17,7 @@ Two things make BOS Settings special:
 
 | Tab | Purpose |
 |---|---|
-| **[Assistant](../assistant/agents-and-personalities.md)** | Manage agents and the active personality. |
+| **[Assistant](../assistant/agents-and-personalities.md)** | Create and edit agents (each conversation picks its own). |
 | **[Skills](../self-improvement/skills.md)** | Browse and edit the skill library. |
 | **[Apps](../apps/settings.md#apps)** | Uninstall / restore / purge installed apps. |
 | **[Appearance](appearance.md)** | Wallpaper, fit, accent color. |
@@ -26,6 +26,7 @@ Two things make BOS Settings special:
 | **[Versions](../versions/live-version-control.md)** | Preview / promote / stop BOS versions. |
 | **[Dev Harness](dev-harness.md)** | How Claude Code runs for development. |
 | **[Browser Automation](browser-automation.md)** | Let the assistant drive a real browser. |
+| **[Command Execution](command-execution.md)** | Let the assistant run shell/Python/Node in a sandbox. |
 
 ---
 

@@ -23,8 +23,9 @@ The Assistant window has three areas:
 - **Center — Chat.** Type requests in natural language. The assistant streams its
   work live as collapsible cards (thinking, tool calls, sub‑agent activity). A
   **Working… / Ready** indicator shows whether it's busy.
-- **Right — Tools / Skills / MCP.** Three tabs showing what the current agent can
-  do, the skills it has, and the MCP servers it's connected to.
+- **Right — Tools / Skills / MCP / State.** Tabs showing what the current agent can
+  do, the skills it has, the MCP servers it's connected to, and the live **session
+  state** shared between the app and the agent (CopilotKit shared state).
 
 You can collapse the left and right panels with the buttons in the chat header.
 

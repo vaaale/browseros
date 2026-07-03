@@ -1,21 +1,21 @@
 # Agents & personalities
 
 The assistant's personality is defined by an **agent**. There is a single concept
-of an "agent" in BOS — the main assistant simply adopts the **active agent's**
-instructions as its personality. The same agents are also the specialists the
-assistant **delegates** work to.
+of an "agent" in BOS. **Each conversation has its own agent** — that's what gives
+that chat its personality. The same agents are also the specialists the assistant
+**delegates** work to, and different conversations (even open at the same time) can
+run different agents independently. There is no single global "active agent".
 
 ---
 
-## Switching the active personality
+## Choosing a conversation's agent
 
-- In the **chat header**, use the **agent selector** to pick the active agent.
-- Or open **Settings → Assistant** to manage agents and choose which one is
-  active.
-- Or just ask: "switch to the Planner personality."
-
-The default agent, **Assistant**, ships out of the box and is the active
-personality until you change it.
+- In the **chat header**, the **agent selector** shows and sets **this
+  conversation's** agent.
+- The conversation list groups chats by agent; the **"+"** in an agent's section
+  starts a new conversation with that agent.
+- A brand‑new/blank conversation starts on the default **Assistant** agent until
+  you pick another.
 
 ---
 
@@ -42,10 +42,8 @@ In **Settings → Assistant** you can:
 
 - **Edit an agent's instructions** (its system prompt / personality).
 - **Create a new agent.**
-- **Switch** the active one.
 
-The assistant can also do these for you ("create a friendly tutor agent and make
-it active"). Every agent's instructions are composed with BOS's always‑on core
+The assistant can also do these for you ("create a friendly tutor agent"). Every agent's instructions are composed with BOS's always‑on core
 policy and the current skills index, so even a custom personality still follows
 the OS's safety rules and can use skills.
 
@@ -64,7 +62,7 @@ so nothing is restricted unless you choose to.
 
 This lets you give a focused agent (e.g. a spec‑authoring agent) exactly the
 capabilities it needs. The right‑hand **Tools / Skills / MCP** panel in the chat
-reflects the active agent's scoped skills and MCP.
+reflects the current conversation's agent's scoped skills and MCP.
 
 ---
 
@@ -74,10 +72,10 @@ When you chat, the assistant's full instructions are composed from:
 
 1. **Core policy** — the non‑negotiable BOS operating rules (delegation,
    Claude‑for‑development, the feature‑branch rule, memory guidance, …).
-2. **The active agent's** personality.
+2. **This conversation's agent** personality.
 3. Your **memory** snapshot (user profile + agent notes).
 4. A **skills index** (names + when‑to‑use; full skill bodies are loaded on
    demand), filtered to the agent's allowed skills (see Capabilities above).
 
 You can ask the assistant to show its current composed instructions, or to rewrite
-the active agent's instructions, with its built‑in tools.
+its own (this conversation's agent's) instructions, with its built‑in tools.

@@ -14,10 +14,13 @@ A skill is a folder `data/skills/<id>/SKILL.md` (+ optional `scripts/`,
 `references/`), or a flat `data/skills/<id>.md`. Frontmatter:
 `name, description, whenToUse, pinned?, score?` + a markdown body (the procedure).
 
-API surface: `listSkills`, `loadSkill(id)`, `saveSkill`, `deleteSkill`,
-script/reference CRUD, and `skillsIndex()` (the name + when‑to‑use digest injected
-into instructions). Full bodies load **on demand** (`loadSkill` action) so the
-prompt stays small.
+Tools (context "both" — main chat + sub-agents): `skill_list`, `skill_load`,
+`skill_read_file` (bundled references/scripts), `skill_save`. Store API
+(`skills/store.ts`): `listSkills`, `getSkill`, `readSkillFile`, `listSkillFiles`,
+`saveSkill`, `removeSkill`. The skills index (name + when‑to‑use digest) is injected
+into instructions; full bodies load **on demand** (`skill_load`) so the prompt stays
+small, and a skill's bundled scripts are run via `run_command` (pass `skill=<id>` to
+stage them into the sandbox workspace).
 
 **Seeded skills** (when `data/skills` is empty):
 
@@ -38,7 +41,7 @@ A per‑skill `.usage.json` sidecar tracks `useCount`, `patchCount`,
 
 ## Pass 1 — review / reflect (`src/lib/agent/review.ts`)
 
-`reflectAndLearn` (action) → `/api/assistant/reflect` → `runReview(transcript)`:
+`skill_reflect` (action) → `/api/assistant/reflect` → `runReview(transcript)`:
 
 - A **separate** LLM pass over the finished conversation with a **restricted
   toolset**: only `MEMORY_LLM_TOOL` and skill create/patch tools. It takes no other
@@ -53,7 +56,7 @@ A per‑skill `.usage.json` sidecar tracks `useCount`, `patchCount`,
 
 ## Pass 2 — improve a skill / GEPA (`skills/improve.ts`)
 
-`improveSkill` (action) → `/api/skills/improve`: a reflective rewrite of one skill's
+`skill_improve` (action) → `/api/skills/improve`: a reflective rewrite of one skill's
 instructions from feedback, recording a self‑reported **`score`** on the new
 version.
 
@@ -65,7 +68,7 @@ version.
 
 ## Pass 3 — curator (`skills/curator.ts`)
 
-`runCurator` (action) → `/api/skills/curator`: archives skills with no recent
+`skill_curate` (action) → `/api/skills/curator`: archives skills with no recent
 activity (`lastActivityAt` older than a threshold) by moving them into
 `data/skills/.archive/` (**recoverable, never deleted**). It **only** touches
 **agent‑created** skills and **skips pinned** ones (pinning protects from archiving

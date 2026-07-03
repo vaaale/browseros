@@ -31,9 +31,9 @@ interface SubAgent {
 | `planner` | local | produce a plan with acceptance criteria |
 | `developer` | **claude** | build apps / modify BOS source (repo‑scoped tools) |
 
-The **active personality** is just one of these agents, stored as an id in the
-`assistant` config namespace (`getActiveAgentId` / `setActiveAgentId` /
-`getActiveAgentBody` / `setAgentSystemPrompt`). There is no separate "profile" store.
+Each conversation carries its own agent id (per‑conversation, the ONLY source of
+truth) — there is no global "active agent". A conversation's personality is the
+`systemPrompt` of its agent; editing it goes through `setAgentSystemPrompt`.
 Ephemeral agents run without being persisted.
 
 ---
@@ -46,7 +46,7 @@ Ephemeral agents run without being persisted.
   provider and the agent's tools. A local agent holding repo‑scoped dev tools gets a
   larger step budget (`DEV_MAX_STEPS = 40`) and its files are `git add`‑ed afterward
   as a backstop. Errors are returned, not thrown. `featureBranch`/`interactive` are
-  forwarded to a nested `delegateToDeveloper` so escalated dev work stays on the
+  forwarded to a nested `dev_delegate` so escalated dev work stays on the
   same feature branch.
 - **`type:"claude"`** → `runClaudeAgent` (`claude-runner.ts`). **No local fallback**
   — development is Claude‑only by design.
@@ -58,18 +58,20 @@ Ephemeral agents run without being persisted.
 
 ## Tools a sub-agent may use (`subagents/tools.ts`)
 
-- **`SUBAGENT_TOOLS`** (default, safe): `list_files`, `read_file`, `write_file`,
-  `create_folder` (the **VFS**), and `web_fetch`.
+- **`SUBAGENT_TOOLS`** (default, safe): `file_list`, `file_read`, `file_write`,
+  `file_mkdir` (the **VFS**), `web_fetch`, `web_search`, the skill tools
+  (`skill_list` / `skill_load` / `skill_read_file`), and scheduler tools.
 - **`DEV_TOOLS`** (repo‑scoped, **opt‑in** — an agent must list these ids in its
   `tools`):
-  - `list_source` / `read_source` / `search_source` / `write_source` /
-    `edit_source` via `src/lib/dev/repo-fs.ts` — **jailed to the repo root**; reads
-    deny `.env*`/`.git`/`node_modules`/`.next`; **writes allowed only under** `src/`,
-    `specs/`, `public/`, `docs/`, `data/`.
-  - `run_command` via `src/lib/dev/run-command.ts` — fixed allowlist
-    (`typecheck`→`npx tsc --noEmit`, `lint`→`npx eslint .`, `build`→`npm run build`,
-    `e2e`), `execFile` (no shell).
-  - `git_branch` / `git_stage` / `git_status` via `src/lib/system/git.ts`.
+  - `bos_source_list` / `bos_source_read` / `bos_source_search` via
+    `src/lib/dev/repo-fs.ts` — **read‑only, jailed to the repo root** (reads deny
+    `.env*`/`.git`/`node_modules`/`.next`). Source *writes* were removed: only the
+    Claude/OpenCode dev harness edits BOS source, via its own native file tools.
+  - `dev_git_status` via `src/lib/system/git.ts`.
+- **`run_command`** (sandboxed exec) is injected **per delegated run** (not a static
+  DEV_TOOL) with a `(browser‑session, agent)` sandbox key — see
+  [Command Execution](../run-command/run-command.md). `delegate_to_developer` →
+  `dev_delegate` is likewise built per run.
 
 `toolsFor(allowed?)` returns `SUBAGENT_TOOLS` when no allowlist is given — **never**
 the dev tools implicitly.
@@ -132,7 +134,7 @@ build‑gate, and staging are harness‑agnostic.
   `bos/*` branches are rediscovered as `not-built` previews and can be selected
   again from the toolbar.
 - **`contentOnly:true`** (e.g. generating an app's HTML — a *content* op) MUST NOT
-  provision a code candidate; the result is installed via `installApp` onto the
+  provision a code candidate; the result is installed via `app_install` onto the
   GitFS `app-candidate` branch instead.
 - BrowserOS source analysis or implementation MUST NOT use `contentOnly:true`.
   `contentOnly` is reserved for standalone app content generation, and the
@@ -145,16 +147,16 @@ See [Live version control](../self-modification/live-version-control.md).
 ## The CORE_POLICY contract (`src/lib/agent/config.ts`)
 
 The always‑on policy mandates: delegate substantive tasks; **Claude for any
-coding**; pick the right app path (simple static `installApp` vs. project `buildApp`,
+coding**; pick the right app path (simple static `app_install` vs. project `app_build`,
 both as previews); modify BOS only via the `developer` agent (never via the VFS);
-ask permission (`requestClaudeAgentPermission`) before using Claude for a
+ask permission (`agent_request_claude`) before using Claude for a
 **non‑dev** task; save durable memory but not transient failures; call
-`reflectAndLearn` after non‑trivial tasks; keep the docs under `docs/usage`/`docs/dev` current.
+`skill_reflect` after non‑trivial tasks; keep the docs under `docs/usage`/`docs/dev` current.
 
 ---
 
 ## Recipe: add a sub-agent
 
-`createSubAgent` action, or add to `DEFAULTS` in `subagents/store.ts`. Use
+`agent_create` action, or add to `DEFAULTS` in `subagents/store.ts`. Use
 `type:"claude"` for coding agents; give local dev agents the repo‑scoped `tools` ids
 if they should edit source.

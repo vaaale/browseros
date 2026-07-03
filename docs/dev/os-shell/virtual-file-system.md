@@ -36,7 +36,7 @@ remove/rename/rawUrl`).
 - **Conversations** (`src/lib/agent/conversations.ts`) store chat threads at
   `/Documents/Chats/<id>.json` through `fsClient`.
 - **Workflows** (`src/lib/workflows/store.ts`) store under `/Workflows/`.
-- Sub‑agents get VFS tools (`list_files`/`read_file`/`write_file`/`create_folder`)
+- Sub‑agents get VFS tools (`file_list`/`file_read`/`file_write`/`file_mkdir`)
   as their **default** toolset — see
   [Sub‑agents](../assistant/sub-agents-and-delegation.md).
 
@@ -44,7 +44,7 @@ remove/rename/rawUrl`).
 
 ## Critical rule
 
-The file tools (`listFiles`/`readFile`/`writeFile`) and the Files app **only see
+The file tools (`file_list`/`file_read`/`file_write`) and the Files app **only see
 `data/vfs`**. To change BOS, edit `src/` (via the developer agent's own tools or
 the repo‑scoped dev tools), **never** through the VFS. Don't hunt for BOS code in
 the VFS — it isn't there.

@@ -34,22 +34,31 @@ context(s) it runs in (`action` / `tool` / `both`). `tool-manifest.ts` is a view
 - `SpecActions` (client spec ops over `/api/specs`) let an active-personality agent
   (Build Studio) author specs directly, mirroring the server `SPEC_TOOLS`.
 
+Tool naming standard: `subsystem_object_verb`, snake_case, one id per operation
+(see `src/lib/agent/capabilities-registry.ts`). Duplicated main-chat action /
+sub-agent tool pairs are collapsed into a single id (`context: "both"`), so e.g.
+the main chat and a delegated sub-agent both use `file_read`.
+
 | Component | Actions |
 |---|---|
-| `OSActions` | `launchApp, listApps, closeWindow, changeWallpaper, openWebPage, listFiles, readFile, writeFile, createFolder, deletePath` |
-| `McpActions` | `listMcpServers, findTools, listMcpServerTools, callMcpServerTool, addMcpServer, removeMcpServer` |
-| `WebSearchActions` | `webSearch` (Anthropic native web search over `/api/web-search`) |
-| `SpecActions` | `listSpecs, readSpec, writeSpec, editSpec, searchSpecs` (over `/api/specs`) |
-| `SubAgentActions` | `listSubAgents, createSubAgent, delegateToSubAgent, requestClaudeAgentPermission` (elicitation card) |
-| `MemoryActions` | `memory` (add/replace/remove, batch), `recallMemories` |
-| `DevActions` | `installApp, buildApp, listInstalledApps, uninstallApp, getMyInstructions, updateMyInstructions` |
-| `ConfigActions` | `listConfigurableSettings, updateSetting` |
-| `AssistantActions` | `switchAssistantAgent` |
-| `SkillsActions` | `loadSkill, saveSkill` |
-| `SelfImprovementActions` | `reflectAndLearn, improveSkill, runCurator` |
-| `DocsActions` | `listDocs, readDoc` |
-| `GitActions` | `gitStatus, startFeatureBranch, stageChanges` |
-| `WorkflowActions` | `createWorkflow, modifyWorkflow, runWorkflow, getStatus, cancelWorkflow, exportWorkflow, validateWorkflow` |
+| `OSActions` | `bos_app_launch, bos_app_list, bos_window_close, bos_wallpaper_set, bos_browser_open, web_view, file_list, file_read, file_write, file_mkdir, file_delete` |
+| `McpActions` | `mcp_server_list, mcp_tool_search, mcp_server_tools, mcp_tool_schema, mcp_tool_call, mcp_server_add, mcp_server_remove` |
+| `WebSearchActions` | `web_search` (Anthropic native web search over `/api/web-search`) |
+| `SpecActions` | `spec_list, spec_read, spec_write, spec_edit, spec_search` (over `/api/specs`) |
+| `SubAgentActions` | `agent_list, agent_create, agent_delegate, agent_request_claude, dev_branch_request` (elicitation card) |
+| `MemoryActions` | `memory_save` (add/replace/remove, batch), `memory_recall` |
+| `DevActions` | `app_install, app_build, app_list, app_uninstall, agent_prompt_get, agent_prompt_set` |
+| `ConfigActions` | `config_list, config_set` |
+| `SkillsActions` | `skill_list, skill_load, skill_read_file, skill_save` |
+| `SelfImprovementActions` | `skill_reflect, skill_improve, skill_curate` |
+| `DocsActions` | `docs_list, docs_read` |
+| `GitActions` | `dev_git_status` |
+| `RunCommandActions` | `run_command` (sandboxed exec; Settings → Command Execution) |
+| `WorkflowActions` | `workflow_create, workflow_modify, workflow_run, workflow_status, workflow_cancel, workflow_export, workflow_validate` |
+
+> Removed: `switchAssistantAgent` (agents delegate, they don't self-switch roles),
+> the unsandboxed `runBash` tool (replaced by `run_command`), and the legacy MCP
+> aliases `findTools`/`callMcpServerTool`.
 
 > Other components: `CopilotProvider` (mounts everything), `ChatPersistence`
 > (per‑conversation load/save + auto‑title), `ToolCallRetry`,
@@ -122,8 +131,8 @@ results for model consumption.
 
 Entry points:
 
-- Main chat action: `webSearch` in `src/components/agent/WebSearchActions.tsx`.
-- Sub-agent tool: `web_search` in `src/lib/agent/subagents/tools.ts`.
+- `web_search` — main chat action in `src/components/agent/WebSearchActions.tsx`;
+  same id as the sub-agent tool in `src/lib/agent/subagents/tools.ts`.
 - API route: `POST /api/web-search` in `src/app/api/web-search/route.ts`.
 
 Constraints:

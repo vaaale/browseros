@@ -27,7 +27,7 @@ Always `npx tsc --noEmit` + `npm run lint` after, and update the relevant
    `load`/`save` (simple cases: `patchNamespace`).
 2. Custom UI → component in `src/components/apps/settings/` mapped in `CUSTOM_TABS`
    (`src/apps/settings/index.tsx`).
-3. Mark secrets `secret: true`. Fields are auto‑exposed via `updateSetting`.
+3. Mark secrets `secret: true`. Fields are auto‑exposed via `config_set`.
 
 → [Configuration system](configuration/configuration-system.md)
 
@@ -55,11 +55,14 @@ responses. Stream with NDJSON if long‑running.
 
 ## Add a sub-agent / make one able to edit source
 
-- `createSubAgent` (action) or a `DEFAULTS` entry in
+- `agent_create` (action) or a `DEFAULTS` entry in
   `src/lib/agent/subagents/store.ts`. Coding agents → `type:"claude"`.
-- A **local** agent that should edit source must list the repo‑scoped `DEV_TOOLS`
-  ids in its `tools` (`read_source`/`write_source`/`edit_source`/`run_command`/…) —
-  these are never granted implicitly.
+- A local agent can be granted the repo‑scoped **read‑only** `DEV_TOOLS`
+  (`bos_source_list`/`bos_source_read`/`bos_source_search`, `dev_git_status`) by
+  listing those ids in its `tools` — never granted implicitly. Source *writes* are
+  not a tool: only the Claude/OpenCode dev harness edits BOS source (via its native
+  file tools, in a Supervisor worktree). `run_command` (sandboxed exec) is injected
+  per delegated run when the agent lists it.
 
 → [Sub‑agents & delegation](assistant/sub-agents-and-delegation.md)
 
@@ -68,7 +71,7 @@ responses. Stream with NDJSON if long‑running.
 ## Add a skill (seed)
 
 Add to the seed list in `src/lib/agent/skills/store.ts` (or create at runtime via
-`saveSkill`). Frontmatter `name/description/whenToUse`; body = the procedure;
+`skill_save`). Frontmatter `name/description/whenToUse`; body = the procedure;
 optional `references/` and `scripts/`.
 
 → [Self‑improvement](self-improvement/self-improvement.md)
@@ -90,9 +93,9 @@ previews then promotes or stops.
 
 ## Build an app for the user (the agent path)
 
-- **Static:** delegate (`contentOnly:true`) → one `index.html` → `installApp({ name,
+- **Static:** delegate (`contentOnly:true`) → one `index.html` → `app_install({ name,
   files })`.
-- **Project:** delegate (`contentOnly:true`) to write a project dir → `buildApp`
-  (`/api/apps/build`) → esbuild bundle → `installApp({ files, entry }, {draft})`.
+- **Project:** delegate (`contentOnly:true`) to write a project dir → `app_build`
+  (`/api/apps/build`) → esbuild bundle → `app_install({ files, entry }, {draft})`.
 
 → [Installed apps](apps/installed-apps.md)

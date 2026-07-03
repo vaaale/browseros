@@ -36,19 +36,25 @@ and the [Assistant API](api/assistant-api.md).
 
 ## System instructions (`src/lib/agent/instructions.ts`)
 
-`composeInstructions()` concatenates, in order:
+`composeInstructions(agentId)` concatenates, in order:
 
 1. **`CORE_POLICY`** (`src/lib/agent/config.ts`) — always‑on rules: delegation,
    Claude‑for‑dev, build‑vs‑modify, feature‑branch, memory guidance, doc‑updates,
    "VFS is not source", style.
-2. **The active agent's** personality (`getActiveAgentBody()` from
-   `subagents/store.ts`).
+2. **The agent's** personality (the `agentId` argument's `systemPrompt`). `agentId`
+   is REQUIRED and comes from the conversation (per‑conversation agent) — there is
+   no global "active agent"; a missing id throws (fail‑fast, no silent fallback).
 3. **The memory snapshot** (`memorySnapshot()` — the frozen USER/MEMORY blocks; see
    [Memory](../memory/memory.md)).
 4. **A skills index** (name + when‑to‑use; full bodies loaded on demand via
-   `loadSkill`).
+   `skill_load`, and bundled files via `skill_read_file`).
 
-This composed text is what the chat passes to `<CopilotChat instructions>`.
+Delivery (CopilotKit 1.61 caveat): the `<CopilotChat instructions>` prop is NOT
+forwarded to the model on the v2 `BuiltInAgent` path. Instead `/api/copilotkit`
+reads the conversation's agent from `?agent=<id>`, calls `composeInstructions`,
+and constructs the default `BuiltInAgent({ model, prompt })` with it — that
+`prompt` is what actually reaches the LLM. `CopilotProvider` keys `<CopilotKit>`
+on the agent id so a fresh runtime client binds the correct `?agent=` on switch.
 
 ---
 

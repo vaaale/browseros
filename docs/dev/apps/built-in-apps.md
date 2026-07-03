@@ -47,7 +47,7 @@ folder with a manifest" model as installed apps.
 | `settings` | Settings | `Settings` | 60 | yes | config tabs |
 
 > Note the built‑in chat app's `id` is **`chat`** but its display name is
-> **"Assistant"**. Launch it with `launchApp("chat")`.
+> **"Assistant"**. Launch it with `bos_app_launch("chat")`.
 
 ---
 
@@ -68,6 +68,6 @@ see [Design heuristics](../design-heuristics.md).
 2. `src/apps/<id>/index.tsx` — `"use client"`, default‑export an `AppProps`
    component. Keep text selectable.
 3. Done — `gen-apps.mjs` discovers it (runs on `predev`/`prebuild`); it appears on
-   the desktop/dock and is launchable via `launchApp`.
+   the desktop/dock and is launchable via `bos_app_launch`.
 4. If it needs persistence, add a server store + `/api/...` route.
 5. Update `docs/usage`/`docs/dev` (served by the Docs app) and, if it adds tools, `tool-manifest.ts`.

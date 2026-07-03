@@ -32,7 +32,7 @@ Each file is a list of short bullet entries. Helpers: `readUser()`, `readMemory(
 
 `MEMORY_LLM_TOOL` is an `LlmTool` (for the review/server loops) exposing the same
 ops (`add`/`replace`/`remove`, batched). The client‑facing equivalent is the
-`memory` action (`MemoryActions.tsx`) → `/api/memory`. `recallMemories` reads the
+`memory_save` action (`MemoryActions.tsx`) → `/api/memory`. `memory_recall` reads the
 **live** entries (vs. the frozen snapshot in the prompt).
 
 ---
@@ -40,7 +40,7 @@ ops (`add`/`replace`/`remove`, batched). The client‑facing equivalent is the
 ## Injection into instructions
 
 `composeInstructions()` ([Assistant overview](../assistant/overview.md)) embeds
-`memorySnapshot()` after the active agent's personality. The snapshot is captured
+`memorySnapshot()` after the conversation's agent personality. The snapshot is captured
 **once per conversation**, so:
 
 - mid‑session writes persist to disk immediately, but

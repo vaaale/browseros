@@ -16,7 +16,10 @@ situation*).
 - When a skill is relevant, it **loads the full instructions** on demand and
   follows them.
 - A skill can carry extra **scripts** and **references** (supporting files the
-  assistant can consult).
+  assistant reads on demand).
+- If a skill's procedure runs a bundled script, the assistant stages the skill's
+  files into the sandbox and runs it there — this needs **[Command
+  Execution](../settings/command-execution.md)** turned on.
 
 You can see the current skills in the Assistant's right **Skills** panel.
 
