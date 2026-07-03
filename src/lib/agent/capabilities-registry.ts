@@ -117,6 +117,27 @@ export const CAPABILITIES: Capability[] = [
   // Build Studio app control (registered in the BS app's embedded chat).
   { id: "buildstudio_artifact_open", group: "Build Studio", context: "action", description: "Open a spec artifact in the Build Studio viewer." },
   { id: "buildstudio_tree_refresh", group: "Build Studio", context: "action", description: "Reload the Build Studio spec tree." },
+
+  // Integrations — one capability id per adapter method, following the pattern
+  // `<integrationId>_<serviceId>_<method>` (see actions/dispatcher.ts).
+  //
+  // NAMING EXCEPTION: everywhere else the standard is `subsystem_object_verb`
+  // in snake_case. Adapter methods here keep their original camelCase (e.g.
+  // `listMessages`) because these are pass-through wrappers over provider
+  // SDKs — matching the provider vocabulary makes it easier for the LLM to
+  // apply examples from Gmail/Drive/Calendar docs directly. Grep for
+  // `NAMING EXCEPTION` before adding new integration ids.
+  { id: "gsuite_gmail_listMessages", group: "Integrations", context: "action", description: "List Gmail messages." },
+  { id: "gsuite_gmail_getMessage", group: "Integrations", context: "action", description: "Fetch a Gmail message by id." },
+  { id: "gsuite_gmail_sendMessage", group: "Integrations", context: "action", description: "Send a Gmail message." },
+  { id: "gsuite_gmail_replyToMessage", group: "Integrations", context: "action", description: "Reply in-thread to a Gmail message." },
+  { id: "gsuite_gmail_modifyMessage", group: "Integrations", context: "action", description: "Add or remove labels on a Gmail message." },
+  { id: "gsuite_gmail_trashMessage", group: "Integrations", context: "action", description: "Move a Gmail message to Trash." },
+  { id: "gsuite_gmail_untrashMessage", group: "Integrations", context: "action", description: "Restore a Gmail message from Trash." },
+  { id: "gsuite_gmail_searchMessages", group: "Integrations", context: "action", description: "Search Gmail with Google's operator syntax." },
+  { id: "gsuite_gmail_listLabels", group: "Integrations", context: "action", description: "List Gmail labels." },
+  { id: "gsuite_gmail_getLabel", group: "Integrations", context: "action", description: "Fetch a Gmail label by id." },
+  { id: "gsuite_gmail_getProfile", group: "Integrations", context: "action", description: "Fetch the authenticated Gmail profile." },
 ];
 
 // Tools/actions the UI marks with a warning affordance in the Agent Settings

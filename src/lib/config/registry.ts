@@ -66,6 +66,19 @@ const REGISTRATIONS: ConfigRegistration[] = [
   },
   {
     schema: {
+      namespace: "integrations",
+      title: "Integrations",
+      description:
+        "Third-party accounts the assistant can act on. Upload your OAuth client credentials, connect, and toggle per-scope authorization. Phase 1 ships Gmail.",
+      order: 9,
+      customComponent: "integrations",
+      fields: [],
+    },
+    load: async () => ({}),
+    save: async () => {},
+  },
+  {
+    schema: {
       namespace: "appearance",
       title: "Appearance",
       description: "Wallpaper and accent color.",

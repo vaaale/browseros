@@ -6,6 +6,7 @@ import { AppearanceTab } from "@/components/apps/settings/AppearanceTab";
 import { AssistantTab } from "@/components/apps/settings/AssistantTab";
 import { SkillsTab } from "@/components/apps/settings/SkillsTab";
 import { AppsTab } from "@/components/apps/settings/AppsTab";
+import { IntegrationsTab } from "@/components/apps/settings/IntegrationsTab";
 import { DevHarnessTab } from "@/components/apps/settings/DevHarnessTab";
 import { DataFsTab } from "@/components/apps/settings/DataFsTab";
 import { VersionsTab } from "@/components/apps/settings/VersionsTab";
@@ -22,6 +23,7 @@ const CUSTOM_TABS: Record<string, React.ComponentType> = {
   skills: SkillsTab,
   mcp: McpServersTab,
   apps: AppsTab,
+  integrations: IntegrationsTab,
   "dev-harness": DevHarnessTab,
   datafs: DataFsTab,
   "self-modification": VersionsTab,

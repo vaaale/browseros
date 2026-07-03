@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useOSStore } from "@/store/os-provider";
 import { VersionControls } from "./VersionControls";
+import { IntegrationsBadge } from "./IntegrationsBadge";
 
 function Clock() {
   const [now, setNow] = useState<string>("");
@@ -37,7 +38,8 @@ export function Topbar() {
       <div className="justify-self-center">
         <VersionControls />
       </div>
-      <div className="justify-self-end">
+      <div className="flex items-center gap-2 justify-self-end">
+        <IntegrationsBadge />
         <Clock />
       </div>
     </div>

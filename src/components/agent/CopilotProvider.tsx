@@ -16,6 +16,7 @@ import { RunCommandActions } from "./RunCommandActions";
 import { WorkflowActions } from "./WorkflowActions";
 import { SpecActions } from "./SpecActions";
 import { WebSearchActions } from "./WebSearchActions";
+import { IntegrationActions } from "./IntegrationActions";
 import { ToolCallRetry } from "./ToolCallRetry";
 import { AgentCapabilitiesProvider } from "./agent-capabilities";
 import { useActiveConversationId, DEFAULT_GROUP } from "@/lib/agent/conversations";
@@ -99,6 +100,7 @@ export function CopilotProvider({
           <RunCommandActions />
           <WorkflowActions />
           <SpecActions />
+          <IntegrationActions />
           <ToolCallRetry />
           {children}
         </AgentCapabilitiesProvider>
