@@ -4,6 +4,8 @@ import { toolsFor, DEV_TOOLS, SPEC_TOOLS, DELEGATE_TO_DEVELOPER } from "./tools"
 import { runClaudeAgent } from "./claude-runner";
 import { getAgent } from "./store";
 import { stageAll } from "@/lib/system/git";
+import { runCommand, type RunLanguage } from "@/lib/system/run-command";
+import { getLogContext } from "@/lib/logging/context";
 import type { Agent, AgentRunResult } from "./types";
 
 export type SubAgentEvent = ToolEvent;
@@ -46,6 +48,36 @@ function makeDelegateTool(
   };
 }
 
+// run_command needs a per-run (browser-session, agent) sandbox key, so it is
+// injected per delegated run rather than living in the static tool table.
+function makeRunCommandTool(agentId: string): LlmTool {
+  const sessionId = getLogContext().sessionId || "server";
+  const sessionKey = `${sessionId}:${agentId}`;
+  return {
+    description:
+      "Run a command in a sandboxed environment (Settings → Command Execution; off by default). language: 'bash' (default), 'python' (ipython -c), or 'node' (node -e). Returns merged stdout/stderr, exit code, and duration.",
+    parameters: {
+      type: "object",
+      properties: {
+        command: { type: "string" },
+        language: { type: "string", enum: ["bash", "python", "node"] },
+        timeoutMs: { type: "number" },
+      },
+      required: ["command"],
+    },
+    execute: async (input) => {
+      const lang = ["bash", "python", "node"].includes(input.language as string) ? (input.language as RunLanguage) : "bash";
+      const r = await runCommand({
+        command: String(input.command ?? ""),
+        language: lang,
+        timeoutMs: typeof input.timeoutMs === "number" ? input.timeoutMs : undefined,
+        sessionKey,
+      });
+      return JSON.stringify(r);
+    },
+  };
+}
+
 async function runLocal(
   agent: Agent,
   task: string,
@@ -59,6 +91,9 @@ async function runLocal(
   const tools = { ...toolsFor(agent.tools) };
   if (ids.includes(DELEGATE_TO_DEVELOPER)) {
     tools[DELEGATE_TO_DEVELOPER] = makeDelegateTool(opts?.onEvent, depth, opts?.featureBranch, opts?.interactive);
+  }
+  if (ids.includes("run_command")) {
+    tools["run_command"] = makeRunCommandTool(agent.id);
   }
 
   const result = await runToolLoop({

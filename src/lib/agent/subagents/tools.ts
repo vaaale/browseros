@@ -3,7 +3,6 @@ import * as vfs from "@/os/vfs";
 import { fetchText } from "@/lib/net";
 import { webSearch, formatWebSearchForModel } from "@/lib/agent/web-search";
 import * as repo from "@/lib/dev/repo-fs";
-import { runDevCommand, ALLOWED_COMMANDS } from "@/lib/dev/run-command";
 import * as git from "@/lib/system/git";
 import * as specfs from "@/lib/dev/spec-fs";
 import type { LlmTool } from "@/lib/agent/llm";
@@ -126,14 +125,8 @@ export const DEV_TOOLS: Record<string, LlmTool> = {
     },
     execute: async (input) => JSON.stringify(await repo.search(input.query as string, { dir: input.dir as string | undefined })),
   },
-  run_command: {
-    description: `Run an allowlisted verification command and return its output. Allowed: ${ALLOWED_COMMANDS.join(", ")}.`,
-    parameters: { type: "object", properties: { command: { type: "string", enum: ALLOWED_COMMANDS } }, required: ["command"] },
-    execute: async (input) => {
-      const r = await runDevCommand(input.command as string);
-      return `[${r.command}] ${r.ok ? "OK" : `FAILED (exit ${r.exitCode})`}\n${r.output}`;
-    },
-  },
+  // NOTE: run_command is NOT a static DEV_TOOL — it needs a per-run (session,
+  // agent) sandbox key, so the runner injects it per delegated run (see runner.ts).
   // NOTE: git_branch / git_stage were removed. Under the Supervisor the live
   // checkout is the running base; branching/staging it breaks the running version
   // and blocks promote. The Supervisor owns version branches and commits the

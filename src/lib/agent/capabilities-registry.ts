@@ -90,7 +90,7 @@ export const CAPABILITIES: Capability[] = [
   { id: "bos_source_list", group: "Dev", context: "tool", description: "List BOS source (read-only, sub-agent)." },
   { id: "bos_source_read", group: "Dev", context: "tool", description: "Read a BOS source file (read-only, sub-agent)." },
   { id: "bos_source_search", group: "Dev", context: "tool", description: "Search BOS source (read-only, sub-agent)." },
-  { id: "run_command", group: "Dev", context: "tool", description: "Run an allowlisted command (sub-agent)." },
+  { id: "run_command", group: "Dev", context: "both", description: "Run a command in a sandboxed environment (bash/python/node)." },
 
   // Docs
   { id: "docs_list", group: "Docs", context: "action", description: "List documentation pages." },
@@ -126,6 +126,7 @@ export const CAPABILITIES: Capability[] = [
 // warning styling — matching happens by exact id against the capability id.
 const DANGEROUS_TOOL_NAMES: readonly string[] = [
   "file_delete", // destructive VFS delete
+  "run_command", // arbitrary command execution (sandboxed, but still powerful)
 ];
 
 /** Ids the UI should annotate as dangerous (warning icon + red description). */
