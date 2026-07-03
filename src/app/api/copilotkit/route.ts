@@ -7,10 +7,12 @@ import {
   copilotRuntimeNextJSAppRouterEndpoint,
   type CopilotServiceAdapter,
 } from "@copilotkit/runtime";
+import { BuiltInAgent } from "@copilotkit/runtime/v2";
 import { getProviderConfig } from "@/lib/agent/provider";
 import { familyOf } from "@/lib/agent/provider-meta";
 import { buildRuntimeOptions } from "@/lib/agent/runtime";
 import { OpenAIChatAdapter } from "@/lib/agent/openai-chat-adapter";
+import { composeInstructions } from "@/lib/agent/instructions";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
@@ -40,8 +42,27 @@ export async function POST(req: NextRequest) {
   // servers are NOT injected here — the agent uses them via the gateway (014).
   const url = new URL(req.url);
   const origin = url.origin;
-  const runtime = new CopilotRuntime(await buildRuntimeOptions());
-  const serviceAdapter = await buildAdapter(origin);
+  // ?agent pins the composed instructions to a specific agent (embedded chats,
+  // 012); otherwise the globally active agent.
+  const agentId = url.searchParams.get("agent") || undefined;
+  const [runtimeOptions, serviceAdapter, prompt] = await Promise.all([
+    buildRuntimeOptions(),
+    buildAdapter(origin),
+    composeInstructions(agentId),
+  ]);
+  // CopilotKit 1.61's v2 path auto-creates the default agent from the service
+  // adapter's language model as `new BuiltInAgent({ model })` — with NO prompt —
+  // and the client's `instructions` prop is never forwarded to it, so the composed
+  // system prompt (core policy + personality + memory + skills) is silently
+  // dropped. Construct the default agent ourselves WITH the composed prompt so it
+  // actually reaches the model. Runtime-level MCP/action tools are still assigned
+  // to this agent by CopilotRuntime. Falls back to the auto-created agent if the
+  // adapter can't expose a language model.
+  const model = serviceAdapter.getLanguageModel?.();
+  const runtime = new CopilotRuntime({
+    ...runtimeOptions,
+    ...(model ? { agents: { default: new BuiltInAgent({ model, prompt }) } } : {}),
+  });
   const { handleRequest } = copilotRuntimeNextJSAppRouterEndpoint({
     runtime,
     serviceAdapter,
