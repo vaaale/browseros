@@ -55,7 +55,10 @@ function makeRunCommandTool(agentId: string): LlmTool {
   const sessionKey = `${sessionId}:${agentId}`;
   return {
     description:
-      "Run a command in a sandboxed environment (Settings → Command Execution; off by default). language: 'bash' (default), 'python' (ipython -c), or 'node' (node -e). To run a SKILL's bundled scripts, pass `skill` = its id — the skill's files are staged into the working dir first so its SKILL.md relative paths (e.g. `python scripts/office/unpack.py`) work. Returns merged stdout/stderr, exit code, and duration.",
+      "Run a command in a sandboxed environment (Settings → Command Execution; off by default). language: 'bash' (default), 'python' (ipython -c), or 'node' (node -e). " +
+      "WORKSPACE: /workspace IS a folder in the user's file system (visible in the Files app). Files you create under /workspace are ALREADY SAVED and visible — do NOT copy/move them elsewhere or use file_write to 'transfer' them. Only /workspace (and /tmp) exist in the sandbox; folders like /Documents are NOT mounted. " +
+      "Common tools are preinstalled (python + python-pptx/markitdown/Pillow, node + pptxgenjs, LibreOffice, poppler) — avoid npm/pip install (no network). " +
+      "To run a SKILL's bundled scripts, pass `skill` = its id — the skill's files are staged into /workspace so its SKILL.md relative paths (e.g. `python scripts/office/unpack.py`) work. Returns merged stdout/stderr, exit code, and duration.",
     parameters: {
       type: "object",
       properties: {
