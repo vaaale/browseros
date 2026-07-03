@@ -21,7 +21,7 @@ interface DelegateResult {
 
 // Elicitation card for the feature-branch gap: when a BOS source change needs a
 // developer delegation but the conversation has no active feature branch, the
-// assistant calls requestFeatureBranch and this card proposes a name (derived
+// assistant calls dev_branch_request and this card proposes a name (derived
 // from the task, user-editable), then creates + activates it on the conversation
 // so the subsequent delegation succeeds instead of dead-ending.
 function FeatureBranchCard({
@@ -153,7 +153,7 @@ export function SubAgentActions({ group = DEFAULT_GROUP }: { group?: string }) {
       { name: "ephemeralType", type: "string", description: "'local' or 'claude'", required: false },
       { name: "ephemeralSystemPrompt", type: "string", description: "For a one-off agent: its instructions", required: false },
       { name: "ephemeralSubagentType", type: "string", description: "For a one-off 'claude' agent: harness subagent_type (defaults to the name)", required: false },
-      { name: "contentOnly", type: "boolean", description: "Set true ONLY for standalone app content generation, such as producing a self-contained index.html or writing an iframe app project into a staging directory for buildApp. Never set this for BrowserOS source analysis or implementation; source work must use the Supervisor preview worktree.", required: false },
+      { name: "contentOnly", type: "boolean", description: "Set true ONLY for standalone app content generation, such as producing a self-contained index.html or writing an iframe app project into a staging directory for app_build. Never set this for BrowserOS source analysis or implementation; source work must use the Supervisor preview worktree.", required: false },
     ],
     handler: async ({ agent, task, ephemeralName, ephemeralType, ephemeralSystemPrompt, ephemeralSubagentType, contentOnly }) => {
       const ephemeral = ephemeralName && ephemeralSystemPrompt

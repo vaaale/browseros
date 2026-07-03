@@ -57,7 +57,7 @@ const SEED: Omit<Skill, "id">[] = [
     description: "Build an app that runs in BOS, or modify BOS itself (built-in apps, Settings, desktop, or server logic). The work is delegated to the Claude developer sub-agent.",
     whenToUse: "When the user asks to build/create/make an app in BOS, OR to modify/change/edit/redesign/fix/extend BOS itself or any built-in part of it (e.g. a Settings tab, the Skills page, the dock, an existing app's behavior).",
     content: [
-      "Development in BOS is always done by the Claude developer sub-agent. Never write code yourself, and never use the virtual file system (listFiles/readFile/writeFile) to find or change code - the VFS is the user's sandboxed data, not BOS source.",
+      "Development in BOS is always done by the Claude developer sub-agent. Never write code yourself, and never use the virtual file system (file_list/file_read/file_write) to find or change code - the VFS is the user's sandboxed data, not BOS source.",
       "",
       "First decide which use-case applies, then follow the matching reference:",
       "- Modifying BOS itself (built-in apps, Settings pages/tabs, the desktop, API routes, or server logic - editing the BOS source under src/): read references/modifying-bos-features.md.",
@@ -66,7 +66,7 @@ const SEED: Omit<Skill, "id">[] = [
       "Shared rules (both use-cases):",
       "1. Do not explore the codebase or VFS yourself and do not try to understand the implementation first - delegate the whole request.",
       "2. Before modifying BOS source, check whether the Assistant header has an Active feature branch selected. If not, ask the user to select or create one before calling the developer harness.",
-      "3. Delegate to the developer sub-agent: delegateToSubAgent with agent 'developer' (Claude - required for all coding). For a large or vague request, optionally delegate to the planner sub-agent first and hand its plan to the developer.",
+      "3. Delegate to the developer sub-agent: agent_delegate with agent 'developer' (Claude - required for all coding). For a large or vague request, optionally delegate to the planner sub-agent first and hand its plan to the developer.",
       "4. When the developer reports back, summarize what changed and how to try it; the docs are source files under docs/usage (end users) and docs/dev (developers) and must be updated by the developer as part of the change.",
       "5. If the developer sub-agent or Claude harness is unavailable, tell the user - never fall back to editing code through the VFS or writing it yourself.",
     ].join("\n"),
@@ -76,7 +76,7 @@ const SEED: Omit<Skill, "id">[] = [
         content: [
           "Use this when changing BrowserOS's own built-in functionality - a built-in app, a Settings tab/page, the desktop/dock, an API route, or server logic. This edits the BOS source (a Next.js App Router app under src/), not the VFS.",
           "",
-          "Delegate the change: first ensure the Assistant conversation has an Active feature branch selected; if not, ask the user to select or create one. Then call delegateToSubAgent with agent 'developer'. Give a clear, complete description of the desired change plus acceptance criteria (what the user should see or be able to do afterward). The developer has repo-scoped access: the harness requires that active feature branch, checks out an isolated worktree for it, finds the right files, edits them, runs typecheck/lint, and stages the changes. Edits under src/ hot-reload in the dev server; some changes (new dependencies, server/config) need a restart.",
+          "Delegate the change: first ensure the Assistant conversation has an Active feature branch selected; if not, ask the user to select or create one. Then call agent_delegate with agent 'developer'. Give a clear, complete description of the desired change plus acceptance criteria (what the user should see or be able to do afterward). The developer has repo-scoped access: the harness requires that active feature branch, checks out an isolated worktree for it, finds the right files, edits them, runs typecheck/lint, and stages the changes. Edits under src/ hot-reload in the dev server; some changes (new dependencies, server/config) need a restart.",
           "",
           "Tell the developer to read docs/dev/ (start at docs/dev/architecture-overview.md - architecture, repo and data/ layout, API routes, extension recipes) and specs/000-browseros-core/spec.md (requirements) before designing, and to follow BOS conventions: keep the server/client boundary (server-only modules behind /api routes), keep app content text-selectable, keep all source edits on the active feature branch, and update docs/usage + docs/dev (and specs/000-browseros-core/spec.md if the architecture changes).",
           "",
@@ -93,9 +93,9 @@ const SEED: Omit<Skill, "id">[] = [
           "Use this when the user wants a new application inside BOS (a tool/utility shown in a window) - not a change to BOS's own code. The result is a self-contained app installed into BOS and rendered as an iframe.",
           "",
           "1. Clarify the spec: core features, UI, any data persistence, and whether it should call same-origin BOS APIs (e.g. /api/fs for the virtual file system). For a large or vague request, optionally delegate to the planner sub-agent first.",
-          "2. Delegate the build to the developer sub-agent (delegateToSubAgent, agent 'developer', contentOnly: true - building an app is a content op, not a BOS-source edit, so it must not spin up a BOS-code candidate). Require: a single self-contained index.html with all CSS and JS inline; no external dependencies, CDNs, or network calls (same-origin BOS API calls are allowed); output ONLY the HTML document starting with <!doctype html>, and do not write files.",
+          "2. Delegate the build to the developer sub-agent (agent_delegate, agent 'developer', contentOnly: true - building an app is a content op, not a BOS-source edit, so it must not spin up a BOS-code candidate). Require: a single self-contained index.html with all CSS and JS inline; no external dependencies, CDNs, or network calls (same-origin BOS API calls are allowed); output ONLY the HTML document starting with <!doctype html>, and do not write files.",
           "3. Extract the HTML from the developer's output; if wrapped in prose or a code fence, keep only the <!doctype html> ... </html> document.",
-          "4. Install it with installApp: pass name, the full html, and an appropriate Lucide icon (e.g. Clock, Calculator, ListTodo, Music; omit to auto-pick). installApp writes the app as a self-contained folder into the apps content repo (GitFS - git-versioned, discovered by directory listing, not the VFS), serves it at /apps/<id>, adds its icon to the dock, and opens it.",
+          "4. Install it with app_install: pass name, the full html, and an appropriate Lucide icon (e.g. Clock, Calculator, ListTodo, Music; omit to auto-pick). app_install writes the app as a self-contained folder into the apps content repo (GitFS - git-versioned, discovered by directory listing, not the VFS), serves it at /apps/<id>, adds its icon to the dock, and opens it.",
           "5. Document it: ensure the new app is described under docs/usage/apps (purpose, features, and how to use it) as part of the developer's work.",
           "",
           "Notes: this installs a standalone app; it does NOT change BOS's own code (for that, use modifying-bos-features.md). If the developer sub-agent or Claude harness is unavailable, tell the user - do not hand-write the app yourself.",
@@ -111,7 +111,7 @@ const SEED: Omit<Skill, "id">[] = [
       "When authoring, refining, planning, analyzing, or implementing a BOS feature through specs — i.e. running any spec-kit step (constitution, specify, clarify, plan, tasks, analyze, implement, converge).",
     pinned: true,
     content: [
-      "The Build Studio skill drives the spec-kit pipeline. Specs live in external git-backed STORES under BOS_SPECS_ROOT — a BOS-owned system store (id 'bos-system-specs') and your writable 'user-specs' store; discover them with list_specs (empty path). Paths are STORE-PREFIXED `<storeId>/<rel>`. Governing principles live in the system store at bos-system-specs/.specify/memory/constitution.md; per-feature artifacts live in <store>/<NNN-feature>/ (spec.md, plan.md, tasks.md, ...). Blank templates and the authoritative command prompts are the spec-kit ENGINE in BOS source at .specify/templates — read them with read_template / list_templates.",
+      "The Build Studio skill drives the spec-kit pipeline. Specs live in external git-backed STORES under BOS_SPECS_ROOT — a BOS-owned system store (id 'bos-system-specs') and your writable 'user-specs' store; discover them with spec_list (empty path). Paths are STORE-PREFIXED `<storeId>/<rel>`. Governing principles live in the system store at bos-system-specs/.specify/memory/constitution.md; per-feature artifacts live in <store>/<NNN-feature>/ (spec.md, plan.md, tasks.md, ...). Blank templates and the authoritative command prompts are the spec-kit ENGINE in BOS source at .specify/templates — read them with spec_template_read / spec_template_list.",
       "",
       "Pipeline (run the step the user asks for; each builds on the previous):",
       "1. constitution — establish/update project principles (bos-system-specs/.specify/memory/constitution.md).",
@@ -125,11 +125,11 @@ const SEED: Omit<Skill, "id">[] = [
       "",
       "How to run any step:",
       "- Load the matching reference (references/<step>.md) and follow it.",
-      "- Read the command prompt and template with read_template (commands/<step>.md and <artifact>-template.md), then write the artifact with write_spec / edit_spec using a STORE-PREFIXED path. Your file tools only reach the spec stores (never BOS source).",
+      "- Read the command prompt and template with spec_template_read (commands/<step>.md and <artifact>-template.md), then write the artifact with spec_write / spec_edit using a STORE-PREFIXED path. Your file tools only reach the spec stores (never BOS source).",
       "",
       "Golden rules:",
       "- The spec is the source of truth; never get ahead of an agreed spec.",
-      "- You NEVER write BOS source. The `implement` step is ALWAYS delegate_to_developer.",
+      "- You NEVER write BOS source. The `implement` step is ALWAYS dev_delegate.",
       "- New specs you author go in the user store (user-specs). Editing a system spec (bos-system-specs) accumulates on a candidate branch and requires Promote; changing the constitution needs extra care.",
       "- Keep specs and docs in sync; record drift in bos-system-specs/discrepancies.md.",
       "- New feature folders are numbered NNN-slug (next = highest existing number + 1 within the store).",
@@ -138,27 +138,27 @@ const SEED: Omit<Skill, "id">[] = [
       {
         name: "constitution.md",
         content:
-          "Step: constitution. Read commands/constitution.md and constitution-template.md with read_template. Create or update the constitution at bos-system-specs/.specify/memory/constitution.md (write_spec/edit_spec) and bump the version + amended date line. This is global, not per-feature; it is a system-store edit, so it accumulates on the candidate branch until promoted — treat constitution changes with extra care.",
+          "Step: constitution. Read commands/constitution.md and constitution-template.md with spec_template_read. Create or update the constitution at bos-system-specs/.specify/memory/constitution.md (spec_write/spec_edit) and bump the version + amended date line. This is global, not per-feature; it is a system-store edit, so it accumulates on the candidate branch until promoted — treat constitution changes with extra care.",
       },
       {
         name: "specify.md",
         content:
-          "Step: specify. Choose a feature id with the NNN-slug convention (list_specs on 'user-specs' to find the highest existing number; next = +1). Read commands/specify.md and spec-template.md with read_template, then write user-specs/<id>/spec.md following the template: prioritized, independently-testable user stories; functional requirements; measurable success criteria. Mark unknowns with [NEEDS CLARIFICATION].",
+          "Step: specify. Choose a feature id with the NNN-slug convention (spec_list on 'user-specs' to find the highest existing number; next = +1). Read commands/specify.md and spec-template.md with spec_template_read, then write user-specs/<id>/spec.md following the template: prioritized, independently-testable user stories; functional requirements; measurable success criteria. Mark unknowns with [NEEDS CLARIFICATION].",
       },
       {
         name: "clarify.md",
         content:
-          "Step: clarify. Read <store>/<id>/spec.md; find ambiguities and [NEEDS CLARIFICATION] markers; ask the user concrete questions. Then append a '## Clarifications' section containing a '### Session <date>' list of Q→A, and update the affected requirements with edit_spec.",
+          "Step: clarify. Read <store>/<id>/spec.md; find ambiguities and [NEEDS CLARIFICATION] markers; ask the user concrete questions. Then append a '## Clarifications' section containing a '### Session <date>' list of Q→A, and update the affected requirements with spec_edit.",
       },
       {
         name: "plan.md",
         content:
-          "Step: plan. Read the spec plus commands/plan.md and plan-template.md via read_template. Write <store>/<id>/plan.md: technical context; a Constitution Check against bos-system-specs/.specify/memory/constitution.md; concrete project structure (real file paths); and design notes. Add research.md / data-model.md / contracts/ only when warranted.",
+          "Step: plan. Read the spec plus commands/plan.md and plan-template.md via spec_template_read. Write <store>/<id>/plan.md: technical context; a Constitution Check against bos-system-specs/.specify/memory/constitution.md; concrete project structure (real file paths); and design notes. Add research.md / data-model.md / contracts/ only when warranted.",
       },
       {
         name: "tasks.md",
         content:
-          "Step: tasks. Read the spec and plan plus commands/tasks.md and tasks-template.md via read_template. Write <store>/<id>/tasks.md: tasks grouped by user story, dependency-ordered, [P] for parallelizable, with exact file paths.",
+          "Step: tasks. Read the spec and plan plus commands/tasks.md and tasks-template.md via spec_template_read. Write <store>/<id>/tasks.md: tasks grouped by user story, dependency-ordered, [P] for parallelizable, with exact file paths.",
       },
       {
         name: "analyze.md",
@@ -168,7 +168,7 @@ const SEED: Omit<Skill, "id">[] = [
       {
         name: "implement.md",
         content:
-          "Step: implement. Ensure spec.md, plan.md and tasks.md exist, and ensure an Active feature branch is selected for this conversation before delegating. Call delegate_to_developer with a complete task: tell the Developer to read the spec at `specs/<store>/<id>/` in its worktree (all spec stores are mounted read-only under `specs/` there), plus a summary of the spec and plan, the tasks to execute, and acceptance criteria. Instruct the Developer to keep edits on that feature branch, run typecheck/lint, and update docs. You never write code yourself — relay the Developer's result and reflect updated status.",
+          "Step: implement. Ensure spec.md, plan.md and tasks.md exist, and ensure an Active feature branch is selected for this conversation before delegating. Call dev_delegate with a complete task: tell the Developer to read the spec at `specs/<store>/<id>/` in its worktree (all spec stores are mounted read-only under `specs/` there), plus a summary of the spec and plan, the tasks to execute, and acceptance criteria. Instruct the Developer to keep edits on that feature branch, run typecheck/lint, and update docs. You never write code yourself — relay the Developer's result and reflect updated status.",
       },
       {
         name: "converge.md",

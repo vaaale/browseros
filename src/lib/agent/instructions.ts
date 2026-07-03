@@ -13,7 +13,7 @@ function mcpDescription(s: McpServerConfig): string {
 
 // Composes the assistant's system instructions: always-on core policy, the
 // agent's personality, the curated memory snapshot (frozen for the session),
-// then a skills index (full skill bodies loaded on demand via loadSkill). The
+// then a skills index (full skill bodies loaded on demand via skill_load). The
 // skills index is filtered to the agent's allowed skills (011-per-agent-capabilities;
 // unset = all). Pass an explicit agentId to compose for an embed's pinned agent
 // (012-embeddable-assistant); defaults to the globally active agent.
@@ -33,7 +33,7 @@ export async function composeInstructions(agentId?: string): Promise<string> {
     const index = allowed
       .map((s) => `- ${s.name}: ${s.description}${s.whenToUse ? ` (use when: ${s.whenToUse})` : ""}`)
       .join("\n");
-    out += `\n\n## Skills\nYou have a skill library. When a skill is relevant, call loadSkill to read its full instructions, then follow them.\n${index}`;
+    out += `\n\n## Skills\nYou have a skill library. When a skill is relevant, call skill_load to read its full instructions, then follow them.\n${index}`;
   }
   // MCP servers as an INDEX, not their tools (014-mcp-tool-gateway): the agent
   // searches/lists tools (with schemas) and calls them on demand, so context stays

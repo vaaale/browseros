@@ -7,7 +7,7 @@ import type { AppManifest } from "@/os/types";
 // Extensibility + self-improvement actions: install apps from generated HTML,
 // and let the agent edit its own instructions and skills. There is no dedicated
 // "build" tool — building an app is a development task that goes through the
-// standard delegateToSubAgent (Claude developer sub-agent) + installApp flow
+// standard agent_delegate (Claude developer sub-agent) + app_install flow
 // (see the "Build App" skill).
 export function DevActions() {
   const store = useOSStoreApi();
@@ -41,7 +41,7 @@ export function DevActions() {
   useCopilotAction({
     name: "app_build",
     description:
-      "Install a multi-file app PROJECT (TypeScript/TSX, may import React) that a Claude developer sub-agent authored into a staging directory. Use this for anything beyond a single static HTML file. First delegate to the developer (contentOnly) to WRITE the project into a fresh staging dir with a src/main.tsx (or src/main.ts) entry; then call buildApp with the app name and that directory. The project is bundled with esbuild and installed as a preview (promote/discard from the Topbar).",
+      "Install a multi-file app PROJECT (TypeScript/TSX, may import React) that a Claude developer sub-agent authored into a staging directory. Use this for anything beyond a single static HTML file. First delegate to the developer (contentOnly) to WRITE the project into a fresh staging dir with a src/main.tsx (or src/main.ts) entry; then call app_build with the app name and that directory. The project is bundled with esbuild and installed as a preview (promote/discard from the Topbar).",
     parameters: [
       { name: "name", type: "string", description: "App name", required: true },
       { name: "dir", type: "string", description: "Absolute path of the staging directory the developer wrote the project into (must contain src/main.tsx or src/main.ts)", required: true },
@@ -89,7 +89,7 @@ export function DevActions() {
   useCopilotAction({
     name: "agent_prompt_get",
     description:
-      "Read the active agent's EDITABLE base instructions (its personality) — the exact text updateMyInstructions overwrites. This is NOT the fully composed prompt: the always-injected core policy, memory, and skills index are added at runtime and MUST NOT be edited or written back (doing so bakes them into the personality and corrupts the agent).",
+      "Read the active agent's EDITABLE base instructions (its personality) — the exact text agent_prompt_set overwrites. This is NOT the fully composed prompt: the always-injected core policy, memory, and skills index are added at runtime and MUST NOT be edited or written back (doing so bakes them into the personality and corrupts the agent).",
     parameters: [],
     handler: async () => {
       const res = await fetch("/api/assistant/agent").then((r) => r.json());
