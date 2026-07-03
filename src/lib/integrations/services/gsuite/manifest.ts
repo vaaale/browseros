@@ -32,8 +32,24 @@ export const GSUITE_MANIFEST: IntegrationManifest = {
       configSchema: {
         type: "object",
         properties: {
-          pollIntervalSec: { type: "number", default: 300, description: "Phase 2 — reserved." },
-          pollQuery: { type: "string", default: "in:inbox is:unread", description: "Phase 2 — reserved." },
+          poll: {
+            type: "object",
+            description: "Polling configuration. See scheduler/types.ts for shape.",
+            properties: {
+              enabled: { type: "boolean", default: false },
+              intervalSec: { type: "number", default: 300 },
+            },
+          },
+          webhook: {
+            type: "object",
+            description: "Webhook (push) configuration. See webhooks/store.ts for shape.",
+            properties: {
+              enabled: { type: "boolean", default: false },
+              topicName: { type: "string", description: "GCP Pub/Sub topic (projects/<id>/topics/<name>)." },
+              subscriptionId: { type: "string", description: "GCP Pub/Sub push subscription id." },
+              labelIds: { type: "array", items: { type: "string" }, default: ["INBOX"] },
+            },
+          },
         },
       },
     },

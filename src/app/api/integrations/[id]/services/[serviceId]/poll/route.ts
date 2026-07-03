@@ -4,6 +4,8 @@ import { getService } from "@/lib/integrations/registry";
 import { getAdapterEntry } from "@/lib/integrations/actions/adapter-registry";
 import { emitNotification } from "@/lib/integrations/notifications/store";
 import { mutateState } from "@/lib/integrations/state/store";
+import { ensureSchedulerStarted } from "@/lib/integrations/scheduler/daemon";
+import { runJobOnce } from "@/lib/integrations/scheduler/jobs";
 import {
   IntegrationAuthError,
   IntegrationConfigError,
@@ -17,22 +19,22 @@ export const runtime = "nodejs";
 
 // POST /api/integrations/[id]/services/[serviceId]/poll
 //
-// Manual polling trigger — Phase 1 stand-in for a scheduler (see spec.md §Roadmap).
-// The service's adapter is asked to `pollOnce()`, and every returned event is
-// forwarded to the notifications module. The route also touches `lastSync` on
-// the service state so the Settings UI can show "last polled" without needing
-// a separate metadata endpoint.
+// Manual "poll now" trigger. Two paths:
+//   - No body / empty body → delegate to the shared `runJobOnce` helper so the
+//     same backoff/state discipline the daemon uses applies (recommended).
+//   - Explicit { since, maxResults } → bypass the shared helper and pass those
+//     through directly. This is the "test poll" path for the settings UI where
+//     the user wants to override `since` for debugging.
 //
-// Body (optional):
-//   { since?: number, maxResults?: number }
-//
-// Response:
-//   { newMessages: number, emitted: number }
+// The route also lazy-starts the daemon so a user who only interacts via
+// "Poll now" still ends up with automatic polling if they enable it later.
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string; serviceId: string }> },
 ) {
   const { id, serviceId } = await params;
+
+  ensureSchedulerStarted();
 
   const svc = getService(id, serviceId);
   if (!svc) {
@@ -56,20 +58,29 @@ export async function POST(
     body = {};
   }
 
+  // Shared-path: no overrides → use runJobOnce to keep backoff bookkeeping
+  // consistent between the daemon and manual triggers.
+  if (body.since === undefined && body.maxResults === undefined) {
+    const result = await runJobOnce(id, serviceId);
+    if (result.ok) {
+      return NextResponse.json({ newMessages: result.newMessages ?? 0, emitted: result.newMessages ?? 0 });
+    }
+    return NextResponse.json(
+      { error: { code: "poll_failed", message: result.error ?? "poll failed" } },
+      { status: 500 },
+    );
+  }
+
+  // Advanced-path: honour the caller's overrides. Errors here don't update
+  // backoff (this is an ad-hoc developer probe, not a scheduled poll).
   const adapter = entry.createAdapter();
-  // Only Gmail exposes pollOnce in Phase 1. Guard by shape rather than by
-  // adapter identity so future adapters that implement pollOnce work here for
-  // free.
-  const pollable = adapter as unknown as {
-    pollOnce?: GmailAdapter["pollOnce"];
-  };
+  const pollable = adapter as unknown as { pollOnce?: GmailAdapter["pollOnce"] };
   if (typeof pollable.pollOnce !== "function") {
     return NextResponse.json(
       { error: { code: "not_pollable", message: `${id}/${serviceId} does not support polling.` } },
       { status: 400 },
     );
   }
-
   try {
     const result = await pollable.pollOnce({ since: body.since, maxResults: body.maxResults });
     let emitted = 0;
@@ -90,7 +101,6 @@ export async function POST(
     })).catch(() => {});
     return NextResponse.json({ newMessages: result.newMessages, emitted });
   } catch (err) {
-    // Record the error on the service state so the Settings UI can surface it.
     await mutateState(id, (prev) => ({
       ...prev,
       services: {

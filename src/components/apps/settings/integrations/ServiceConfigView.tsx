@@ -1,10 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertCircle, Bell, Globe, Save, RefreshCw } from "lucide-react";
+import { AlertCircle, Bell, Copy, Globe, RefreshCw, Save, ShieldCheck } from "lucide-react";
 import type { IntegrationSummary } from "./useIntegrations";
 import { scopeLabel } from "./useIntegrations";
 import { ScopeToggle } from "./ScopeToggle";
+import { PollingSection } from "./PollingSection";
+import { WebhookSection } from "./WebhookSection";
 
 type ServiceStateOverrides = Record<string, boolean>;
 
@@ -24,8 +26,6 @@ export function ServiceConfigView({ item, serviceId, onPatch }: ServiceConfigVie
   const [enabledDraft, setEnabledDraft] = useState<boolean>(svcState?.enabled !== false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | undefined>();
-  const [polling, setPolling] = useState(false);
-  const [pollResult, setPollResult] = useState<string | undefined>();
 
   useEffect(() => {
     setDrafts(initialOverrides);
@@ -59,9 +59,6 @@ export function ServiceConfigView({ item, serviceId, onPatch }: ServiceConfigVie
     setSaving(true);
     setError(undefined);
     try {
-      // Compare drafts against the initial to build the payload — an "add"
-      // is any scope disabled in drafts, a "remove" (back to enabled) is any
-      // scope that was previously false but is no longer in drafts.
       const scopeOverridesPatch: Record<string, boolean> = {};
       const keys = new Set([...Object.keys(initialOverrides), ...Object.keys(drafts)]);
       for (const k of keys) {
@@ -87,24 +84,6 @@ export function ServiceConfigView({ item, serviceId, onPatch }: ServiceConfigVie
     setEnabledDraft(svcState?.enabled !== false);
     setError(undefined);
   }, [dirty, initialOverrides, svcState?.enabled]);
-
-  const pollNow = useCallback(async () => {
-    setPolling(true);
-    setPollResult(undefined);
-    try {
-      const res = await fetch(
-        `/api/integrations/${encodeURIComponent(item.manifest.id)}/services/${encodeURIComponent(serviceId)}/poll`,
-        { method: "POST" },
-      );
-      const body = (await res.json()) as { newMessages?: number; error?: string };
-      if (!res.ok) throw new Error(body.error ?? `Poll failed: ${res.status}`);
-      setPollResult(`Polled: ${body.newMessages ?? 0} new event${body.newMessages === 1 ? "" : "s"}.`);
-    } catch (e) {
-      setPollResult(`Error: ${(e as Error).message}`);
-    } finally {
-      setPolling(false);
-    }
-  }, [item.manifest.id, serviceId]);
 
   if (!service) return <p className="text-xs text-white/40">Unknown service.</p>;
 
@@ -175,59 +154,14 @@ export function ServiceConfigView({ item, serviceId, onPatch }: ServiceConfigVie
         )}
       </section>
 
-      {/* Polling (Phase 2) — disabled but visible */}
-      <section className="rounded-lg border border-white/10 bg-white/[0.02] p-3 opacity-70">
-        <div className="mb-2 flex items-center justify-between">
-          <h4 className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-white/40">
-            <Bell size={12} /> Polling
-            <span className="rounded bg-white/10 px-1.5 py-0.5 text-[10px] font-normal normal-case text-white/60">
-              Coming in Phase 2
-            </span>
-          </h4>
-          <button
-            type="button"
-            onClick={pollNow}
-            disabled={polling || !item.state.connected}
-            className="inline-flex items-center gap-1.5 rounded border border-white/15 px-2.5 py-1 text-[11px] font-medium text-white/80 transition-colors hover:bg-white/10 disabled:opacity-40"
-          >
-            <RefreshCw size={12} /> {polling ? "Polling…" : "Poll now"}
-          </button>
-        </div>
-        <div className="grid grid-cols-2 gap-2 text-[11px] text-white/50">
-          <label className="space-y-1">
-            <span>Interval (seconds)</span>
-            <input
-              type="number"
-              disabled
-              defaultValue={300}
-              className="w-full cursor-not-allowed rounded border border-white/10 bg-white/[0.03] px-2 py-1 text-white/60"
-            />
-          </label>
-          <label className="space-y-1">
-            <span>Query</span>
-            <input
-              type="text"
-              disabled
-              defaultValue="in:inbox is:unread"
-              className="w-full cursor-not-allowed rounded border border-white/10 bg-white/[0.03] px-2 py-1 text-white/60"
-            />
-          </label>
-        </div>
-        {pollResult && <p className="mt-2 text-[11px] text-white/70">{pollResult}</p>}
-      </section>
+      {/* Polling (Phase 2) */}
+      <PollingSection item={item} serviceId={serviceId} onPatch={onPatch} />
 
-      {/* Webhooks (Phase 2) — disabled placeholder */}
-      <section className="rounded-lg border border-white/10 bg-white/[0.02] p-3 opacity-70">
-        <h4 className="mb-1.5 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-white/40">
-          <Globe size={12} /> Webhooks
-          <span className="rounded bg-white/10 px-1.5 py-0.5 text-[10px] font-normal normal-case text-white/60">
-            Coming in Phase 2
-          </span>
-        </h4>
-        <p className="text-[11px] text-white/50">
-          Push notifications from the provider will land here. No endpoint is registered yet.
-        </p>
-      </section>
+      {/* Webhooks (Phase 2) */}
+      <WebhookSection item={item} serviceId={serviceId} />
     </div>
   );
 }
+
+// Re-export the icons used by sub-sections so the barrel-free imports stay tidy.
+export const _icons = { Bell, Globe, Copy, ShieldCheck, RefreshCw };
