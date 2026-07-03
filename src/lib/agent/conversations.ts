@@ -390,12 +390,15 @@ function firstUserText(messages: unknown[]): string | null {
   return null;
 }
 
-function firstSettledAssistantText(messages: unknown[]): string | null {
+// First assistant text usable as a title signal. Tool-heavy agents (and models
+// like qwen) emit preamble text together WITH a tool call in the same message —
+// that preamble is a fine title signal and is often the ONLY assistant text in
+// the conversation, so we do NOT require a tool-call-free message here (requiring
+// one made title generation never fire for tool-using conversations).
+function firstAssistantText(messages: unknown[]): string | null {
   for (const m of messages) {
     const x = readMessage(m);
     if (x?.role !== "assistant") continue;
-    const hasPendingCalls = Array.isArray(x.toolCalls) && x.toolCalls.length > 0;
-    if (hasPendingCalls) continue;
     if (typeof x.content === "string" && x.content.trim().length > 0) return x.content;
   }
   return null;
@@ -408,7 +411,7 @@ async function maybeGenerateTitleInBackground(id: string, messages: unknown[]): 
   const meta = state?.conversations.find((c) => c.id === id);
   if (!meta || meta.title !== DEFAULT_TITLE) return;
   const userText = firstUserText(messages);
-  const assistantText = firstSettledAssistantText(messages);
+  const assistantText = firstAssistantText(messages);
   if (!userText || !assistantText) return;
 
   titleGenInFlight.add(id);
