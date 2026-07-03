@@ -33,7 +33,7 @@ export async function composeInstructions(agentId?: string): Promise<string> {
     const index = allowed
       .map((s) => `- ${s.name}: ${s.description}${s.whenToUse ? ` (use when: ${s.whenToUse})` : ""}`)
       .join("\n");
-    out += `\n\n## Skills\nYou have a skill library. When a skill is relevant, call skill_load to read its full instructions, then follow them.\n${index}`;
+    out += `\n\n## Skills\nYou have a skill library. When a skill is relevant, call skill_load to read its full instructions, then follow them. A skill's instructions may point to bundled files — open referenced docs and scripts with skill_read_file, and execute scripts with run_command.\n${index}`;
   }
   // MCP servers as an INDEX, not their tools (014-mcp-tool-gateway): the agent
   // searches/lists tools (with schemas) and calls them on demand, so context stays

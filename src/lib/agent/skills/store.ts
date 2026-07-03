@@ -346,6 +346,50 @@ export async function getSkill(idOrName: string): Promise<Skill | undefined> {
   return undefined;
 }
 
+/** Resolve a skill's on-disk directory by id or name (undefined if not found or
+ *  the skill is a legacy flat-file with no bundled resources). */
+async function skillDir(idOrName: string): Promise<string | undefined> {
+  const skill = await getSkill(idOrName);
+  if (!skill) return undefined;
+  const dir = path.join(DIR, skill.id);
+  return (await pathExists(path.join(dir, SKILL_FILE))) ? dir : undefined;
+}
+
+/** Progressive disclosure: read a bundled file from a skill's directory by
+ *  relative path — a reference doc, a script, or any sibling of SKILL.md (e.g.
+ *  pptx keeps `editing.md` / `scripts/thumbnail.py`). Path-guarded to the skill
+ *  directory so the model can't traverse out of it. */
+export async function readSkillFile(idOrName: string, relPath: string): Promise<string> {
+  const dir = await skillDir(idOrName);
+  if (!dir) throw new Error(`No skill "${idOrName}" (or it has no bundled files).`);
+  const abs = path.resolve(dir, relPath);
+  const rel = path.relative(dir, abs);
+  if (rel === "" || rel.startsWith("..") || path.isAbsolute(rel)) {
+    throw new Error(`Path escapes skill directory: ${relPath}`);
+  }
+  return fs.readFile(abs, "utf8");
+}
+
+/** List a skill's bundled files (relative paths, excluding SKILL.md itself) so
+ *  the agent can discover references/scripts to read with readSkillFile. */
+export async function listSkillFiles(idOrName: string): Promise<string[]> {
+  const base = await skillDir(idOrName);
+  if (!base) return [];
+  const root: string = base;
+  const out: string[] = [];
+  async function walk(d: string): Promise<void> {
+    const entries = await fs.readdir(d, { withFileTypes: true }).catch(() => []);
+    for (const e of entries) {
+      if (e.name.startsWith(".")) continue;
+      const full = path.join(d, e.name);
+      if (e.isDirectory()) await walk(full);
+      else if (!(d === root && e.name === SKILL_FILE)) out.push(path.relative(root, full));
+    }
+  }
+  await walk(root);
+  return out.sort();
+}
+
 export async function saveSkill(input: {
   name: string;
   description: string;

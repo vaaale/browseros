@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { listSkills, getSkill, saveSkill, removeSkill, type SkillAsset } from "@/lib/agent/skills/store";
+import { listSkills, getSkill, saveSkill, removeSkill, readSkillFile, listSkillFiles, type SkillAsset } from "@/lib/agent/skills/store";
 
 export const dynamic = "force-dynamic";
 
@@ -18,8 +18,17 @@ function normalizeAssets(input: unknown): SkillAsset[] | undefined {
 }
 
 export async function GET(req: NextRequest) {
-  const id = new URL(req.url).searchParams.get("id");
-  if (id) return NextResponse.json({ skill: await getSkill(id) });
+  const sp = new URL(req.url).searchParams;
+  const id = sp.get("id");
+  const file = sp.get("file");
+  if (id && file) {
+    try {
+      return NextResponse.json({ content: await readSkillFile(id, file) });
+    } catch (err) {
+      return NextResponse.json({ error: (err as Error).message }, { status: 400 });
+    }
+  }
+  if (id) return NextResponse.json({ skill: await getSkill(id), files: await listSkillFiles(id) });
   return NextResponse.json({ skills: await listSkills() });
 }
 

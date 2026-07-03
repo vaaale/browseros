@@ -8,6 +8,7 @@ import * as git from "@/lib/system/git";
 import * as specfs from "@/lib/dev/spec-fs";
 import type { LlmTool } from "@/lib/agent/llm";
 import { SCHEDULER_TOOLS } from "@/lib/scheduler/agent-tools";
+import { listSkills, getSkill, readSkillFile, listSkillFiles } from "@/lib/agent/skills/store";
 
 // Base tools every sub-agent may use: the sandboxed virtual file system, web,
 // and scheduler operations (spread in at module bottom to keep this literal
@@ -64,6 +65,37 @@ export const SUBAGENT_TOOLS: Record<string, LlmTool> = {
       allowed_domains: input.allowed_domains as string[] | undefined,
       blocked_domains: input.blocked_domains as string[] | undefined,
     })),
+  },
+  // Skill library (progressive disclosure): list skills, load a skill's SKILL.md,
+  // and read its bundled reference/script files. Part of every sub-agent's base
+  // toolkit so delegated agents can actually follow the skills they load.
+  skill_list: {
+    description: "List available skills (id, name, description, when to use).",
+    parameters: { type: "object", properties: {} },
+    execute: async () =>
+      JSON.stringify((await listSkills()).map((s) => ({ id: s.id, name: s.name, description: s.description, whenToUse: s.whenToUse }))),
+  },
+  skill_load: {
+    description:
+      "Load a skill's full instructions (SKILL.md) by name or id. The instructions may reference bundled files (references/scripts) — open them with skill_read_file and run scripts with run_command.",
+    parameters: { type: "object", properties: { skill: { type: "string" } }, required: ["skill"] },
+    execute: async (input) => {
+      const s = await getSkill(input.skill as string);
+      if (!s) return `No skill "${input.skill}".`;
+      const files = await listSkillFiles(input.skill as string);
+      const note = files.length > 0 ? `\n\n---\nBundled files (read with skill_read_file):\n${files.map((f) => `- ${f}`).join("\n")}` : "";
+      return `# ${s.name}\n${s.content}${note}`;
+    },
+  },
+  skill_read_file: {
+    description:
+      "Read a bundled file from a skill by relative path (e.g. 'editing.md', 'scripts/thumbnail.py'). Read-only, scoped to the skill's directory.",
+    parameters: {
+      type: "object",
+      properties: { skill: { type: "string" }, path: { type: "string" } },
+      required: ["skill", "path"],
+    },
+    execute: async (input) => readSkillFile(input.skill as string, input.path as string),
   },
   // Scheduler operations — safe (sandboxed under data/scheduler) so they're part
   // of every sub-agent's base toolkit, letting the assistant help users schedule

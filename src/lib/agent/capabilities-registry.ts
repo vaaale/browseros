@@ -60,7 +60,9 @@ export const CAPABILITIES: Capability[] = [
   { id: "memory_recall", group: "Memory", context: "action", description: "Read live persistent memory entries." },
 
   // Skills
-  { id: "skill_load", group: "Skills", context: "action", description: "Load a skill's full instructions." },
+  { id: "skill_list", group: "Skills", context: "both", description: "List available skills." },
+  { id: "skill_load", group: "Skills", context: "both", description: "Load a skill's full instructions." },
+  { id: "skill_read_file", group: "Skills", context: "both", description: "Read a bundled reference/script file from a skill." },
   { id: "skill_save", group: "Skills", context: "action", description: "Save a reusable skill." },
   { id: "skill_reflect", group: "Skills", context: "action", description: "Run the self-improvement review after a task." },
   { id: "skill_improve", group: "Skills", context: "action", description: "Improve a skill from feedback (GEPA)." },

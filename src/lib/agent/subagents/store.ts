@@ -91,7 +91,7 @@ const DEFAULTS: SeedAgent[] = [
     tools: [
       "spec_list", "spec_read", "spec_write", "spec_edit", "spec_search", "spec_template_read", "spec_template_list",
       "dev_delegate", "buildstudio_artifact_open", "buildstudio_tree_refresh",
-      "agent_delegate", "skill_load", "memory_save", "memory_recall", "docs_list", "docs_read",
+      "agent_delegate", "skill_list", "skill_load", "skill_read_file", "memory_save", "memory_recall", "docs_list", "docs_read",
     ],
     skills: ["build-studio"],
     mcp: [],
