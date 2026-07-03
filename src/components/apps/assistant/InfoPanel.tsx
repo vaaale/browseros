@@ -2,11 +2,12 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Wrench, Sparkles, Plug, PlugZap, Loader2 } from "lucide-react";
+import { useCoAgent } from "@copilotkit/react-core";
 import { ASSISTANT_TOOLS } from "@/lib/agent/tool-manifest";
 import type { Skill } from "@/lib/agent/skills/store";
 import type { McpServerConfig } from "@/lib/mcp/types";
 
-type Tab = "tools" | "skills" | "mcp";
+type Tab = "tools" | "skills" | "mcp" | "state";
 
 // An unset/empty allowlist means "all" (011-per-agent-capabilities).
 function allows(allow: string[] | undefined, id: string): boolean {
@@ -32,7 +33,7 @@ export function InfoPanel() {
   return (
     <div className="flex h-full w-56 shrink-0 flex-col border-l border-white/10 bg-white/[0.02]">
       <div className="flex shrink-0 border-b border-white/10 text-xs">
-        {(["tools", "skills", "mcp"] as Tab[]).map((t) => (
+        {(["tools", "skills", "mcp", "state"] as Tab[]).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -46,6 +47,7 @@ export function InfoPanel() {
         {tab === "tools" && <ToolsTab />}
         {tab === "skills" && <SkillsTab allowed={caps?.skills} />}
         {tab === "mcp" && <McpTab allowed={caps?.mcp} />}
+        {tab === "state" && <SessionStateTab />}
       </div>
     </div>
   );
@@ -69,6 +71,35 @@ function ToolsTab() {
           ))}
         </div>
       ))}
+    </div>
+  );
+}
+
+// CopilotKit "shared state" (AG-UI): a state object synchronized between the
+// assistant and this app. The assistant reads it (sent up with each run) and
+// updates it via the AGUISendStateSnapshot/AGUISendStateDelta tools; those updates
+// stream back here and re-render live. The client agent id is "default" (we don't
+// pin a `<CopilotKit agent=…>`), which is the agent this panel reflects.
+const STATE_TRANSPORT_KEYS = ["messages", "tools", "copilotkit"];
+
+function SessionStateTab() {
+  const { state } = useCoAgent<Record<string, unknown>>({ name: "default", initialState: {} });
+  const visible = Object.fromEntries(
+    Object.entries(state ?? {}).filter(([k]) => !STATE_TRANSPORT_KEYS.includes(k)),
+  );
+  const isEmpty = Object.keys(visible).length === 0;
+  return (
+    <div className="space-y-2">
+      <p className="text-[10px] text-white/45">
+        Live session state shared with the assistant. It reads and updates this as it works.
+      </p>
+      {isEmpty ? (
+        <p className="text-white/40">No session state yet.</p>
+      ) : (
+        <pre className="overflow-x-auto whitespace-pre-wrap break-words rounded border border-white/10 bg-black/30 p-2 text-[10px] leading-relaxed text-white/80">
+          {JSON.stringify(visible, null, 2)}
+        </pre>
+      )}
     </div>
   );
 }

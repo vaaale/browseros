@@ -2,7 +2,7 @@
 
 import { useEffect } from "react";
 import { useCopilotAction, type CatchAllActionRenderProps } from "@copilotkit/react-core";
-import { ChevronDown, ChevronRight, Wrench, Loader2 } from "lucide-react";
+import { ChevronDown, ChevronRight, Wrench, Loader2, Braces } from "lucide-react";
 import { parseMcpUi } from "@/lib/mcp/ui";
 import { parseNested, type NestedEvent } from "@/lib/agent/nested-events";
 import { useDelegation } from "@/lib/agent/subagent-events";
@@ -143,6 +143,22 @@ function EventCard({ name, status, args, result }: { name: string; status: strin
   );
 }
 
+// CopilotKit's BuiltInAgent injects AG-UI shared-state tools into every run. Their
+// effect is the synchronized session state (shown live in the Info panel's State
+// tab), so a full Request/Response card in the transcript is just noise — render a
+// compact one-line note instead.
+const STATE_SYNC_TOOLS = new Set(["AGUISendStateSnapshot", "AGUISendStateDelta"]);
+
+function StateSyncNote({ status }: { status: string }) {
+  const busy = status !== "complete";
+  return (
+    <div className="my-1 flex items-center gap-1.5 px-2 py-1 text-[11px] text-white/40">
+      <Braces size={11} className="shrink-0 text-white/35" />
+      <span>{busy ? "Updating session state…" : "Updated session state"}</span>
+    </div>
+  );
+}
+
 // Catch-all renderer: every tool/action call becomes a collapsible event card.
 // The empty dependency array memoizes the action registration so the wildcard
 // `render` keeps a STABLE identity across re-renders. CopilotKit mounts the
@@ -153,9 +169,12 @@ export function ChatToolRenderer() {
   useCopilotAction(
     {
       name: "*",
-      render: ({ name, status, args, result }: CatchAllActionRenderProps<[]>) => (
-        <EventCard name={name} status={status} args={args} result={result} />
-      ),
+      render: ({ name, status, args, result }: CatchAllActionRenderProps<[]>) =>
+        STATE_SYNC_TOOLS.has(name) ? (
+          <StateSyncNote status={status} />
+        ) : (
+          <EventCard name={name} status={status} args={args} result={result} />
+        ),
     },
     [],
   );
