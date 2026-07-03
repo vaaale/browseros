@@ -24,12 +24,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 
-# PEP 668: this is a dedicated sandbox image, so installing into the system
-# environment is intentional.
-RUN pip3 install --no-cache-dir --break-system-packages \
-      ipython \
-      "markitdown[pptx]" \
-      Pillow
+# Python tooling lives in a virtualenv, NOT the system interpreter. On Debian the
+# system Python is "externally managed" (PEP 668), so `pip install` there fails
+# unless forced — the exact error agents hit. A venv on PATH makes python/pip/
+# ipython resolve to it, so plain `pip install <pkg>` just works at runtime. The
+# venv is owned by uid 1000 (the sandbox user) so runtime installs can write to it.
+ENV VIRTUAL_ENV=/opt/venv
+RUN python3 -m venv "$VIRTUAL_ENV"
+ENV PATH="$VIRTUAL_ENV/bin:$PATH"
+RUN pip install --no-cache-dir ipython "markitdown[pptx]" Pillow python-pptx \
+ && chown -R 1000:1000 "$VIRTUAL_ENV"
 
 RUN npm install -g pptxgenjs
 

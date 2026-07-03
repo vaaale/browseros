@@ -302,7 +302,9 @@ async function ensureContainer(cfg: RcConfig, sessionKey: string): Promise<strin
     "--security-opt", "no-new-privileges",
     "--pids-limit", "512",
     "--memory", "2g",
-    "--read-only",
+    // NOT --read-only: the agent legitimately writes to the venv (pip install),
+    // node_modules, etc. Non-root uid 1000 still can't touch root-owned system
+    // files, so system tampering is prevented regardless.
     "--tmpfs", "/tmp:rw,exec,size=512m",
     ...(cfg.network ? [] : ["--network", "none"]),
     ...cfg.volumes.flatMap((v) => ["-v", `${v.hostPath}:${v.hostPath}:${v.mode}`]),
