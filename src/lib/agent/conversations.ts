@@ -2,7 +2,7 @@
 
 import { useSyncExternalStore } from "react";
 import { fsClient } from "@/lib/os-client";
-import { trimToSettledTail } from "@/lib/agent/conversations-sanitize";
+import { sanitizeLoadedMessages } from "@/lib/agent/conversations-sanitize";
 
 /**
  * Conversations live as one JSON file per chat under the user's VFS at
@@ -340,11 +340,12 @@ export async function renameConversation(id: string, title: string): Promise<voi
   }
 }
 
-/** Load the persisted messages for a conversation, trimmed to a settled tail so
- *  reopening it can never resume an in-flight turn (no uncommanded agent run). */
+/** Load the persisted messages for a conversation, sanitized so reopening it can
+ *  never resume an in-flight turn (no uncommanded agent run) WITHOUT discarding
+ *  history — an interrupted tail is closed with a settled note, not deleted. */
 export async function loadConversationMessages(id: string): Promise<unknown[]> {
   const file = await readConversationFile(id);
-  return trimToSettledTail(file?.messages ?? []);
+  return sanitizeLoadedMessages(file?.messages ?? []);
 }
 
 /** Persist the messages of a conversation, preserving its metadata. */
