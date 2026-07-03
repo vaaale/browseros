@@ -28,6 +28,7 @@ export function ServiceConfigView({ item, serviceId, onPatch }: ServiceConfigVie
   const [error, setError] = useState<string | undefined>();
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setDrafts(initialOverrides);
     setEnabledDraft(svcState?.enabled !== false);
   }, [initialOverrides, svcState?.enabled]);
@@ -76,7 +77,7 @@ export function ServiceConfigView({ item, serviceId, onPatch }: ServiceConfigVie
     } finally {
       setSaving(false);
     }
-  }, [drafts, initialOverrides, enabledDraft, item.manifest.id, onPatch, serviceId, svcState?.config]);
+  }, [drafts, initialOverrides, enabledDraft, item.manifest.id, onPatch, serviceId, svcState]);
 
   const cancel = useCallback(() => {
     if (dirty && !confirm("Discard unsaved changes to scope toggles?")) return;

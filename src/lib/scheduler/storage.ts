@@ -156,7 +156,7 @@ export async function recordExecution(
       ? null
       : calculateNextRun(prev.scheduleConfig, execution.executedAt);
 
-  let next: Task = {
+  const next: Task = {
     ...prev,
     lastExecutedAt: execution.executedAt,
     nextRunAt,

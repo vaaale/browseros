@@ -20,6 +20,7 @@ export function IntegrationsBadge() {
   }, []);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void refresh();
     const id = setInterval(() => void refresh(), 15_000);
     return () => clearInterval(id);

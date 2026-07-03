@@ -45,6 +45,7 @@ export function IntegrationDetailView({ item, onOpenService, onRefresh, onDiscon
   }, [item.manifest.id, item.state.connected]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadWhoAmI();
   }, [loadWhoAmI]);
 

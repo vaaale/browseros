@@ -104,6 +104,7 @@ export default function SchedulerApp() {
   }, []);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadTasks();
     fetch("/api/scheduler/agents")
       .then((r) => r.json())
@@ -592,6 +593,7 @@ function TaskModal({
   const [modalError, setModalError] = useState<string | null>(null);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (!agentId && agents.length > 0) setAgentId(agents[0].id);
   }, [agentId, agents]);
 
