@@ -1,11 +1,14 @@
 import "server-only";
-import { spawn, execFile } from "node:child_process";
+import { spawn, execFile, execFileSync } from "node:child_process";
 import { promisify } from "node:util";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { promises as fs } from "node:fs";
 import { dataDir } from "@/os/data-dir";
 import { readNamespace } from "@/lib/config/store";
+import { stageSkillFiles } from "@/lib/agent/skills/store";
+
+const CONTAINER_LABEL = "bos.run-command=1";
 
 // Sandboxed command execution for the assistant and sub-agents. Two backends:
 //  - "docker": each (browser-session, agent) gets its own long-lived container
@@ -84,7 +87,7 @@ export async function loadRcConfig(): Promise<RcConfig> {
   return {
     enabled: s.enabled === true,
     backend,
-    dockerImage: typeof s.dockerImage === "string" && s.dockerImage.trim() ? s.dockerImage.trim() : "node:22-bookworm",
+    dockerImage: typeof s.dockerImage === "string" && s.dockerImage.trim() ? s.dockerImage.trim() : "browseros/run-command:latest",
     workspaceDir:
       typeof s.workspaceDir === "string" && s.workspaceDir.trim()
         ? s.workspaceDir.trim()
@@ -211,8 +214,39 @@ interface ContainerEntry {
   lastUsed: number;
 }
 // Persist the container registry across dev hot-reloads.
-const g = globalThis as unknown as { __bosRcContainers?: Map<string, ContainerEntry>; __bosRcReaper?: NodeJS.Timeout };
+const g = globalThis as unknown as {
+  __bosRcContainers?: Map<string, ContainerEntry>;
+  __bosRcReaper?: NodeJS.Timeout;
+  __bosRcHooks?: boolean;
+};
 const containers: Map<string, ContainerEntry> = (g.__bosRcContainers ??= new Map());
+
+// Tear down sandbox containers when the server process exits. Registered once,
+// lazily (only after the docker backend is first used). Signal handlers use the
+// SYNC docker CLI so cleanup completes before the process terminates.
+function installShutdownHooks(): void {
+  if (g.__bosRcHooks) return;
+  g.__bosRcHooks = true;
+  const syncCleanup = () => {
+    for (const c of containers.values()) {
+      try {
+        execFileSync("docker", ["rm", "-f", c.name], { stdio: "ignore" });
+      } catch {
+        /* ignore */
+      }
+    }
+    containers.clear();
+  };
+  process.once("SIGTERM", () => {
+    syncCleanup();
+    process.exit(0);
+  });
+  process.once("SIGINT", () => {
+    syncCleanup();
+    process.exit(0);
+  });
+  process.once("exit", syncCleanup);
+}
 
 function containerName(sessionKey: string): string {
   return "bos-rc-" + safeKey(sessionKey);
@@ -263,6 +297,7 @@ async function ensureContainer(cfg: RcConfig, sessionKey: string): Promise<strin
   await execFileP("docker", ["rm", "-f", name]).catch(() => {}); // clear any stale container
   const args = [
     "run", "-d", "--name", name,
+    "--label", CONTAINER_LABEL,
     "--workdir", "/workspace",
     "-v", `${workspaceHost}:/workspace:rw`,
     "--user", "1000:1000",
@@ -280,15 +315,21 @@ async function ensureContainer(cfg: RcConfig, sessionKey: string): Promise<strin
   await execFileP("docker", args);
   containers.set(sessionKey, { name, lastUsed: Date.now() });
   scheduleReaper();
+  installShutdownHooks();
   return name;
 }
 
-/** Run one command in the (session, agent) sandbox. Never throws. */
+/** Run one command in the (session, agent) sandbox. Never throws.
+ *
+ *  If `skill` is given, that skill's bundled files are staged into the workspace
+ *  (CWD) first, so a SKILL.md command like `python scripts/office/unpack.py`
+ *  resolves against the workspace root exactly as the skill's docs assume. */
 export async function runCommand(opts: {
   command: string;
   sessionKey: string;
   language?: RunLanguage;
   timeoutMs?: number;
+  skill?: string;
 }): Promise<RunResult> {
   const cfg = await loadRcConfig();
   if (!cfg.enabled) {
@@ -297,6 +338,17 @@ export async function runCommand(opts: {
   const language = opts.language ?? "bash";
   const maxMs = Math.min(positive(opts.timeoutMs, cfg.maxTimeoutMs), cfg.maxTimeoutMs);
   const [prog, ...args] = argvFor(language, opts.command);
+
+  // The per-(session,agent) workspace: a writable host dir that is the CWD
+  // (local) or bind-mounted at /workspace (docker).
+  const workspaceHost = path.join(cfg.workspaceDir, safeKey(opts.sessionKey));
+  await fs.mkdir(workspaceHost, { recursive: true }).catch(() => {});
+  if (opts.skill) {
+    const staged = await stageSkillFiles(opts.skill, workspaceHost).catch(() => false);
+    if (!staged) {
+      return { ok: false, exitCode: null, output: `No skill "${opts.skill}" to stage into the workspace.`, durationMs: 0, backend: cfg.backend };
+    }
+  }
 
   if (cfg.backend === "docker") {
     if (!(await dockerAvailable())) {
@@ -312,9 +364,7 @@ export async function runCommand(opts: {
   }
 
   // local backend
-  const cwd = path.join(cfg.workspaceDir, safeKey(opts.sessionKey));
-  await fs.mkdir(cwd, { recursive: true }).catch(() => {});
-  return runChild(prog, args, { cwd, idleMs: cfg.idleTimeoutMs, maxMs, backend: "local" });
+  return runChild(prog, args, { cwd: workspaceHost, idleMs: cfg.idleTimeoutMs, maxMs, backend: "local" });
 }
 
 /** Tear down all sandbox containers (call on shutdown). */

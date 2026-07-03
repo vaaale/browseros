@@ -390,6 +390,18 @@ export async function listSkillFiles(idOrName: string): Promise<string[]> {
   return out.sort();
 }
 
+/** Copy a skill's bundled files (SKILL.md, scripts/, references, siblings) INTO
+ *  destDir so a sandbox can run the skill's scripts with the relative paths its
+ *  SKILL.md uses (e.g. `python scripts/office/unpack.py`). Returns false if the
+ *  skill has no bundled directory. */
+export async function stageSkillFiles(idOrName: string, destDir: string): Promise<boolean> {
+  const dir = await skillDir(idOrName);
+  if (!dir) return false;
+  await fs.mkdir(destDir, { recursive: true });
+  await fs.cp(dir, destDir, { recursive: true });
+  return true;
+}
+
 export async function saveSkill(input: {
   name: string;
   description: string;

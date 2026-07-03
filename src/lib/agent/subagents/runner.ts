@@ -55,12 +55,13 @@ function makeRunCommandTool(agentId: string): LlmTool {
   const sessionKey = `${sessionId}:${agentId}`;
   return {
     description:
-      "Run a command in a sandboxed environment (Settings → Command Execution; off by default). language: 'bash' (default), 'python' (ipython -c), or 'node' (node -e). Returns merged stdout/stderr, exit code, and duration.",
+      "Run a command in a sandboxed environment (Settings → Command Execution; off by default). language: 'bash' (default), 'python' (ipython -c), or 'node' (node -e). To run a SKILL's bundled scripts, pass `skill` = its id — the skill's files are staged into the working dir first so its SKILL.md relative paths (e.g. `python scripts/office/unpack.py`) work. Returns merged stdout/stderr, exit code, and duration.",
     parameters: {
       type: "object",
       properties: {
         command: { type: "string" },
         language: { type: "string", enum: ["bash", "python", "node"] },
+        skill: { type: "string", description: "Optional skill id to stage into the working dir first." },
         timeoutMs: { type: "number" },
       },
       required: ["command"],
@@ -70,6 +71,7 @@ function makeRunCommandTool(agentId: string): LlmTool {
       const r = await runCommand({
         command: String(input.command ?? ""),
         language: lang,
+        skill: typeof input.skill === "string" && input.skill ? input.skill : undefined,
         timeoutMs: typeof input.timeoutMs === "number" ? input.timeoutMs : undefined,
         sessionKey,
       });

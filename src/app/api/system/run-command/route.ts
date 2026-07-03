@@ -18,7 +18,8 @@ export async function POST(req: NextRequest) {
     const sessionId = typeof body.sessionId === "string" && body.sessionId ? body.sessionId : "default";
     const agentId = typeof body.agentId === "string" && body.agentId ? body.agentId : "main";
     const timeoutMs = typeof body.timeoutMs === "number" ? body.timeoutMs : undefined;
-    const result = await runCommand({ command, language, timeoutMs, sessionKey: `${sessionId}:${agentId}` });
+    const skill = typeof body.skill === "string" && body.skill ? body.skill : undefined;
+    const result = await runCommand({ command, language, timeoutMs, skill, sessionKey: `${sessionId}:${agentId}` });
     return NextResponse.json(result);
   } catch (err) {
     return NextResponse.json({ error: (err as Error).message }, { status: 400 });
