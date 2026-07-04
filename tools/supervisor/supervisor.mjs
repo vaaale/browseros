@@ -264,12 +264,17 @@ async function hydrateWorktree(wt) {
   }
 }
 
-// Mount the external spec stores READ-ONLY into a worktree at `specs/` (018), so
-// the developer harness reads the spec it implements at `specs/<store>/<id>/…`.
-// A copy (reflink where supported): harness edits stay in the worktree copy and
-// never flow back to the store, and because the BOS repo gitignores `specs/`, the
-// mount is excluded from the candidate `git add -A`. Refreshed on every begin so
-// an edited spec is current. No-op when there is no spec store yet.
+// Mount the external spec stores into a worktree at `specs/` (018) as a read-WRITE
+// SYMLINK to the canonical SPECS_ROOT, so the developer harness reads the spec it
+// implements at `specs/<store>/<id>/…` AND its edits flow straight back to the
+// shared store (Build Studio delegates spec authoring to the harness, which runs a
+// more capable model). A symlink — not a copy — because we WANT writes to reach the
+// canonical store; git canonicalizes the link, so committing (harness raw git, or
+// BOS's store-git.ts) lands in the real per-store repo. Safe unlike a node_modules
+// symlink: `specs/` isn't in Turbopack's module graph, and the BOS repo gitignores
+// `specs/` so the link is never staged into the candidate `git add -A`. Re-linking
+// on every begin is free (always reflects live content) and never destroys store
+// contents. No-op when there is no spec store yet.
 async function mountSpecStores(wt) {
   const dst = path.join(wt, "specs");
   try {
@@ -278,13 +283,7 @@ async function mountSpecStores(wt) {
     return; // no stores to mount
   }
   await fs.rm(dst, { recursive: true, force: true }).catch(() => {});
-  const run = (args) => exec("cp", args, { maxBuffer: 32 * 1024 * 1024, timeout: 120_000 });
-  try {
-    await run(["-a", "--reflink=auto", `${SPECS_ROOT}/.`, dst]);
-  } catch {
-    await fs.rm(dst, { recursive: true, force: true }).catch(() => {});
-    await run(["-a", `${SPECS_ROOT}/.`, dst]).catch(() => {});
-  }
+  await fs.symlink(SPECS_ROOT, dst, "dir");
 }
 
 // Create/replace the BASE worktree: detached at `commit` so it never conflicts with
