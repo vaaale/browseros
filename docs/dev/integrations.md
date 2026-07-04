@@ -137,12 +137,48 @@ explain to the user what needs to happen.
 1. Add a `ServiceDefinition` to the integration's manifest (`manifest.ts`).
 2. Create a new adapter under `services/<id>/adapters/<svc>.ts` — extend
    `ServiceAdapter` and declare its own `<SVC>_METHODS`.
-3. Register it in `actions/adapter-registry.ts` under the same
-   `integrationId` key.
+3. Call `registerAdapter(integrationId, serviceId, { createAdapter, methods })`
+   at the bottom of the adapter file (side-effect registration). Also add a
+   side-effect import for the new adapter file to
+   `actions/adapter-registry.ts` so it loads whenever the registry does.
 4. Add per-method capability ids to the Integrations group.
 5. Add matching per-method wiring to `IntegrationActions.tsx` (a new
-   descriptor list + a new `<Service>MethodAction` component analogous to
-   `GmailMethodAction`).
+   descriptor list + hook the descriptors into `GsuiteMethodAction` /
+   the analogous cross-service action component).
+
+## Drive smoke test (Phase 3)
+
+Prereqs: an existing GSuite connection with Gmail scopes granted, plus at
+least one file in the connected Google Drive.
+
+1. Settings → **Integrations** → **GSuite** → **Drive** — the service now
+   appears in the drill-down under GSuite. The Drive service page renders
+   `DriveConfigSection` (an in-page explainer for `drive.readonly` vs
+   `drive.file`) above the scope toggles.
+2. If Drive scopes are not yet granted, use the "Reauthorize with Drive"
+   flow (delta-scope OAuth via `useReconnectWithScopes`) — Google merges the
+   new scopes with existing grants via `include_granted_scopes=true`. You do
+   NOT need to re-consent to Gmail scopes.
+3. From an assistant chat, ask "list my most recent Drive files" — the LLM
+   should call `gsuite_drive_listFiles` and return a JSON summary.
+4. Ask "download the file named X" → the model calls
+   `gsuite_drive_downloadFile({ id, maxBytes })`. Files under **256 KB**
+   (default cap) return `{ contentType, base64, size }`; larger files return
+   `{ error: "too_large", size, maxBytes }` so the LLM can offer an
+   alternative (e.g., using `exportFile` for Google-native docs, or telling
+   the user the file is too large).
+5. For a Google Doc / Sheet / Slide, ask "export … as PDF" — the model calls
+   `gsuite_drive_exportFile({ id, mimeType: 'application/pdf' })` and gets
+   the same base64 result shape.
+6. Toggle `drive.readonly` **off** in Settings → the seven `gsuite_drive_*`
+   actions become unavailable within one render cycle (verified via the
+   assistant's tool list refresh — the model no longer sees them). Toggle
+   back on and they return.
+
+Calendar and Contacts appear as sub-services under GSuite but their
+adapters are Phase 3 stubs — any invocation throws
+`IntegrationConfigError("service_not_yet_implemented")` and no capability
+ids are registered for them yet.
 
 ## Acceptance criteria (Phase 1 Definition of Done)
 

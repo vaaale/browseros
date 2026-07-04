@@ -136,9 +136,60 @@ export function scopeLabel(scope: string): string {
     "https://www.googleapis.com/auth/gmail.readonly": "Read Gmail messages",
     "https://www.googleapis.com/auth/gmail.modify": "Modify Gmail labels & trash",
     "https://www.googleapis.com/auth/gmail.send": "Send email as you",
+    "https://www.googleapis.com/auth/drive.readonly": "See all your Drive files (read-only)",
+    "https://www.googleapis.com/auth/drive.file": "Access only files this app opens or creates",
+    "https://www.googleapis.com/auth/calendar.readonly": "Read your calendars & events",
+    "https://www.googleapis.com/auth/calendar.events": "Create, edit & delete calendar events",
+    "https://www.googleapis.com/auth/contacts.readonly": "Read your contacts",
   };
   if (map[scope]) return map[scope];
   // Fallback: trim to the trailing path segment.
   const idx = scope.lastIndexOf("/");
   return idx >= 0 ? scope.slice(idx + 1) : scope;
+}
+
+/**
+ * Open the OAuth popup with a specific scope subset — used when a user wants
+ * to grant a new service (e.g. Drive) without re-consenting to already-
+ * granted scopes. Google's `include_granted_scopes=true` (set in the start
+ * flow) merges the delta with the existing grant.
+ *
+ * Returns a promise that resolves when the callback posts `bos-oauth` and
+ * `refresh()` has been called. Rejects on error.
+ */
+export function useReconnectWithScopes(): {
+  reconnect: (integrationId: string, scopes: string[]) => Promise<void>;
+} {
+  const { refresh } = useIntegrations();
+  const reconnect = useCallback(
+    async (integrationId: string, scopes: string[]) => {
+      if (scopes.length === 0) throw new Error("scopes list must be non-empty");
+      const qs = new URLSearchParams({
+        integrationId,
+        scopes: scopes.join(","),
+      });
+      const res = await fetch(`/api/integrations/oauth/start?${qs.toString()}`);
+      const body = (await res.json()) as { authUrl?: string; error?: string };
+      if (!res.ok || !body.authUrl) {
+        throw new Error(body.error ?? "Failed to start OAuth flow.");
+      }
+      const popup = window.open(body.authUrl, `bos-oauth-${integrationId}`, "width=520,height=680");
+      if (!popup) {
+        throw new Error("Popup was blocked. Allow popups for this site and try again.");
+      }
+      await new Promise<void>((resolve, reject) => {
+        const listener = (ev: MessageEvent) => {
+          const data = ev.data as { type?: string; ok?: boolean; error?: string } | null;
+          if (!data || data.type !== "bos-oauth") return;
+          window.removeEventListener("message", listener);
+          void refresh();
+          if (data.ok) resolve();
+          else reject(new Error(data.error ?? "Reconnect failed."));
+        };
+        window.addEventListener("message", listener);
+      });
+    },
+    [refresh],
+  );
+  return { reconnect };
 }

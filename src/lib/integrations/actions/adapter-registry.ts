@@ -2,30 +2,46 @@ import "server-only";
 
 import type { ServiceAdapter } from "../adapters/base";
 import type { AdapterMethodMeta } from "./types";
-import { GmailAdapter, GMAIL_METHODS } from "../services/gsuite/adapters/gmail";
 
 // Server-side lookup: for a given (integrationId, serviceId), return a fresh
 // adapter instance and the method-metadata list. Kept OUT of the framework-
 // free entry point (`../index.ts`) so client bundles don't pull in adapters.
 //
-// Adding a service here is the ONLY registration a new adapter needs — the
-// invoke route, the dispatcher, and the assistant tool wiring all discover it
-// through this map.
+// Adapters register themselves at module-load time by calling
+// `registerAdapter(integrationId, serviceId, entry)`. Each adapter file
+// imports this module and invokes the register call at the bottom of the
+// file (side-effect); the barrel (`services/gsuite/index.ts`) imports every
+// adapter file so the barrel-consumer sees a fully-populated registry.
+//
+// This mirrors the manifest registry's pattern (`registerIntegration`) — we
+// avoid a central hard-coded map so adding a new adapter is one file
+// touched per service.
 
-interface AdapterEntry {
+export interface AdapterEntry {
   createAdapter: () => ServiceAdapter;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   methods: readonly AdapterMethodMeta<any>[];
 }
 
-const ADAPTERS: Record<string, Record<string, AdapterEntry>> = {
-  gsuite: {
-    gmail: {
-      createAdapter: () => new GmailAdapter(),
-      methods: GMAIL_METHODS,
-    },
-  },
-};
+const ADAPTERS: Record<string, Record<string, AdapterEntry>> = {};
+
+/**
+ * Register an adapter with the server-side registry. Duplicate registrations
+ * for the same `(integrationId, serviceId)` throw — matches
+ * `registerIntegration` semantics so a subtle module-graph doubling
+ * surfaces as a load-time failure rather than a silent overwrite.
+ */
+export function registerAdapter(
+  integrationId: string,
+  serviceId: string,
+  entry: AdapterEntry,
+): void {
+  const bucket = ADAPTERS[integrationId] ?? (ADAPTERS[integrationId] = {});
+  if (bucket[serviceId]) {
+    throw new Error(`Duplicate adapter registration: ${integrationId}/${serviceId}`);
+  }
+  bucket[serviceId] = entry;
+}
 
 export function getAdapterEntry(integrationId: string, serviceId: string): AdapterEntry | undefined {
   return ADAPTERS[integrationId]?.[serviceId];
@@ -59,3 +75,16 @@ export function listAdapterServices(): Array<{
   }
   return out;
 }
+
+/** Test-only: wipe the registry. */
+export function _resetAdapterRegistry(): void {
+  for (const k of Object.keys(ADAPTERS)) delete ADAPTERS[k];
+}
+
+// Side-effect imports: each adapter file calls `registerAdapter(...)` at
+// module load. Consumers of `adapter-registry.ts` (the invoke route, the
+// scheduler, etc.) transitively load every adapter without a hard-coded map.
+// Adapters that are placeholders in Phase 3 (calendar, contacts) are NOT
+// imported here — they'll come online in Phase 4.
+import "../services/gsuite/adapters/gmail";
+import "../services/gsuite/adapters/drive";

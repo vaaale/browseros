@@ -7,6 +7,7 @@ import { scopeLabel } from "./useIntegrations";
 import { ScopeToggle } from "./ScopeToggle";
 import { PollingSection } from "./PollingSection";
 import { WebhookSection } from "./WebhookSection";
+import { DriveConfigSection } from "./DriveConfigSection";
 
 type ServiceStateOverrides = Record<string, boolean>;
 
@@ -132,6 +133,9 @@ export function ServiceConfigView({ item, serviceId, onPatch }: ServiceConfigVie
           <span>{error}</span>
         </div>
       )}
+
+      {/* Service-specific hints */}
+      {serviceId === "drive" && <DriveConfigSection />}
 
       {/* Scopes */}
       <section>

@@ -138,6 +138,13 @@ export const CAPABILITIES: Capability[] = [
   { id: "gsuite_gmail_listLabels", group: "Integrations", context: "action", description: "List Gmail labels." },
   { id: "gsuite_gmail_getLabel", group: "Integrations", context: "action", description: "Fetch a Gmail label by id." },
   { id: "gsuite_gmail_getProfile", group: "Integrations", context: "action", description: "Fetch the authenticated Gmail profile." },
+  { id: "gsuite_drive_listFiles", group: "Integrations", context: "action", description: "List files in Google Drive." },
+  { id: "gsuite_drive_getFile", group: "Integrations", context: "action", description: "Fetch a Drive file's metadata by id." },
+  { id: "gsuite_drive_searchFiles", group: "Integrations", context: "action", description: "Search Drive with Google's query syntax." },
+  { id: "gsuite_drive_downloadFile", group: "Integrations", context: "action", description: "Download a Drive file's binary content (base64, size-capped)." },
+  { id: "gsuite_drive_exportFile", group: "Integrations", context: "action", description: "Export a Google-native doc (Docs/Sheets/Slides) as PDF/CSV/text/etc." },
+  { id: "gsuite_drive_listFolders", group: "Integrations", context: "action", description: "List folders in Drive, optionally under a parent." },
+  { id: "gsuite_drive_getAbout", group: "Integrations", context: "action", description: "Fetch the authenticated Drive profile + storage quota." },
 ];
 
 // Tools/actions the UI marks with a warning affordance in the Agent Settings

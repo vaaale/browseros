@@ -4,6 +4,7 @@ import { useCopilotReadable } from "@copilotkit/react-core";
 import { useCopilotAction } from "@/components/agent/gated-action";
 import { useIntegrationsEffectiveScopes } from "@/components/apps/settings/integrations/useIntegrations";
 import { GMAIL_METHOD_DESCRIPTORS } from "@/lib/integrations/services/gsuite/adapters/gmail-methods";
+import { DRIVE_METHOD_DESCRIPTORS } from "@/lib/integrations/services/gsuite/adapters/drive-methods";
 import {
   actionNameFor,
   invokeAdapterMethod,
@@ -26,7 +27,7 @@ export function IntegrationActions() {
 
   useCopilotReadable({
     description:
-      "Connected external integrations (Gmail / GSuite): which are connected and which scopes are effectively granted right now. If an action is disabled, ask the user to connect the integration or enable the missing scope in Settings → Integrations.",
+      "Connected external integrations (Gmail / Drive / GSuite): which are connected and which scopes are effectively granted right now. If an action is disabled, ask the user to connect the integration or enable the missing scope in Settings → Integrations.",
     value: {
       gsuite: {
         connected: gsuiteConnected,
@@ -36,13 +37,25 @@ export function IntegrationActions() {
   });
 
   // Static-length map over compile-time descriptors: number of hook calls is
-  // stable across renders (Rules of Hooks) because GMAIL_METHOD_DESCRIPTORS is
-  // a readonly module constant.
+  // stable across renders (Rules of Hooks) because *_METHOD_DESCRIPTORS are
+  // readonly module constants.
   return (
     <>
       {GMAIL_METHOD_DESCRIPTORS.map((d) => (
-        <GmailMethodAction
-          key={d.method}
+        <GsuiteMethodAction
+          key={`gmail_${d.method}`}
+          serviceId="gmail"
+          method={d.method}
+          scope={d.scope}
+          description={d.description}
+          parameters={d.parameters}
+          scopeGranted={gsuiteScopes.has(d.scope) && gsuiteConnected}
+        />
+      ))}
+      {DRIVE_METHOD_DESCRIPTORS.map((d) => (
+        <GsuiteMethodAction
+          key={`drive_${d.method}`}
+          serviceId="drive"
           method={d.method}
           scope={d.scope}
           description={d.description}
@@ -54,7 +67,8 @@ export function IntegrationActions() {
   );
 }
 
-interface GmailActionProps {
+interface GsuiteActionProps {
+  serviceId: string;
   method: string;
   scope: string;
   description: string;
@@ -63,19 +77,20 @@ interface GmailActionProps {
 }
 
 /**
- * One CopilotKit action for a single Gmail adapter method. Split out so each
+ * One CopilotKit action for a single GSuite adapter method. Split out so each
  * useCopilotAction is a static hook call in its own component tree — the
- * parent's `.map()` renders a stable number of children (equal to the length
- * of GMAIL_METHOD_DESCRIPTORS at compile time).
+ * parent's `.map()` renders a stable number of children (equal to the
+ * summed length of the compile-time descriptor lists).
  */
-function GmailMethodAction({
+function GsuiteMethodAction({
+  serviceId,
   method,
   scope,
   description,
   parameters,
   scopeGranted,
-}: GmailActionProps): null {
-  const name = actionNameFor("gsuite", "gmail", method);
+}: GsuiteActionProps): null {
+  const name = actionNameFor("gsuite", serviceId, method);
   // `available` drives whether the LLM sees the action. Adding an explicit
   // scope hint to the description gives the model a chance to ask the user
   // to grant the missing scope instead of just retrying blindly.
@@ -100,16 +115,18 @@ function GmailMethodAction({
       try {
         const result = await invokeAdapterMethod({
           integrationId: "gsuite",
-          serviceId: "gmail",
+          serviceId,
           method,
           args: args ?? {},
         });
         // Trim large payloads so the LLM's context isn't blown out by a giant
-        // list of messages. 8 KB is enough to preserve small responses but
-        // avoids dumping raw email bodies verbatim.
+        // list of messages / files. 8 KB is enough to preserve small responses
+        // but avoids dumping raw bodies verbatim. Binary downloads (Drive)
+        // already enforce their own maxBytes cap and return base64 that we
+        // never truncate below its own limit.
         const json = JSON.stringify(result);
         if (json.length > 8_000) {
-          return `${json.slice(0, 8_000)}\n\n… response truncated at 8 KB. Use a smaller maxResults or fetch specific ids to see more.`;
+          return `${json.slice(0, 8_000)}\n\n… response truncated at 8 KB. Use a smaller pageSize / maxResults or fetch specific ids to see more.`;
         }
         return json;
       } catch (err) {

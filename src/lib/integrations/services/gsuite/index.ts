@@ -7,4 +7,4 @@ import { GSUITE_MANIFEST } from "./manifest";
 
 registerIntegration(GSUITE_MANIFEST);
 
-export { GSUITE_MANIFEST, GMAIL_SCOPES } from "./manifest";
+export { GSUITE_MANIFEST, GMAIL_SCOPES, DRIVE_SCOPES, CALENDAR_SCOPES, CONTACTS_SCOPES } from "./manifest";

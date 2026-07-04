@@ -485,3 +485,16 @@ export const GMAIL_METHODS: readonly AdapterMethodMeta<GmailAdapter>[] =
     parameters: d.parameters,
     invoke: GMAIL_INVOKERS[d.method],
   }));
+
+// --- Registration --------------------------------------------------------
+// Register this adapter with the server-side registry at module load. The
+// `adapter-registry.ts` module side-effect-imports this file so any server
+// entry that touches the registry sees Gmail registered. Guarded to be
+// re-import safe (adapter-registry throws on duplicate ids).
+import { registerAdapter, getAdapterEntry as _getAdapterEntry } from "../../../actions/adapter-registry";
+if (!_getAdapterEntry("gsuite", "gmail")) {
+  registerAdapter("gsuite", "gmail", {
+    createAdapter: () => new GmailAdapter(),
+    methods: GMAIL_METHODS,
+  });
+}
