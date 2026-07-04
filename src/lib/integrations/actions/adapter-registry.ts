@@ -10,8 +10,15 @@ import type { AdapterMethodMeta } from "./types";
 // Adapters register themselves at module-load time by calling
 // `registerAdapter(integrationId, serviceId, entry)`. Each adapter file
 // imports this module and invokes the register call at the bottom of the
-// file (side-effect); the barrel (`services/gsuite/index.ts`) imports every
-// adapter file so the barrel-consumer sees a fully-populated registry.
+// file (side-effect); the service barrel (`services/gsuite/index.ts`)
+// imports every adapter file so any consumer of the barrel sees a
+// fully-populated registry.
+//
+// NOTE: this module MUST NOT import the adapter files itself — doing so
+// creates a circular dependency (adapter → registry → adapter) that ESM /
+// Turbopack can't sequence, producing a `Cannot access 'u' before
+// initialization` TDZ error at load time. Registration is driven by the
+// service barrel instead.
 //
 // This mirrors the manifest registry's pattern (`registerIntegration`) — we
 // avoid a central hard-coded map so adding a new adapter is one file
@@ -80,11 +87,3 @@ export function listAdapterServices(): Array<{
 export function _resetAdapterRegistry(): void {
   for (const k of Object.keys(ADAPTERS)) delete ADAPTERS[k];
 }
-
-// Side-effect imports: each adapter file calls `registerAdapter(...)` at
-// module load. Consumers of `adapter-registry.ts` (the invoke route, the
-// scheduler, etc.) transitively load every adapter without a hard-coded map.
-// Adapters that are placeholders in Phase 3 (calendar, contacts) are NOT
-// imported here — they'll come online in Phase 4.
-import "../services/gsuite/adapters/gmail";
-import "../services/gsuite/adapters/drive";
