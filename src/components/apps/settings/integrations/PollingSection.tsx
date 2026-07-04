@@ -13,6 +13,13 @@ interface PollingSectionProps {
   item: IntegrationSummary;
   serviceId: string;
   onPatch: (id: string, body: unknown) => Promise<void>;
+  /**
+   * Whether the (integrationId, serviceId) pair has a registered adapter that
+   * declares `capabilities.poll`. When false, we render a "not supported"
+   * placeholder and skip status polling / control wiring entirely — otherwise
+   * `runJobOnce` would fail with "no adapter" / "does not support polling".
+   */
+  supported: boolean;
 }
 
 interface IntervalOption {
@@ -60,7 +67,7 @@ function formatRelative(ts: number | undefined, now: number): string {
   return diff >= 0 ? `in ${hours}h` : `${hours}h ago`;
 }
 
-export function PollingSection({ item, serviceId, onPatch }: PollingSectionProps) {
+export function PollingSection({ item, serviceId, onPatch, supported }: PollingSectionProps) {
   const persisted = useMemo(() => readPollConfig(item, serviceId), [item, serviceId]);
   const [enabled, setEnabled] = useState<boolean>(persisted.enabled);
   const [intervalSec, setIntervalSec] = useState<number>(persisted.intervalSec);
@@ -96,6 +103,7 @@ export function PollingSection({ item, serviceId, onPatch }: PollingSectionProps
   }, []);
 
   useEffect(() => {
+    if (!supported) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadStatus();
     const interval = setInterval(() => {
@@ -107,7 +115,7 @@ export function PollingSection({ item, serviceId, onPatch }: PollingSectionProps
       clearInterval(interval);
       clearInterval(tick);
     };
-  }, [loadStatus]);
+  }, [loadStatus, supported]);
 
   const dirty = useMemo(() => {
     return enabled !== persisted.enabled || intervalSec !== persisted.intervalSec;
@@ -124,9 +132,14 @@ export function PollingSection({ item, serviceId, onPatch }: PollingSectionProps
         enabled,
         intervalSec: clamp(intervalSec),
       };
+      // Preserve the service-level `enabled` flag explicitly. The server
+      // defaults a never-seen-before service to `enabled: false`, which would
+      // stealth-disable the service the first time a user tweaks its poll
+      // config. Mirror the UI's default-enabled semantics (`!== false`).
       await onPatch(item.manifest.id, {
         services: {
           [serviceId]: {
+            enabled: svcState?.enabled !== false,
             config: { poll: nextPoll },
           },
         },
@@ -170,10 +183,32 @@ export function PollingSection({ item, serviceId, onPatch }: PollingSectionProps
     );
   }, [status, item.manifest.id, serviceId]);
 
-  const canPoll = item.state.connected && item.state.services[serviceId]?.enabled !== false;
+  const canPoll =
+    supported &&
+    item.state.connected &&
+    item.state.services[serviceId]?.enabled !== false;
   const activeError = persisted.lastError ?? jobStatus?.lastError;
   const failures = jobStatus?.failures ?? persisted.failures ?? 0;
   const backoffActive = persisted.retryAfter && persisted.retryAfter > now;
+
+  if (!supported) {
+    return (
+      <section className="rounded-lg border border-white/10 bg-white/[0.03] p-3">
+        <div className="mb-2 flex items-center gap-2">
+          <h4 className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-white/40">
+            <Bell size={12} /> Polling
+          </h4>
+          <span className="rounded bg-white/10 px-1.5 py-0.5 text-[10px] font-normal normal-case text-white/60">
+            Not available
+          </span>
+        </div>
+        <p className="text-[11px] text-white/50">
+          Polling isn&apos;t available for this service yet. It will light up once an adapter with
+          poll support is registered.
+        </p>
+      </section>
+    );
+  }
 
   return (
     <section className="rounded-lg border border-white/10 bg-white/[0.03] p-3">

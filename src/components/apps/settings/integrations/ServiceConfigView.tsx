@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertCircle, Bell, Copy, Globe, RefreshCw, Save, ShieldCheck } from "lucide-react";
-import type { IntegrationSummary } from "./useIntegrations";
-import { scopeLabel } from "./useIntegrations";
+import type { AdapterSummary, IntegrationSummary } from "./useIntegrations";
+import { adapterSupports, scopeLabel } from "./useIntegrations";
 import { ScopeToggle } from "./ScopeToggle";
 import { PollingSection } from "./PollingSection";
 import { WebhookSection } from "./WebhookSection";
@@ -15,9 +15,12 @@ export interface ServiceConfigViewProps {
   item: IntegrationSummary;
   serviceId: string;
   onPatch: (id: string, body: unknown) => Promise<void>;
+  adapters: AdapterSummary[];
 }
 
-export function ServiceConfigView({ item, serviceId, onPatch }: ServiceConfigViewProps) {
+export function ServiceConfigView({ item, serviceId, onPatch, adapters }: ServiceConfigViewProps) {
+  const canPoll = adapterSupports(adapters, item.manifest.id, serviceId, "poll");
+  const canWebhook = adapterSupports(adapters, item.manifest.id, serviceId, "webhook");
   const service = item.manifest.services.find((s) => s.id === serviceId);
   const svcState = item.state.services[serviceId];
 
@@ -69,8 +72,12 @@ export function ServiceConfigView({ item, serviceId, onPatch }: ServiceConfigVie
         if (isFalse && !wasFalse) scopeOverridesPatch[k] = false;
         if (!isFalse && wasFalse) scopeOverridesPatch[k] = true;
       }
+      // Only send `enabled` — the server preserves existing `config` when the
+      // patch omits it. Spreading `svcState?.config` here would round-trip a
+      // potentially-stale copy and could clobber concurrent edits from
+      // sub-sections (Polling, Webhook) that own their own config keys.
       await onPatch(item.manifest.id, {
-        services: { [serviceId]: { enabled: enabledDraft, config: svcState?.config ?? {} } },
+        services: { [serviceId]: { enabled: enabledDraft } },
         scopeOverrides: scopeOverridesPatch,
       });
     } catch (e) {
@@ -78,7 +85,7 @@ export function ServiceConfigView({ item, serviceId, onPatch }: ServiceConfigVie
     } finally {
       setSaving(false);
     }
-  }, [drafts, initialOverrides, enabledDraft, item.manifest.id, onPatch, serviceId, svcState]);
+  }, [drafts, initialOverrides, enabledDraft, item.manifest.id, onPatch, serviceId]);
 
   const cancel = useCallback(() => {
     if (dirty && !confirm("Discard unsaved changes to scope toggles?")) return;
@@ -160,10 +167,15 @@ export function ServiceConfigView({ item, serviceId, onPatch }: ServiceConfigVie
       </section>
 
       {/* Polling (Phase 2) */}
-      <PollingSection item={item} serviceId={serviceId} onPatch={onPatch} />
+      <PollingSection
+        item={item}
+        serviceId={serviceId}
+        onPatch={onPatch}
+        supported={canPoll}
+      />
 
       {/* Webhooks (Phase 2) */}
-      <WebhookSection item={item} serviceId={serviceId} />
+      <WebhookSection item={item} serviceId={serviceId} supported={canWebhook} />
     </div>
   );
 }

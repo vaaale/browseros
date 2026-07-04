@@ -32,6 +32,13 @@ interface WebhookSnapshot {
 interface WebhookSectionProps {
   item: IntegrationSummary;
   serviceId: string;
+  /**
+   * Whether the (integrationId, serviceId) pair has a registered adapter that
+   * declares `capabilities.webhook`. When false, render a "not supported"
+   * placeholder and skip the initial `GET /webhook` load — the endpoint
+   * relies on a registered handler that placeholder services don't have.
+   */
+  supported: boolean;
 }
 
 type GmailExtras = {
@@ -46,7 +53,7 @@ function isGmail(integrationId: string, serviceId: string): boolean {
   return integrationId === "gsuite" && serviceId === "gmail";
 }
 
-export function WebhookSection({ item, serviceId }: WebhookSectionProps) {
+export function WebhookSection({ item, serviceId, supported }: WebhookSectionProps) {
   const [snapshot, setSnapshot] = useState<WebhookSnapshot | undefined>();
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -86,9 +93,13 @@ export function WebhookSection({ item, serviceId }: WebhookSectionProps) {
   }, [base]);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (!supported) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setLoading(false);
+      return;
+    }
     void load();
-  }, [load]);
+  }, [load, supported]);
 
   // Seed drafts from snapshot exactly once (avoid stomping in-progress edits
   // when we poll for status updates).
@@ -215,6 +226,25 @@ export function WebhookSection({ item, serviceId }: WebhookSectionProps) {
 
   const enabled = snapshot?.config?.enabled === true;
   const connected = item.state.connected;
+
+  if (!supported) {
+    return (
+      <section className="rounded-lg border border-white/10 bg-white/[0.03] p-3">
+        <div className="mb-2 flex items-center gap-2">
+          <h4 className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-white/40">
+            <Globe size={12} /> Webhooks
+          </h4>
+          <span className="rounded bg-white/10 px-1.5 py-0.5 text-[10px] font-normal normal-case text-white/60">
+            Not available
+          </span>
+        </div>
+        <p className="text-[11px] text-white/50">
+          Webhooks aren&apos;t available for this service yet. They&apos;ll light up once an adapter
+          with webhook support is registered.
+        </p>
+      </section>
+    );
+  }
 
   return (
     <section className="rounded-lg border border-white/10 bg-white/[0.03] p-3">

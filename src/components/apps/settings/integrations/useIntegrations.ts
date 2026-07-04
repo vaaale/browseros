@@ -10,9 +10,23 @@ export interface IntegrationSummary {
   hasClientSecret: boolean;
 }
 
+/** Client-side capability mirror of the server AdapterCapabilities. */
+export interface AdapterCapabilitySummary {
+  poll?: boolean;
+  webhook?: boolean;
+}
+
+/** One entry per (integrationId, serviceId) that has a registered adapter. */
+export interface AdapterSummary {
+  integrationId: string;
+  serviceId: string;
+  capabilities: AdapterCapabilitySummary;
+}
+
 interface UseIntegrationsResult {
   loading: boolean;
   items: IntegrationSummary[];
+  adapters: AdapterSummary[];
   error?: string;
   refresh: () => Promise<void>;
   patch: (id: string, body: unknown) => Promise<void>;
@@ -26,6 +40,7 @@ interface UseIntegrationsResult {
  */
 export function useIntegrations(): UseIntegrationsResult {
   const [items, setItems] = useState<IntegrationSummary[]>([]);
+  const [adapters, setAdapters] = useState<AdapterSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | undefined>();
 
@@ -34,6 +49,7 @@ export function useIntegrations(): UseIntegrationsResult {
       setLoading(true);
       const res = await fetch("/api/integrations").then((r) => r.json());
       setItems((res.integrations as IntegrationSummary[]) ?? []);
+      setAdapters((res.adapters as AdapterSummary[]) ?? []);
       setError(undefined);
     } catch (e) {
       setError((e as Error).message);
@@ -77,7 +93,39 @@ export function useIntegrations(): UseIntegrationsResult {
     [refresh],
   );
 
-  return { loading, items, error, refresh, patch, disconnect };
+  return { loading, items, adapters, error, refresh, patch, disconnect };
+}
+
+/**
+ * Lookup helper: does a registered adapter exist for the given
+ * (integrationId, serviceId) pair? Placeholder services (calendar, contacts)
+ * intentionally omit registration, so this returns `false` and the settings
+ * UI can gate polling / webhook sub-sections accordingly.
+ */
+export function hasAdapter(
+  adapters: AdapterSummary[],
+  integrationId: string,
+  serviceId: string,
+): boolean {
+  return adapters.some((a) => a.integrationId === integrationId && a.serviceId === serviceId);
+}
+
+/**
+ * Lookup helper: does the adapter for (integrationId, serviceId) declare the
+ * given capability? Returns `false` for missing adapters, missing entries, or
+ * adapters that simply don't set the flag (e.g. Drive, which has an adapter
+ * but no `pollOnce`).
+ */
+export function adapterSupports(
+  adapters: AdapterSummary[],
+  integrationId: string,
+  serviceId: string,
+  capability: keyof AdapterCapabilitySummary,
+): boolean {
+  const entry = adapters.find(
+    (a) => a.integrationId === integrationId && a.serviceId === serviceId,
+  );
+  return entry?.capabilities?.[capability] === true;
 }
 
 /**

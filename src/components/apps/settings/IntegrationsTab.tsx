@@ -17,7 +17,7 @@ type View =
   | { name: "config"; integrationId: string; serviceId: string };
 
 export function IntegrationsTab() {
-  const { items, loading, error, refresh, patch, disconnect } = useIntegrations();
+  const { items, adapters, loading, error, refresh, patch, disconnect } = useIntegrations();
   const [view, setView] = useState<View>({ name: "list" });
 
   const currentItem = useMemo(() => {
@@ -66,7 +66,12 @@ export function IntegrationsTab() {
         <p className="text-xs text-white/40">Integration not found. Return to the list.</p>
       )}
       {view.name === "config" && currentItem && (
-        <ServiceConfigView item={currentItem} serviceId={view.serviceId} onPatch={patch} />
+        <ServiceConfigView
+          item={currentItem}
+          serviceId={view.serviceId}
+          onPatch={patch}
+          adapters={adapters}
+        />
       )}
     </div>
   );

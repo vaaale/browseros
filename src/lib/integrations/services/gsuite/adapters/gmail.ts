@@ -496,5 +496,6 @@ if (!_getAdapterEntry("gsuite", "gmail")) {
   registerAdapter("gsuite", "gmail", {
     createAdapter: () => new GmailAdapter(),
     methods: GMAIL_METHODS,
+    capabilities: { poll: true, webhook: true },
   });
 }
