@@ -38,7 +38,14 @@ export function CopilotProvider({
   // Scope the chat to the group's active conversation; switching conversations
   // switches the CopilotKit thread. agentId (when embedded) pins the agent (012).
   const threadId = useActiveConversationId(group);
-  const runtimeUrl = agentId ? `/api/copilotkit?agent=${encodeURIComponent(agentId)}` : "/api/copilotkit";
+  // Pass the conversation id too so the server can inject this conversation's active
+  // feature branch into the composed prompt — the model can't otherwise see it, and
+  // without that it calls dev_branch_request for BOS source changes even when a
+  // branch is already selected (the delegate route still resolves the branch by
+  // conversation id independently, so a stale param never misroutes the branch).
+  const runtimeUrl = agentId
+    ? `/api/copilotkit?agent=${encodeURIComponent(agentId)}${threadId ? `&conv=${encodeURIComponent(threadId)}` : ""}`
+    : "/api/copilotkit";
 
   // The pinned (or active) agent's capability allowlist gates which main-chat
   // actions are exposed (016-unified-agents). CopilotKit forbids an action's

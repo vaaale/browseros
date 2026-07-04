@@ -93,12 +93,12 @@ function FeatureBranchCard({
 }
 
 // The dev_branch_request elicitation. The active feature branch is conversation
-// state that the model CANNOT see, so it calls this action for any BOS source
-// change even when the user already selected a branch in the dropdown (most visible
-// on a NEW conversation, which has no prior branch message in its history). When a
-// branch is already active we must NOT prompt for a new one — auto-respond so the
-// model just delegates, and the delegate route resolves the selected branch
-// server-side. Only truly-missing branches show the create card.
+// state; the model is normally told about it server-side (composed prompt) so it
+// delegates directly and never calls this action when a branch is set. This card is
+// the fallback for the rare case the model calls it anyway: if a branch is already
+// active, show a one-click Continue (a user gesture reliably resumes the run — a
+// programmatic auto-respond from mount did NOT). Only a truly-missing branch shows
+// the create card.
 function DevBranchElicitation({
   task,
   convId,
@@ -110,20 +110,22 @@ function DevBranchElicitation({
   existingBranch?: string;
   respond?: (result: string) => void;
 }) {
-  const done = useRef(false);
-  useEffect(() => {
-    if (existingBranch && !done.current) {
-      done.current = true;
-      respond?.(
-        `Active feature branch is already "${existingBranch}". Do NOT create a new one — delegate the source change to the developer sub-agent now.`,
-      );
-    }
-  }, [existingBranch, respond]);
-
   if (existingBranch) {
     return (
-      <div className="my-1 rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-xs text-white/60">
-        Using this conversation&apos;s active feature branch <b className="text-white/80">{existingBranch}</b>.
+      <div className="my-1 rounded-lg border border-sky-400/30 bg-sky-400/10 p-3 text-xs">
+        <div className="mb-2 text-sky-100">
+          This conversation already targets feature branch <b>{existingBranch}</b> — no new branch needed.
+        </div>
+        <button
+          onClick={() =>
+            respond?.(
+              `Active feature branch is already "${existingBranch}". Do NOT create a new one — delegate the source change to the "developer" sub-agent now.`,
+            )
+          }
+          className="rounded bg-sky-400/20 px-2.5 py-1 font-medium hover:bg-sky-400/30"
+        >
+          Continue with {existingBranch}
+        </button>
       </div>
     );
   }

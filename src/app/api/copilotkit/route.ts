@@ -13,6 +13,7 @@ import { familyOf } from "@/lib/agent/provider-meta";
 import { buildRuntimeOptions } from "@/lib/agent/runtime";
 import { OpenAIChatAdapter } from "@/lib/agent/openai-chat-adapter";
 import { composeInstructions } from "@/lib/agent/instructions";
+import { getConversationActiveFeatureBranch } from "@/lib/agent/conversations-server";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
@@ -49,6 +50,7 @@ export async function POST(req: NextRequest) {
   // (composeInstructions itself still throws on an empty id, so the actual
   // resolution point never silently falls back to the wrong agent.)
   const agentId = url.searchParams.get("agent") || "";
+  const convId = url.searchParams.get("conv") || "";
   const [runtimeOptions, serviceAdapter] = await Promise.all([
     buildRuntimeOptions(),
     buildAdapter(origin),
@@ -61,7 +63,17 @@ export async function POST(req: NextRequest) {
   // the composed prompt so it actually reaches the model. Runtime-level MCP/action
   // tools are still assigned to this agent by CopilotRuntime.
   const model = agentId ? serviceAdapter.getLanguageModel?.() : undefined;
-  const agents = model ? { default: new BuiltInAgent({ model, prompt: await composeInstructions(agentId) }) } : undefined;
+  let prompt = agentId ? await composeInstructions(agentId) : "";
+  if (model && convId) {
+    // Surface this conversation's active feature branch so the model delegates BOS
+    // source changes directly instead of (blindly) calling dev_branch_request — it
+    // has no other way to observe the branch the user selected in the UI.
+    const branch = await getConversationActiveFeatureBranch(convId).catch(() => undefined);
+    if (branch) {
+      prompt += `\n\n## Active feature branch\nThis conversation already has an active feature branch \`${branch}\` for BrowserOS source changes. Do NOT call dev_branch_request — delegate the source change directly to the "developer" sub-agent.`;
+    }
+  }
+  const agents = model ? { default: new BuiltInAgent({ model, prompt }) } : undefined;
   const runtime = new CopilotRuntime({
     ...runtimeOptions,
     ...(agents ? { agents } : {}),
