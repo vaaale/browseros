@@ -236,6 +236,84 @@ function decodeBase64Url(data: string): Buffer {
   return Buffer.from(padded, "base64");
 }
 
+// Extracted view of a Gmail message payload used by getMessageAsMarkdown.
+// The Gmail API returns a nested tree of parts; we flatten it into three
+// buckets so the caller doesn't have to think about MIME structure.
+interface ExtractedParts {
+  plain: string[];
+  html: string[];
+  attachments: Array<{
+    filename: string;
+    attachmentId: string;
+    mimeType?: string;
+    size?: number;
+  }>;
+}
+
+function extractParts(payload: GmailMessagePayload | undefined): ExtractedParts {
+  const out: ExtractedParts = { plain: [], html: [], attachments: [] };
+  const walk = (p: GmailMessagePayload): void => {
+    const mime = (p.mimeType ?? "").toLowerCase();
+    const body = p.body;
+    if (body?.attachmentId) {
+      out.attachments.push({
+        filename: p.filename || "attachment.bin",
+        attachmentId: body.attachmentId,
+        mimeType: p.mimeType,
+        size: body.size,
+      });
+    } else if (body?.data && mime.startsWith("text/plain")) {
+      out.plain.push(decodeBase64Url(body.data).toString("utf8"));
+    } else if (body?.data && mime.startsWith("text/html")) {
+      out.html.push(decodeBase64Url(body.data).toString("utf8"));
+    }
+    for (const child of p.parts ?? []) walk(child);
+  };
+  if (payload) walk(payload);
+  return out;
+}
+
+// Minimal HTML → markdown fallback used only when a message has no text/plain
+// alternative. Not a full parser — just the tag set that shows up in ~99% of
+// mail: block wrappers (p, div, br, headings), lists, inline emphasis, and
+// links. Anything else is stripped. Ambient <style>/<script>/<head> are
+// dropped first so their contents don't leak into the output.
+function htmlToMarkdown(html: string): string {
+  return html
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<head[\s\S]*?<\/head>/gi, "")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p\s*>/gi, "\n\n")
+    .replace(/<p[^>]*>/gi, "")
+    .replace(/<\/div\s*>/gi, "\n")
+    .replace(/<div[^>]*>/gi, "")
+    .replace(/<h([1-6])[^>]*>/gi, (_m, n: string) => `\n${"#".repeat(Number(n))} `)
+    .replace(/<\/h[1-6]\s*>/gi, "\n")
+    .replace(/<(?:strong|b)[^>]*>([\s\S]*?)<\/(?:strong|b)\s*>/gi, "**$1**")
+    .replace(/<(?:em|i)[^>]*>([\s\S]*?)<\/(?:em|i)\s*>/gi, "*$1*")
+    .replace(/<a[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a\s*>/gi, "[$2]($1)")
+    .replace(/<li[^>]*>/gi, "- ")
+    .replace(/<\/li\s*>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/&#(\d+);/g, (_m, n: string) => String.fromCodePoint(Number(n)))
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+// Escape a cell value for a markdown table (pipes are the only meaningful
+// separator; newlines would break the row).
+function escapeTableCell(s: string): string {
+  return s.replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
+}
+
 async function vfsExists(vfsPath: string): Promise<boolean> {
   try {
     await stat(vfsPath);
@@ -294,6 +372,67 @@ export class GmailAdapter extends ServiceAdapter {
       const url = `${BASE}/users/me/messages/${encodeURIComponent(params.id)}${qs.toString() ? `?${qs.toString()}` : ""}`;
       return gsuiteFetch<GmailMessage>(this, url);
     });
+  }
+
+  // ---- 1.8.2b getMessageAsMarkdown --------------------------------------
+  /**
+   * LLM-facing variant of `getMessage`: fetches with `format=full`, walks the
+   * MIME tree, and returns a markdown document containing headers, the body
+   * (text/plain preferred, text/html downgraded via `htmlToMarkdown`), and —
+   * if the message has attachments — a `| filename | id |` table the model
+   * can feed straight into `gmail_messages_download_attachment`.
+   */
+  async getMessageAsMarkdown(params: { id: string }): Promise<string> {
+    const msg = await this.getMessage({ id: params.id, format: "full" });
+    const subject = headerValue(msg, "Subject") ?? "(no subject)";
+    const from = headerValue(msg, "From") ?? "";
+    const to = headerValue(msg, "To") ?? "";
+    const cc = headerValue(msg, "Cc");
+    const bcc = headerValue(msg, "Bcc");
+    const date = headerValue(msg, "Date") ?? "";
+    const { plain, html, attachments } = extractParts(msg.payload);
+
+    let body: string;
+    if (plain.length > 0) {
+      body = plain.join("\n\n").trim();
+    } else if (html.length > 0) {
+      body = htmlToMarkdown(html.join("\n"));
+    } else if (msg.snippet) {
+      body = msg.snippet;
+    } else {
+      body = "_(empty body)_";
+    }
+
+    const lines: string[] = [];
+    lines.push(`# ${subject}`);
+    lines.push("");
+    lines.push(`- **From:** ${from}`);
+    lines.push(`- **To:** ${to}`);
+    if (cc) lines.push(`- **Cc:** ${cc}`);
+    if (bcc) lines.push(`- **Bcc:** ${bcc}`);
+    if (date) lines.push(`- **Date:** ${date}`);
+    lines.push(`- **Message id:** \`${msg.id}\``);
+    lines.push(`- **Thread id:** \`${msg.threadId}\``);
+    if (msg.labelIds?.length) lines.push(`- **Labels:** ${msg.labelIds.join(", ")}`);
+    lines.push("");
+    lines.push("## Body");
+    lines.push("");
+    lines.push(body);
+    lines.push("");
+    if (attachments.length > 0) {
+      lines.push(`## Attachments (${attachments.length})`);
+      lines.push("");
+      lines.push("| filename | id |");
+      lines.push("| --- | --- |");
+      for (const a of attachments) {
+        lines.push(`| ${escapeTableCell(a.filename)} | ${escapeTableCell(a.attachmentId)} |`);
+      }
+      lines.push("");
+      lines.push(
+        `_Use \`gmail_messages_download_attachment\` with messageId=\`${msg.id}\` and one of the ids above to save an attachment to the VFS._`,
+      );
+    }
+    return lines.join("\n");
   }
 
   // ---- 1.8.3 sendMessage -------------------------------------------------
@@ -549,11 +688,7 @@ const GMAIL_INVOKERS: Record<
       includeSpamTrash: args.includeSpamTrash as boolean | undefined,
     }),
   messages_get: (adapter, args) =>
-    adapter.getMessage({
-      id: String(args.id),
-      format: args.format as MessageFormat | undefined,
-      metadataHeaders: args.metadataHeaders as string[] | undefined,
-    }),
+    adapter.getMessageAsMarkdown({ id: String(args.id) }),
   messages_send: (adapter, args) =>
     adapter.sendMessage({
       to: String(args.to),

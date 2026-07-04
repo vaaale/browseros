@@ -56,11 +56,9 @@ export const GMAIL_METHOD_DESCRIPTORS: readonly GmailMethodDescriptor[] = [
     method: "messages_get",
     scope: GMAIL_SCOPES.readonly,
     description:
-      "Fetch a single Gmail message by id. Use `format=metadata` with `metadataHeaders` to fetch only headers you need.",
+      "Fetch a single Gmail message by id and return it as a markdown document: headers (From/To/Subject/Date/labels), the body (text/plain preferred, text/html downgraded to markdown otherwise), and — if present — an attachment table with `filename` and `id` columns. Pass the id column value to `gmail_messages_download_attachment` (with the same messageId) to save an attachment.",
     parameters: [
       { name: "id", type: "string", description: "The Gmail message id.", required: true },
-      { name: "format", type: "string", description: "'full' | 'metadata' | 'minimal' | 'raw'. Defaults to 'full'.", required: false },
-      { name: "metadataHeaders", type: "string[]", description: "Headers to include when format=metadata (e.g. Subject, From).", required: false },
     ],
   },
   {
