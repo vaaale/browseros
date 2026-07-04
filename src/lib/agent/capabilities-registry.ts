@@ -127,24 +127,30 @@ export const CAPABILITIES: Capability[] = [
   // SDKs — matching the provider vocabulary makes it easier for the LLM to
   // apply examples from Gmail/Drive/Calendar docs directly. Grep for
   // `NAMING EXCEPTION` before adding new integration ids.
-  { id: "gsuite_gmail_listMessages", group: "Integrations", context: "action", description: "List Gmail messages." },
-  { id: "gsuite_gmail_getMessage", group: "Integrations", context: "action", description: "Fetch a Gmail message by id." },
-  { id: "gsuite_gmail_sendMessage", group: "Integrations", context: "action", description: "Send a Gmail message." },
-  { id: "gsuite_gmail_replyToMessage", group: "Integrations", context: "action", description: "Reply in-thread to a Gmail message." },
-  { id: "gsuite_gmail_modifyMessage", group: "Integrations", context: "action", description: "Add or remove labels on a Gmail message." },
-  { id: "gsuite_gmail_trashMessage", group: "Integrations", context: "action", description: "Move a Gmail message to Trash." },
-  { id: "gsuite_gmail_untrashMessage", group: "Integrations", context: "action", description: "Restore a Gmail message from Trash." },
-  { id: "gsuite_gmail_searchMessages", group: "Integrations", context: "action", description: "Search Gmail with Google's operator syntax." },
-  { id: "gsuite_gmail_listLabels", group: "Integrations", context: "action", description: "List Gmail labels." },
-  { id: "gsuite_gmail_getLabel", group: "Integrations", context: "action", description: "Fetch a Gmail label by id." },
-  { id: "gsuite_gmail_getProfile", group: "Integrations", context: "action", description: "Fetch the authenticated Gmail profile." },
-  { id: "gsuite_drive_listFiles", group: "Integrations", context: "action", description: "List files in Google Drive." },
-  { id: "gsuite_drive_getFile", group: "Integrations", context: "action", description: "Fetch a Drive file's metadata by id." },
-  { id: "gsuite_drive_searchFiles", group: "Integrations", context: "action", description: "Search Drive with Google's query syntax." },
-  { id: "gsuite_drive_downloadFile", group: "Integrations", context: "action", description: "Download a Drive file's binary content (base64, size-capped)." },
-  { id: "gsuite_drive_exportFile", group: "Integrations", context: "action", description: "Export a Google-native doc (Docs/Sheets/Slides) as PDF/CSV/text/etc." },
-  { id: "gsuite_drive_listFolders", group: "Integrations", context: "action", description: "List folders in Drive, optionally under a parent." },
-  { id: "gsuite_drive_getAbout", group: "Integrations", context: "action", description: "Fetch the authenticated Drive profile + storage quota." },
+  //
+  // GROUPING: integration capabilities are grouped per external service (not
+  // under a single "Integrations" bucket) so the Settings capability picker
+  // stays scannable as more providers are added. Future Calendar and Contacts
+  // capabilities will use `"Google Calendar"` and `"Google Contacts"` groups
+  // respectively; non-Google providers should use their own service-name group.
+  { id: "gsuite_gmail_listMessages", group: "Gmail", context: "action", description: "List Gmail messages." },
+  { id: "gsuite_gmail_getMessage", group: "Gmail", context: "action", description: "Fetch a Gmail message by id." },
+  { id: "gsuite_gmail_sendMessage", group: "Gmail", context: "action", description: "Send a Gmail message." },
+  { id: "gsuite_gmail_replyToMessage", group: "Gmail", context: "action", description: "Reply in-thread to a Gmail message." },
+  { id: "gsuite_gmail_modifyMessage", group: "Gmail", context: "action", description: "Add or remove labels on a Gmail message." },
+  { id: "gsuite_gmail_trashMessage", group: "Gmail", context: "action", description: "Move a Gmail message to Trash." },
+  { id: "gsuite_gmail_untrashMessage", group: "Gmail", context: "action", description: "Restore a Gmail message from Trash." },
+  { id: "gsuite_gmail_searchMessages", group: "Gmail", context: "action", description: "Search Gmail with Google's operator syntax." },
+  { id: "gsuite_gmail_listLabels", group: "Gmail", context: "action", description: "List Gmail labels." },
+  { id: "gsuite_gmail_getLabel", group: "Gmail", context: "action", description: "Fetch a Gmail label by id." },
+  { id: "gsuite_gmail_getProfile", group: "Gmail", context: "action", description: "Fetch the authenticated Gmail profile." },
+  { id: "gsuite_drive_listFiles", group: "Google Drive", context: "action", description: "List files in Google Drive." },
+  { id: "gsuite_drive_getFile", group: "Google Drive", context: "action", description: "Fetch a Drive file's metadata by id." },
+  { id: "gsuite_drive_searchFiles", group: "Google Drive", context: "action", description: "Search Drive with Google's query syntax." },
+  { id: "gsuite_drive_downloadFile", group: "Google Drive", context: "action", description: "Download a Drive file's binary content (base64, size-capped)." },
+  { id: "gsuite_drive_exportFile", group: "Google Drive", context: "action", description: "Export a Google-native doc (Docs/Sheets/Slides) as PDF/CSV/text/etc." },
+  { id: "gsuite_drive_listFolders", group: "Google Drive", context: "action", description: "List folders in Drive, optionally under a parent." },
+  { id: "gsuite_drive_getAbout", group: "Google Drive", context: "action", description: "Fetch the authenticated Drive profile + storage quota." },
 ];
 
 // Tools/actions the UI marks with a warning affordance in the Agent Settings

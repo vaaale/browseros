@@ -19,7 +19,8 @@ import {
 // NAMING: actions here are `<integrationId>_<serviceId>_<method>` in the
 // adapter's own camelCase (e.g. gsuite_gmail_listMessages). This is the ONLY
 // explicit exception to the codebase's snake_case action naming — see the
-// Integrations group in capabilities-registry.ts.
+// per-service groups (Gmail, Google Drive, and future Google Calendar / Google
+// Contacts) in capabilities-registry.ts.
 export function IntegrationActions() {
   const { byIntegration, connected } = useIntegrationsEffectiveScopes();
   const gsuiteScopes = byIntegration["gsuite"] ?? new Set<string>();
