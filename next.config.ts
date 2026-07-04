@@ -25,7 +25,7 @@ const nextConfig: NextConfig = {
   },
   // Exclude the external `specs/` symlink from file tracing (dev + build).
   outputFileTracingExcludes: {
-    "*": ["specs/**", "./specs/**"],
+    "*": ["specs", "specs/**", "./specs", "./specs/**"],
   },
   ...(allowedDevOrigins.length ? { allowedDevOrigins } : {}),
 };
