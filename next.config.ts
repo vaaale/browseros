@@ -22,6 +22,8 @@ const nextConfig: NextConfig = {
   // (the `specs/` symlink points outside the checkout and would confuse it).
   turbopack: {
     root: __dirname,
+    // Suppress symlink-resolution errors from the external `specs/` symlink.
+    ignoreIssue: [{ path: "specs/**" }, { path: "**/specs/**" }],
   },
   // Exclude the external `specs/` symlink from file tracing (dev + build).
   outputFileTracingExcludes: {
