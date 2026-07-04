@@ -134,6 +134,7 @@ export const CAPABILITIES: Capability[] = [
   { id: "gmail_messages_trash", group: "Gmail", context: "action", description: "Move a Gmail message to Trash." },
   { id: "gmail_messages_untrash", group: "Gmail", context: "action", description: "Restore a Gmail message from Trash." },
   { id: "gmail_messages_search", group: "Gmail", context: "action", description: "Search Gmail with Google's operator syntax." },
+  { id: "gmail_messages_download_attachment", group: "Gmail", context: "action", description: "Download a Gmail attachment into /Documents/Emails in the VFS." },
   { id: "gmail_labels_list", group: "Gmail", context: "action", description: "List Gmail labels." },
   { id: "gmail_labels_get", group: "Gmail", context: "action", description: "Fetch a Gmail label by id." },
   { id: "gmail_profile_get", group: "Gmail", context: "action", description: "Fetch the authenticated Gmail profile." },

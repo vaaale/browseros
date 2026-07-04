@@ -18,7 +18,7 @@ Every integration exposes:
   `pollOnce` → `new_email`), which the notifications store persists and the
   Topbar badge counts.
 
-Phase 1 ships one integration (GSuite) with one service (Gmail) and 11 adapter
+Phase 1 ships one integration (GSuite) with one service (Gmail) and 12 adapter
 methods. This document is the smoke-test walkthrough and the recipe for adding
 a new adapter method or service.
 
@@ -83,6 +83,14 @@ URIs, and its `client_secrets.json` downloaded.
 5. Ask the assistant "list my unread emails from this week". It should call
    `gmail_messages_list` (or `gmail_messages_search`) with an
    appropriate query and summarise the results.
+5b. Ask "save the PDF attachment on that message to my Documents". The model
+   calls `gmail_messages_get({ id, format: 'full' })` to discover the
+   attachment part, then `gmail_messages_download_attachment({ messageId,
+   attachmentId })`. The adapter writes the attachment to
+   `/Documents/Emails/<filename>` in the VFS (using a `-<msgId8>` suffix on
+   name collisions) and returns `{ path, size, mimeType }`. Attachments
+   larger than **50 MB** come back as `{ error: "too_large", size, maxBytes }`
+   so the LLM can decide what to do.
 6. Trigger a manual poll: `POST /api/integrations/gsuite/services/gmail/poll`
    (or the assistant will do this once the scheduler ships). New messages are
    emitted as `new_email` events into the notification inbox.

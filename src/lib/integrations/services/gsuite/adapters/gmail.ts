@@ -7,6 +7,7 @@ import type { AdapterMethodMeta } from "../../../actions/types";
 import { gsuiteFetch } from "../client";
 import { GMAIL_SCOPES } from "../manifest";
 import { GMAIL_METHOD_DESCRIPTORS, type GmailMethodName } from "./gmail-methods";
+import { mkdir, stat, writeBuffer } from "@/os/vfs";
 
 // GmailAdapter — the surface every Gmail feature (chat action, poll job, UI)
 // calls into. Every method:
@@ -19,6 +20,10 @@ import { GMAIL_METHOD_DESCRIPTORS, type GmailMethodName } from "./gmail-methods"
 // dispatcher walks it to register one CopilotKit action per method (D4/D5).
 
 const BASE = "https://gmail.googleapis.com/gmail/v1";
+// Soft cap on `messages_download_attachment` payloads. Anything larger returns
+// `{ error: "too_large" }` so the LLM can decide (skip / ask user / etc.).
+const DEFAULT_ATTACHMENT_MAX_BYTES = 50 * 1024 * 1024; // 50 MB
+const ATTACHMENT_DIR = "/Documents/Emails";
 
 // --- Request / response types --------------------------------------------
 
@@ -102,6 +107,14 @@ export interface SearchMessagesParams {
   maxResults?: number;
   pageToken?: string;
 }
+
+export interface DownloadAttachmentParams {
+  messageId: string;
+  attachmentId: string;
+}
+export type DownloadAttachmentResult =
+  | { path: string; size: number; mimeType: string }
+  | { error: "too_large"; size: number; maxBytes: number };
 
 export interface GmailLabel {
   id: string;
@@ -187,6 +200,49 @@ function buildRfc2822({
 function headerValue(msg: GmailMessage, name: string): string | undefined {
   const target = name.toLowerCase();
   return msg.payload?.headers?.find((h) => h.name.toLowerCase() === target)?.value;
+}
+
+// Walk a Gmail message payload tree (root + nested parts) for the part whose
+// body carries `attachmentId`. Returns undefined if none matches — the caller
+// treats that as an invalid attachmentId for the given message.
+function findAttachmentPart(
+  payload: GmailMessagePayload | undefined,
+  attachmentId: string,
+): GmailMessagePayload | undefined {
+  if (!payload) return undefined;
+  if (payload.body?.attachmentId === attachmentId) return payload;
+  for (const part of payload.parts ?? []) {
+    const hit = findAttachmentPart(part, attachmentId);
+    if (hit) return hit;
+  }
+  return undefined;
+}
+
+// Strip characters that would break the VFS path or the host FS: path
+// separators, NUL, and other C0/C1 control chars. Also trims surrounding
+// whitespace and dots (Windows-hostile) and falls back to a stable default
+// when nothing usable is left.
+function sanitizeAttachmentFilename(raw: string | undefined): string {
+  const trimmed = (raw ?? "").replace(/[\/\\\x00-\x1f\x7f]/g, "_").trim().replace(/^\.+|\.+$/g, "");
+  return trimmed || "attachment.bin";
+}
+
+// URL-safe base64 (RFC 4648 §5, Gmail's attachment encoding) → Buffer.
+// Node's Buffer.from(..., "base64") already tolerates both alphabets, but we
+// normalise explicitly so a stricter decoder would still accept the input.
+function decodeBase64Url(data: string): Buffer {
+  const normalised = data.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = normalised + "=".repeat((4 - (normalised.length % 4)) % 4);
+  return Buffer.from(padded, "base64");
+}
+
+async function vfsExists(vfsPath: string): Promise<boolean> {
+  try {
+    await stat(vfsPath);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function serviceDef(): ServiceDefinition {
@@ -342,6 +398,68 @@ export class GmailAdapter extends ServiceAdapter {
     });
   }
 
+  // ---- 1.8.7b downloadAttachment ----------------------------------------
+  /**
+   * Download a Gmail attachment and persist it to the BOS VFS under
+   * `/Documents/Emails`. Filename + mime type come from the parent message's
+   * part (Gmail's attachment endpoint itself only returns `{ data, size }`),
+   * so we fetch the message metadata first, then the attachment body.
+   *
+   * Collision rule: if the target file already exists, we append `-<msgId8>`
+   * to the stem (never overwrite). If that name is also taken (same msg re-
+   * downloaded) we let the overwrite happen — the two files are byte-equal.
+   */
+  async downloadAttachment(params: DownloadAttachmentParams): Promise<DownloadAttachmentResult> {
+    return this.withScope(GMAIL_SCOPES.readonly, async () => {
+      const maxBytes = DEFAULT_ATTACHMENT_MAX_BYTES;
+      // Fetch the parent message so we can resolve filename + mimeType for the
+      // attachment part. `format=full` is required — metadata mode omits parts.
+      const message = await this.getMessage({ id: params.messageId, format: "full" });
+      const part = findAttachmentPart(message.payload, params.attachmentId);
+      if (!part) {
+        throw new Error(
+          `Attachment ${params.attachmentId} not found on message ${params.messageId}`,
+        );
+      }
+      const filename = sanitizeAttachmentFilename(part.filename);
+      const mimeType = part.mimeType ?? "application/octet-stream";
+      const declaredSize = part.body?.size;
+      if (typeof declaredSize === "number" && declaredSize > maxBytes) {
+        return { error: "too_large" as const, size: declaredSize, maxBytes };
+      }
+      // Fetch the attachment body (URL-safe base64).
+      const attachmentUrl =
+        `${BASE}/users/me/messages/${encodeURIComponent(params.messageId)}` +
+        `/attachments/${encodeURIComponent(params.attachmentId)}`;
+      const res = await gsuiteFetch<{ size?: number; data?: string }>(this, attachmentUrl);
+      if (!res.data) {
+        throw new Error(
+          `Gmail returned no data for attachment ${params.attachmentId} on message ${params.messageId}`,
+        );
+      }
+      const buffer = decodeBase64Url(res.data);
+      if (buffer.byteLength > maxBytes) {
+        return { error: "too_large" as const, size: buffer.byteLength, maxBytes };
+      }
+      // Ensure the target directory exists (VFS `mkdir` is recursive).
+      await mkdir(ATTACHMENT_DIR);
+      // Collision handling: if `filename` is taken, append a short message-id
+      // suffix before the extension.
+      const dotIdx = filename.lastIndexOf(".");
+      const stem = dotIdx > 0 ? filename.slice(0, dotIdx) : filename;
+      const ext = dotIdx > 0 ? filename.slice(dotIdx) : "";
+      let targetName = filename;
+      let targetPath = `${ATTACHMENT_DIR}/${targetName}`;
+      if (await vfsExists(targetPath)) {
+        const suffix = params.messageId.slice(0, 8);
+        targetName = `${stem}-${suffix}${ext}`;
+        targetPath = `${ATTACHMENT_DIR}/${targetName}`;
+      }
+      await writeBuffer(targetPath, buffer);
+      return { path: targetPath, size: buffer.byteLength, mimeType };
+    });
+  }
+
   // ---- 1.8.8 listLabels / getLabel --------------------------------------
   async listLabels(): Promise<ListLabelsResult> {
     return this.withScope(GMAIL_SCOPES.readonly, async () =>
@@ -465,6 +583,11 @@ const GMAIL_INVOKERS: Record<
       query: String(args.query),
       maxResults: args.maxResults as number | undefined,
       pageToken: args.pageToken as string | undefined,
+    }),
+  messages_download_attachment: (adapter, args) =>
+    adapter.downloadAttachment({
+      messageId: String(args.messageId),
+      attachmentId: String(args.attachmentId),
     }),
   labels_list: (adapter) => adapter.listLabels(),
   labels_get: (adapter, args) => adapter.getLabel(String(args.id)),

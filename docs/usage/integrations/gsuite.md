@@ -18,7 +18,7 @@ Once connected, GSuite adds four **services** the assistant can call:
 
 | Service     | What the assistant can do today                                                                 | Status |
 |-------------|--------------------------------------------------------------------------------------------------|--------|
-| **Gmail**   | List / search / read messages, send + reply, add/remove labels, trash/untrash, list labels.     | Full   |
+| **Gmail**   | List / search / read messages, send + reply, add/remove labels, trash/untrash, list labels, download attachments. | Full   |
 | **Drive**   | List, search, download, and export files (Docs → PDF, Sheets → CSV, …).                          | Read-only (write in a future release) |
 | **Calendar** | Service surfaces in the UI; the "reminder poll" hook is in place but returns nothing yet.       | Coming — write & event listing land in a later phase |
 | **Contacts** | Service surfaces in the UI so scopes can be granted ahead of time.                              | Coming — People API adapter lands in a later phase |
@@ -176,7 +176,7 @@ Every page has the same shape:
 
 | Scope                                             | Grants                             | Assistant methods it unlocks                                    |
 |---------------------------------------------------|------------------------------------|-----------------------------------------------------------------|
-| `https://www.googleapis.com/auth/gmail.readonly`  | Read messages, labels, profile.    | `messages_list`, `messages_get`, `messages_search`, `labels_list`, `labels_get`, `profile_get` |
+| `https://www.googleapis.com/auth/gmail.readonly`  | Read messages, labels, profile, attachments. | `messages_list`, `messages_get`, `messages_search`, `messages_download_attachment`, `labels_list`, `labels_get`, `profile_get` |
 | `https://www.googleapis.com/auth/gmail.modify`    | Add/remove labels, trash/untrash.  | `messages_modify`, `messages_trash`, `messages_untrash`         |
 | `https://www.googleapis.com/auth/gmail.send`      | Send new mail, reply in-thread.    | `messages_send`, `messages_reply`                               |
 
@@ -327,6 +327,12 @@ already work today:
 - *"Any unread emails from Alice this week?"*
 - *"Summarize the newest 5 emails in my inbox."*
 - *"Search my mail for 'invoice' from the last 30 days and list totals."*
+- *"Save the PDF attached to Bob's latest email to my Documents."* — the
+  assistant fetches the message, then calls
+  `messages_download_attachment`, which writes the file to
+  `/Documents/Emails/<name>` in the VFS. Files up to **50 MB** work;
+  larger attachments return `{ error: "too_large", size }` so the
+  assistant can offer to skip or tell you.
 
 **Gmail (modify):**
 

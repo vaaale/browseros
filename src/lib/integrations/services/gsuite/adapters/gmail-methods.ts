@@ -23,6 +23,7 @@ export type GmailMethodName =
   | "messages_trash"
   | "messages_untrash"
   | "messages_search"
+  | "messages_download_attachment"
   | "labels_list"
   | "labels_get"
   | "profile_get";
@@ -117,6 +118,16 @@ export const GMAIL_METHOD_DESCRIPTORS: readonly GmailMethodDescriptor[] = [
       { name: "query", type: "string", description: "Gmail search query.", required: true },
       { name: "maxResults", type: "number", description: "Max results per page.", required: false },
       { name: "pageToken", type: "string", description: "Next page token.", required: false },
+    ],
+  },
+  {
+    method: "messages_download_attachment",
+    scope: GMAIL_SCOPES.readonly,
+    description:
+      "Download a Gmail message attachment and save it to the BOS virtual file system under /Documents/Emails. The filename comes from the attachment's part on the parent message; collisions are avoided by appending a short message-id suffix. Returns { path, size, mimeType }; over 50 MB returns { error: 'too_large', size, maxBytes }.",
+    parameters: [
+      { name: "messageId", type: "string", description: "The Gmail message id containing the attachment.", required: true },
+      { name: "attachmentId", type: "string", description: "The attachment id (from the parent message's payload.parts[].body.attachmentId).", required: true },
     ],
   },
   {
