@@ -176,9 +176,9 @@ Every page has the same shape:
 
 | Scope                                             | Grants                             | Assistant methods it unlocks                                    |
 |---------------------------------------------------|------------------------------------|-----------------------------------------------------------------|
-| `https://www.googleapis.com/auth/gmail.readonly`  | Read messages, labels, profile.    | `listMessages`, `getMessage`, `searchMessages`, `listLabels`, `getLabel`, `getProfile` |
-| `https://www.googleapis.com/auth/gmail.modify`    | Add/remove labels, trash/untrash.  | `modifyMessage`, `trashMessage`, `untrashMessage`               |
-| `https://www.googleapis.com/auth/gmail.send`      | Send new mail, reply in-thread.    | `sendMessage`, `replyToMessage`                                 |
+| `https://www.googleapis.com/auth/gmail.readonly`  | Read messages, labels, profile.    | `messages_list`, `messages_get`, `messages_search`, `labels_list`, `labels_get`, `profile_get` |
+| `https://www.googleapis.com/auth/gmail.modify`    | Add/remove labels, trash/untrash.  | `messages_modify`, `messages_trash`, `messages_untrash`         |
+| `https://www.googleapis.com/auth/gmail.send`      | Send new mail, reply in-thread.    | `messages_send`, `messages_reply`                               |
 
 Grant the narrowest scope that covers what you want the assistant to do. Read-only
 is a safe default; add `modify` if you want the assistant to organize your
@@ -262,37 +262,55 @@ Beyond the scopes, Drive's config page exposes:
 
 The assistant methods Drive exposes:
 
-- `listFiles`, `searchFiles`, `getFile`, `listFolders`, `getAbout`
-- `downloadFile` — returns base64 content up to 256 KB (larger files come back
-  as `{ error: "too_large", size }` so the assistant can decide what to do).
-- `exportFile` — Google-native docs (Docs / Sheets / Slides) to another MIME
+- `files_list`, `files_search`, `files_get`, `folders_list`, `about_get`
+- `files_download` — returns base64 content up to 256 KB (larger files come
+  back as `{ error: "too_large", size }` so the assistant can decide what
+  to do).
+- `files_export` — Google-native docs (Docs / Sheets / Slides) to another MIME
   type: `application/pdf`, `text/csv`, `text/plain`, `text/html`, …
 
 [Screenshot: Drive service config with the "Drive access levels" explainer and the two scope toggles]
 
 ### Calendar
 
-The Calendar service surfaces in the UI so its scopes can be granted alongside
-Gmail/Drive, but the adapter is a **placeholder**. Today it exposes only a
-`pollUpcomingReminders()` hook that always returns `[]`; listing events and
-creating/updating/deleting them are coming in a later phase and will throw a
-"not yet implemented" error if the assistant tries to call them.
+**Scopes:**
 
-You can already configure:
+| Scope                                                 | Grants                                                                    |
+|-------------------------------------------------------|---------------------------------------------------------------------------|
+| `https://www.googleapis.com/auth/calendar.readonly`   | List calendars/events, query free/busy.                                   |
+| `https://www.googleapis.com/auth/calendar.events`     | Create / update / delete events, RSVP, move events between calendars.     |
 
-- **Calendar id** — `primary` or a specific calendar id.
+Assistant methods:
+
+- `calendars_list` — the user's own + subscribed calendars.
+- `events_list`, `events_get` — read events, optionally within a time window.
+- `events_create`, `events_update`, `events_delete` — write events. Attendee
+  emails can be supplied; `sendUpdates` controls whether Google emails them.
+- `events_respond` — RSVP (`accepted` / `declined` / `tentative` /
+  `needsAction`) on behalf of the authenticated user.
+- `events_move` — move an event from one calendar to another.
+- `freebusy_query` — busy time ranges across one or more calendars, useful
+  for scheduling.
+
+You can also configure:
+
+- **Calendar id** — `primary` or a specific calendar id (used as a default
+  by scheduler hooks).
 - **Reminder minutes before** — how many minutes before an event to notify.
 - **Max upcoming events to track.**
 
-Grant `calendar.readonly` and/or `calendar.events` now if you want the scopes
-pre-authorized for when the adapter ships.
-
 ### Contacts
 
-Same shape as Calendar — the service is declared and its scope
-(`contacts.readonly`) can be granted, but the People API adapter is not yet
-implemented. Any invocation returns a config error the assistant can reason
-about ("Contacts.listContacts is not yet implemented").
+**Scope:** `https://www.googleapis.com/auth/contacts.readonly` — read-only
+access to the People API.
+
+Assistant methods:
+
+- `contacts_list` — the user's own contacts (People API `people.connections`),
+  optionally sorted.
+- `contacts_get` — fetch a single contact by resource name (e.g.
+  `people/c123456`).
+- `contacts_search` — free-text search across names / emails / phone numbers.
 
 ---
 

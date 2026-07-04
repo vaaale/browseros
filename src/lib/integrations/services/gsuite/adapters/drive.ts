@@ -219,7 +219,7 @@ const DRIVE_INVOKERS: Record<
   DriveMethodName,
   (adapter: DriveAdapter, args: Record<string, unknown>) => Promise<unknown>
 > = {
-  listFiles: (adapter, args) =>
+  files_list: (adapter, args) =>
     adapter.listFiles({
       q: args.q as string | undefined,
       pageSize: args.pageSize as number | undefined,
@@ -227,35 +227,35 @@ const DRIVE_INVOKERS: Record<
       orderBy: args.orderBy as string | undefined,
       fields: args.fields as string | undefined,
     }),
-  getFile: (adapter, args) =>
+  files_get: (adapter, args) =>
     adapter.getFile({
       id: String(args.id),
       fields: args.fields as string | undefined,
     }),
-  searchFiles: (adapter, args) =>
+  files_search: (adapter, args) =>
     adapter.searchFiles({
       q: String(args.q),
       pageSize: args.pageSize as number | undefined,
       pageToken: args.pageToken as string | undefined,
     }),
-  downloadFile: (adapter, args) =>
+  files_download: (adapter, args) =>
     adapter.downloadFile({
       id: String(args.id),
       maxBytes: args.maxBytes as number | undefined,
     }),
-  exportFile: (adapter, args) =>
+  files_export: (adapter, args) =>
     adapter.exportFile({
       id: String(args.id),
       mimeType: String(args.mimeType),
       maxBytes: args.maxBytes as number | undefined,
     }),
-  listFolders: (adapter, args) =>
+  folders_list: (adapter, args) =>
     adapter.listFolders({
       parentId: args.parentId as string | undefined,
       pageSize: args.pageSize as number | undefined,
       pageToken: args.pageToken as string | undefined,
     }),
-  getAbout: (adapter) => adapter.getAbout(),
+  about_get: (adapter) => adapter.getAbout(),
 };
 
 export const DRIVE_METHODS: readonly AdapterMethodMeta<DriveAdapter>[] =

@@ -422,7 +422,7 @@ const GMAIL_INVOKERS: Record<
   GmailMethodName,
   (adapter: GmailAdapter, args: Record<string, unknown>) => Promise<unknown>
 > = {
-  listMessages: (adapter, args) =>
+  messages_list: (adapter, args) =>
     adapter.listMessages({
       query: args.query as string | undefined,
       labelIds: args.labelIds as string[] | undefined,
@@ -430,13 +430,13 @@ const GMAIL_INVOKERS: Record<
       pageToken: args.pageToken as string | undefined,
       includeSpamTrash: args.includeSpamTrash as boolean | undefined,
     }),
-  getMessage: (adapter, args) =>
+  messages_get: (adapter, args) =>
     adapter.getMessage({
       id: String(args.id),
       format: args.format as MessageFormat | undefined,
       metadataHeaders: args.metadataHeaders as string[] | undefined,
     }),
-  sendMessage: (adapter, args) =>
+  messages_send: (adapter, args) =>
     adapter.sendMessage({
       to: String(args.to),
       subject: String(args.subject),
@@ -446,29 +446,29 @@ const GMAIL_INVOKERS: Record<
       replyTo: args.replyTo as string | undefined,
       mimeType: args.mimeType as SendMessageParams["mimeType"],
     }),
-  replyToMessage: (adapter, args) =>
+  messages_reply: (adapter, args) =>
     adapter.replyToMessage({
       messageId: String(args.messageId),
       body: String(args.body),
       mimeType: args.mimeType as ReplyToMessageParams["mimeType"],
     }),
-  modifyMessage: (adapter, args) =>
+  messages_modify: (adapter, args) =>
     adapter.modifyMessage({
       id: String(args.id),
       addLabelIds: args.addLabelIds as string[] | undefined,
       removeLabelIds: args.removeLabelIds as string[] | undefined,
     }),
-  trashMessage: (adapter, args) => adapter.trashMessage(String(args.id)),
-  untrashMessage: (adapter, args) => adapter.untrashMessage(String(args.id)),
-  searchMessages: (adapter, args) =>
+  messages_trash: (adapter, args) => adapter.trashMessage(String(args.id)),
+  messages_untrash: (adapter, args) => adapter.untrashMessage(String(args.id)),
+  messages_search: (adapter, args) =>
     adapter.searchMessages({
       query: String(args.query),
       maxResults: args.maxResults as number | undefined,
       pageToken: args.pageToken as string | undefined,
     }),
-  listLabels: (adapter) => adapter.listLabels(),
-  getLabel: (adapter, args) => adapter.getLabel(String(args.id)),
-  getProfile: (adapter) => adapter.getProfile(),
+  labels_list: (adapter) => adapter.listLabels(),
+  labels_get: (adapter, args) => adapter.getLabel(String(args.id)),
+  profile_get: (adapter) => adapter.getProfile(),
 };
 
 /**

@@ -5,22 +5,27 @@
 // The metadata here does NOT include the `invoke` closure — that lives with
 // the adapter in gmail.ts and is only used server-side by the invoke route
 // (see actions/adapter-registry.ts).
+//
+// Method ids follow the BOS `<object>_<verb>` snake_case tool-naming standard
+// (see capabilities-registry.ts). The GmailAdapter TS class methods stay in
+// camelCase (`listMessages`, `sendMessage`, …) — the invoker map in `gmail.ts`
+// bridges tool id → adapter method.
 
 import { GMAIL_SCOPES } from "../manifest";
 import type { AdapterMethodParameter } from "../../../actions/types";
 
 export type GmailMethodName =
-  | "listMessages"
-  | "getMessage"
-  | "sendMessage"
-  | "replyToMessage"
-  | "modifyMessage"
-  | "trashMessage"
-  | "untrashMessage"
-  | "searchMessages"
-  | "listLabels"
-  | "getLabel"
-  | "getProfile";
+  | "messages_list"
+  | "messages_get"
+  | "messages_send"
+  | "messages_reply"
+  | "messages_modify"
+  | "messages_trash"
+  | "messages_untrash"
+  | "messages_search"
+  | "labels_list"
+  | "labels_get"
+  | "profile_get";
 
 export interface GmailMethodDescriptor {
   method: GmailMethodName;
@@ -34,7 +39,7 @@ export interface GmailMethodDescriptor {
 // fields.
 export const GMAIL_METHOD_DESCRIPTORS: readonly GmailMethodDescriptor[] = [
   {
-    method: "listMessages",
+    method: "messages_list",
     scope: GMAIL_SCOPES.readonly,
     description:
       "List Gmail message ids for the authenticated user. Optional Gmail search `query` (e.g. 'is:unread newer_than:7d'), `labelIds`, `maxResults`, and `pageToken`.",
@@ -47,7 +52,7 @@ export const GMAIL_METHOD_DESCRIPTORS: readonly GmailMethodDescriptor[] = [
     ],
   },
   {
-    method: "getMessage",
+    method: "messages_get",
     scope: GMAIL_SCOPES.readonly,
     description:
       "Fetch a single Gmail message by id. Use `format=metadata` with `metadataHeaders` to fetch only headers you need.",
@@ -58,7 +63,7 @@ export const GMAIL_METHOD_DESCRIPTORS: readonly GmailMethodDescriptor[] = [
     ],
   },
   {
-    method: "sendMessage",
+    method: "messages_send",
     scope: GMAIL_SCOPES.send,
     description: "Send a Gmail message. Defaults to text/plain; pass mimeType='text/html' for rich content.",
     parameters: [
@@ -72,7 +77,7 @@ export const GMAIL_METHOD_DESCRIPTORS: readonly GmailMethodDescriptor[] = [
     ],
   },
   {
-    method: "replyToMessage",
+    method: "messages_reply",
     scope: GMAIL_SCOPES.send,
     description: "Reply in-thread to an existing Gmail message. Threading + Re: prefix are handled automatically.",
     parameters: [
@@ -82,7 +87,7 @@ export const GMAIL_METHOD_DESCRIPTORS: readonly GmailMethodDescriptor[] = [
     ],
   },
   {
-    method: "modifyMessage",
+    method: "messages_modify",
     scope: GMAIL_SCOPES.modify,
     description: "Add or remove labels on a Gmail message. Common labels: INBOX, UNREAD, STARRED, IMPORTANT.",
     parameters: [
@@ -92,19 +97,19 @@ export const GMAIL_METHOD_DESCRIPTORS: readonly GmailMethodDescriptor[] = [
     ],
   },
   {
-    method: "trashMessage",
+    method: "messages_trash",
     scope: GMAIL_SCOPES.modify,
-    description: "Move a Gmail message to Trash. Reversible via untrashMessage.",
+    description: "Move a Gmail message to Trash. Reversible via messages_untrash.",
     parameters: [{ name: "id", type: "string", description: "The Gmail message id.", required: true }],
   },
   {
-    method: "untrashMessage",
+    method: "messages_untrash",
     scope: GMAIL_SCOPES.modify,
     description: "Restore a Gmail message from Trash.",
     parameters: [{ name: "id", type: "string", description: "The Gmail message id.", required: true }],
   },
   {
-    method: "searchMessages",
+    method: "messages_search",
     scope: GMAIL_SCOPES.readonly,
     description:
       "Search Gmail with Google's operator syntax. Examples: 'from:foo@example.com', 'has:attachment', 'newer_than:7d'.",
@@ -115,19 +120,19 @@ export const GMAIL_METHOD_DESCRIPTORS: readonly GmailMethodDescriptor[] = [
     ],
   },
   {
-    method: "listLabels",
+    method: "labels_list",
     scope: GMAIL_SCOPES.readonly,
     description: "List all Gmail labels (system + user).",
     parameters: [],
   },
   {
-    method: "getLabel",
+    method: "labels_get",
     scope: GMAIL_SCOPES.readonly,
     description: "Fetch a single Gmail label by id.",
     parameters: [{ name: "id", type: "string", description: "Label id (e.g. INBOX or a user label id).", required: true }],
   },
   {
-    method: "getProfile",
+    method: "profile_get",
     scope: GMAIL_SCOPES.readonly,
     description: "Fetch the authenticated user's Gmail profile (emailAddress, message/thread counts, historyId).",
     parameters: [],

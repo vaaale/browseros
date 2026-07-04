@@ -8,12 +8,12 @@
 // One CopilotKit action per adapter method. Naming convention (see
 // docs/dev/integrations.md and capabilities-registry.ts):
 //
-//   <integrationId>_<serviceId>_<method>
-//   e.g. gsuite_gmail_listMessages
+//   <integrationId>_<serviceId>_<object>_<verb>   (snake_case)
+//   e.g. gsuite_gmail_messages_list
 //
-// The final segment stays in the adapter's own camelCase because these are
-// pass-through method wrappers (see the Integrations capability group in
-// capabilities-registry.ts — explicit exception to the snake_case rule).
+// The `<object>_<verb>` tail is the adapter method's descriptor id (see the
+// GmailMethodName / DriveMethodName / CalendarMethodName / ContactsMethodName
+// unions in each adapter's `*-methods.ts`).
 //
 // Scope gating is done in TWO places:
 //   - Client: `available` on the action reflects the effective-scope set so

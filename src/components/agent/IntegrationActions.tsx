@@ -5,6 +5,8 @@ import { useCopilotAction } from "@/components/agent/gated-action";
 import { useIntegrationsEffectiveScopes } from "@/components/apps/settings/integrations/useIntegrations";
 import { GMAIL_METHOD_DESCRIPTORS } from "@/lib/integrations/services/gsuite/adapters/gmail-methods";
 import { DRIVE_METHOD_DESCRIPTORS } from "@/lib/integrations/services/gsuite/adapters/drive-methods";
+import { CALENDAR_METHOD_DESCRIPTORS } from "@/lib/integrations/services/gsuite/adapters/calendar-methods";
+import { CONTACTS_METHOD_DESCRIPTORS } from "@/lib/integrations/services/gsuite/adapters/contacts-methods";
 import {
   actionNameFor,
   invokeAdapterMethod,
@@ -16,11 +18,10 @@ import {
 // actions it can actually use. The server-side invoke route re-checks scopes
 // (defence-in-depth) — see /api/integrations/[id]/services/[serviceId]/invoke.
 //
-// NAMING: actions here are `<integrationId>_<serviceId>_<method>` in the
-// adapter's own camelCase (e.g. gsuite_gmail_listMessages). This is the ONLY
-// explicit exception to the codebase's snake_case action naming — see the
-// per-service groups (Gmail, Google Drive, and future Google Calendar / Google
-// Contacts) in capabilities-registry.ts.
+// NAMING: actions here are `<integrationId>_<serviceId>_<object>_<verb>` in
+// snake_case (e.g. `gsuite_gmail_messages_list`). See capabilities-registry.ts
+// for the per-service groups (Gmail, Google Drive, Google Calendar, Google
+// Contacts).
 export function IntegrationActions() {
   const { byIntegration, connected } = useIntegrationsEffectiveScopes();
   const gsuiteScopes = byIntegration["gsuite"] ?? new Set<string>();
@@ -28,7 +29,7 @@ export function IntegrationActions() {
 
   useCopilotReadable({
     description:
-      "Connected external integrations (Gmail / Drive / GSuite): which are connected and which scopes are effectively granted right now. If an action is disabled, ask the user to connect the integration or enable the missing scope in Settings → Integrations.",
+      "Connected external integrations (Gmail / Drive / Calendar / Contacts / GSuite): which are connected and which scopes are effectively granted right now. If an action is disabled, ask the user to connect the integration or enable the missing scope in Settings → Integrations.",
     value: {
       gsuite: {
         connected: gsuiteConnected,
@@ -57,6 +58,28 @@ export function IntegrationActions() {
         <GsuiteMethodAction
           key={`drive_${d.method}`}
           serviceId="drive"
+          method={d.method}
+          scope={d.scope}
+          description={d.description}
+          parameters={d.parameters}
+          scopeGranted={gsuiteScopes.has(d.scope) && gsuiteConnected}
+        />
+      ))}
+      {CALENDAR_METHOD_DESCRIPTORS.map((d) => (
+        <GsuiteMethodAction
+          key={`calendar_${d.method}`}
+          serviceId="calendar"
+          method={d.method}
+          scope={d.scope}
+          description={d.description}
+          parameters={d.parameters}
+          scopeGranted={gsuiteScopes.has(d.scope) && gsuiteConnected}
+        />
+      ))}
+      {CONTACTS_METHOD_DESCRIPTORS.map((d) => (
+        <GsuiteMethodAction
+          key={`contacts_${d.method}`}
+          serviceId="contacts"
           method={d.method}
           scope={d.scope}
           description={d.description}
