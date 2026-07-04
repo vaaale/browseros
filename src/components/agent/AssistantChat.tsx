@@ -11,7 +11,7 @@ import { ReasoningAssistantMessage } from "@/components/agent/ReasoningAssistant
 import { markdownRenderers } from "@/components/agent/MarkdownRenderers";
 import { ConversationPanel } from "@/components/apps/assistant/ConversationPanel";
 import { InfoPanel } from "@/components/apps/assistant/InfoPanel";
-import { AgentSelector, FeatureBranchSelector } from "@/components/apps/assistant/AgentSelector";
+import { AgentSelector, ConversationSelector, FeatureBranchSelector } from "@/components/apps/assistant/AgentSelector";
 import { CardScopeProvider } from "@/lib/agent/card-collapse";
 import { DEFAULT_GROUP, useConversations, useActiveConversation, newConversation } from "@/lib/agent/conversations";
 
@@ -34,6 +34,10 @@ export interface AssistantChatProps {
   /** Assistant mode: show all conversation groups (nested) and switch between
    *  them (each group implies its agent); shows the personality selector. */
   allGroups?: boolean;
+  /** Render the conversation list as a dropdown in a top toolbar (paired with
+   *  the feature branch selector) instead of a left panel. For narrow embeds
+   *  like Build Studio. Ignored when `allGroups` is true. */
+  conversationsInToolbar?: boolean;
   /** Extra nodes rendered INSIDE this surface's CopilotKit provider — e.g. a host
    *  app registering `useCopilotAction` tools the embedded agent can call to drive
    *  the app's UI. They render no visible chrome (the action components return null). */
@@ -69,6 +73,7 @@ function AssistantChatInner({
   showInfo = true,
   initialLabel,
   allGroups,
+  conversationsInToolbar,
   onPickGroup,
 }: AssistantChatProps & { onPickGroup?: (group: string) => void }) {
   const { isLoading } = useChatPersistence(group);
@@ -93,29 +98,39 @@ function AssistantChatInner({
       .catch(() => {});
   }, [agentId]);
 
+  // Toolbar mode is opt-in for single-group embeds; `allGroups` (the Assistant
+  // app) has its own toolbar with an agent picker and always keeps the nested
+  // ConversationPanel on the left.
+  const useToolbar = Boolean(conversationsInToolbar) && !allGroups;
+  const showLeftPanel = showConversations && !useToolbar;
+  const showToolbar = allGroups || useToolbar;
+  const statusBadge = isLoading ? (
+    <>
+      <Loader2 size={12} className="animate-spin text-amber-300" />
+      <span className="text-amber-200">Working…</span>
+    </>
+  ) : (
+    <>
+      <CheckCircle2 size={12} className="text-emerald-400" />
+      <span className="text-white/45">Ready</span>
+    </>
+  );
+
   return (
     <CardScopeProvider scope={group}>
       <div className="flex h-full" data-theme="dark" style={THEME_OVERRIDES}>
         <ChatToolRenderer />
-        {showConversations && (allGroups ? <ConversationPanel onPickGroup={onPickGroup} /> : <ConversationPanel group={group} />)}
+        {showLeftPanel && (allGroups ? <ConversationPanel onPickGroup={onPickGroup} /> : <ConversationPanel group={group} />)}
         <div className="flex min-w-0 flex-1 flex-col">
-          {allGroups && (
-            <div className="flex shrink-0 items-center gap-2 border-b border-white/10 bg-white/[0.03] px-2 py-1 text-[11px]">
-              <AgentSelector group={group} />
+          {showToolbar && (
+            <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-white/10 bg-white/[0.03] px-2 py-1 text-[11px]">
+              {allGroups ? (
+                <AgentSelector group={group} />
+              ) : (
+                <ConversationSelector group={group} agentId={agentId} />
+              )}
               <FeatureBranchSelector group={group} />
-              <span className="ml-auto flex items-center gap-1.5">
-                {isLoading ? (
-                  <>
-                    <Loader2 size={12} className="animate-spin text-amber-300" />
-                    <span className="text-amber-200">Working…</span>
-                  </>
-                ) : (
-                  <>
-                    <CheckCircle2 size={12} className="text-emerald-400" />
-                    <span className="text-white/45">Ready</span>
-                  </>
-                )}
-              </span>
+              <span className="ml-auto flex items-center gap-1.5">{statusBadge}</span>
             </div>
           )}
           <div className="min-h-0 flex-1">

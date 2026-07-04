@@ -386,6 +386,7 @@ export default function BuildStudioApp() {
           agentId="build-studio"
           group="build-studio"
           showConversations
+          conversationsInToolbar
           showInfo={false}
           initialLabel="Describe a feature to build, or ask me to refine the selected spec."
         >

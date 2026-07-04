@@ -1,12 +1,16 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { GitBranch, UserCircle } from "lucide-react";
+import { GitBranch, MessageSquare, Trash2, UserCircle } from "lucide-react";
 import {
   DEFAULT_GROUP,
+  deleteConversation,
+  newConversation,
+  selectConversation,
   setConversationAgent,
   setConversationActiveFeatureBranch,
   useActiveConversation,
+  useConversations,
 } from "@/lib/agent/conversations";
 import { DEFAULT_AGENT_ID } from "@/lib/agent/agent-ids";
 
@@ -123,5 +127,61 @@ export function FeatureBranchSelector({ group = DEFAULT_GROUP }: { group?: strin
         <option value="__new__">New feature branch...</option>
       </select>
     </label>
+  );
+}
+
+// Compact conversation picker for embedded chats that don't have room for the
+// full ConversationPanel (e.g. Build Studio). Lists conversations in `group`,
+// with an inline "New conversation..." option and a trash button that deletes
+// the active thread. `agentId` pins new conversations to a specific agent (an
+// embed pins to its group's agent).
+export function ConversationSelector({
+  group = DEFAULT_GROUP,
+  agentId,
+}: {
+  group?: string;
+  agentId?: string;
+}) {
+  const { conversations, activeId } = useConversations(group);
+
+  const onChange = async (next: string) => {
+    if (next === "__new__") {
+      await newConversation(group, agentId ?? (group !== DEFAULT_GROUP ? group : undefined));
+      return;
+    }
+    selectConversation(next);
+  };
+
+  const onDelete = () => {
+    if (!activeId) return;
+    if (!window.confirm("Delete this conversation?")) return;
+    void deleteConversation(activeId);
+  };
+
+  return (
+    <span className="flex items-center gap-1 text-xs text-white/60">
+      <label className="flex items-center gap-1.5" title="Active conversation">
+        <MessageSquare size={14} className="text-white/50" />
+        <select
+          value={activeId}
+          onChange={(e) => void onChange(e.target.value)}
+          className="max-w-[240px] rounded border border-white/10 bg-black/30 px-1.5 py-1 text-xs text-white/85 outline-none focus:border-white/30"
+        >
+          {conversations.length === 0 && <option value="">No conversations</option>}
+          {conversations.map((c) => (
+            <option key={c.id} value={c.id}>{c.title}</option>
+          ))}
+          <option value="__new__">New conversation...</option>
+        </select>
+      </label>
+      <button
+        onClick={onDelete}
+        disabled={!activeId}
+        title="Delete this conversation"
+        className="rounded p-1 text-white/40 hover:bg-white/10 hover:text-white disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-white/40"
+      >
+        <Trash2 size={12} />
+      </button>
+    </span>
   );
 }
