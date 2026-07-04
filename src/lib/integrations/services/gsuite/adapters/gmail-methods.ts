@@ -56,7 +56,7 @@ export const GMAIL_METHOD_DESCRIPTORS: readonly GmailMethodDescriptor[] = [
     method: "messages_get",
     scope: GMAIL_SCOPES.readonly,
     description:
-      "Fetch a single Gmail message by id and return it as a markdown document: headers (From/To/Subject/Date/labels), the body (text/plain preferred, text/html downgraded to markdown otherwise), and — if present — an attachment table with `filename` and `id` columns. Pass the id column value to `gmail_messages_download_attachment` (with the same messageId) to save an attachment.",
+      "Fetch a single Gmail message by id and return it as a markdown document: headers (From/To/Subject/Date/labels), the body (text/plain preferred, text/html downgraded to markdown otherwise), and — if present — an attachment table with `filename` and `id` columns. The `id` column contains the short `partId` (e.g. `1`, `1.2`); pass it verbatim as `attachmentId` to `gmail_messages_download_attachment` and the server resolves it to Gmail's underlying attachment id.",
     parameters: [
       { name: "id", type: "string", description: "The Gmail message id.", required: true },
     ],
@@ -122,10 +122,10 @@ export const GMAIL_METHOD_DESCRIPTORS: readonly GmailMethodDescriptor[] = [
     method: "messages_download_attachment",
     scope: GMAIL_SCOPES.readonly,
     description:
-      "Download a Gmail message attachment and save it to the BOS virtual file system under /Documents/Emails. The filename comes from the attachment's part on the parent message; collisions are avoided by appending a short message-id suffix. Returns { path, size, mimeType }; over 50 MB returns { error: 'too_large', size, maxBytes }.",
+      "Download a Gmail message attachment and save it to the BOS virtual file system under /Documents/Emails. Accepts either the short `partId` shown in the `messages_get` attachment table (e.g. `1`, `1.2`) or the raw Gmail `attachmentId` — the server resolves either to the underlying part. The filename comes from the attachment's part on the parent message; collisions are avoided by appending a short message-id suffix. Returns { path, size, mimeType }; over 50 MB returns { error: 'too_large', size, maxBytes }.",
     parameters: [
       { name: "messageId", type: "string", description: "The Gmail message id containing the attachment.", required: true },
-      { name: "attachmentId", type: "string", description: "The attachment id (from the parent message's payload.parts[].body.attachmentId).", required: true },
+      { name: "attachmentId", type: "string", description: "Either the short `partId` from the `messages_get` attachment table (e.g. `1`, `1.2`) or the raw Gmail attachment id (`payload.parts[].body.attachmentId`). Both are accepted.", required: true },
     ],
   },
   {

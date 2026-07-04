@@ -218,6 +218,28 @@ function findAttachmentPart(
   return undefined;
 }
 
+// Resolve `id` against a payload tree, trying `body.attachmentId` first (raw
+// Gmail attachment id — backward compatible) and then `partId` (the short id
+// exposed in the markdown attachment table). This lets `download_attachment`
+// accept either form without the caller having to know which is which.
+function findAttachmentPartByIdOrPartId(
+  payload: GmailMessagePayload | undefined,
+  id: string,
+): GmailMessagePayload | undefined {
+  if (!payload) return undefined;
+  const byAttachmentId = findAttachmentPart(payload, id);
+  if (byAttachmentId) return byAttachmentId;
+  const walk = (p: GmailMessagePayload): GmailMessagePayload | undefined => {
+    if (p.partId === id && p.body?.attachmentId) return p;
+    for (const child of p.parts ?? []) {
+      const hit = walk(child);
+      if (hit) return hit;
+    }
+    return undefined;
+  };
+  return walk(payload);
+}
+
 // Strip characters that would break the VFS path or the host FS: path
 // separators, NUL, and other C0/C1 control chars. Also trims surrounding
 // whitespace and dots (Windows-hostile) and falls back to a stable default
@@ -245,6 +267,7 @@ interface ExtractedParts {
   attachments: Array<{
     filename: string;
     attachmentId: string;
+    partId?: string;
     mimeType?: string;
     size?: number;
   }>;
@@ -259,6 +282,7 @@ function extractParts(payload: GmailMessagePayload | undefined): ExtractedParts 
       out.attachments.push({
         filename: p.filename || "attachment.bin",
         attachmentId: body.attachmentId,
+        partId: p.partId,
         mimeType: p.mimeType,
         size: body.size,
       });
@@ -425,11 +449,12 @@ export class GmailAdapter extends ServiceAdapter {
       lines.push("| filename | id |");
       lines.push("| --- | --- |");
       for (const a of attachments) {
-        lines.push(`| ${escapeTableCell(a.filename)} | ${escapeTableCell(a.attachmentId)} |`);
+        const id = a.partId ?? a.attachmentId;
+        lines.push(`| ${escapeTableCell(a.filename)} | ${escapeTableCell(id)} |`);
       }
       lines.push("");
       lines.push(
-        `_Use \`gmail_messages_download_attachment\` with messageId=\`${msg.id}\` and one of the ids above to save an attachment to the VFS._`,
+        `_The \`id\` column is each attachment's \`partId\` (short, e.g. \`1\`, \`1.2\`); pass it verbatim as \`attachmentId\` to \`gmail_messages_download_attachment\` with messageId=\`${msg.id}\` — the server resolves it to the underlying Gmail attachment id automatically._`,
       );
     }
     return lines.join("\n");
@@ -551,25 +576,26 @@ export class GmailAdapter extends ServiceAdapter {
   async downloadAttachment(params: DownloadAttachmentParams): Promise<DownloadAttachmentResult> {
     return this.withScope(GMAIL_SCOPES.readonly, async () => {
       const maxBytes = DEFAULT_ATTACHMENT_MAX_BYTES;
-      // Fetch the parent message so we can resolve filename + mimeType for the
-      // attachment part. `format=full` is required — metadata mode omits parts.
+      // Fetch the parent message so we can (a) resolve the caller's id — which
+      // may be either the short `partId` from the markdown table or the raw
+      // Gmail `attachmentId` — and (b) pick up the filename + mimeType Gmail
+      // won't return from `/attachments/{id}`. `format=full` is required.
       const message = await this.getMessage({ id: params.messageId, format: "full" });
-      const part = findAttachmentPart(message.payload, params.attachmentId);
-      if (!part) {
-        throw new Error(
-          `Attachment ${params.attachmentId} not found on message ${params.messageId}`,
-        );
-      }
-      const filename = sanitizeAttachmentFilename(part.filename);
-      const mimeType = part.mimeType ?? "application/octet-stream";
-      const declaredSize = part.body?.size;
+      const part = findAttachmentPartByIdOrPartId(message.payload, params.attachmentId);
+      const resolvedAttachmentId = part?.body?.attachmentId;
+      const filename = sanitizeAttachmentFilename(part?.filename);
+      const mimeType = part?.mimeType ?? "application/octet-stream";
+      const declaredSize = part?.body?.size;
       if (typeof declaredSize === "number" && declaredSize > maxBytes) {
         return { error: "too_large" as const, size: declaredSize, maxBytes };
       }
-      // Fetch the attachment body (URL-safe base64).
+      // Fetch the attachment body (URL-safe base64). Fall back to the caller-
+      // supplied id if we couldn't resolve locally — that lets Gmail's API
+      // return the authoritative error rather than us guessing.
+      const attachmentIdForFetch = resolvedAttachmentId ?? params.attachmentId;
       const attachmentUrl =
         `${BASE}/users/me/messages/${encodeURIComponent(params.messageId)}` +
-        `/attachments/${encodeURIComponent(params.attachmentId)}`;
+        `/attachments/${encodeURIComponent(attachmentIdForFetch)}`;
       const res = await gsuiteFetch<{ size?: number; data?: string }>(this, attachmentUrl);
       if (!res.data) {
         throw new Error(
