@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useCopilotAction } from "@/components/agent/gated-action";
 import { encodeNested } from "@/lib/agent/nested-events";
 import { startDelegation, pushDelegationEvent, finishDelegation } from "@/lib/agent/subagent-events";
-import { useActiveConversationId, setConversationActiveFeatureBranch, DEFAULT_GROUP } from "@/lib/agent/conversations";
+import { useActiveConversationId, useActiveConversation, setConversationActiveFeatureBranch, DEFAULT_GROUP } from "@/lib/agent/conversations";
 import { suggestFeatureBranchName } from "@/lib/agent/feature-branch";
 import { sessionHeader } from "@/lib/logging/client/session";
 
@@ -92,6 +92,44 @@ function FeatureBranchCard({
   );
 }
 
+// The dev_branch_request elicitation. The active feature branch is conversation
+// state that the model CANNOT see, so it calls this action for any BOS source
+// change even when the user already selected a branch in the dropdown (most visible
+// on a NEW conversation, which has no prior branch message in its history). When a
+// branch is already active we must NOT prompt for a new one — auto-respond so the
+// model just delegates, and the delegate route resolves the selected branch
+// server-side. Only truly-missing branches show the create card.
+function DevBranchElicitation({
+  task,
+  convId,
+  existingBranch,
+  respond,
+}: {
+  task: string;
+  convId: string;
+  existingBranch?: string;
+  respond?: (result: string) => void;
+}) {
+  const done = useRef(false);
+  useEffect(() => {
+    if (existingBranch && !done.current) {
+      done.current = true;
+      respond?.(
+        `Active feature branch is already "${existingBranch}". Do NOT create a new one — delegate the source change to the developer sub-agent now.`,
+      );
+    }
+  }, [existingBranch, respond]);
+
+  if (existingBranch) {
+    return (
+      <div className="my-1 rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-xs text-white/60">
+        Using this conversation&apos;s active feature branch <b className="text-white/80">{existingBranch}</b>.
+      </div>
+    );
+  }
+  return <FeatureBranchCard task={task} convId={convId} onDone={(result) => respond?.(result)} />;
+}
+
 // Sub-agent delegation: list/create agents, delegate (existing or ephemeral),
 // and an elicitation card to approve a Claude agent for a non-dev task.
 export function SubAgentActions({ group = DEFAULT_GROUP }: { group?: string }) {
@@ -104,6 +142,15 @@ export function SubAgentActions({ group = DEFAULT_GROUP }: { group?: string }) {
   useEffect(() => {
     threadIdRef.current = threadId;
   }, [threadId]);
+
+  // The active conversation's selected feature branch, read through a ref so the
+  // dev_branch_request elicitation reflects the CURRENT selection (not a stale
+  // closure) and can skip the create-branch prompt when one is already set.
+  const activeConversation = useActiveConversation(group);
+  const activeBranchRef = useRef(activeConversation?.activeFeatureBranch);
+  useEffect(() => {
+    activeBranchRef.current = activeConversation?.activeFeatureBranch;
+  }, [activeConversation?.activeFeatureBranch]);
 
   useCopilotAction({
     name: "agent_list",
@@ -249,10 +296,11 @@ export function SubAgentActions({ group = DEFAULT_GROUP }: { group?: string }) {
         return <div className="my-1 rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-xs text-white/60">Feature-branch choice recorded.</div>;
       }
       return (
-        <FeatureBranchCard
+        <DevBranchElicitation
           task={String(args?.task ?? "")}
           convId={threadIdRef.current}
-          onDone={(result) => respond?.(result)}
+          existingBranch={activeBranchRef.current}
+          respond={respond}
         />
       );
     },
