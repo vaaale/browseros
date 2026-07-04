@@ -27,6 +27,7 @@ Two things make BOS Settings special:
 | **[Dev Harness](dev-harness.md)** | How Claude Code runs for development. |
 | **[Browser Automation](browser-automation.md)** | Let the assistant drive a real browser. |
 | **[Command Execution](command-execution.md)** | Let the assistant run shell/Python/Node in a sandbox. |
+| **Integrations** | Connect third-party services (e.g. [GSuite](../integrations/gsuite.md)) via OAuth. |
 
 ---
 

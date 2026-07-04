@@ -22,6 +22,7 @@ Start at **[Introduction](usage/introduction.md)**.
 - **Settings:** [overview](usage/settings/overview.md) · [AI provider](usage/settings/ai-provider.md) · [dev harness](usage/settings/dev-harness.md) · [appearance](usage/settings/appearance.md) · [browser automation](usage/settings/browser-automation.md) · [data isolation](usage/settings/data-isolation.md)
 - **Versions:** [live version control](usage/versions/live-version-control.md)
 - **MCP:** [MCP servers](usage/mcp/mcp-servers.md)
+- **Integrations:** [GSuite (Gmail / Drive / Calendar / Contacts)](usage/integrations/gsuite.md)
 
 > The in‑OS **Docs app** renders these trees (`docs/usage` + `docs/dev`) as a
 > **read‑only** reader, so users can read this documentation inside BOS.
