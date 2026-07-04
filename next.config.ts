@@ -18,6 +18,15 @@ const nextConfig: NextConfig = {
   // esbuild (used to build per-app projects at install time) ships a native
   // binary and must not be bundled by the server compiler — keep it external.
   serverExternalPackages: ["esbuild"],
+  // Pin Turbopack's workspace root so it doesn't walk beyond this directory
+  // (the `specs/` symlink points outside the checkout and would confuse it).
+  turbopack: {
+    root: __dirname,
+  },
+  // Exclude the external `specs/` symlink from file tracing (dev + build).
+  outputFileTracingExcludes: {
+    "*": ["specs/**", "./specs/**"],
+  },
   ...(allowedDevOrigins.length ? { allowedDevOrigins } : {}),
 };
 
