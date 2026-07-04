@@ -13,15 +13,26 @@ import {
   toCopilotParameter,
 } from "@/lib/integrations/actions/dispatcher";
 
-// Registers one CopilotKit action per adapter method. `available` is driven by
-// the user's effective-scope set (granted ∩ enabled), so the LLM only sees
-// actions it can actually use. The server-side invoke route re-checks scopes
-// (defence-in-depth) — see /api/integrations/[id]/services/[serviceId]/invoke.
+// Registers one CopilotKit action per adapter method. Every action is rendered
+// on every render (never conditionally mounted / unmounted) — the number of
+// hook calls is fixed at compile time by the *_METHOD_DESCRIPTORS lengths.
+// The `available` flag on each action reflects the effective-scope set
+// (granted ∩ enabled) so the LLM only sees actions it can actually use. The
+// server-side invoke route re-checks scopes (defence-in-depth).
 //
-// NAMING: actions here are `<integrationId>_<serviceId>_<object>_<verb>` in
-// snake_case (e.g. `gsuite_gmail_messages_list`). See capabilities-registry.ts
-// for the per-service groups (Gmail, Google Drive, Google Calendar, Google
-// Contacts).
+// KEYING NOTE: each GsuiteMethodAction is keyed by `<name>:<on|off>`. That is
+// intentional — CopilotKit's `useCopilotAction` captures the action's config
+// TYPE (render vs frontend) in `useState` on first render, then throws
+// "Action configuration changed between renders" if a subsequent render maps
+// to a different type. Toggling `available` between "enabled" (frontend) and
+// "disabled" (render) crosses that boundary, so we force React to remount
+// the leaf component when scopeGranted flips. Fresh mount → fresh useState →
+// no cross-render type flip.
+//
+// NAMING: actions here are `<serviceId>_<object>_<verb>` in snake_case (e.g.
+// `gmail_messages_list`, `drive_files_list`, `calendar_events_create`). The
+// integration id (`gsuite`) is intentionally NOT included in the name — see
+// dispatcher.ts and capabilities-registry.ts for the shared convention.
 export function IntegrationActions() {
   const { byIntegration, connected } = useIntegrationsEffectiveScopes();
   const gsuiteScopes = byIntegration["gsuite"] ?? new Set<string>();
@@ -43,50 +54,62 @@ export function IntegrationActions() {
   // readonly module constants.
   return (
     <>
-      {GMAIL_METHOD_DESCRIPTORS.map((d) => (
-        <GsuiteMethodAction
-          key={`gmail_${d.method}`}
-          serviceId="gmail"
-          method={d.method}
-          scope={d.scope}
-          description={d.description}
-          parameters={d.parameters}
-          scopeGranted={gsuiteScopes.has(d.scope) && gsuiteConnected}
-        />
-      ))}
-      {DRIVE_METHOD_DESCRIPTORS.map((d) => (
-        <GsuiteMethodAction
-          key={`drive_${d.method}`}
-          serviceId="drive"
-          method={d.method}
-          scope={d.scope}
-          description={d.description}
-          parameters={d.parameters}
-          scopeGranted={gsuiteScopes.has(d.scope) && gsuiteConnected}
-        />
-      ))}
-      {CALENDAR_METHOD_DESCRIPTORS.map((d) => (
-        <GsuiteMethodAction
-          key={`calendar_${d.method}`}
-          serviceId="calendar"
-          method={d.method}
-          scope={d.scope}
-          description={d.description}
-          parameters={d.parameters}
-          scopeGranted={gsuiteScopes.has(d.scope) && gsuiteConnected}
-        />
-      ))}
-      {CONTACTS_METHOD_DESCRIPTORS.map((d) => (
-        <GsuiteMethodAction
-          key={`contacts_${d.method}`}
-          serviceId="contacts"
-          method={d.method}
-          scope={d.scope}
-          description={d.description}
-          parameters={d.parameters}
-          scopeGranted={gsuiteScopes.has(d.scope) && gsuiteConnected}
-        />
-      ))}
+      {GMAIL_METHOD_DESCRIPTORS.map((d) => {
+        const scopeGranted = gsuiteScopes.has(d.scope) && gsuiteConnected;
+        return (
+          <GsuiteMethodAction
+            key={`gmail_${d.method}:${scopeGranted ? "on" : "off"}`}
+            serviceId="gmail"
+            method={d.method}
+            scope={d.scope}
+            description={d.description}
+            parameters={d.parameters}
+            scopeGranted={scopeGranted}
+          />
+        );
+      })}
+      {DRIVE_METHOD_DESCRIPTORS.map((d) => {
+        const scopeGranted = gsuiteScopes.has(d.scope) && gsuiteConnected;
+        return (
+          <GsuiteMethodAction
+            key={`drive_${d.method}:${scopeGranted ? "on" : "off"}`}
+            serviceId="drive"
+            method={d.method}
+            scope={d.scope}
+            description={d.description}
+            parameters={d.parameters}
+            scopeGranted={scopeGranted}
+          />
+        );
+      })}
+      {CALENDAR_METHOD_DESCRIPTORS.map((d) => {
+        const scopeGranted = gsuiteScopes.has(d.scope) && gsuiteConnected;
+        return (
+          <GsuiteMethodAction
+            key={`calendar_${d.method}:${scopeGranted ? "on" : "off"}`}
+            serviceId="calendar"
+            method={d.method}
+            scope={d.scope}
+            description={d.description}
+            parameters={d.parameters}
+            scopeGranted={scopeGranted}
+          />
+        );
+      })}
+      {CONTACTS_METHOD_DESCRIPTORS.map((d) => {
+        const scopeGranted = gsuiteScopes.has(d.scope) && gsuiteConnected;
+        return (
+          <GsuiteMethodAction
+            key={`contacts_${d.method}:${scopeGranted ? "on" : "off"}`}
+            serviceId="contacts"
+            method={d.method}
+            scope={d.scope}
+            description={d.description}
+            parameters={d.parameters}
+            scopeGranted={scopeGranted}
+          />
+        );
+      })}
     </>
   );
 }
@@ -105,6 +128,11 @@ interface GsuiteActionProps {
  * useCopilotAction is a static hook call in its own component tree — the
  * parent's `.map()` renders a stable number of children (equal to the
  * summed length of the compile-time descriptor lists).
+ *
+ * The parent flips `key` on scope changes so this component remounts and
+ * `useCopilotAction`'s internal `useState(getActionConfig(action))` re-runs
+ * from scratch (avoids the "Action configuration changed between renders"
+ * crash when `available` flips between "enabled" and "disabled").
  */
 function GsuiteMethodAction({
   serviceId,

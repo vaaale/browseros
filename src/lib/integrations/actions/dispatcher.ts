@@ -8,8 +8,13 @@
 // One CopilotKit action per adapter method. Naming convention (see
 // docs/dev/integrations.md and capabilities-registry.ts):
 //
-//   <integrationId>_<serviceId>_<object>_<verb>   (snake_case)
-//   e.g. gsuite_gmail_messages_list
+//   <serviceId>_<object>_<verb>   (snake_case)
+//   e.g. gmail_messages_list, drive_files_list, calendar_events_create
+//
+// The integration id (e.g. `gsuite`) is deliberately NOT included in the
+// action name — service ids (gmail, drive, calendar, contacts, …) are unique
+// across BOS's registered integrations and the shorter name reads better in
+// LLM tool listings.
 //
 // The `<object>_<verb>` tail is the adapter method's descriptor id (see the
 // GmailMethodName / DriveMethodName / CalendarMethodName / ContactsMethodName
@@ -38,13 +43,17 @@ export interface CopilotActionParameter {
 /**
  * Build the CopilotKit action name for an adapter method. Kept in one place so
  * the client (action registration) and server (invoke route routing) agree.
+ *
+ * The integrationId argument is accepted for callsite documentation (which
+ * integration this action belongs to) but intentionally not embedded in the
+ * name — service ids are already unique across integrations.
  */
 export function actionNameFor(
-  integrationId: string,
+  _integrationId: string,
   serviceId: string,
   method: string,
 ): string {
-  return `${integrationId}_${serviceId}_${method}`;
+  return `${serviceId}_${method}`;
 }
 
 /**

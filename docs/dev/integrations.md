@@ -78,10 +78,10 @@ URIs, and its `client_secrets.json` downloaded.
    modify, send). You should return to BrowserOS with the integration marked
    *Connected* and the granted scopes listed.
 4. Optionally disable one scope (e.g. `gmail.send`) with the per-scope toggle.
-   The corresponding assistant action (`gsuite_gmail_messages_send`) becomes
+   The corresponding assistant action (`gmail_messages_send`) becomes
    unavailable — the LLM will not see it.
 5. Ask the assistant "list my unread emails from this week". It should call
-   `gsuite_gmail_messages_list` (or `gsuite_gmail_messages_search`) with an
+   `gmail_messages_list` (or `gmail_messages_search`) with an
    appropriate query and summarise the results.
 6. Trigger a manual poll: `POST /api/integrations/gsuite/services/gmail/poll`
    (or the assistant will do this once the scheduler ships). New messages are
@@ -115,10 +115,13 @@ explain to the user what needs to happen.
   (`gsuite`, `gmail`, `drive`).
 - Full OAuth scope URLs are the CANONICAL scope id (what the server receives).
   Shortnames (`gmail.readonly`) are for logs and UI only.
-- Assistant action names follow `<integrationId>_<serviceId>_<object>_<verb>`
-  in snake_case (e.g. `gsuite_gmail_messages_list`). The `<object>_<verb>`
-  tail is the adapter method's descriptor id (see the `GmailMethodName` /
-  `DriveMethodName` / `CalendarMethodName` / `ContactsMethodName` unions).
+- Assistant action names follow `<serviceId>_<object>_<verb>` in snake_case
+  (e.g. `gmail_messages_list`, `drive_files_list`, `calendar_events_create`).
+  The integration id (`gsuite`) is intentionally NOT part of the action name —
+  service ids are already unique across BOS's registered integrations. The
+  `<object>_<verb>` tail is the adapter method's descriptor id (see the
+  `GmailMethodName` / `DriveMethodName` / `CalendarMethodName` /
+  `ContactsMethodName` unions).
 
 ## Adding a new adapter method
 
@@ -129,8 +132,8 @@ explain to the user what needs to happen.
    `<object>_<verb>`). Extend the matching `*MethodName` union.
 3. Add an invoker to the server-side `*_INVOKERS` map in the adapter file
    (keyed by the same snake_case tool id).
-4. Add a capability id (`<integrationId>_<serviceId>_<object>_<verb>`) to the
-   per-service group in `capabilities-registry.ts`.
+4. Add a capability id (`<serviceId>_<object>_<verb>`) to the per-service
+   group in `capabilities-registry.ts`.
 5. `npx tsc --noEmit`. The client dispatcher and server invoke route will
    pick the method up automatically.
 
@@ -162,20 +165,20 @@ least one file in the connected Google Drive.
    new scopes with existing grants via `include_granted_scopes=true`. You do
    NOT need to re-consent to Gmail scopes.
 3. From an assistant chat, ask "list my most recent Drive files" — the LLM
-   should call `gsuite_drive_files_list` and return a JSON summary.
+   should call `drive_files_list` and return a JSON summary.
 4. Ask "download the file named X" → the model calls
-   `gsuite_drive_files_download({ id, maxBytes })`. Files under **256 KB**
+   `drive_files_download({ id, maxBytes })`. Files under **256 KB**
    (default cap) return `{ contentType, base64, size }`; larger files return
    `{ error: "too_large", size, maxBytes }` so the LLM can offer an
-   alternative (e.g., using `gsuite_drive_files_export` for Google-native
-   docs, or telling the user the file is too large).
+   alternative (e.g., using `drive_files_export` for Google-native docs, or
+   telling the user the file is too large).
 5. For a Google Doc / Sheet / Slide, ask "export … as PDF" — the model calls
-   `gsuite_drive_files_export({ id, mimeType: 'application/pdf' })` and gets
-   the same base64 result shape.
-6. Toggle `drive.readonly` **off** in Settings → the seven `gsuite_drive_*`
-   actions become unavailable within one render cycle (verified via the
-   assistant's tool list refresh — the model no longer sees them). Toggle
-   back on and they return.
+   `drive_files_export({ id, mimeType: 'application/pdf' })` and gets the
+   same base64 result shape.
+6. Toggle `drive.readonly` **off** in Settings → the seven `drive_*` actions
+   become unavailable within one render cycle (verified via the assistant's
+   tool list refresh — the model no longer sees them). Toggle back on and
+   they return.
 
 Calendar and Contacts appear as sub-services under GSuite but their
 adapters are Phase 3 stubs — any invocation throws

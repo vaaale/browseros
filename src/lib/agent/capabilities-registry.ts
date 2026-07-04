@@ -119,43 +119,43 @@ export const CAPABILITIES: Capability[] = [
   { id: "buildstudio_tree_refresh", group: "Build Studio", context: "action", description: "Reload the Build Studio spec tree." },
 
   // Integrations — one capability id per adapter method, following the pattern
-  // `<integrationId>_<serviceId>_<object>_<verb>` in snake_case (see
-  // actions/dispatcher.ts). Example: `gsuite_gmail_messages_list`.
+  // `<serviceId>_<object>_<verb>` in snake_case (see actions/dispatcher.ts).
+  // Example: `gmail_messages_list`, `drive_files_list`.
   //
   // GROUPING: integration capabilities are grouped per external service (not
   // under a single "Integrations" bucket) so the Settings capability picker
   // stays scannable as more providers are added. Non-Google providers should
   // use their own service-name group.
-  { id: "gsuite_gmail_messages_list", group: "Gmail", context: "action", description: "List Gmail messages." },
-  { id: "gsuite_gmail_messages_get", group: "Gmail", context: "action", description: "Fetch a Gmail message by id." },
-  { id: "gsuite_gmail_messages_send", group: "Gmail", context: "action", description: "Send a Gmail message." },
-  { id: "gsuite_gmail_messages_reply", group: "Gmail", context: "action", description: "Reply in-thread to a Gmail message." },
-  { id: "gsuite_gmail_messages_modify", group: "Gmail", context: "action", description: "Add or remove labels on a Gmail message." },
-  { id: "gsuite_gmail_messages_trash", group: "Gmail", context: "action", description: "Move a Gmail message to Trash." },
-  { id: "gsuite_gmail_messages_untrash", group: "Gmail", context: "action", description: "Restore a Gmail message from Trash." },
-  { id: "gsuite_gmail_messages_search", group: "Gmail", context: "action", description: "Search Gmail with Google's operator syntax." },
-  { id: "gsuite_gmail_labels_list", group: "Gmail", context: "action", description: "List Gmail labels." },
-  { id: "gsuite_gmail_labels_get", group: "Gmail", context: "action", description: "Fetch a Gmail label by id." },
-  { id: "gsuite_gmail_profile_get", group: "Gmail", context: "action", description: "Fetch the authenticated Gmail profile." },
-  { id: "gsuite_drive_files_list", group: "Google Drive", context: "action", description: "List files in Google Drive." },
-  { id: "gsuite_drive_files_get", group: "Google Drive", context: "action", description: "Fetch a Drive file's metadata by id." },
-  { id: "gsuite_drive_files_search", group: "Google Drive", context: "action", description: "Search Drive with Google's query syntax." },
-  { id: "gsuite_drive_files_download", group: "Google Drive", context: "action", description: "Download a Drive file's binary content (base64, size-capped)." },
-  { id: "gsuite_drive_files_export", group: "Google Drive", context: "action", description: "Export a Google-native doc (Docs/Sheets/Slides) as PDF/CSV/text/etc." },
-  { id: "gsuite_drive_folders_list", group: "Google Drive", context: "action", description: "List folders in Drive, optionally under a parent." },
-  { id: "gsuite_drive_about_get", group: "Google Drive", context: "action", description: "Fetch the authenticated Drive profile + storage quota." },
-  { id: "gsuite_calendar_calendars_list", group: "Google Calendar", context: "action", description: "List the user's calendars (primary + subscribed)." },
-  { id: "gsuite_calendar_events_list", group: "Google Calendar", context: "action", description: "List events on a calendar within a time window." },
-  { id: "gsuite_calendar_events_get", group: "Google Calendar", context: "action", description: "Fetch a single calendar event by id." },
-  { id: "gsuite_calendar_events_create", group: "Google Calendar", context: "action", description: "Create a new calendar event." },
-  { id: "gsuite_calendar_events_update", group: "Google Calendar", context: "action", description: "Patch fields on an existing calendar event." },
-  { id: "gsuite_calendar_events_delete", group: "Google Calendar", context: "action", description: "Delete a calendar event." },
-  { id: "gsuite_calendar_events_respond", group: "Google Calendar", context: "action", description: "RSVP to a calendar event (accept / decline / tentative)." },
-  { id: "gsuite_calendar_events_move", group: "Google Calendar", context: "action", description: "Move an event from one calendar to another." },
-  { id: "gsuite_calendar_freebusy_query", group: "Google Calendar", context: "action", description: "Query free/busy time ranges across calendars." },
-  { id: "gsuite_contacts_contacts_list", group: "Google Contacts", context: "action", description: "List the user's contacts (People API connections)." },
-  { id: "gsuite_contacts_contacts_get", group: "Google Contacts", context: "action", description: "Fetch a single contact by resourceName." },
-  { id: "gsuite_contacts_contacts_search", group: "Google Contacts", context: "action", description: "Search contacts by free-text query." },
+  { id: "gmail_messages_list", group: "Gmail", context: "action", description: "List Gmail messages." },
+  { id: "gmail_messages_get", group: "Gmail", context: "action", description: "Fetch a Gmail message by id." },
+  { id: "gmail_messages_send", group: "Gmail", context: "action", description: "Send a Gmail message." },
+  { id: "gmail_messages_reply", group: "Gmail", context: "action", description: "Reply in-thread to a Gmail message." },
+  { id: "gmail_messages_modify", group: "Gmail", context: "action", description: "Add or remove labels on a Gmail message." },
+  { id: "gmail_messages_trash", group: "Gmail", context: "action", description: "Move a Gmail message to Trash." },
+  { id: "gmail_messages_untrash", group: "Gmail", context: "action", description: "Restore a Gmail message from Trash." },
+  { id: "gmail_messages_search", group: "Gmail", context: "action", description: "Search Gmail with Google's operator syntax." },
+  { id: "gmail_labels_list", group: "Gmail", context: "action", description: "List Gmail labels." },
+  { id: "gmail_labels_get", group: "Gmail", context: "action", description: "Fetch a Gmail label by id." },
+  { id: "gmail_profile_get", group: "Gmail", context: "action", description: "Fetch the authenticated Gmail profile." },
+  { id: "drive_files_list", group: "Google Drive", context: "action", description: "List files in Google Drive." },
+  { id: "drive_files_get", group: "Google Drive", context: "action", description: "Fetch a Drive file's metadata by id." },
+  { id: "drive_files_search", group: "Google Drive", context: "action", description: "Search Drive with Google's query syntax." },
+  { id: "drive_files_download", group: "Google Drive", context: "action", description: "Download a Drive file's binary content (base64, size-capped)." },
+  { id: "drive_files_export", group: "Google Drive", context: "action", description: "Export a Google-native doc (Docs/Sheets/Slides) as PDF/CSV/text/etc." },
+  { id: "drive_folders_list", group: "Google Drive", context: "action", description: "List folders in Drive, optionally under a parent." },
+  { id: "drive_about_get", group: "Google Drive", context: "action", description: "Fetch the authenticated Drive profile + storage quota." },
+  { id: "calendar_calendars_list", group: "Google Calendar", context: "action", description: "List the user's calendars (primary + subscribed)." },
+  { id: "calendar_events_list", group: "Google Calendar", context: "action", description: "List events on a calendar within a time window." },
+  { id: "calendar_events_get", group: "Google Calendar", context: "action", description: "Fetch a single calendar event by id." },
+  { id: "calendar_events_create", group: "Google Calendar", context: "action", description: "Create a new calendar event." },
+  { id: "calendar_events_update", group: "Google Calendar", context: "action", description: "Patch fields on an existing calendar event." },
+  { id: "calendar_events_delete", group: "Google Calendar", context: "action", description: "Delete a calendar event." },
+  { id: "calendar_events_respond", group: "Google Calendar", context: "action", description: "RSVP to a calendar event (accept / decline / tentative)." },
+  { id: "calendar_events_move", group: "Google Calendar", context: "action", description: "Move an event from one calendar to another." },
+  { id: "calendar_freebusy_query", group: "Google Calendar", context: "action", description: "Query free/busy time ranges across calendars." },
+  { id: "contacts_contacts_list", group: "Google Contacts", context: "action", description: "List the user's contacts (People API connections)." },
+  { id: "contacts_contacts_get", group: "Google Contacts", context: "action", description: "Fetch a single contact by resourceName." },
+  { id: "contacts_contacts_search", group: "Google Contacts", context: "action", description: "Search contacts by free-text query." },
 ];
 
 // Tools/actions the UI marks with a warning affordance in the Agent Settings
