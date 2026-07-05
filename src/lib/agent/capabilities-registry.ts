@@ -57,7 +57,8 @@ export const CAPABILITIES: Capability[] = [
 
   // Memory
   { id: "memory_save", group: "Memory", context: "action", description: "Save to persistent memory." },
-  { id: "memory_recall", group: "Memory", context: "action", description: "Read live persistent memory entries." },
+  { id: "memory_recall", group: "Memory", context: "action", description: "Read live persistent memory entries or a topic shard." },
+  { id: "memory_search", group: "Memory", context: "action", description: "Search topic shards + recent episodes for matching entries." },
 
   // Skills
   { id: "skill_list", group: "Skills", context: "both", description: "List available skills." },

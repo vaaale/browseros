@@ -61,10 +61,80 @@ memory.
 
 ---
 
+## Memory loops (spec 021)
+
+Two automated scheduler jobs replace the voluntary `skill_reflect` model of
+spec 003 and add an episodic buffer between reflection and long-term memory:
+
+- **Fast loop** (`src/lib/agent/memory/fast-loop.ts`) — runs every ~2 min as a
+  `system` JobDefinition (`system:memory.fast-loop`) in the unified scheduler.
+  Scans `/Documents/Chats/*.json`, picks conversations idle ≥ 5 min or with
+  ≥ 40 unreviewed turns, and reviews only the slice after the watermark
+  (`/Documents/Memory/.watermarks.json`). Toolset restricted to
+  `episode_write` and `skill_patch` (no `skill_create`, no writes to USER.md /
+  MEMORY.md / topics). Output: one episode file per conversation per day at
+  `/Documents/Memory/Episodes/<yyyy-mm-dd>-<convId>.md`.
+- **Slow loop** (`src/lib/agent/memory/consolidate.ts`) — runs hourly as
+  `system:memory.slow-loop`. Overlap-locked at
+  `/Documents/Memory/.consolidate.lock` (30-min staleness expiry). Loads
+  pending episodes oldest-first, applies incremental ops only
+  (`memory_add_entry`, `memory_replace_entry`, `memory_remove_entry`,
+  `topic_create`, `skill_patch`, and gated `skill_create`), then marks each
+  processed episode `consolidated` and archives files older than
+  `memoryLoops.episodeArchiveAgeDays` (default 14) into `.Archive/`.
+- **Topics** (`src/lib/agent/memory/topics.ts`) — long-term memory shards at
+  `/Documents/Memory/Topics/<slug>.md`. Per-topic budget 4000 chars (config
+  `memoryLoops.topicBudget`). `MEMORY.md` stays the always-injected index —
+  one line per topic (`- <slug>: <digest>`).
+- **Watermarks** (`src/lib/agent/memory/watermarks.ts`) — sidecar JSON so the
+  loops don't race the client-owned conversation files.
+
+Both loops respect `hasCredentials()` and no-op when no AI provider is
+configured. Both are seeded into `/Documents/System/scheduler-jobs.json` on
+first `installBuiltInHandlers()` call via `ensureSystemJob(...)` — there is no
+parallel scheduler persistence for memory.
+
+### Skill creation gate (FR-014)
+
+`consolidate.ts` gates `skill_create` with all three of: no existing skill
+covers the class (checked via `skill_list`); complexity threshold (≥ 3
+`- ` / `1.` step markers AND ≥ 200 chars of body); recurrence evidence (≥ 2
+matching `skill-candidate` tags across every episode file). A first-occurrence
+skill create is refused and the current episode is tagged instead.
+
+### Retrieval
+
+- `memory_search(query, maxResults?)` — case-insensitive substring/word match
+  over `Topics/**/*.md` and `Episodes/**/*.md`, ranked by token match count.
+  Provenance returned as `<path>#<anchor>` (`#entry-N` for topics,
+  `#<section-slug>` for episodes). Ranking is isolated in `search.ts` so BM25
+  can drop in without an interface change.
+- `memory_recall(topic?)` — extended: with a slug it returns that topic
+  shard's entries; without arguments it returns USER + MEMORY + the list of
+  topic slugs.
+
+### Config (`memoryLoops` namespace)
+
+Exposed via Settings → Memory Loops. Fields: `fastLoop.enabled`,
+`fastLoop.tickIntervalSec`, `fastLoop.idleThresholdSec`, `fastLoop.turnCap`,
+`fastLoop.minNewTurns`, `slowLoop.enabled`, `slowLoop.intervalSec`,
+`slowLoop.batchSize`, `modelOverride`, `episodeArchiveAgeDays`, `topicBudget`.
+
+### Manual triggers
+
+- `POST /api/memory/consolidate` — run the slow loop now.
+- `POST /api/assistant/reflect` with `{ conversationId }` — run the fast loop
+  now for one conversation (idle threshold waived).
+
+---
+
 ## API (`/api/memory`)
 
-- **GET** → `{ user: string[], memory: string[] }`.
+- **GET** → `{ user: string[], memory: string[], topics: string[] }`.
+- **GET** `?target=user|memory` → `{ target, entries }`.
+- **GET** `?topic=<slug>` → `{ topic, digest, entries: [{ id, text, timestamp }] }`.
 - **POST** `{ target:"user"|"memory", action:"add"|"replace"|"remove", content, … }`.
 - **DELETE** `?target=&text=`.
+- **GET** `/api/memory/search?q=<query>&maxResults=<n>` → `{ query, results: [{ source, content, score }] }`.
 
 The Memory app (`src/apps/memory/index.tsx`) is a thin UI over this.

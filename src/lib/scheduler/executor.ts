@@ -36,13 +36,34 @@ async function runPromptHandler(handler: JobHandler): Promise<HandlerRunResult> 
 }
 
 let installed = false;
+let memoryLoopsSeeding: Promise<void> | null = null;
 
 /**
  * Install the built-in handlers on the engine. Safe to call multiple times —
- * idempotent because `registerHandler` overwrites on repeat.
+ * idempotent because `registerHandler` overwrites on repeat. Also kicks off
+ * the memory-loops system-job seeding (spec 021 FR-004/FR-010): the fast and
+ * slow loops declare their JobDefinitions in the unified store on first hit
+ * so no separate boot script is required.
  */
 export function installBuiltInHandlers(): void {
   if (installed) return;
   installed = true;
   registerHandler("prompt", runPromptHandler);
+  ensureMemoryLoopsSeeded();
+}
+
+function ensureMemoryLoopsSeeded(): void {
+  if (memoryLoopsSeeding) return;
+  memoryLoopsSeeding = (async () => {
+    try {
+      const [{ ensureFastLoopJob }, { ensureSlowLoopJob }] = await Promise.all([
+        import("@/lib/agent/memory/fast-loop"),
+        import("@/lib/agent/memory/consolidate"),
+      ]);
+      await ensureFastLoopJob();
+      await ensureSlowLoopJob();
+    } catch (err) {
+      logger().error(LOG, "memory-loops seeding failed", err);
+    }
+  })();
 }

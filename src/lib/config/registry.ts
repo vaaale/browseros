@@ -321,6 +321,47 @@ const REGISTRATIONS: ConfigRegistration[] = [
   },
   {
     schema: {
+      namespace: "memoryLoops",
+      title: "Memory Loops",
+      description:
+        "Automated memory reflection. The fast loop reviews idle conversations every few minutes and writes episodes; the slow loop consolidates pending episodes into topic-sharded long-term memory hourly. Both are system-category scheduler jobs and produce zero LLM cost when idle.",
+      order: 15,
+      fields: [
+        { key: "fastLoop.enabled", label: "Fast loop enabled", type: "boolean", description: "Automatically review idle conversations and write episodes." },
+        { key: "fastLoop.tickIntervalSec", label: "Fast loop tick (seconds)", type: "number", description: "How often the fast loop wakes up. Default 120." },
+        { key: "fastLoop.idleThresholdSec", label: "Idle threshold (seconds)", type: "number", description: "A conversation must be idle this long before it's eligible for review. Default 300." },
+        { key: "fastLoop.turnCap", label: "Unreviewed turn cap", type: "number", description: "Force a review when this many new turns pile up, even without idle. Default 40." },
+        { key: "fastLoop.minNewTurns", label: "Minimum new turns", type: "number", description: "Skip conversations with fewer new assistant turns than this (trivial-exchange debounce). Default 4." },
+        { key: "slowLoop.enabled", label: "Slow loop enabled", type: "boolean", description: "Consolidate pending episodes into long-term memory topics and skills." },
+        { key: "slowLoop.intervalSec", label: "Slow loop interval (seconds)", type: "number", description: "How often the slow loop runs. Default 3600 (hourly)." },
+        { key: "slowLoop.batchSize", label: "Slow loop batch size", type: "number", description: "Max pending episodes processed per run. Default 10." },
+        { key: "modelOverride", label: "Model override", type: "text", description: "Optional model id to override the default provider for both loops. Leave blank to use the provider default." },
+        { key: "episodeArchiveAgeDays", label: "Archive age (days)", type: "number", description: "Consolidated episodes older than this move to .Archive/ (never deleted). Default 14." },
+        { key: "topicBudget", label: "Topic budget (chars)", type: "number", description: "Per-topic character budget before a new shard is created. Default 4000." },
+      ],
+    },
+    load: async () => {
+      const s = await readNamespace("memoryLoops");
+      return {
+        "fastLoop.enabled": s["fastLoop.enabled"] !== false,
+        "fastLoop.tickIntervalSec": typeof s["fastLoop.tickIntervalSec"] === "number" ? s["fastLoop.tickIntervalSec"] : 120,
+        "fastLoop.idleThresholdSec": typeof s["fastLoop.idleThresholdSec"] === "number" ? s["fastLoop.idleThresholdSec"] : 300,
+        "fastLoop.turnCap": typeof s["fastLoop.turnCap"] === "number" ? s["fastLoop.turnCap"] : 40,
+        "fastLoop.minNewTurns": typeof s["fastLoop.minNewTurns"] === "number" ? s["fastLoop.minNewTurns"] : 4,
+        "slowLoop.enabled": s["slowLoop.enabled"] !== false,
+        "slowLoop.intervalSec": typeof s["slowLoop.intervalSec"] === "number" ? s["slowLoop.intervalSec"] : 3600,
+        "slowLoop.batchSize": typeof s["slowLoop.batchSize"] === "number" ? s["slowLoop.batchSize"] : 10,
+        modelOverride: typeof s.modelOverride === "string" ? s.modelOverride : "",
+        episodeArchiveAgeDays: typeof s.episodeArchiveAgeDays === "number" ? s.episodeArchiveAgeDays : 14,
+        topicBudget: typeof s.topicBudget === "number" ? s.topicBudget : 4000,
+      };
+    },
+    save: async (patch) => {
+      await patchNamespace("memoryLoops", patch);
+    },
+  },
+  {
+    schema: {
       namespace: "logging",
       title: "Logs",
       description:

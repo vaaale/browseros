@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { listEntries, removeEntry, type MemoryTarget } from "@/lib/agent/memory/curated";
 import { memoryTool } from "@/lib/agent/memory/tool";
+import { getTopic, listTopicSlugs } from "@/lib/agent/memory/topics";
 
 export const dynamic = "force-dynamic";
 
@@ -8,13 +9,29 @@ function asTarget(t: string | null): MemoryTarget | null {
   return t === "user" || t === "memory" ? t : null;
 }
 
-// GET            -> { user: string[], memory: string[] }  (both curated surfaces)
+// GET            -> { user: string[], memory: string[], topics: string[] }
 // GET ?target=X  -> { target, entries }
+// GET ?topic=Y   -> { topic: slug, digest, entries: [{ id, text, timestamp }] }
 export async function GET(req: NextRequest) {
-  const t = asTarget(new URL(req.url).searchParams.get("target"));
+  const url = new URL(req.url);
+  const topicSlug = url.searchParams.get("topic")?.trim();
+  if (topicSlug) {
+    const topic = await getTopic(topicSlug);
+    if (!topic) return NextResponse.json({ error: `Topic "${topicSlug}" not found` }, { status: 404 });
+    return NextResponse.json({
+      topic: topic.slug,
+      digest: topic.digest,
+      entries: topic.entries.map((e) => ({ id: e.id, text: e.text, timestamp: e.timestamp })),
+    });
+  }
+  const t = asTarget(url.searchParams.get("target"));
   if (t) return NextResponse.json({ target: t, entries: await listEntries(t) });
-  const [user, memory] = await Promise.all([listEntries("user"), listEntries("memory")]);
-  return NextResponse.json({ user, memory });
+  const [user, memory, topics] = await Promise.all([
+    listEntries("user"),
+    listEntries("memory"),
+    listTopicSlugs().catch(() => [] as string[]),
+  ]);
+  return NextResponse.json({ user, memory, topics });
 }
 
 // POST body: { target, action?, content?, oldText?, operations? } -> memory tool result
