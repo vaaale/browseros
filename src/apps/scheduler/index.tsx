@@ -202,8 +202,15 @@ export default function SchedulerApp() {
   };
 
   const runNow = async (task: Task) => {
-    await fetch(`/api/scheduler/${task.id}/run`, { method: "POST" });
-    void loadTasks();
+    console.log("Running job now:", task.id);
+    const res = await fetch(`/api/scheduler/${task.id}/run`, { method: "POST" });
+    console.log("Response status:", res.status);
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      setError(`Run failed (${res.status}): ${body || res.statusText}`);
+      return;
+    }
+    await loadTasks();
   };
 
   const pauseResume = async (task: Task) => {
@@ -450,7 +457,7 @@ function TaskTable({
             <Th>Category</Th>
             <Th>Target</Th>
             <Th>Schedule</Th>
-            <Th>Next Run</Th>
+            <Th>Last / Next</Th>
             <Th>Status</Th>
             <Th align="right">Actions</Th>
           </tr>
