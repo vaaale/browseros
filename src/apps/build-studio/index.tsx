@@ -175,7 +175,15 @@ export default function BuildStudioApp() {
   const openFile = useCallback((path: string, branch = "") => {
     setActivePath(path);
     setActiveBranch(branch);
-    setActiveFeature(featureIdOf(path));
+    const feature = featureIdOf(path);
+    setActiveFeature(feature);
+    // Expand the parent feature folder so the file is visible and highlighted in the tree.
+    setCollapsed((prev) => {
+      if (!prev.has(feature)) return prev;
+      const next = new Set(prev);
+      next.delete(feature);
+      return next;
+    });
   }, []);
 
   const save = useCallback(async () => {
