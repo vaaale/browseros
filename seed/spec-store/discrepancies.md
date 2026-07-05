@@ -32,3 +32,13 @@ Earlier specs assumed an unsandboxed `runBash`. It is replaced by `run_command`
 `003-self-improvement` `skill_improve` is a single reflective rewrite recording a
 self-reported score, not the full GEPA loop (candidate generation + evaluation +
 Pareto selection + versioned rollback). See `003-self-improvement`.
+
+## Spec-store mount & candidate model reworked by 020
+
+`018-external-spec-store` FR-005 (global `spec-candidate` branch + per-store
+promote/discard) and FR-007 (read-only symlink mount of the stores into the
+preview worktree) are superseded: the symlink broke Turbopack, and harness
+writes were in practice write-through, not inert. `020-branch-coupled-specs`
+replaces both — stores are mounted as git worktrees on the code's feature
+branch; direct edits commit-on-save; review/promote of specs is coupled to the
+code promote. Authoritative: `020` FR-001..FR-007.

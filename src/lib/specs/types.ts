@@ -58,8 +58,9 @@ export interface SpecTreeNode {
   owner?: StoreOwner;
   writable?: boolean;
   requiresPromote?: boolean;
-  /** For a promote-gated "group": whether an unpromoted spec candidate exists. */
-  hasCandidate?: boolean;
+  /** Set on draft nodes (020): the `bos/*` branch this feature/file lives on.
+   *  Draft content is read-only from base; it lands via the feature's promote. */
+  branch?: string;
   children?: SpecTreeNode[];
 }
 

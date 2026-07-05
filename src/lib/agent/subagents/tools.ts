@@ -141,8 +141,8 @@ export const DEV_TOOLS: Record<string, LlmTool> = {
 
 // Spec-scoped tools for Build Studio. Specs live in external stores (018): a
 // path is STORE-PREFIXED `<storeId>/<rel>` (list stores with an empty path).
-// Writes go to the addressed store — refused for read-only stores; system-store
-// writes accumulate on a candidate branch until promoted. Opt-in like DEV_TOOLS.
+// Writes go to the addressed store — refused for read-only stores; edits
+// commit-on-save to the store's checked-out branch (020). Opt-in like DEV_TOOLS.
 export const SPEC_TOOLS: Record<string, LlmTool> = {
   spec_list: {
     description: "List entries in the spec stores. An empty/omitted path lists the available stores (e.g. 'bos-system-specs', 'user-specs'); a store-prefixed path like 'user-specs/003-my-feature' lists inside a store.",
@@ -155,7 +155,7 @@ export const SPEC_TOOLS: Record<string, LlmTool> = {
     execute: async (input) => specfs.readFile(input.path as string),
   },
   spec_write: {
-    description: "Create or overwrite a specification artifact by STORE-PREFIXED path (e.g. 'user-specs/003-x/spec.md'). New user specs go in the user store; system specs require promote. Build the body from a template via read_template.",
+    description: "Create or overwrite a specification artifact by STORE-PREFIXED path (e.g. 'user-specs/003-x/spec.md'). New user specs go in the user store; edits commit-on-save to the store's checked-out branch. Build the body from a template via read_template.",
     parameters: {
       type: "object",
       properties: { path: { type: "string" }, content: { type: "string" } },

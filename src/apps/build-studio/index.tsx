@@ -89,6 +89,10 @@ export default function BuildStudioApp() {
   const [specs, setSpecs] = useState<Specification[]>([]);
   const [activeFeature, setActiveFeature] = useState<string>("");
   const [activePath, setActivePath] = useState<string>("");
+  // Non-empty when viewing a DRAFT artifact from a `bos/*` store branch (020):
+  // content is served from git (no checkout) and is read-only here — it lands
+  // via the feature's promote in the version controls.
+  const [activeBranch, setActiveBranch] = useState<string>("");
   const [content, setContent] = useState<string>("");
   const [loadedKey, setLoadedKey] = useState<string>("");
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
@@ -133,26 +137,29 @@ export default function BuildStudioApp() {
     loadTree();
   }, [loadTree]);
 
+  const activeKey = activeBranch ? `${activePath}@${activeBranch}` : activePath;
+
   useEffect(() => {
     if (!activePath) return;
+    const key = activeBranch ? `${activePath}@${activeBranch}` : activePath;
     let alive = true;
-    fetch(`/api/specs?path=${encodeURIComponent(activePath)}`)
+    fetch(`/api/specs?path=${encodeURIComponent(activePath)}${activeBranch ? `&branch=${encodeURIComponent(activeBranch)}` : ""}`)
       .then((r) => r.json())
       .then((res: { content?: string }) => {
         if (!alive) return;
         setContent(res.content ?? `Could not load "${activePath}".`);
-        setLoadedKey(activePath);
+        setLoadedKey(key);
         setEditing(false);
       })
       .catch(() => {
         if (!alive) return;
         setContent(`Could not load "${activePath}".`);
-        setLoadedKey(activePath);
+        setLoadedKey(key);
       });
     return () => {
       alive = false;
     };
-  }, [activePath]);
+  }, [activePath, activeBranch]);
 
   const toggle = useCallback((key: string) => {
     setCollapsed((prev) => {
@@ -163,34 +170,11 @@ export default function BuildStudioApp() {
     });
   }, []);
 
-  const openFile = useCallback((path: string) => {
+  const openFile = useCallback((path: string, branch = "") => {
     setActivePath(path);
+    setActiveBranch(branch);
     setActiveFeature(featureIdOf(path));
   }, []);
-
-  const runStoreAction = useCallback(
-    async (store: string, action: "promote" | "discard") => {
-      setError("");
-      if (action === "discard" && !window.confirm(`Discard all unpromoted spec changes in "${store}"?`)) return;
-      try {
-        const r = await fetch("/api/specs", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ action, store }),
-        });
-        const res = await r.json();
-        if (!r.ok) throw new Error(res.error || `${action} failed`);
-        loadTree();
-        if (activePath) {
-          const cur = await fetch(`/api/specs?path=${encodeURIComponent(activePath)}`).then((x) => x.json());
-          setContent(cur.content ?? content);
-        }
-      } catch (e) {
-        setError((e as Error).message);
-      }
-    },
-    [loadTree, activePath, content],
-  );
 
   const save = useCallback(async () => {
     if (!activePath) return;
@@ -215,7 +199,7 @@ export default function BuildStudioApp() {
   }, [activePath, draft, loadTree]);
 
   const activeSpec = activeFeature ? specByPath.get(activeFeature) : undefined;
-  const loading = Boolean(activePath) && loadedKey !== activePath;
+  const loading = Boolean(activePath) && loadedKey !== activeKey;
 
   return (
     <div className="flex h-full text-sm" data-theme="dark">
@@ -241,40 +225,18 @@ export default function BuildStudioApp() {
               <div key={group.path} className="mb-1.5">
                 <div className="flex items-center gap-1.5 px-2 pb-0.5 pt-1 text-[10px] font-semibold uppercase tracking-wide text-white/35">
                   <span className="truncate">{group.label ?? group.name}</span>
-                  {group.requiresPromote && !group.hasCandidate && (
-                    <span title="Edits here require Promote" className="rounded bg-white/10 px-1 text-[9px] normal-case text-white/40">
-                      promote
-                    </span>
-                  )}
-                  {group.requiresPromote && group.hasCandidate && (
-                    <span className="ml-auto flex items-center gap-1">
-                      <button
-                        onClick={() => void runStoreAction(group.name, "promote")}
-                        title="Merge the spec candidate into this store (build-free)"
-                        className="rounded bg-emerald-500/20 px-1 text-[9px] normal-case text-emerald-200 hover:bg-emerald-500/30"
-                      >
-                        Promote
-                      </button>
-                      <button
-                        onClick={() => void runStoreAction(group.name, "discard")}
-                        title="Discard the unpromoted spec changes"
-                        className="rounded bg-white/10 px-1 text-[9px] normal-case text-white/50 hover:bg-white/20"
-                      >
-                        Discard
-                      </button>
-                    </span>
-                  )}
                 </div>
                 {group.children?.map((node) => {
                   if (node.type === "feature") {
-                    const isCollapsed = collapsed.has(node.path);
+                    const nodeKey = node.branch ? `${node.path}@${node.branch}` : node.path;
+                    const isCollapsed = collapsed.has(nodeKey);
                     const spec = specByPath.get(node.path);
                     return (
-                      <div key={node.path}>
+                      <div key={nodeKey}>
                         <button
                           onClick={() => {
                             setActiveFeature(node.path);
-                            toggle(node.path);
+                            toggle(nodeKey);
                           }}
                           className={`flex w-full items-center gap-1 rounded px-2 py-1 text-left text-xs font-medium hover:bg-white/5 ${
                             activeFeature === node.path && !activePath ? "text-white" : "text-white/70"
@@ -282,16 +244,21 @@ export default function BuildStudioApp() {
                         >
                           {isCollapsed ? <ChevronRight size={12} className="shrink-0" /> : <ChevronDown size={12} className="shrink-0" />}
                           <FolderTree size={12} className="shrink-0 opacity-60" />
-                          <span className="truncate">{spec?.title ?? node.name}</span>
+                          <span className="truncate">{node.branch ? node.name : spec?.title ?? node.name}</span>
+                          {node.branch && (
+                            <span title={`Draft on ${node.branch} — read-only here; lands when the feature is promoted`} className="rounded bg-sky-500/20 px-1 text-[9px] font-normal normal-case text-sky-200">
+                              {node.branch}
+                            </span>
+                          )}
                         </button>
                         {!isCollapsed &&
                           node.children?.map((child) => (
                             <button
-                              key={child.path}
-                              onClick={() => openFile(child.path)}
+                              key={child.branch ? `${child.path}@${child.branch}` : child.path}
+                              onClick={() => openFile(child.path, child.branch ?? "")}
                               style={{ paddingLeft: 30 }}
                               className={`flex w-full items-center gap-1.5 rounded px-2 py-1 text-left text-xs transition-colors ${
-                                activePath === child.path ? "bg-white/15 text-white" : "text-white/65 hover:bg-white/10"
+                                activeKey === (child.branch ? `${child.path}@${child.branch}` : child.path) ? "bg-white/15 text-white" : "text-white/65 hover:bg-white/10"
                               }`}
                             >
                               <FileText size={12} className="shrink-0 opacity-60" />
@@ -306,7 +273,7 @@ export default function BuildStudioApp() {
                       key={node.path}
                       onClick={() => openFile(node.path)}
                       className={`flex w-full items-center gap-1.5 rounded px-2 py-1 text-left text-xs transition-colors ${
-                        activePath === node.path ? "bg-white/15 text-white" : "text-white/65 hover:bg-white/10"
+                        activeKey === node.path ? "bg-white/15 text-white" : "text-white/65 hover:bg-white/10"
                       }`}
                     >
                       <FileText size={12} className="shrink-0 opacity-60" />
@@ -354,8 +321,15 @@ export default function BuildStudioApp() {
         </div>
         {activePath && !loading && (
           <div className="flex items-center justify-between border-t border-white/10 px-4 py-1.5">
-            <span className="truncate text-[10px] text-white/35">{activePath}</span>
-            {editing ? (
+            <span className="truncate text-[10px] text-white/35">
+              {activePath}
+              {activeBranch ? ` @ ${activeBranch}` : ""}
+            </span>
+            {activeBranch ? (
+              <span title="Draft branches are read-only here; promote the feature to land them" className="rounded px-2 py-1 text-[10px] text-white/40">
+                read-only draft
+              </span>
+            ) : editing ? (
               <div className="flex gap-1">
                 <button
                   onClick={save}

@@ -1,7 +1,7 @@
 import "server-only";
 import * as specfs from "@/lib/dev/spec-fs";
 import { listStores } from "@/lib/specs/stores";
-import { hasCandidate } from "@/lib/specs/store-git";
+import { listDraftBranches, draftChangedFiles } from "@/lib/specs/store-git";
 import { ensureStoresOnce } from "@/lib/specs/seed";
 import {
   ARTIFACT_FILES,
@@ -163,6 +163,22 @@ export async function specTree(): Promise<SpecTreeNode[]> {
         children.push({ type: "file", name: e.name, path: e.path });
       }
     }
+    // Draft branches (020): features being worked on `bos/*` store branches,
+    // rendered read-only from base without any checkout or preview.
+    for (const branch of await listDraftBranches(store.root).catch(() => [] as string[])) {
+      const changed = await draftChangedFiles(store.root, branch).catch(() => [] as string[]);
+      const byFeature = new Map<string, SpecTreeNode[]>();
+      for (const rel of changed) {
+        const [featureId, ...rest] = rel.split("/");
+        if (!featureId || !rest.length) continue; // loose root files: skip in the tree
+        const files = byFeature.get(featureId) ?? [];
+        files.push({ type: "file", name: rest.join("/"), path: `${store.id}/${rel}`, branch });
+        byFeature.set(featureId, files);
+      }
+      for (const [featureId, files] of byFeature) {
+        children.push({ type: "feature", name: featureId, path: `${store.id}/${featureId}`, branch, children: files });
+      }
+    }
     groups.push({
       type: "group",
       name: store.id,
@@ -171,7 +187,6 @@ export async function specTree(): Promise<SpecTreeNode[]> {
       owner: store.owner,
       writable: store.writable,
       requiresPromote: store.requiresPromote,
-      hasCandidate: store.requiresPromote ? await hasCandidate(store.root) : false,
       children,
     });
   }

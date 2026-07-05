@@ -122,6 +122,8 @@ apps are discovered by listing the directory. See
 |---|---|---|
 | `BOS_DATA_DIR` | Runtime‑state root | `<cwd>/data` |
 | `BOS_APPS_DIR` | Installed‑apps (GitFS) root | `<cwd>/apps` |
+| `BOS_SPECS_ROOT` | Spec-store container root. The Supervisor sets it explicitly per version (020): previews → `<worktree>/specs` (store worktrees on the feature branch), base → the canonical root | `<cwd>/specs` |
+| `BOS_SPECS_SEED` | `0` disables store seeding (set by the Supervisor for previews — seeding is base's job) | — |
 | `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` | Seed the default provider | — |
 | `BOS_AGENT_MODEL` | Seed the default model | `claude-sonnet-4-6` |
 | `BOS_MCP_SERVERS` | Comma‑separated MCP endpoints to seed | — |

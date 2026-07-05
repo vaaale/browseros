@@ -34,6 +34,24 @@ checkout of `baseBranch`). A `preview` lives in a **branch‑named** worktree
 Keying by branch (a stable identity) rather than role keeps bookkeeping honest
 across promotes and lets an orphaned preview be recovered after a restart.
 
+### Spec stores are branch-coupled (020)
+
+One feature = **one branch name across the BOS repo and every spec store**. On
+provision/restore, each store under `BOS_SPECS_ROOT` is mounted into the code
+worktree at `specs/<store>/` as a **git worktree of that store** checked out on
+the same `bos/<feature>` branch (created off the store's default when missing).
+Real directories — no symlink for Turbopack to trip on — and new files reach the
+canonical store through commits (shared object DB/refs). The BOS repo gitignores
+`specs/`, so the candidate `git add -A` never stages the mounts. The Supervisor
+commits the store worktrees whenever it commits the code worktree; promote
+merges each store's feature branch into its default (after a `merge-tree`
+pre-check that runs **before** the code promote's point of no return); discard
+deletes the store branches. Version servers get an explicit spec root:
+previews `<worktree>/specs` (+ `BOS_SPECS_SEED=0` — seeding is base's job),
+base the canonical `BOS_SPECS_ROOT`. Base renders in-progress drafts from the
+store refs (Build Studio draft nodes), so spec work is visible without
+previewing the branch.
+
 ### Per-session routing (pin cookie)
 
 `pinnedVersion(req)` reads the `bos_pin` cookie — `preview` or a **branch name**. A
@@ -47,9 +65,11 @@ everyone else stays on `base`.
   developer agent to edit. `branch` is mandatory and must match
   `bos/<kebab-name>` with one to four lowercase dash-separated segments. An
   existing branch is checked out **with its history**; a missing branch is created
-  off base. Does **not** build.
+  off base. (Re)mounts the spec-store worktrees on the same branch. Does **not**
+  build.
 - `buildAndStart(v)` — **stop any existing server for this version first** (so a
-  rebuild never collides on its port), commit the worktree, `npm run build`, start
+  rebuild never collides on its port), commit the spec-store worktrees + the code
+  worktree, `npm run build`, start
   `next start -p <pooled port>`, then **health‑gate** via `/api/health`
   (`waitHealthy`, ≤120s). Before building, the Supervisor checks that the live
   checkout is still clean and on the base branch. If the developer harness touched
@@ -62,11 +82,12 @@ everyone else stays on `base`.
 - `stopPreview(branch)` — **Stop**: kill its server (awaiting exit) but keep the
   worktree, data clone, and feature branch so the work can be resumed.
 - `discardPreview(branch)` — **Discard**: kill the server, remove worktree + data
-  clone, and delete the feature branch. Promote also destroys the preview after the
-  branch is merged.
+  clone, and delete the feature branch — in the BOS repo **and** every spec store.
+  Promote also destroys the preview after the branch is merged.
 - `promote()` — **safe ordering**: do every fallible step while base still serves,
   advance the base ref **last**:
-  1. Require a clean main checkout; make the preview a clean descendant of base in
+  1. Require a clean main checkout; commit + `merge-tree`-pre-check the spec-store
+     branches (a spec conflict fails the promote here); make the preview a clean descendant of base in
      its own worktree (FF: nothing to do; non‑FF: `mergeTreeConflicts` pre‑check →
      rebase → rebuild + re‑health‑gate, else surface the conflicting files).
   2. Stop old base (**await exit**), start the candidate's code on `BOS_PORT_BASE`
@@ -75,8 +96,9 @@ everyone else stays on `base`.
   3. Point of no return: `git merge --ff-only` the base branch, **tag**
      (`bos/v<yyyy-mm-dd-hh_mm_ss>`), optional push
      (`BOS_PUSH_MODE=auto-on-promote`).
-  4. Adopt the swapped server as base, detach its worktree off the (now‑merged)
-     feature branch, delete that branch, drop the preview's data clone.
+  4. Adopt the swapped server as base, merge each spec store's feature branch into
+     its default (dropping the store branch), detach the worktree off the
+     (now‑merged) feature branch, delete that branch, drop the preview's data clone.
   There is **no `rollback`** action (a tag is left on every promote as a durable
   anchor for a future rollback feature).
 - Boot: `reconcileWorktrees()` prunes the Supervisor's leftover worktrees from a

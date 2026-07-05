@@ -130,7 +130,7 @@ const SEED: Omit<Skill, "id">[] = [
       "Golden rules:",
       "- The spec is the source of truth; never get ahead of an agreed spec.",
       "- You NEVER write BOS source. The `implement` step is ALWAYS dev_delegate.",
-      "- New specs you author go in the user store (user-specs). Editing a system spec (bos-system-specs) accumulates on a candidate branch and requires Promote; changing the constitution needs extra care.",
+      "- New specs you author go in the user store (user-specs). Edits commit-on-save to the store's checked-out branch — inside a feature preview that is the feature branch, promoted/discarded together with the code; changing the constitution needs extra care.",
       "- Keep specs and docs in sync; record drift in bos-system-specs/discrepancies.md.",
       "- New feature folders are numbered NNN-slug (next = highest existing number + 1 within the store).",
     ].join("\n"),
@@ -138,7 +138,7 @@ const SEED: Omit<Skill, "id">[] = [
       {
         name: "constitution.md",
         content:
-          "Step: constitution. Read commands/constitution.md and constitution-template.md with spec_template_read. Create or update the constitution at bos-system-specs/.specify/memory/constitution.md (spec_write/spec_edit) and bump the version + amended date line. This is global, not per-feature; it is a system-store edit, so it accumulates on the candidate branch until promoted — treat constitution changes with extra care.",
+          "Step: constitution. Read commands/constitution.md and constitution-template.md with spec_template_read. Create or update the constitution at bos-system-specs/.specify/memory/constitution.md (spec_write/spec_edit) and bump the version + amended date line. This is global, not per-feature; it is a system-store edit and commits on save — treat constitution changes with extra care.",
       },
       {
         name: "specify.md",

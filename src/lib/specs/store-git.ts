@@ -1,17 +1,20 @@
 import "server-only";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { ensureRepo, commitAll } from "@/lib/gitfs/store";
+import { commitAll } from "@/lib/gitfs/store";
 
-// Per-store git operations for spec versioning (018-external-spec-store). Specs
-// are inert content, so promote is a build-free `git merge` in the store's own
-// repo (mirrors the app-candidate model) — the Supervisor is NOT involved (no
-// build, no preview server, no port). User stores commit-on-save; system stores
-// accumulate on a candidate branch and promote/discard.
+// Per-store git operations for spec versioning (018-external-spec-store,
+// reworked by 020-branch-coupled-specs). Direct edits commit-on-save to the
+// store's default branch. In-progress feature work lives on `bos/*` DRAFT
+// branches — created by the Supervisor as store worktrees coupled to the code's
+// feature branch — which this module reads (list/diff/show) WITHOUT checking
+// anything out, so base can render drafts from any branch. Promote/discard of
+// draft branches is the Supervisor's job (coupled to the code promote); the old
+// global `spec-candidate` branch is retired.
 
 const exec = promisify(execFile);
 const IDENTITY = ["-c", "user.name=BrowserOS", "-c", "user.email=bos@localhost"];
-const CANDIDATE = "spec-candidate";
+const DRAFT_BRANCH = /^bos\/[a-z0-9/-]+$/;
 
 async function git(root: string, args: string[]): Promise<string> {
   const { stdout } = await exec("git", [...IDENTITY, ...args], {
@@ -22,69 +25,58 @@ async function git(root: string, args: string[]): Promise<string> {
   return stdout.trim();
 }
 
-async function currentBranch(root: string): Promise<string> {
-  return git(root, ["rev-parse", "--abbrev-ref", "HEAD"]);
+function requireDraftBranch(branch: string): string {
+  if (!DRAFT_BRANCH.test(branch)) throw new Error(`Not a draft branch: "${branch}" (expected bos/<name>).`);
+  return branch;
 }
 
-async function branchExists(root: string, branch: string): Promise<boolean> {
+/** The store's default branch = its canonical checkout (drafts live in worktrees). */
+async function defaultBranch(root: string): Promise<string> {
   try {
-    await git(root, ["rev-parse", "--verify", `refs/heads/${branch}`]);
-    return true;
+    return await git(root, ["symbolic-ref", "--short", "HEAD"]);
   } catch {
-    return false;
+    return "master";
   }
 }
 
-/** The store's non-candidate default branch (main/master, whichever git init made). */
-async function defaultBranch(root: string): Promise<string> {
-  const out = await git(root, ["branch", "--format=%(refname:short)"]).catch(() => "");
-  const branches = out
-    .split("\n")
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .filter((b) => b !== CANDIDATE);
-  if (branches.includes("main")) return "main";
-  if (branches.includes("master")) return "master";
-  return branches[0] || "master";
-}
-
-/** Commit-on-save for a writable, no-promote store (e.g. the user store). */
+/** Commit-on-save for direct (base-side) edits — all writable stores. */
 export async function commitOnSave(root: string, message: string): Promise<void> {
   await commitAll(root, message);
 }
 
-/** Ensure the store is on its candidate branch (created off the current default
- *  branch if absent) so in-place edits accumulate there for review. */
-export async function beginCandidate(root: string): Promise<string> {
-  await ensureRepo(root);
-  if ((await currentBranch(root)) === CANDIDATE) return CANDIDATE;
-  if (await branchExists(root, CANDIDATE)) await git(root, ["checkout", CANDIDATE]);
-  else await git(root, ["checkout", "-b", CANDIDATE]);
-  return CANDIDATE;
-}
-
-/** Whether the store currently has an in-progress candidate. */
-export async function hasCandidate(root: string): Promise<boolean> {
-  return branchExists(root, CANDIDATE);
-}
-
-/** Promote: commit pending edits, merge the candidate into the default branch
- *  (build-free), delete the candidate. */
-export async function promoteCandidate(root: string): Promise<{ promoted: boolean }> {
-  await commitAll(root, "spec changes");
-  if (!(await branchExists(root, CANDIDATE))) return { promoted: false };
+/** Draft branches (`bos/*`) whose tree differs from the store's default branch. */
+export async function listDraftBranches(root: string): Promise<string[]> {
+  let out = "";
+  try {
+    out = await git(root, ["branch", "--list", "bos/*", "--format=%(refname:short)"]);
+  } catch {
+    return [];
+  }
   const base = await defaultBranch(root);
-  await git(root, ["checkout", base]);
-  await git(root, ["merge", "--no-edit", CANDIDATE]);
-  await git(root, ["branch", "-D", CANDIDATE]).catch(() => {});
-  return { promoted: true };
+  const drafts: string[] = [];
+  for (const b of out.split("\n").map((s) => s.trim()).filter(Boolean)) {
+    if (!DRAFT_BRANCH.test(b)) continue;
+    const diff = await git(root, ["diff", "--name-only", `${base}...${b}`]).catch(() => "");
+    if (diff) drafts.push(b);
+  }
+  return drafts;
 }
 
-/** Discard: return to the default branch and drop the candidate (losing its edits). */
-export async function discardCandidate(root: string): Promise<{ discarded: boolean }> {
-  if (!(await branchExists(root, CANDIDATE))) return { discarded: false };
+/** Files changed on a draft branch since it diverged from the default branch. */
+export async function draftChangedFiles(root: string, branch: string): Promise<string[]> {
+  requireDraftBranch(branch);
   const base = await defaultBranch(root);
-  await git(root, ["checkout", "-f", base]);
-  await git(root, ["branch", "-D", CANDIDATE]).catch(() => {});
-  return { discarded: true };
+  const out = await git(root, ["diff", "--name-only", `${base}...${branch}`]).catch(() => "");
+  return out.split("\n").map((s) => s.trim()).filter(Boolean);
+}
+
+/** Read a file's content at a draft branch (no checkout). `rel` must already be
+ *  store-jailed by the caller (spec-fs). */
+export async function readFileAtBranch(root: string, branch: string, rel: string): Promise<string> {
+  requireDraftBranch(branch);
+  const norm = rel.replace(/\\/g, "/").replace(/^\/+/, "");
+  if (!norm || norm.split("/").some((seg) => seg === ".." || seg.startsWith("-"))) {
+    throw new Error(`Invalid path for branch read: "${rel}"`);
+  }
+  return git(root, ["show", `${branch}:${norm}`]);
 }

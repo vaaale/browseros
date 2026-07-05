@@ -19,7 +19,8 @@ export interface StoreManifest {
   owner: StoreOwner;
   /** Whether spec-fs may write to this store at all. */
   writable: boolean;
-  /** Whether writes go through a candidate branch + promote (vs commit-on-save). */
+  /** Retained as metadata (020): review happens on feature branches coupled to
+   *  the code promote; writes commit-on-save regardless of this flag. */
   requiresPromote: boolean;
 }
 

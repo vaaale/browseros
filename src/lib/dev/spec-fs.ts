@@ -3,15 +3,17 @@ import { promises as fs } from "fs";
 import path from "path";
 import { writeFileAtomic } from "@/os/atomic-write";
 import { listStores, getStore, STORE_MANIFEST, type SpecStore } from "@/lib/specs/stores";
-import { beginCandidate, commitOnSave } from "@/lib/specs/store-git";
+import { commitOnSave, readFileAtBranch } from "@/lib/specs/store-git";
 import { ensureStoresOnce } from "@/lib/specs/seed";
 
 // Multi-root spec filesystem (018-external-spec-store). A spec-fs path is
 // `<storeId>/<relPath>`: the first segment selects a discovered spec store and
 // the remainder is jailed to that store's root. Reads span all stores; a write to
-// a non-writable store is refused, and a write to a store that requires promote is
-// routed onto its candidate branch (edits accumulate there until promoted). Build
-// Studio authors specs here and can never reach BOS source or secrets.
+// a non-writable store is refused. Writes commit-on-save to the checked-out
+// branch — the store's default on base, the feature branch inside a preview's
+// mounted store worktree (020-branch-coupled-specs). Draft branches are readable
+// without a checkout via readFileAt. Build Studio authors specs here and can
+// never reach BOS source or secrets.
 
 const MAX_READ_BYTES = 512 * 1024;
 const MAX_SEARCH_RESULTS = 200;
@@ -93,13 +95,17 @@ export async function readFile(p: string): Promise<string> {
   return buf.toString("utf8");
 }
 
-/** Ensure a store is ready to receive a write, or throw with a clear reason.
- *  Stores that require promote are switched onto their candidate branch first. */
+/** Ensure a store is ready to receive a write, or throw with a clear reason. */
 async function prepareWrite(store: SpecStore): Promise<void> {
   if (!store.writable) {
     throw new Error(`Spec store "${store.id}" is read-only (${store.owner}); it cannot be edited here.`);
   }
-  if (store.requiresPromote) await beginCandidate(store.root);
+}
+
+/** Read a file's content at a draft branch of its store (no checkout). */
+export async function readFileAt(p: string, branch: string): Promise<string> {
+  const { store, rel } = await resolveInStore(p);
+  return readFileAtBranch(store.root, branch, rel);
 }
 
 export async function writeFile(p: string, content: string): Promise<string> {

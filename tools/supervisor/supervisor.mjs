@@ -50,9 +50,11 @@ const PIN_COOKIE = "bos_pin";
 // promote merges it to the base branch, discard drops it. Orthogonal to the
 // BOS-code preview flow above and needs no extra port/proxy.
 const APPS_REPO = process.env.BOS_APPS_DIR || path.join(REPO, "apps");
-// Container of external spec stores (018). Mounted read-only into each preview
-// worktree at `specs/` so the developer harness can READ the spec it implements
-// (and the constitution) even though specs no longer live in the source tree.
+// Container of external spec stores (018/020). Each store is mounted into a
+// preview worktree at `specs/<store>/` as a GIT WORKTREE of that store, checked
+// out on the SAME feature branch as the code (020-branch-coupled-specs) — one
+// feature = one branch name across the BOS repo and every store. Promote merges
+// both; discard drops both.
 const SPECS_ROOT = process.env.BOS_SPECS_ROOT || path.join(REPO, "specs");
 const APP_CANDIDATE_BRANCH = "app-candidate";
 const GIT_IDENTITY = ["-c", "user.name=BrowserOS", "-c", "user.email=bos@localhost"];
@@ -152,6 +154,7 @@ async function restorePreviews() {
     if (previews.has(branch)) continue;
     try {
       const wt = await addWorktreeForBranch(branch);
+      await mountSpecStores(wt, branch).catch((e) => slog("warn", "restore", `spec mount failed for ${branch}: ${e?.message || e}`, { branch }));
       const clone = clonePath(branch);
       await provisionClone(clone);
       const port = await allocPreviewPort();
@@ -264,26 +267,134 @@ async function hydrateWorktree(wt) {
   }
 }
 
-// Mount the external spec stores into a worktree at `specs/` (018) as a read-WRITE
-// SYMLINK to the canonical SPECS_ROOT, so the developer harness reads the spec it
-// implements at `specs/<store>/<id>/…` AND its edits flow straight back to the
-// shared store (Build Studio delegates spec authoring to the harness, which runs a
-// more capable model). A symlink — not a copy — because we WANT writes to reach the
-// canonical store; git canonicalizes the link, so committing (harness raw git, or
-// BOS's store-git.ts) lands in the real per-store repo. Safe unlike a node_modules
-// symlink: `specs/` isn't in Turbopack's module graph, and the BOS repo gitignores
-// `specs/` so the link is never staged into the candidate `git add -A`. Re-linking
-// on every begin is free (always reflects live content) and never destroys store
-// contents. No-op when there is no spec store yet.
-async function mountSpecStores(wt) {
-  const dst = path.join(wt, "specs");
+// ---------------------------------------------------------------- spec stores (020-branch-coupled-specs)
+// Every spec store (a git repo at SPECS_ROOT/<store>) is mounted into the code
+// worktree at `specs/<store>/` as a GIT WORKTREE of the store, checked out on the
+// code's feature branch. Real directories, so Turbopack never sees a symlink; new
+// files propagate through commits (shared object DB + refs), so the canonical
+// store sees spec work as soon as it is committed. The BOS repo gitignores
+// `specs/`, so `git add -A` in the code worktree never stages the mounts.
+
+// A store = a subdirectory of SPECS_ROOT with its own `.git` and a manifest
+// (same discovery rule as src/lib/specs/stores.ts — never the container itself).
+async function listSpecStores() {
+  let entries;
   try {
-    await fs.access(SPECS_ROOT);
+    entries = await fs.readdir(SPECS_ROOT, { withFileTypes: true });
   } catch {
-    return; // no stores to mount
+    return [];
   }
-  await fs.rm(dst, { recursive: true, force: true }).catch(() => {});
-  await fs.symlink(SPECS_ROOT, dst, "dir");
+  const stores = [];
+  for (const e of entries) {
+    if (!e.isDirectory() || e.name.startsWith(".")) continue;
+    const root = path.join(SPECS_ROOT, e.name);
+    try {
+      await fs.access(path.join(root, ".git"));
+      await fs.access(path.join(root, "spec-store.json"));
+      stores.push({ id: e.name, root });
+    } catch {
+      /* not a store */
+    }
+  }
+  return stores;
+}
+
+// The store's default branch = whatever its canonical checkout is on (stores are
+// kept on their default branch; feature work lives in the mounted worktrees).
+async function storeDefaultBranch(root) {
+  return (await gitTry(["symbolic-ref", "--short", "HEAD"], root)) || "master";
+}
+
+// Mount (or refresh) the store worktrees for `branch` at `wt/specs/<store>`.
+// Replaces a legacy symlink from the pre-020 design. Reuses an intact existing
+// mount; otherwise prunes stale registrations and adds the worktree — on the
+// existing store branch, or a new one off the store's default.
+async function mountSpecStores(wt, branch) {
+  const container = path.join(wt, "specs");
+  const legacy = await fs.lstat(container).catch(() => null);
+  if (legacy?.isSymbolicLink()) await fs.rm(container, { force: true });
+  const stores = await listSpecStores();
+  if (!stores.length) return;
+  await fs.mkdir(container, { recursive: true });
+  for (const s of stores) {
+    const dst = path.join(container, s.id);
+    const mounted = await fs.access(path.join(dst, ".git")).then(() => true).catch(() => false);
+    if (mounted && (await gitTry(["rev-parse", "--abbrev-ref", "HEAD"], dst)) === branch) continue;
+    await fs.rm(dst, { recursive: true, force: true }).catch(() => {});
+    await gitTry(["worktree", "prune"], s.root);
+    if (await gitTry(["rev-parse", "--verify", `refs/heads/${branch}`], s.root)) {
+      await git(["worktree", "add", dst, branch], s.root);
+    } else {
+      await git(["worktree", "add", "-b", branch, dst, await storeDefaultBranch(s.root)], s.root);
+    }
+  }
+}
+
+// Commit spec edits in every mounted store worktree (mirrors the code-worktree
+// commit in buildAndStart): spec work must be on the store's refs — visible from
+// base, safe from a worktree teardown — before we build or promote.
+async function commitSpecStores(wt, branch) {
+  for (const s of await listSpecStores()) {
+    const dst = path.join(wt, "specs", s.id);
+    if (!(await fs.access(path.join(dst, ".git")).then(() => true).catch(() => false))) continue;
+    await gitTry(["add", "-A"], dst);
+    await gitTry([...GIT_IDENTITY, "commit", "-m", `spec candidate (${branch})`], dst);
+  }
+}
+
+// Pre-check: can every store's feature branch merge cleanly into its default?
+// Returns null when clean, else a description. Run BEFORE the code promote's
+// point of no return so a spec conflict never strands a half-promoted feature.
+async function specStoreConflicts(branch) {
+  for (const s of await listSpecStores()) {
+    if (!(await gitTry(["rev-parse", "--verify", `refs/heads/${branch}`], s.root))) continue;
+    const base = await storeDefaultBranch(s.root);
+    const mb = await gitTry(["merge-base", base, branch], s.root);
+    if (!mb) continue;
+    try {
+      await exec("git", ["merge-tree", "--write-tree", `--merge-base=${mb}`, base, branch], { cwd: s.root, maxBuffer: 8 * 1024 * 1024 });
+    } catch (e) {
+      const out = `${String(e.stdout || "")}\n${String(e.stderr || "")}`.trim();
+      return `spec store "${s.id}": branch ${branch} conflicts with ${base}:\n${out || "(merge conflicts)"}`;
+    }
+  }
+  return null;
+}
+
+// Remove a store's worktree registration for `dst` (dir may already be gone).
+async function removeStoreWorktree(root, dst) {
+  await gitTry(["worktree", "remove", "--force", dst], root);
+  await gitTry(["worktree", "prune"], root);
+}
+
+// Merge each store's feature branch into its default (build-free — specs are
+// inert content), then drop the branch + its worktree registration. Called after
+// the code promote succeeds. A failure here is logged loudly and leaves the
+// branch for manual merge — it must not roll back an already-promoted base.
+async function promoteSpecStores(branch, wt) {
+  for (const s of await listSpecStores()) {
+    if (!(await gitTry(["rev-parse", "--verify", `refs/heads/${branch}`], s.root))) continue;
+    await removeStoreWorktree(s.root, path.join(wt, "specs", s.id));
+    try {
+      await git([...GIT_IDENTITY, "merge", "--no-edit", branch], s.root);
+      await gitTry(["branch", "-D", branch], s.root);
+      slog("info", "promote", `spec store ${s.id}: merged ${branch}`, { branch });
+    } catch (e) {
+      await gitTry(["merge", "--abort"], s.root);
+      slog("error", "promote", `spec store ${s.id}: merge of ${branch} FAILED after code promote — merge manually in ${s.root}: ${e?.message || e}`, { branch });
+    }
+  }
+}
+
+// Drop the store feature branches + worktree registrations (Discard). Committed
+// canonical history is untouched; uncommitted worktree edits die with the
+// worktree, same as code.
+async function discardSpecStores(branch, wt) {
+  for (const s of await listSpecStores()) {
+    if (wt) await removeStoreWorktree(s.root, path.join(wt, "specs", s.id));
+    else await gitTry(["worktree", "prune"], s.root);
+    await gitTry(["branch", "-D", branch], s.root);
+  }
 }
 
 // Create/replace the BASE worktree: detached at `commit` so it never conflicts with
@@ -322,7 +433,19 @@ function startProc(v) {
     // BOS_CANONICAL_DATA lets a version persist cross-version state (e.g. chat
     // conversation metadata) to canonical data even when it runs on a throwaway
     // preview clone, so it survives Stop/promote.
-    env: { ...process.env, PORT: String(v.port), BOS_DATA_DIR: v.dataDir, BOS_CANONICAL_DATA: CANONICAL_DATA, BOS_VERSION_LABEL: v.role, BOS_BASE_BRANCH: baseBranch },
+    // Explicit spec root per role (020): previews read/write their own mounted
+    // store worktrees (feature branch); base reads the canonical stores. Previews
+    // must not seed stores — a seed commit would land on the feature branch.
+    env: {
+      ...process.env,
+      PORT: String(v.port),
+      BOS_DATA_DIR: v.dataDir,
+      BOS_CANONICAL_DATA: CANONICAL_DATA,
+      BOS_VERSION_LABEL: v.role,
+      BOS_BASE_BRANCH: baseBranch,
+      BOS_SPECS_ROOT: v.role === "preview" ? path.join(v.worktree, "specs") : SPECS_ROOT,
+      ...(v.role === "preview" ? { BOS_SPECS_SEED: "0" } : {}),
+    },
     stdio: "inherit",
     // detached: true puts the child in its own process group so stopProc can
     // kill the ENTIRE group (npx + its next-server child) via negative PID.
@@ -424,6 +547,9 @@ function runBuild(cwd, branch) {
 // throwing, so callers (e.g. /build) can surface WHY.
 async function buildAndStart(v, ctx = {}) {
   await stopProc(v);
+  // Commit spec-store worktrees FIRST (020): spec work belongs on the store's
+  // refs (visible from base, teardown-safe) the moment the candidate builds.
+  await commitSpecStores(v.worktree, v.branch);
   await git(["add", "-A"], v.worktree).catch(() => {});
   await git([...GIT_IDENTITY, "commit", "-m", `BOS candidate (${v.branch})`], v.worktree).catch((e) => {
     const detail = String(e?.stderr || e?.stdout || e?.message || e || "");
@@ -509,6 +635,7 @@ function startBaseDevProc(v) {
       BOS_CANONICAL_DATA: CANONICAL_DATA,
       BOS_VERSION_LABEL: "base",
       BOS_BASE_BRANCH: baseBranch,
+      BOS_SPECS_ROOT: SPECS_ROOT,
       BOS_SUPERVISOR_URL: `http://127.0.0.1:${PUBLIC_PORT}`,
     },
     stdio: "inherit",
@@ -589,11 +716,13 @@ async function discardPreview(branch) {
   const p = previews.get(branch);
   previews.delete(branch);
   if (!p) {
+    await discardSpecStores(branch, null);
     await gitTry(["branch", "-D", branch]);
     log(`discarded preview ${branch} (branch deleted)`);
     return;
   }
   await stopProc(p);
+  await discardSpecStores(branch, p.worktree);
   await gitTry(["worktree", "remove", "--force", p.worktree]);
   await fs.rm(p.dataDir, { recursive: true, force: true }).catch(() => {});
   await gitTry(["branch", "-D", p.branch]);
@@ -602,9 +731,9 @@ async function discardPreview(branch) {
 
 async function beginPreview(branch) {
   const p = await provisionPreview(branch);
-  // (Re)mount the spec stores read-only on every begin — fresh provision or reuse —
-  // so the harness always sees the current spec content.
-  await mountSpecStores(p.worktree).catch((e) => slog("warn", "begin", `spec mount failed for ${branch}: ${e?.message || e}`, { branch }));
+  // (Re)mount the store worktrees on every begin — fresh provision or reuse — so
+  // the harness reads/writes specs on the feature branch at `specs/<store>/…`.
+  await mountSpecStores(p.worktree, branch).catch((e) => slog("warn", "begin", `spec mount failed for ${branch}: ${e?.message || e}`, { branch }));
   return p;
 }
 
@@ -649,6 +778,13 @@ async function promote(branch) {
     throw new Error(`base checkout (${REPO}) has uncommitted changes — commit, stash, or discard them before promoting:\n${dirty}`);
   }
 
+  // 020: spec work promotes WITH the code. Commit any pending store-worktree
+  // edits, then pre-check the store merges — a spec conflict must fail the
+  // promote before anything irreversible happens.
+  await commitSpecStores(cand.worktree, cand.branch);
+  const specConflicts = await specStoreConflicts(cand.branch);
+  if (specConflicts) throw new Error(`promote blocked — ${specConflicts}`);
+
   // 1) Make the preview a clean descendant of base, in its own worktree. FF: already
   //    ahead → nothing to do. Non-FF: rebase onto base, then rebuild + re-gate.
   if ((await gitTry(["merge-base", "--is-ancestor", baseBranch, "HEAD"], cand.worktree)) === null) {
@@ -687,6 +823,8 @@ async function promote(branch) {
     const changed = (prevBaseCommit ? await gitTry(["diff", "--name-only", `${prevBaseCommit}..${newCommit}`], REPO) : "") || "";
     const depsChanged = /(^|\n)(package(-lock)?\.json|pnpm-lock\.yaml|yarn\.lock)/.test(changed);
     const configChanged = /(^|\n)(next\.config\.|tsconfig|\.env)/.test(changed);
+    // Land the coupled spec branches now that the code promote is committed.
+    await promoteSpecStores(cand.branch, cand.worktree);
     // Reap the promoted preview before touching base (frees resources / the branch).
     await stopProc(cand);
     await gitTry(["worktree", "remove", "--force", cand.worktree]);
@@ -751,6 +889,9 @@ async function promote(branch) {
   //    can be deleted and base isn't sitting "on" a feature branch. Clean up.
   base = swapped;
   await stopProc(cand); // the preview's pool-port server is now redundant — reap it so it doesn't leak
+  // Land the coupled spec branches; this also unregisters the store worktrees
+  // inside the adopted base worktree (the new base reads the canonical stores).
+  await promoteSpecStores(cand.branch, swapped.worktree);
   await gitTry(["checkout", "--detach"], swapped.worktree);
   base.branch = baseBranch;
   if (oldBase?.worktree && oldBase.worktree !== swapped.worktree) await gitTry(["worktree", "remove", "--force", oldBase.worktree]);
@@ -792,6 +933,9 @@ async function listBranches() {
 // `git worktree add` collisions and stale-port confusion.
 async function reconcileWorktrees() {
   await gitTry(["worktree", "prune"]);
+  // Store worktrees lived inside the removed code worktrees — drop their stale
+  // registrations so a later mount/branch-delete can't fail on them (020).
+  for (const s of await listSpecStores()) await gitTry(["worktree", "prune"], s.root);
   const list = (await gitTry(["worktree", "list", "--porcelain"])) || "";
   for (const line of list.split("\n")) {
     if (!line.startsWith("worktree ")) continue;

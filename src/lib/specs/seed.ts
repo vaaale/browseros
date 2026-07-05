@@ -73,8 +73,12 @@ async function ensureUserStore(dir: string): Promise<void> {
   if (fresh) await commitAll(dir, "init user spec store");
 }
 
-/** Idempotently ensure the built-in system + user spec stores exist. */
+/** Idempotently ensure the built-in system + user spec stores exist. Preview
+ *  servers run with BOS_SPECS_SEED=0 (020): their spec root is a set of store
+ *  WORKTREES on a feature branch, and a seed commit there would pollute it —
+ *  seeding is base's job against the canonical stores. */
 export async function ensureStores(): Promise<void> {
+  if (process.env.BOS_SPECS_SEED === "0") return;
   const root = specsRoot();
   await fs.mkdir(root, { recursive: true });
   await ensureSystemStore(path.join(root, SYSTEM_STORE_ID));

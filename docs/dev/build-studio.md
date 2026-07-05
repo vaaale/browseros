@@ -7,17 +7,25 @@ Developer.
 
 ## Pieces
 
-- **Spec stores** (018) — specs live in external git repos under `BOS_SPECS_ROOT`
+- **Spec stores** (018/020) — specs live in external git repos under `BOS_SPECS_ROOT`
   (default `/specs`, gitignored), each a self-describing folder (git repo + `spec-store.json`
-  manifest declaring `owner`/`writable`/`requiresPromote`). Discovery + manifest:
-  `src/lib/specs/stores.ts`; container config `src/os/specs-dir.ts`; seeding (system store
-  from `seed/spec-store/`, additive) `src/lib/specs/seed.ts`; per-store build-free
-  candidate/promote `src/lib/specs/store-git.ts`.
+  manifest declaring `owner`/`writable`/`requiresPromote` — the latter retained as metadata).
+  Discovery + manifest: `src/lib/specs/stores.ts`; container config `src/os/specs-dir.ts`;
+  seeding (system store from `seed/spec-store/`, additive; skipped when `BOS_SPECS_SEED=0` —
+  previews) `src/lib/specs/seed.ts`; commit-on-save + draft-branch reads (list/diff/`git show`)
+  `src/lib/specs/store-git.ts`.
+- **Branch-coupled drafts** (020) — feature work happens on `bos/*` branches shared
+  with the BOS repo: the Supervisor mounts each store into the preview worktree as a
+  git worktree on the feature branch; promote/discard of specs rides the code
+  promote/discard (see `self-modification/live-version-control.md`). The old global
+  `spec-candidate` branch is retired. Base renders drafts read-only from the store
+  refs (no checkout) as branch-badged nodes in the spec tree.
 - **Spec jail** — `src/lib/dev/spec-fs.ts`: MULTI-ROOT `list/read/write/edit/search` over
   the stores. Paths are STORE-PREFIXED `<storeId>/<rel>`; reads span all stores, writes are
-  refused for read-only stores and routed onto a candidate branch for promote-gated stores.
-  The spec-kit engine (templates/commands) stays in source and is read via `readTemplate`/
-  `listTemplates`. It cannot reach BOS source or secrets.
+  refused for read-only stores and commit-on-save to the store's checked-out branch
+  (base: the default branch; preview: the feature branch). `readFileAt(path, branch)`
+  reads a draft branch. The spec-kit engine (templates/commands) stays in source and is
+  read via `readTemplate`/`listTemplates`. It cannot reach BOS source or secrets.
 - **Spec model** — `src/lib/specs/types.ts` (framework-free) and
   `src/lib/specs/pipeline.ts` (iterates stores; derives per-feature pipeline status, parses
   `tasks.md` progress, and `nextFeatureId()` for `NNN-slug` numbering within a store).
@@ -33,8 +41,9 @@ Developer.
   add references or companion skills. An external integration (e.g. a future GitLab
   integration) needs BOTH a skill (instructions) and a tool/MCP (the capability).
 - **API** — `src/app/api/specs/route.ts`: `GET` groups(stores)+status / artifact (store-prefixed
-  `path`), `PUT` artifact (atomic), `POST {action:"promote"|"discard"|"status", store}` for the
-  build-free candidate promote/discard. Server-only; the app talks to it over `fetch`.
+  `path`, optional `branch` for read-only draft reads), `PUT` artifact (atomic). No POST:
+  spec promotion is branch-coupled to the code promote (020). Server-only; the app talks
+  to it over `fetch`.
 - **App** — `src/apps/build-studio/` (`manifest.ts` + `index.tsx`): a three-pane layout —
   spec tree (left) + pipeline strip & artifact view/edit (centre) + the embedded
   **agent chat** (right, `<AssistantChat agentId={buildStudioAgent}>`, per `012`/`013`).

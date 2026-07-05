@@ -49,7 +49,7 @@ export function SpecActions() {
 
   useCopilotAction({
     name: "spec_write",
-    description: "Create or overwrite a specification artifact by STORE-PREFIXED path. New specs go in the user store; system-store edits require Promote. Provide the FULL file content.",
+    description: "Create or overwrite a specification artifact by STORE-PREFIXED path. New specs go in the user store; edits commit-on-save to the store's checked-out branch. Provide the FULL file content.",
     parameters: [
       { name: "path", type: "string", description: "Store-prefixed artifact path, e.g. 'user-specs/003-x/spec.md'", required: true },
       { name: "content", type: "string", description: "Full file content", required: true },
