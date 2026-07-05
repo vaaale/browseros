@@ -362,6 +362,56 @@ const REGISTRATIONS: ConfigRegistration[] = [
   },
   {
     schema: {
+      namespace: "compaction",
+      title: "Context Compaction",
+      description:
+        "Server-side view transformation on what is sent to the model. Layer 1 clears older tool results in stable batches once estimated tokens cross clearThreshold. Layer 2 asynchronously summarizes past summarizeThreshold. Layer 3 (hard-limit) truncates pair-safely as a last resort so the provider never sees a context-length overflow. The client-owned transcript at /Documents/Chats is never rewritten.",
+      order: 16,
+      fields: [
+        { key: "enabled", label: "Enabled", type: "boolean", description: "Master switch. When off, the middleware is a pass-through and every request goes to the provider verbatim." },
+        { key: "assumedContextTokens", label: "Assumed context window (tokens)", type: "number", description: "Used when the provider does not declare a maxInputTokens. Default 128000." },
+        { key: "clearThreshold", label: "Clear threshold (fraction of budget)", type: "number", description: "Estimated tokens above this fraction trigger Layer 1 tool-result clearing. Default 0.50." },
+        { key: "summarizeThreshold", label: "Summarize threshold (fraction of budget)", type: "number", description: "Estimated tokens above this fraction schedule Layer 2 (async summarization). Default 0.75." },
+        { key: "hardLimit", label: "Hard limit (fraction of budget)", type: "number", description: "Estimated tokens above this fraction trigger the synchronous pair-safe truncation fallback. Default 0.92." },
+        { key: "keepToolResults", label: "Keep last N tool-result pairs", type: "number", description: "Tool-results at positions older than the newest N pairs are eligible for clearing. Default 5." },
+        { key: "keepTailMessages", label: "Minimum tail messages", type: "number", description: "The kept tail is at least this many messages, even if they exceed the tail-budget fraction. Default 10." },
+        { key: "tailBudgetFraction", label: "Tail-budget fraction", type: "number", description: "Target size of the kept tail expressed as a fraction of the effective budget. Default 0.20." },
+        { key: "unrecoverableTools", label: "Unrecoverable tools", type: "textarea", description: "Comma or newline separated list of tool names whose results must never be cleared." },
+        { key: "model", label: "Summarizer model override", type: "text", description: "Optional cheaper model id for the summarizer. Leave blank to use the current provider default." },
+        { key: "lockStalenessMs", label: "Lock staleness (ms)", type: "number", description: "How long a summarization lock is honored before another turn is allowed to reclaim it. Default 600000 (10 min)." },
+      ],
+    },
+    load: async () => {
+      const s = await readNamespace("compaction");
+      return {
+        enabled: s.enabled !== false,
+        assumedContextTokens: typeof s.assumedContextTokens === "number" ? s.assumedContextTokens : 128_000,
+        clearThreshold: typeof s.clearThreshold === "number" ? s.clearThreshold : 0.5,
+        summarizeThreshold: typeof s.summarizeThreshold === "number" ? s.summarizeThreshold : 0.75,
+        hardLimit: typeof s.hardLimit === "number" ? s.hardLimit : 0.92,
+        keepToolResults: typeof s.keepToolResults === "number" ? s.keepToolResults : 5,
+        keepTailMessages: typeof s.keepTailMessages === "number" ? s.keepTailMessages : 10,
+        tailBudgetFraction: typeof s.tailBudgetFraction === "number" ? s.tailBudgetFraction : 0.2,
+        unrecoverableTools: Array.isArray(s.unrecoverableTools)
+          ? (s.unrecoverableTools as unknown[]).filter((v): v is string => typeof v === "string").join(", ")
+          : typeof s.unrecoverableTools === "string" ? s.unrecoverableTools : "",
+        model: typeof s.model === "string" ? s.model : "",
+        lockStalenessMs: typeof s.lockStalenessMs === "number" ? s.lockStalenessMs : 600_000,
+      };
+    },
+    save: async (patch) => {
+      const next: Record<string, unknown> = { ...patch };
+      if (typeof next.unrecoverableTools === "string") {
+        next.unrecoverableTools = (next.unrecoverableTools as string)
+          .split(/[,\s;]+/)
+          .map((s) => s.trim())
+          .filter(Boolean);
+      }
+      await patchNamespace("compaction", next);
+    },
+  },
+  {
+    schema: {
       namespace: "logging",
       title: "Logs",
       description:

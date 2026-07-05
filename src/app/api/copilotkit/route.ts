@@ -14,6 +14,7 @@ import { buildRuntimeOptions } from "@/lib/agent/runtime";
 import { OpenAIChatAdapter } from "@/lib/agent/openai-chat-adapter";
 import { composeInstructions } from "@/lib/agent/instructions";
 import { getConversationActiveFeatureBranch } from "@/lib/agent/conversations-server";
+import { withCompaction } from "@/lib/agent/compaction/middleware";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
@@ -62,7 +63,8 @@ export async function POST(req: NextRequest) {
   // dropped. When an agent is pinned, construct the default agent ourselves WITH
   // the composed prompt so it actually reaches the model. Runtime-level MCP/action
   // tools are still assigned to this agent by CopilotRuntime.
-  const model = agentId ? serviceAdapter.getLanguageModel?.() : undefined;
+  const rawModel = agentId ? serviceAdapter.getLanguageModel?.() : undefined;
+  const model = rawModel && convId ? withCompaction(rawModel, convId) : rawModel;
   let prompt = agentId ? await composeInstructions(agentId) : "";
   if (model && convId) {
     // Surface this conversation's active feature branch so the model delegates BOS

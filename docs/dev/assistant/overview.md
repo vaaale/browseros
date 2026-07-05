@@ -90,3 +90,54 @@ delegate a focused follow‑up" message rather than silently stopping.
   and is **masked** in API responses — never echo a key to the client.
 - `hasCredentials()` gates server features that need a model (review, improve,
   title generation).
+
+---
+
+## Context compaction (`src/lib/agent/compaction/`)
+
+Long conversations are compacted **as a pure view transform** over the model input
+array — the client‑owned transcript at `/Documents/Chats/<id>.json` is never
+rewritten (spec 022 SC‑006). Wiring point is one line in `route.ts`:
+
+```ts
+const rawModel = agentId ? serviceAdapter.getLanguageModel?.() : undefined;
+const model = rawModel && convId ? withCompaction(rawModel, convId) : rawModel;
+```
+
+`withCompaction(model, convId)` uses `wrapLanguageModel` + `transformParams` from
+`ai` v6. Inside the middleware the compactor applies **three layers** ordered by
+increasing token pressure:
+
+| Layer | Trigger (fraction of budget) | What it does | Cost |
+|-------|------------------------------|--------------|------|
+| 1. Placeholder clearing | `clearThreshold` (default 0.50) | Older tool_results (beyond the newest N pairs) get one‑line placeholders. Kept deterministic → prompt‑cache hits still land. | 0 LLM calls |
+| 2. Async summarization | `summarizeThreshold` (default 0.75) | Fire‑and‑forget: an out‑of‑band summarizer runs against the client transcript, records the boundary + span hash + summary text in the sidecar. From the next turn on the view splices `<conversation_summary>…</conversation_summary>` in place of the summarized span. | 1 LLM call per boundary advance |
+| 3. Mechanical fallback | `hardLimit` (default 0.92) | Synchronous truncation to keep the first user message + the largest recent pair‑safe tail below `summarizeThreshold`. Layer 2 is still scheduled so the next turn benefits. | 0 LLM calls |
+
+State lives in `data/memory/compaction/<convId>.json` (the "sidecar"): the
+boundary count, a SHA‑256 span hash (so client‑edited history invalidates the
+summary — FR‑010), the summary text, the clearWatermark, and a summarization
+lock. Writes are temp‑file + rename atomic.
+
+**Constraint‑pinning invariant (FR‑017)**: the system prompt (`composeInstructions()`
+output — CORE_POLICY + agent + memory + skills) is **never** compacted. The
+middleware only rewrites the non‑system portion of `params.prompt`. Standing
+constraints stated by the user inside the conversation are preserved by the
+normative summarizer prompt (`prompts/compaction-summary-system.md`) which
+requires a **Standing constraints** section be carried forward.
+
+Config namespace `compaction` (`src/lib/config/registry.ts`) exposes every knob
+to Settings and to the agent's config tools: `enabled`, `assumedContextTokens`,
+`clearThreshold`, `summarizeThreshold`, `hardLimit`, `keepToolResults`,
+`keepTailMessages`, `tailBudgetFraction`, `unrecoverableTools`, `model`,
+`lockStalenessMs`.
+
+021 memory‑loops is a **soft dependency**: before writing a summary the
+compactor `await import('@/lib/agent/memory/fast-loop')` and, if `runFastLoop`
+exists, runs it first so durable lessons hit the memory store before the raw
+span is compacted away. Absence is a logged skip (US‑4.3), never a failure.
+
+For the design rationale, benchmarks, and the exhaustive edge‑case matrix, see
+[Context compaction research](context-compaction-research.md) and spec
+`bos-system-specs/022-context-compaction/`. For the write‑before‑compaction
+pattern with 021 see [Memory](../memory/memory.md).
