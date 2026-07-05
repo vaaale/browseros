@@ -17,6 +17,7 @@ import { WorkflowActions } from "./WorkflowActions";
 import { SpecActions } from "./SpecActions";
 import { WebSearchActions } from "./WebSearchActions";
 import { IntegrationActions } from "./IntegrationActions";
+import { ScratchpadActions } from "./ScratchpadActions";
 import { ToolCallRetry } from "./ToolCallRetry";
 import { AgentCapabilitiesProvider } from "./agent-capabilities";
 import { useActiveConversationId } from "@/lib/agent/conversations";
@@ -77,6 +78,7 @@ export function CopilotProvider({
           <WorkflowActions />
           <SpecActions />
           <IntegrationActions />
+          <ScratchpadActions agentId={agentId} />
           <ToolCallRetry />
           {children}
         </AgentCapabilitiesProvider>

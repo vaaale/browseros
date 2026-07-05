@@ -68,6 +68,12 @@ export const CAPABILITIES: Capability[] = [
   { id: "skill_improve", group: "Skills", context: "action", description: "Improve a skill from feedback (GEPA)." },
   { id: "skill_curate", group: "Skills", context: "action", description: "Archive stale agent-created skills (recoverable)." },
 
+  // Scratchpad (conversation-scoped notes; state derived from tool-call history)
+  { id: "scratchpad_write", group: "Scratchpad", context: "action", description: "Create a note in the conversation-scoped scratchpad." },
+  { id: "scratchpad_read", group: "Scratchpad", context: "action", description: "Read scratchpad notes (list metadata or fetch one by title)." },
+  { id: "scratchpad_edit", group: "Scratchpad", context: "action", description: "Replace the content of an existing scratchpad note." },
+  { id: "scratchpad_delete", group: "Scratchpad", context: "action", description: "Delete a scratchpad note by title." },
+
   // MCP
   { id: "mcp_server_list", group: "MCP", context: "action", description: "List connected MCP servers (with descriptions)." },
   { id: "mcp_tool_search", group: "MCP", context: "action", description: "Search MCP tools across all servers or on a specific server." },
