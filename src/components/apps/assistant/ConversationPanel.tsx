@@ -8,7 +8,6 @@ import {
   newConversation,
   selectConversation,
   deleteConversation,
-  DEFAULT_GROUP,
   type Conversation,
 } from "@/lib/agent/conversations";
 import { DEFAULT_AGENT_ID } from "@/lib/agent/agent-ids";
@@ -24,15 +23,6 @@ function humanize(id: string): string {
     .filter(Boolean)
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
     .join(" ");
-}
-
-// Effective agent for a conversation (display bucketing only). New chats are
-// always tagged; a pre-existing untagged chat falls back to its group name
-// (embeds were pinned to the group's agent) or the built-in default id.
-function effectiveAgent(c: Conversation): string {
-  if (c.agentId) return c.agentId;
-  if (c.group && c.group !== DEFAULT_GROUP) return c.group;
-  return DEFAULT_AGENT_ID;
 }
 
 function ConvRow({ c, active, onPick }: { c: Conversation; active: boolean; onPick?: () => void }) {
@@ -63,28 +53,26 @@ function ConvRow({ c, active, onPick }: { c: Conversation; active: boolean; onPi
   );
 }
 
-// `group` set → only that group's conversations (embedded chats).
-// `group` unset → all conversations grouped by AGENT (the Assistant app); each
-// section is an agent and the "+ New" button creates a conversation pinned to
-// that agent. Picking a conversation calls onPickGroup so the host can follow
-// its underlying conversation-group (which determines which thread is active).
-// `currentGroup` is the group that is currently active in the host (only used
-// in the all-groups view): conversations outside this group must not be
-// highlighted even if they are active within their own group. Without this
-// guard, conversations from different groups that share the same effectiveAgent
-// (e.g. a Build Studio embed whose agentId defaults to "assistant") all render
-// as active simultaneously — one highlight per group instead of one globally.
-export function ConversationPanel({ group, currentGroup, onPickGroup }: { group?: string; currentGroup?: string; onPickGroup?: (group: string) => void }) {
-  const single = useConversations(group ?? DEFAULT_GROUP);
+// `agentId` set → only that agent's conversations (embedded chats).
+// `agentId` unset → all conversations grouped by agent (the Assistant app).
+// `currentAgentId` is the agent currently selected in the host (all-agents view
+// only): conversations outside this agent are not highlighted even if they are
+// each active within their own agent's list.
+export function ConversationPanel({
+  agentId,
+  currentAgentId,
+  onPickAgent,
+}: {
+  agentId?: string;
+  currentAgentId?: string;
+  onPickAgent?: (agentId: string) => void;
+}) {
+  const single = useConversations(agentId ?? DEFAULT_AGENT_ID);
   const all = useAllConversations();
   const [agents, setAgents] = useState<AgentMeta[]>([]);
 
-  // The agent list is what we group BY in the all-groups view — labels and
-  // section ordering come from it. Refetched whenever the conversation set
-  // changes so a new conversation's agent (just added in Settings, for example)
-  // resolves to its display name instead of falling back to its raw id.
   useEffect(() => {
-    if (group) return;
+    if (agentId) return;
     let alive = true;
     fetch("/api/assistant/agent")
       .then((r) => r.json())
@@ -96,15 +84,15 @@ export function ConversationPanel({ group, currentGroup, onPickGroup }: { group?
     return () => {
       alive = false;
     };
-  }, [group, all.conversations.length]);
+  }, [agentId, all.conversations.length]);
 
-  if (group) {
+  if (agentId) {
     return (
       <div className="flex h-full w-48 shrink-0 flex-col border-r border-white/10 bg-white/[0.02]">
         <div className="flex items-center justify-between px-2 py-2">
           <span className="text-xs font-semibold uppercase tracking-wide text-white/40">Chats</span>
           <button
-            onClick={() => void newConversation(group, group !== DEFAULT_GROUP ? group : undefined)}
+            onClick={() => void newConversation(agentId)}
             title="New conversation"
             className="rounded p-1 text-white/60 hover:bg-white/10 hover:text-white"
           >
@@ -122,13 +110,11 @@ export function ConversationPanel({ group, currentGroup, onPickGroup }: { group?
 
   const nameFor = (id: string): string => agents.find((a) => a.id === id)?.name ?? humanize(id || "Unassigned");
 
-  // Bucket conversations by their effective agent. Section order: known agents
-  // in the order /api/assistant/agent returned them, then any leftover ids
-  // (agents that no longer exist) alphabetically — so deleting an agent doesn't
-  // hide its conversations.
+  // Bucket conversations by agentId. Section order: known agents in the order
+  // the API returned them, then any unknown ids alphabetically.
   const buckets = new Map<string, Conversation[]>();
   for (const c of all.conversations) {
-    const key = effectiveAgent(c) || "unassigned";
+    const key = c.agentId || DEFAULT_AGENT_ID;
     const list = buckets.get(key) ?? [];
     list.push(c);
     buckets.set(key, list);
@@ -141,29 +127,27 @@ export function ConversationPanel({ group, currentGroup, onPickGroup }: { group?
     <div className="flex h-full w-48 shrink-0 flex-col border-r border-white/10 bg-white/[0.02]">
       <div className="px-2 py-2 text-xs font-semibold uppercase tracking-wide text-white/40">Chats</div>
       <div className="min-h-0 flex-1 space-y-2 overflow-auto px-1.5 pb-2">
-        {ordered.map((agentId) => (
-          <div key={agentId}>
+        {ordered.map((aid) => (
+          <div key={aid}>
             <div className="flex items-center justify-between px-1 py-0.5">
-              <span className="text-[10px] font-semibold uppercase tracking-wide text-white/35">{nameFor(agentId)}</span>
+              <span className="text-[10px] font-semibold uppercase tracking-wide text-white/35">{nameFor(aid)}</span>
               <button
                 onClick={() => {
-                  // New conversations from the Assistant app live in the
-                  // default partition; the agent pin is what classifies them.
-                  void newConversation(DEFAULT_GROUP, agentId).then(() => onPickGroup?.(DEFAULT_GROUP));
+                  void newConversation(aid).then(() => onPickAgent?.(aid));
                 }}
-                title={`New ${nameFor(agentId)} conversation`}
+                title={`New ${nameFor(aid)} conversation`}
                 className="rounded p-0.5 text-white/40 hover:bg-white/10 hover:text-white"
               >
                 <Plus size={12} />
               </button>
             </div>
             <div className="space-y-0.5">
-              {(buckets.get(agentId) ?? []).map((c) => (
+              {(buckets.get(aid) ?? []).map((c) => (
                 <ConvRow
                   key={c.id}
                   c={c}
-                  active={c.group === (currentGroup ?? DEFAULT_GROUP) && all.activeByGroup[c.group] === c.id}
-                  onPick={() => onPickGroup?.(c.group)}
+                  active={c.agentId === (currentAgentId ?? DEFAULT_AGENT_ID) && all.activeByAgent[c.agentId] === c.id}
+                  onPick={() => onPickAgent?.(c.agentId)}
                 />
               ))}
             </div>

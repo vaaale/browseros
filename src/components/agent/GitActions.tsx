@@ -1,7 +1,8 @@
 "use client";
 
 import { useCopilotAction } from "@/components/agent/gated-action";
-import { DEFAULT_GROUP, useActiveConversation } from "@/lib/agent/conversations";
+import { useActiveConversation } from "@/lib/agent/conversations";
+import { DEFAULT_AGENT_ID } from "@/lib/agent/agent-ids";
 
 // Read-only git status for the assistant. Self-modification is owned by the
 // Supervisor: the developer sub-agent edits an ISOLATED preview worktree and the
@@ -9,8 +10,8 @@ import { DEFAULT_GROUP, useActiveConversation } from "@/lib/agent/conversations"
 // stages the live checkout (doing so would break the running base and block
 // promote; see specs/005, 017). The old in-place startFeatureBranch/stageChanges
 // actions were removed for that reason.
-export function GitActions({ group = DEFAULT_GROUP }: { group?: string }) {
-  const activeConversation = useActiveConversation(group);
+export function GitActions({ agentId = DEFAULT_AGENT_ID }: { agentId?: string }) {
+  const activeConversation = useActiveConversation(agentId);
 
   useCopilotAction({
     name: "dev_git_status",

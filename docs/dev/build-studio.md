@@ -37,9 +37,11 @@ Developer.
   build-free candidate promote/discard. Server-only; the app talks to it over `fetch`.
 - **App** — `src/apps/build-studio/` (`manifest.ts` + `index.tsx`): a three-pane layout —
   spec tree (left) + pipeline strip & artifact view/edit (centre) + the embedded
-  **agent chat** (right, `<AssistantChat agentId="build-studio" group="build-studio">`,
-  per `012`/`013`). The two side panes are resizable via
-  `src/components/apps/ResizeHandle.tsx` (widths persisted in `localStorage`).
+  **agent chat** (right, `<AssistantChat agentId={buildStudioAgent}>`, per `012`/`013`).
+  The agent is user-configurable in **Settings → Build Studio** (defaults to the
+  `"build-studio"` agent); the app reads it from `GET /api/config/build-studio` on mount.
+  The two side panes are resizable via `src/components/apps/ResizeHandle.tsx`
+  (widths persisted in `localStorage`).
 - **Agent app-control tools** — `src/apps/build-studio/AgentTools.tsx` registers
   `openSpecArtifact` (show an artifact in the centre viewer) and `refreshSpecTree`
   (reload the tree) as `useCopilotAction` frontend tools. They are passed through

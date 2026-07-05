@@ -7,7 +7,7 @@ BrowserOS (BOS) is a single‑page, server‑side‑rendered "operating system i
 ## Working rules
 - Work on a **feature branch** (`git checkout -b bos/<short-name>`); make focused edits; **don't** touch secrets, `package.json`, lockfiles, or build config unless asked.
 - After editing: `npx tsc --noEmit` and `npm run lint`; fix what you broke. `src/` hot‑reloads under `npm run dev`. **Do not run `npm run build` while `next dev` is running** (shared `.next`).
-- Update `data/docs` (and the relevant spec in the system store, `bos-system-specs/…`, via Build Studio if architecture changed) when you add/modify/remove a feature.
+- Update `docs/` (and the relevant spec in the system store, `bos-system-specs/…`, via Build Studio if architecture changed) when you add/modify/remove a feature.
 
 ## Orientation
 - Server‑only code (`import "server-only"`, Node/`fs`/secrets) lives behind `src/app/api/**/route.ts`; clients talk over `fetch`. `src/os/types.ts` is framework‑free.

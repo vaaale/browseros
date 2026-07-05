@@ -41,6 +41,23 @@ const REGISTRATIONS: ConfigRegistration[] = [
   },
   {
     schema: {
+      namespace: "build-studio",
+      title: "Build Studio",
+      description: "Configuration for the Build Studio spec-authoring chat.",
+      order: 12,
+      customComponent: "build-studio",
+      fields: [],
+    },
+    load: async () => {
+      const s = await readNamespace("build-studio");
+      return { agent: (s.agent as string) || "build-studio" };
+    },
+    save: async (patch) => {
+      await patchNamespace("build-studio", patch);
+    },
+  },
+  {
+    schema: {
       namespace: "mcp",
       title: "MCP Servers",
       description:

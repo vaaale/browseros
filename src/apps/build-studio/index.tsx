@@ -84,6 +84,7 @@ function PhaseStrip({ phases }: { phases: PipelinePhase[] }) {
 }
 
 export default function BuildStudioApp() {
+  const [buildStudioAgent, setBuildStudioAgent] = useState("build-studio");
   const [tree, setTree] = useState<SpecTreeNode[]>([]);
   const [specs, setSpecs] = useState<Specification[]>([]);
   const [activeFeature, setActiveFeature] = useState<string>("");
@@ -119,6 +120,13 @@ export default function BuildStudioApp() {
         setSpecs(res.specs ?? []);
       })
       .catch(() => setError("Could not load specs."));
+  }, []);
+
+  useEffect(() => {
+    fetch("/api/config/build-studio")
+      .then((r) => r.json())
+      .then((d) => { if (typeof d.agent === "string" && d.agent) setBuildStudioAgent(d.agent); })
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -383,8 +391,7 @@ export default function BuildStudioApp() {
           inside the chat's provider so it is callable by the build-studio agent). */}
       <aside style={{ width: rightWidth }} className="flex shrink-0 flex-col border-l border-white/10">
         <AssistantChat
-          agentId="build-studio"
-          group="build-studio"
+          agentId={buildStudioAgent}
           showConversations
           conversationsInToolbar
           showInfo={false}

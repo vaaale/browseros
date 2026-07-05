@@ -12,6 +12,7 @@ import { DataFsTab } from "@/components/apps/settings/DataFsTab";
 import { VersionsTab } from "@/components/apps/settings/VersionsTab";
 import { McpServersTab } from "@/components/apps/settings/McpServersTab";
 import { LogsTab } from "@/components/apps/settings/LogsTab";
+import { BuildStudioTab } from "@/components/apps/settings/BuildStudioTab";
 import { ConfigForm } from "@/components/apps/settings/ConfigForm";
 import { ProviderSettings } from "@/components/apps/ProviderSettings";
 
@@ -24,6 +25,7 @@ const CUSTOM_TABS: Record<string, React.ComponentType> = {
   mcp: McpServersTab,
   apps: AppsTab,
   integrations: IntegrationsTab,
+  "build-studio": BuildStudioTab,
   "dev-harness": DevHarnessTab,
   datafs: DataFsTab,
   "self-modification": VersionsTab,

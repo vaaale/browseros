@@ -4,7 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import { useCopilotAction } from "@/components/agent/gated-action";
 import { encodeNested } from "@/lib/agent/nested-events";
 import { startDelegation, pushDelegationEvent, finishDelegation } from "@/lib/agent/subagent-events";
-import { useActiveConversationId, useActiveConversation, setConversationActiveFeatureBranch, DEFAULT_GROUP } from "@/lib/agent/conversations";
+import { useActiveConversationId, useActiveConversation, setConversationActiveFeatureBranch } from "@/lib/agent/conversations";
+import { DEFAULT_AGENT_ID } from "@/lib/agent/agent-ids";
 import { suggestFeatureBranchName } from "@/lib/agent/feature-branch";
 import { sessionHeader } from "@/lib/logging/client/session";
 
@@ -134,12 +135,12 @@ function DevBranchElicitation({
 
 // Sub-agent delegation: list/create agents, delegate (existing or ephemeral),
 // and an elicitation card to approve a Claude agent for a non-dev task.
-export function SubAgentActions({ group = DEFAULT_GROUP }: { group?: string }) {
+export function SubAgentActions({ agentId = DEFAULT_AGENT_ID }: { agentId?: string }) {
   // The active conversation id, read through a ref so the delegate handler always
   // sends the CURRENT thread (not a stale closure value). The server uses it only
   // to look up the conversation's active feature branch; branch selection is not
   // exposed as an LLM tool parameter.
-  const threadId = useActiveConversationId(group);
+  const threadId = useActiveConversationId(agentId);
   const threadIdRef = useRef(threadId);
   useEffect(() => {
     threadIdRef.current = threadId;
@@ -148,7 +149,7 @@ export function SubAgentActions({ group = DEFAULT_GROUP }: { group?: string }) {
   // The active conversation's selected feature branch, read through a ref so the
   // dev_branch_request elicitation reflects the CURRENT selection (not a stale
   // closure) and can skip the create-branch prompt when one is already set.
-  const activeConversation = useActiveConversation(group);
+  const activeConversation = useActiveConversation(agentId);
   const activeBranchRef = useRef(activeConversation?.activeFeatureBranch);
   useEffect(() => {
     activeBranchRef.current = activeConversation?.activeFeatureBranch;

@@ -9,40 +9,31 @@ import { DEFAULT_AGENT_ID } from "@/lib/agent/agent-ids";
  * Conversations live as one JSON file per chat under the user's VFS at
  * /Documents/Chats/<id>.json. Each file holds metadata AND message history.
  *
- * Conversations are partitioned into GROUPS (012-embeddable-assistant): the
- * Assistant app uses the default "assistant" group; an embedded chat (e.g. Build
- * Studio) uses its own group and only sees its group's conversations. The group is
- * a field on each conversation (files without one default to "assistant", so older
- * chats migrate transparently). The active conversation id is tracked PER GROUP in
- * localStorage. All public APIs default to the "assistant" group, so existing
- * callers are unaffected.
+ * Conversations are keyed by agentId: each agent has its own conversation list
+ * and its own active-conversation pointer (tracked in localStorage). This
+ * replaces the old `group` partition field — agentId is now the sole organising
+ * key, so embedded surfaces (Build Studio, etc.) use whichever agent they are
+ * configured to use and share that agent's conversation history.
  */
-
-export const DEFAULT_GROUP = "assistant";
 
 export interface Conversation {
   id: string;
   title: string;
   createdAt: number;
-  group: string;
-  // Per-conversation agent (personality). Optional for back-compat: pre-existing
-  // chats have no agentId and fall back to the group's agent (for embeds) or the
-  // globally active agent (for the Assistant app).
-  agentId?: string;
-  // Branch the conversation's developer harness work targets.
+  agentId: string;
   activeFeatureBranch?: string;
 }
 
 interface State {
-  conversations: Conversation[]; // across all groups
-  activeByGroup: Record<string, string>;
+  conversations: Conversation[];
+  activeByAgent: Record<string, string>;
   loaded: boolean;
 }
 
 export const CHATS_DIR = "/Documents/Chats";
 const ACTIVE_KEY_PREFIX = "bos.activeConversation.";
 const DEFAULT_TITLE = "New conversation";
-const SERVER_SNAPSHOT: State = { conversations: [], activeByGroup: {}, loaded: false };
+const SERVER_SNAPSHOT: State = { conversations: [], activeByAgent: {}, loaded: false };
 
 const titleGenInFlight = new Set<string>();
 
@@ -56,14 +47,9 @@ function normalizeAgentId(agentId?: string): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function freshConversation(group: string, agentId?: string): Conversation {
+function freshConversation(agentId: string): Conversation {
   const id = newId();
-  // Every conversation is ALWAYS tagged with an agent — there is no untagged/
-  // "active-agent-resolved" conversation. An explicit agentId (e.g. the picked
-  // agent, or an embed's group agent) wins; a blank/bootstrap chat starts on the
-  // built-in default agent.
-  const agent = normalizeAgentId(agentId) ?? DEFAULT_AGENT_ID;
-  return { id, title: DEFAULT_TITLE, createdAt: Date.now(), group, agentId: agent };
+  return { id, title: DEFAULT_TITLE, createdAt: Date.now(), agentId };
 }
 
 function chatPath(id: string): string {
@@ -74,8 +60,8 @@ interface ConversationFile {
   id: string;
   title: string;
   createdAt: number;
-  group: string;
   agentId?: string;
+  group?: string; // legacy field — read for migration, never written
   activeFeatureBranch?: string;
   messages: unknown[];
 }
@@ -85,12 +71,20 @@ async function readConversationFile(id: string): Promise<ConversationFile | null
     const content = await fsClient.read(chatPath(id));
     const parsed = JSON.parse(content) as ConversationFile;
     if (!parsed || typeof parsed !== "object") return null;
+    // Migration: old files stored a `group` field instead of (or in addition to)
+    // agentId. If agentId is missing, derive it from group: a non-default group
+    // (e.g. "build-studio") maps 1-to-1 to an agent id of the same name. The
+    // legacy default group ("assistant") maps to DEFAULT_AGENT_ID.
+    const rawAgentId = typeof parsed.agentId === "string" && parsed.agentId ? parsed.agentId : undefined;
+    const rawGroup = typeof parsed.group === "string" && parsed.group ? parsed.group : undefined;
+    const agentId = normalizeAgentId(rawAgentId)
+      ?? (rawGroup && rawGroup !== "assistant" ? rawGroup : undefined)
+      ?? DEFAULT_AGENT_ID;
     return {
       id: parsed.id ?? id,
       title: typeof parsed.title === "string" ? parsed.title : "Conversation",
       createdAt: typeof parsed.createdAt === "number" ? parsed.createdAt : 0,
-      group: typeof parsed.group === "string" && parsed.group ? parsed.group : DEFAULT_GROUP,
-      agentId: typeof parsed.agentId === "string" && parsed.agentId ? parsed.agentId : undefined,
+      agentId,
       activeFeatureBranch: typeof parsed.activeFeatureBranch === "string" && parsed.activeFeatureBranch ? parsed.activeFeatureBranch : undefined,
       messages: Array.isArray(parsed.messages) ? parsed.messages : [],
     };
@@ -111,29 +105,29 @@ function notify(): void {
   for (const l of listeners) l();
 }
 
-function readActiveId(group: string): string | null {
+function readActiveId(agentId: string): string | null {
   try {
-    return localStorage.getItem(ACTIVE_KEY_PREFIX + group);
+    return localStorage.getItem(ACTIVE_KEY_PREFIX + agentId);
   } catch {
     return null;
   }
 }
 
-function persistActiveId(group: string, id: string): void {
+function persistActiveId(agentId: string, id: string): void {
   try {
-    localStorage.setItem(ACTIVE_KEY_PREFIX + group, id);
+    localStorage.setItem(ACTIVE_KEY_PREFIX + agentId, id);
   } catch {
     /* ignore */
   }
 }
 
-function resolveActiveByGroup(conversations: Conversation[]): Record<string, string> {
+function resolveActiveByAgent(conversations: Conversation[]): Record<string, string> {
   const active: Record<string, string> = {};
   for (const c of conversations) {
-    if (active[c.group]) continue;
-    const stored = readActiveId(c.group);
-    const valid = stored && conversations.some((x) => x.group === c.group && x.id === stored);
-    active[c.group] = valid ? stored! : conversations.find((x) => x.group === c.group)!.id;
+    if (active[c.agentId]) continue;
+    const stored = readActiveId(c.agentId);
+    const valid = stored && conversations.some((x) => x.agentId === c.agentId && x.id === stored);
+    active[c.agentId] = valid ? stored! : conversations.find((x) => x.agentId === c.agentId)!.id;
   }
   return active;
 }
@@ -149,7 +143,7 @@ async function loadFromVfs(): Promise<void> {
         const id = e.name.replace(/\.json$/, "");
         const file = await readConversationFile(id);
         if (!file) return null;
-        return { id: file.id, title: file.title, createdAt: file.createdAt, group: file.group, agentId: file.agentId, activeFeatureBranch: file.activeFeatureBranch };
+        return { id: file.id, title: file.title, createdAt: file.createdAt, agentId: file.agentId!, activeFeatureBranch: file.activeFeatureBranch };
       }),
     );
     conversations = loaded.filter((c): c is Conversation => c !== null);
@@ -158,9 +152,9 @@ async function loadFromVfs(): Promise<void> {
     conversations = [];
   }
 
-  // The Assistant always has at least one thread (preserves prior behavior).
-  if (!conversations.some((c) => c.group === DEFAULT_GROUP)) {
-    const seed = freshConversation(DEFAULT_GROUP);
+  // The default agent always has at least one conversation.
+  if (!conversations.some((c) => c.agentId === DEFAULT_AGENT_ID)) {
+    const seed = freshConversation(DEFAULT_AGENT_ID);
     conversations = [seed, ...conversations];
     try {
       await writeConversationFile({ ...seed, messages: [] });
@@ -169,9 +163,9 @@ async function loadFromVfs(): Promise<void> {
     }
   }
 
-  const activeByGroup = resolveActiveByGroup(conversations);
-  for (const [group, id] of Object.entries(activeByGroup)) persistActiveId(group, id);
-  state = { conversations, activeByGroup, loaded: true };
+  const activeByAgent = resolveActiveByAgent(conversations);
+  for (const [agentId, id] of Object.entries(activeByAgent)) persistActiveId(agentId, id);
+  state = { conversations, activeByAgent, loaded: true };
   notify();
 }
 
@@ -194,27 +188,24 @@ function setState(next: State): void {
   notify();
 }
 
-export async function newConversation(group: string = DEFAULT_GROUP, agentId?: string): Promise<string> {
+export async function newConversation(agentId: string = DEFAULT_AGENT_ID): Promise<string> {
   await ensureLoading();
-  const conv = freshConversation(group, agentId);
-  const current = state ?? { conversations: [], activeByGroup: {}, loaded: true };
-  persistActiveId(group, conv.id);
+  const conv = freshConversation(agentId);
+  const current = state ?? { conversations: [], activeByAgent: {}, loaded: true };
+  persistActiveId(agentId, conv.id);
   setState({
     conversations: [conv, ...current.conversations],
-    activeByGroup: { ...current.activeByGroup, [group]: conv.id },
+    activeByAgent: { ...current.activeByAgent, [agentId]: conv.id },
     loaded: true,
   });
   try {
-    // Build the file object explicitly (no spread) so each persisted field is
-    // visible at this call site — guarantees `agentId` reaches disk when set.
     const file: ConversationFile = {
       id: conv.id,
       title: conv.title,
       createdAt: conv.createdAt,
-      group: conv.group,
+      agentId: conv.agentId,
       messages: [],
     };
-    if (conv.agentId) file.agentId = conv.agentId;
     if (conv.activeFeatureBranch) file.activeFeatureBranch = conv.activeFeatureBranch;
     await writeConversationFile(file);
   } catch (err) {
@@ -278,45 +269,45 @@ export async function setConversationAgent(id: string, agentId: string): Promise
   }
 }
 
-// id is globally unique; the group is inferred from the conversation.
+// id is globally unique; the agentId is inferred from the conversation.
 export function selectConversation(id: string): void {
   const current = get();
   const conv = current.conversations.find((c) => c.id === id);
-  if (!conv || current.activeByGroup[conv.group] === id) return;
-  persistActiveId(conv.group, id);
-  setState({ ...current, activeByGroup: { ...current.activeByGroup, [conv.group]: id } });
+  if (!conv || current.activeByAgent[conv.agentId] === id) return;
+  persistActiveId(conv.agentId, id);
+  setState({ ...current, activeByAgent: { ...current.activeByAgent, [conv.agentId]: id } });
 }
 
 export async function deleteConversation(id: string): Promise<void> {
   await ensureLoading();
   const current = state ?? get();
   const target = current.conversations.find((c) => c.id === id);
-  const group = target?.group ?? DEFAULT_GROUP;
+  const agentId = target?.agentId ?? DEFAULT_AGENT_ID;
   let conversations = current.conversations.filter((c) => c.id !== id);
-  const activeByGroup = { ...current.activeByGroup };
+  const activeByAgent = { ...current.activeByAgent };
 
-  // The Assistant group always keeps at least one thread.
-  if (group === DEFAULT_GROUP && !conversations.some((c) => c.group === DEFAULT_GROUP)) {
-    const seed = freshConversation(DEFAULT_GROUP);
+  // The default agent always keeps at least one thread.
+  if (agentId === DEFAULT_AGENT_ID && !conversations.some((c) => c.agentId === DEFAULT_AGENT_ID)) {
+    const seed = freshConversation(DEFAULT_AGENT_ID);
     conversations = [seed, ...conversations];
-    activeByGroup[DEFAULT_GROUP] = seed.id;
-    persistActiveId(DEFAULT_GROUP, seed.id);
+    activeByAgent[DEFAULT_AGENT_ID] = seed.id;
+    persistActiveId(DEFAULT_AGENT_ID, seed.id);
     try {
       await writeConversationFile({ ...seed, messages: [] });
     } catch (err) {
       console.error("Failed to seed replacement conversation", err);
     }
-  } else if (activeByGroup[group] === id) {
-    const next = conversations.find((c) => c.group === group);
+  } else if (activeByAgent[agentId] === id) {
+    const next = conversations.find((c) => c.agentId === agentId);
     if (next) {
-      activeByGroup[group] = next.id;
-      persistActiveId(group, next.id);
+      activeByAgent[agentId] = next.id;
+      persistActiveId(agentId, next.id);
     } else {
-      delete activeByGroup[group];
+      delete activeByAgent[agentId];
     }
   }
 
-  setState({ conversations, activeByGroup, loaded: true });
+  setState({ conversations, activeByAgent, loaded: true });
   try {
     await fsClient.remove(chatPath(id));
   } catch {
@@ -354,16 +345,12 @@ export async function saveConversationMessages(id: string, messages: unknown[]):
   const current = state;
   const meta = current?.conversations.find((c) => c.id === id);
   const existing = await readConversationFile(id);
-  // Never replace an existing non-empty conversation with an empty message list:
-  // an empty snapshot is a transient reset (thread swap / remount), not the user
-  // clearing history. Dropping it here is the last line of defense against wipes.
   if (messages.length === 0 && existing && existing.messages.length > 0) return;
   const file: ConversationFile = {
     id,
     title: meta?.title ?? existing?.title ?? "Conversation",
     createdAt: existing?.createdAt ?? meta?.createdAt ?? Date.now(),
-    group: meta?.group ?? existing?.group ?? DEFAULT_GROUP,
-    agentId: meta?.agentId ?? existing?.agentId,
+    agentId: meta?.agentId ?? existing?.agentId ?? DEFAULT_AGENT_ID,
     activeFeatureBranch: meta?.activeFeatureBranch ?? existing?.activeFeatureBranch,
     messages,
   };
@@ -391,11 +378,6 @@ function firstUserText(messages: unknown[]): string | null {
   return null;
 }
 
-// First assistant text usable as a title signal. Tool-heavy agents (and models
-// like qwen) emit preamble text together WITH a tool call in the same message —
-// that preamble is a fine title signal and is often the ONLY assistant text in
-// the conversation, so we do NOT require a tool-call-free message here (requiring
-// one made title generation never fire for tool-using conversations).
 function firstAssistantText(messages: unknown[]): string | null {
   for (const m of messages) {
     const x = readMessage(m);
@@ -405,8 +387,6 @@ function firstAssistantText(messages: unknown[]): string | null {
   return null;
 }
 
-/** Fire-and-forget background title generation, gated to once per conversation
- *  and only while the title is still the default placeholder. */
 async function maybeGenerateTitleInBackground(id: string, messages: unknown[]): Promise<void> {
   if (titleGenInFlight.has(id)) return;
   const meta = state?.conversations.find((c) => c.id === id);
@@ -448,39 +428,39 @@ function useStoreState(): State {
   );
 }
 
-/** Conversations for a group (default "assistant") + that group's active id. */
-export function useConversations(group: string = DEFAULT_GROUP): {
+/** Conversations for an agent + that agent's active conversation id. */
+export function useConversations(agentId: string = DEFAULT_AGENT_ID): {
   conversations: Conversation[];
   activeId: string;
   loaded: boolean;
 } {
   const s = useStoreState();
   return {
-    conversations: s.conversations.filter((c) => c.group === group),
-    activeId: s.activeByGroup[group] ?? "",
+    conversations: s.conversations.filter((c) => c.agentId === agentId),
+    activeId: s.activeByAgent[agentId] ?? "",
     loaded: s.loaded,
   };
 }
 
-/** All conversations across groups (for a grouped/nested view) + each group's active id. */
+/** All conversations across agents + each agent's active id. */
 export function useAllConversations(): {
   conversations: Conversation[];
-  activeByGroup: Record<string, string>;
+  activeByAgent: Record<string, string>;
   loaded: boolean;
 } {
   const s = useStoreState();
-  return { conversations: s.conversations, activeByGroup: s.activeByGroup, loaded: s.loaded };
+  return { conversations: s.conversations, activeByAgent: s.activeByAgent, loaded: s.loaded };
 }
 
-export function useActiveConversationId(group: string = DEFAULT_GROUP): string {
-  return useConversations(group).activeId;
+export function useActiveConversationId(agentId: string = DEFAULT_AGENT_ID): string {
+  return useConversations(agentId).activeId;
 }
 
-/** Active conversation object for a group (the Conversation, not just its id).
- *  Returns null while loading or if the group has no conversations. */
-export function useActiveConversation(group: string = DEFAULT_GROUP): Conversation | null {
+/** Active conversation object for an agent.
+ *  Returns null while loading or if the agent has no conversations. */
+export function useActiveConversation(agentId: string = DEFAULT_AGENT_ID): Conversation | null {
   const s = useStoreState();
-  const id = s.activeByGroup[group];
+  const id = s.activeByAgent[agentId];
   if (!id) return null;
   return s.conversations.find((c) => c.id === id) ?? null;
 }

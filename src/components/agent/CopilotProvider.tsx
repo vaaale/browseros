@@ -19,7 +19,8 @@ import { WebSearchActions } from "./WebSearchActions";
 import { IntegrationActions } from "./IntegrationActions";
 import { ToolCallRetry } from "./ToolCallRetry";
 import { AgentCapabilitiesProvider } from "./agent-capabilities";
-import { useActiveConversationId, DEFAULT_GROUP } from "@/lib/agent/conversations";
+import { useActiveConversationId } from "@/lib/agent/conversations";
+import { DEFAULT_AGENT_ID } from "@/lib/agent/agent-ids";
 
 interface AgentInfo {
   id: string;
@@ -28,38 +29,16 @@ interface AgentInfo {
 
 export function CopilotProvider({
   children,
-  group = DEFAULT_GROUP,
-  agentId,
+  agentId = DEFAULT_AGENT_ID,
 }: {
   children: ReactNode;
-  group?: string;
   agentId?: string;
 }) {
-  // Scope the chat to the group's active conversation; switching conversations
-  // switches the CopilotKit thread. agentId (when embedded) pins the agent (012).
-  const threadId = useActiveConversationId(group);
-  // Pass the conversation id too so the server can inject this conversation's active
-  // feature branch into the composed prompt — the model can't otherwise see it, and
-  // without that it calls dev_branch_request for BOS source changes even when a
-  // branch is already selected (the delegate route still resolves the branch by
-  // conversation id independently, so a stale param never misroutes the branch).
+  const threadId = useActiveConversationId(agentId);
   const runtimeUrl = agentId
     ? `/api/copilotkit?agent=${encodeURIComponent(agentId)}${threadId ? `&conv=${encodeURIComponent(threadId)}` : ""}`
     : "/api/copilotkit";
 
-  // The pinned (or active) agent's capability allowlist gates which main-chat
-  // actions are exposed (016-unified-agents). CopilotKit forbids an action's
-  // `available` flag changing after it registers, so we mount the gated action
-  // components only once the allowlist has loaded (`ready`) — each action then
-  // registers ONCE with its final availability. On an agent switch we reset
-  // `ready` (unmount) before refetching, so the allowlist never changes under a
-  // mounted action.
-  // `loaded` records the allowlist AND the agentId it was fetched for. `ready` is
-  // derived: true only while the loaded allowlist matches the current agent — so on
-  // an agent switch it is false (subtree unmounts) until the new allowlist arrives.
-  // setState happens only in the async callback (never synchronously in the effect),
-  // and the allowlist never changes under a mounted action (avoids CopilotKit's
-  // "action configuration changed between renders").
   const [loaded, setLoaded] = useState<{ agentId?: string; allow: string[] | null } | null>(null);
   useEffect(() => {
     let alive = true;
@@ -79,16 +58,6 @@ export function CopilotProvider({
   const ready = loaded !== null && loaded.agentId === agentId;
   const allow = ready ? loaded!.allow : null;
 
-  // Mount the actions AND the chat together, only once the allowlist is known, so
-  // the registered action set is final from the chat's first render. (Changing the
-  // action set after the chat has rendered makes CopilotKit re-process tool calls,
-  // which churns the live event cards.) `ready` resets on agent switch, remounting
-  // this subtree with the new agent's allowlist.
-  // Key on the agent so switching agents fully REMOUNTS CopilotKit with a fresh
-  // runtime client bound to the correct `?agent=` URL. CopilotKit creates its
-  // core once and only updates the endpoint via an async effect, so without a
-  // remount a message sent right after an agent switch can still hit the previous
-  // conversation's agent — the "developer answers as Clark" bug.
   return (
     <CopilotKit key={agentId ?? "none"} runtimeUrl={runtimeUrl} threadId={threadId}>
       {ready && (
@@ -96,14 +65,14 @@ export function CopilotProvider({
           <OSActions />
           <McpActions agentId={agentId} />
           <WebSearchActions />
-          <SubAgentActions group={group} />
+          <SubAgentActions agentId={agentId} />
           <MemoryActions />
           <DevActions agentId={agentId} />
           <ConfigActions />
           <SkillsActions />
           <SelfImprovementActions />
           <DocsActions />
-          <GitActions group={group} />
+          <GitActions agentId={agentId} />
           <RunCommandActions />
           <WorkflowActions />
           <SpecActions />

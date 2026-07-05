@@ -73,7 +73,7 @@ src/
       openai-chat-adapter.ts    Forces OpenAI Chat Completions (not Responses)
       runtime.ts                CopilotRuntime options (wires MCP servers)
       tool-manifest.ts          Curated tool list shown in the Tools panel
-      conversations.ts          VFS-backed thread + message store
+      conversations.ts          VFS-backed thread + message store (keyed by agentId)
       conversations-sanitize.ts trimToSettledTail() (never resume an in-flight turn)
       card-collapse.ts          Event-card collapse store (timers OUTSIDE React)
       nested-events.ts          Encode/parse nested sub-agent event trees
@@ -92,9 +92,9 @@ apps/                           Installed apps — standalone git repo (GitFS), 
 
 | Path | Contents |
 |---|---|
-| `data/vfs/` | The user VFS (Documents, Pictures, Desktop). Chat history at `data/vfs/Documents/Chats/<id>.json` (including each conversation's optional `activeFeatureBranch`); workflows at `data/vfs/Workflows/`. |
+| `data/vfs/` | The user VFS (Documents, Pictures, Desktop). Chat history at `data/vfs/Documents/Chats/<id>.json` — each file carries `agentId` (the sole partition key), `title`, `createdAt`, optional `activeFeatureBranch`, and the message array. Old files with a `group` field are migrated to `agentId` on first read. Active conversation per agent is tracked in `localStorage` as `bos.activeConversation.<agentId>`. Workflows at `data/vfs/Workflows/`. |
 | `data/settings.json` | OS settings (wallpaper, accent, theme). |
-| `data/config/<ns>.json` | Generic per‑namespace config (e.g. `dev-harness`, `browser-automation`, `datafs`, `assistant`). |
+| `data/config/<ns>.json` | Generic per‑namespace config (e.g. `dev-harness`, `browser-automation`, `datafs`, `assistant`, `build-studio`). |
 | `data/provider.json` | AI provider config incl. the API key — **masked** in API responses. |
 | `data/mcp-servers.json` | Chat MCP servers. |
 | `data/memory/USER.md`, `data/memory/MEMORY.md` | Curated memory surfaces. |

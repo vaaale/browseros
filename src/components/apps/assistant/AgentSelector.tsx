@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { GitBranch, MessageSquare, Trash2, UserCircle } from "lucide-react";
 import {
-  DEFAULT_GROUP,
   deleteConversation,
   newConversation,
   selectConversation,
@@ -19,12 +18,9 @@ interface AgentMeta {
   name: string;
 }
 
-// The selector reflects (and edits) the ACTIVE conversation's agent — the only
-// source of truth. Picking a new agent reassigns THIS conversation in-place
-// (moving it under that agent's section). There is no global "active agent".
-export function AgentSelector({ group = DEFAULT_GROUP }: { group?: string }) {
+export function AgentSelector({ agentId = DEFAULT_AGENT_ID }: { agentId?: string }) {
   const [agents, setAgents] = useState<AgentMeta[]>([]);
-  const conv = useActiveConversation(group);
+  const conv = useActiveConversation(agentId);
 
   const load = useCallback(async () => {
     const res = await fetch("/api/assistant/agent").then((r) => r.json());
@@ -36,9 +32,6 @@ export function AgentSelector({ group = DEFAULT_GROUP }: { group?: string }) {
     return () => clearTimeout(id);
   }, [load]);
 
-  // The dropdown shows the active conversation's agent; a conversation that
-  // predates per-conversation agents falls back to the built-in default id only
-  // for display (its runtime agent is resolved from the tagged id going forward).
   const shown = conv?.agentId ?? DEFAULT_AGENT_ID;
 
   const onChange = async (id: string) => {
@@ -61,13 +54,9 @@ export function AgentSelector({ group = DEFAULT_GROUP }: { group?: string }) {
   );
 }
 
-interface BranchState {
-  featureBranches: string[];
-}
-
-export function FeatureBranchSelector({ group = DEFAULT_GROUP }: { group?: string }) {
-  const conv = useActiveConversation(group);
-  const [branches, setBranches] = useState<BranchState>({ featureBranches: [] });
+export function FeatureBranchSelector({ agentId = DEFAULT_AGENT_ID }: { agentId?: string }) {
+  const conv = useActiveConversation(agentId);
+  const [branches, setBranches] = useState<{ featureBranches: string[] }>({ featureBranches: [] });
 
   const load = useCallback(async () => {
     const res = await fetch("/api/assistant/feature-branches")
@@ -89,6 +78,7 @@ export function FeatureBranchSelector({ group = DEFAULT_GROUP }: { group?: strin
   const shownBranches = value && !branches.featureBranches.includes(value)
     ? [value, ...branches.featureBranches]
     : branches.featureBranches;
+
   const onChange = async (next: string) => {
     if (next === "__new__") {
       const name = window.prompt("Feature branch name (kebab-case, up to 4 segments)", "");
@@ -130,23 +120,16 @@ export function FeatureBranchSelector({ group = DEFAULT_GROUP }: { group?: strin
   );
 }
 
-// Compact conversation picker for embedded chats that don't have room for the
-// full ConversationPanel (e.g. Build Studio). Lists conversations in `group`,
-// with an inline "New conversation..." option and a trash button that deletes
-// the active thread. `agentId` pins new conversations to a specific agent (an
-// embed pins to its group's agent).
 export function ConversationSelector({
-  group = DEFAULT_GROUP,
-  agentId,
+  agentId = DEFAULT_AGENT_ID,
 }: {
-  group?: string;
   agentId?: string;
 }) {
-  const { conversations, activeId } = useConversations(group);
+  const { conversations, activeId } = useConversations(agentId);
 
   const onChange = async (next: string) => {
     if (next === "__new__") {
-      await newConversation(group, agentId ?? (group !== DEFAULT_GROUP ? group : undefined));
+      await newConversation(agentId);
       return;
     }
     selectConversation(next);

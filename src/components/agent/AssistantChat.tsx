@@ -11,9 +11,10 @@ import { ReasoningAssistantMessage } from "@/components/agent/ReasoningAssistant
 import { markdownRenderers } from "@/components/agent/MarkdownRenderers";
 import { ConversationPanel } from "@/components/apps/assistant/ConversationPanel";
 import { InfoPanel } from "@/components/apps/assistant/InfoPanel";
-import { AgentSelector, ConversationSelector, FeatureBranchSelector } from "@/components/apps/assistant/AgentSelector";
+import { AgentSelector, FeatureBranchSelector } from "@/components/apps/assistant/AgentSelector";
 import { CardScopeProvider } from "@/lib/agent/card-collapse";
-import { DEFAULT_GROUP, useConversations, useActiveConversation, newConversation } from "@/lib/agent/conversations";
+import { useConversations, useActiveConversation, newConversation } from "@/lib/agent/conversations";
+import { DEFAULT_AGENT_ID } from "@/lib/agent/agent-ids";
 
 const FALLBACK_INSTRUCTIONS = "You are the BrowserOS assistant.";
 
@@ -24,113 +25,110 @@ const THEME_OVERRIDES: React.CSSProperties = {
 };
 
 export interface AssistantChatProps {
-  /** Pin the chat to a specific agent; defaults to the global active personality. */
+  /** Pin the chat to a specific agent. */
   agentId?: string;
-  /** Conversation partition; defaults to the Assistant group. */
-  group?: string;
   showConversations?: boolean;
   showInfo?: boolean;
   initialLabel?: string;
   /** Assistant mode: show all conversation groups (nested) and switch between
    *  them (each group implies its agent); shows the personality selector. */
   allGroups?: boolean;
-  /** Render the conversation list as a dropdown in a top toolbar (paired with
-   *  the feature branch selector) instead of a left panel. For narrow embeds
-   *  like Build Studio. Ignored when `allGroups` is true. */
+  /** Show conversation list in a compact toolbar instead of the left panel.
+   *  Only applies when showConversations=true and allGroups=false. */
   conversationsInToolbar?: boolean;
-  /** Extra nodes rendered INSIDE this surface's CopilotKit provider — e.g. a host
-   *  app registering `useCopilotAction` tools the embedded agent can call to drive
-   *  the app's UI. They render no visible chrome (the action components return null). */
+  /** Extra nodes rendered INSIDE this surface's CopilotKit provider. */
   children?: ReactNode;
 }
 
-// Embeddable assistant chat (012-embeddable-assistant). Mounts its OWN CopilotKit
-// provider over this sub-tree so it can be pinned to an agent and a conversation
-// group, independent of the Assistant app — reusing the same chat, persistence,
-// tool rendering, and side panels. In `allGroups` mode it follows the selected
-// conversation across groups; the agent is taken from the conversation itself
-// (per-conversation agentId), falling back to the group name for embeds.
 export function AssistantChat(props: AssistantChatProps) {
-  const [group, setGroup] = useState(props.group ?? DEFAULT_GROUP);
-  const activeConv = useActiveConversation(group);
-  // The active conversation's agent wins; then any explicit pin from the host;
-  // then the group name (embeds were historically pinned to the group's agent);
-  // otherwise let CopilotProvider fall back to the globally active agent.
-  const agentId =
-    activeConv?.agentId ?? props.agentId ?? (group !== DEFAULT_GROUP ? group : undefined);
+  // In allGroups mode the active agent is the one whose conversation was last
+  // selected; it starts on the default agent and updates when the user picks a
+  // conversation that belongs to a different agent.
+  const [currentAgentId, setCurrentAgentId] = useState(props.agentId ?? DEFAULT_AGENT_ID);
+  const activeConv = useActiveConversation(currentAgentId);
+  // The active conversation's agent wins over the prop; a fresh embed with no
+  // conversation yet falls back to the prop, then the default.
+  const resolvedAgentId = activeConv?.agentId ?? props.agentId ?? DEFAULT_AGENT_ID;
+
   return (
-    <CopilotProvider group={group} agentId={agentId}>
+    <CopilotProvider agentId={resolvedAgentId}>
       {props.children}
-      <AssistantChatInner {...props} group={group} agentId={agentId} onPickGroup={props.allGroups ? setGroup : undefined} />
+      <AssistantChatInner
+        {...props}
+        currentAgentId={currentAgentId}
+        resolvedAgentId={resolvedAgentId}
+        onPickAgent={props.allGroups ? setCurrentAgentId : undefined}
+      />
     </CopilotProvider>
   );
 }
 
 function AssistantChatInner({
-  agentId,
-  group = DEFAULT_GROUP,
+  currentAgentId,
+  resolvedAgentId,
   showConversations = true,
   showInfo = true,
   initialLabel,
   allGroups,
   conversationsInToolbar,
-  onPickGroup,
-}: AssistantChatProps & { onPickGroup?: (group: string) => void }) {
-  const { isLoading } = useChatPersistence(group);
-  const conv = useConversations(group);
+  onPickAgent,
+}: Omit<AssistantChatProps, "agentId"> & {
+  currentAgentId: string;
+  resolvedAgentId: string;
+  onPickAgent?: (agentId: string) => void;
+}) {
+  const { isLoading } = useChatPersistence(resolvedAgentId);
+  const conv = useConversations(resolvedAgentId);
   const [instructions, setInstructions] = useState(FALLBACK_INSTRUCTIONS);
 
-  // An embed's group starts empty (only the default "assistant" group is seeded),
-  // so create its first conversation on open. setTimeout defers the store write
-  // out of the effect body.
+  const useToolbar = Boolean(conversationsInToolbar) && !allGroups;
+  const showLeftPanel = showConversations && !useToolbar;
+
+  // An embed's agent may start with no conversations — create the first one.
   useEffect(() => {
     if (conv.loaded && !conv.activeId && conv.conversations.length === 0) {
-      const t = setTimeout(() => void newConversation(group), 0);
+      const t = setTimeout(() => void newConversation(resolvedAgentId), 0);
       return () => clearTimeout(t);
     }
-  }, [conv.loaded, conv.activeId, conv.conversations.length, group]);
+  }, [conv.loaded, conv.activeId, conv.conversations.length, resolvedAgentId]);
 
   useEffect(() => {
-    const url = agentId ? `/api/assistant/agent?agentId=${encodeURIComponent(agentId)}` : "/api/assistant/agent";
+    const url = resolvedAgentId
+      ? `/api/assistant/agent?agentId=${encodeURIComponent(resolvedAgentId)}`
+      : "/api/assistant/agent";
     fetch(url)
       .then((r) => r.json())
       .then((d) => d.composed && setInstructions(d.composed))
       .catch(() => {});
-  }, [agentId]);
-
-  // Toolbar mode is opt-in for single-group embeds; `allGroups` (the Assistant
-  // app) has its own toolbar with an agent picker and always keeps the nested
-  // ConversationPanel on the left.
-  const useToolbar = Boolean(conversationsInToolbar) && !allGroups;
-  const showLeftPanel = showConversations && !useToolbar;
-  const showToolbar = allGroups || useToolbar;
-  const statusBadge = isLoading ? (
-    <>
-      <Loader2 size={12} className="animate-spin text-amber-300" />
-      <span className="text-amber-200">Working…</span>
-    </>
-  ) : (
-    <>
-      <CheckCircle2 size={12} className="text-emerald-400" />
-      <span className="text-white/45">Ready</span>
-    </>
-  );
+  }, [resolvedAgentId]);
 
   return (
-    <CardScopeProvider scope={group}>
+    <CardScopeProvider scope={resolvedAgentId}>
       <div className="flex h-full" data-theme="dark" style={THEME_OVERRIDES}>
         <ChatToolRenderer />
-        {showLeftPanel && (allGroups ? <ConversationPanel currentGroup={group} onPickGroup={onPickGroup} /> : <ConversationPanel group={group} />)}
+        {showLeftPanel && (
+          allGroups
+            ? <ConversationPanel currentAgentId={currentAgentId} onPickAgent={onPickAgent} />
+            : <ConversationPanel agentId={resolvedAgentId} />
+        )}
         <div className="flex min-w-0 flex-1 flex-col">
-          {showToolbar && (
-            <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-white/10 bg-white/[0.03] px-2 py-1 text-[11px]">
-              {allGroups ? (
-                <AgentSelector group={group} />
-              ) : (
-                <ConversationSelector group={group} agentId={agentId} />
-              )}
-              <FeatureBranchSelector group={group} />
-              <span className="ml-auto flex items-center gap-1.5">{statusBadge}</span>
+          {allGroups && (
+            <div className="flex shrink-0 items-center gap-2 border-b border-white/10 bg-white/[0.03] px-2 py-1 text-[11px]">
+              <AgentSelector agentId={currentAgentId} />
+              <FeatureBranchSelector agentId={currentAgentId} />
+              <span className="ml-auto flex items-center gap-1.5">
+                {isLoading ? (
+                  <>
+                    <Loader2 size={12} className="animate-spin text-amber-300" />
+                    <span className="text-amber-200">Working…</span>
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle2 size={12} className="text-emerald-400" />
+                    <span className="text-white/45">Ready</span>
+                  </>
+                )}
+              </span>
             </div>
           )}
           <div className="min-h-0 flex-1">
@@ -143,7 +141,7 @@ function AssistantChatInner({
             />
           </div>
         </div>
-        {showInfo && <InfoPanel agentId={agentId} />}
+        {showInfo && <InfoPanel agentId={resolvedAgentId} />}
       </div>
     </CardScopeProvider>
   );
