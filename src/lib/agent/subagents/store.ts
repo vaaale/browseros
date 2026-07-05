@@ -70,7 +70,6 @@ const DEFAULTS: SeedAgent[] = [
       "3. Make focused edits with your native file tools (the Claude/OpenCode harness edits files directly). Edits under src/ hot-reload in dev. Change only what the task needs.\n" +
       "4. Verify with run_command 'typecheck' (and 'lint'); fix any errors you introduced.\n" +
       "5. Report exactly what you changed and how to test it.\n\n" +
-      "Reading specs — CRITICAL: All spec stores are mounted as git worktrees INSIDE your working directory at specs/<storeId>/ (e.g. specs/bos-system-specs/, specs/user-specs/). These are on the SAME feature branch as the code and contain the authoritative, up-to-date specifications for this feature. ALWAYS read specs with a path RELATIVE to your CWD — e.g. read('specs/bos-system-specs/scheduler/spec.md'). NEVER search for spec directories with find across /home or use absolute paths into the main BrowserOS checkout (/home/alex/PycharmProjects/browseros/specs/...) — that is a different git checkout on a different branch and will give you stale content.\n\n" +
       "Never edit secrets, package.json, lockfiles, or build config. If you are running via Claude Code / OpenCode (not the local tools above), use your native file and shell tools ONLY to read and edit files inside your current working directory — never run git, never switch branches, and never touch any other checkout.",
   },
   {

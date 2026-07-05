@@ -422,10 +422,27 @@ export async function runClaudeAgent(
     };
   }
 
+  // Inject the workspace boundary at RUNTIME, where we know the exact worktree path.
+  // This cannot live in the agent's seeded systemPrompt: seed prompt edits only reach
+  // fresh installs (existing installs keep their persisted data/agents/<id>/AGENT.md).
+  // Injecting here reaches every harness path (all use agent.systemPrompt) on every run,
+  // and can name the real absolute worktree path — closing the "Developer reads specs
+  // from the main checkout on a stale branch" bug (git worktree internals leak the main
+  // checkout path via .git / git-common-dir / `git worktree list`).
+  const workspaceNote =
+    `\n\n---\nWORKSPACE (runtime, authoritative): Your working directory is ${cwd}. ` +
+    `All spec stores are mounted here at ${cwd}/specs/<storeId>/ (e.g. specs/bos-system-specs/, specs/user-specs/), ` +
+    `checked out on THIS feature's branch — they hold the authoritative, up-to-date specs for this task. ` +
+    `Read specs with paths RELATIVE to your working directory (e.g. specs/bos-system-specs/scheduler/spec.md). ` +
+    `NEVER search /home for spec directories and NEVER read specs via an absolute path into another checkout ` +
+    `(e.g. anything under a different repo path such as .../browseros/specs/...) — those are different git branches and will give you STALE content. ` +
+    `Stay inside ${cwd} for all reads and edits.`;
+  const runAgent: Agent = { ...agent, systemPrompt: agent.systemPrompt + workspaceNote };
+
   const result =
     harness.mode === "mcp"
-      ? await runViaMcp(agent, task, { ...harness.server, cwd, env: { ...(harness.server.env ?? {}), PWD: cwd } }, opts?.onEvent)
-      : await (harness.tool === "opencode" ? runOpenCodeCli : runClaudeCli)(agent, task, cwd, opts?.onEvent);
+      ? await runViaMcp(runAgent, task, { ...harness.server, cwd, env: { ...(harness.server.env ?? {}), PWD: cwd } }, opts?.onEvent)
+      : await (harness.tool === "opencode" ? runOpenCodeCli : runClaudeCli)(runAgent, task, cwd, opts?.onEvent);
 
   if (!result.error) {
     opts?.onEvent?.({ tool: "Supervisor: build + health-gate candidate", input: {} });
