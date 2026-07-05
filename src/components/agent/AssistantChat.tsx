@@ -11,7 +11,7 @@ import { ReasoningAssistantMessage } from "@/components/agent/ReasoningAssistant
 import { markdownRenderers } from "@/components/agent/MarkdownRenderers";
 import { ConversationPanel } from "@/components/apps/assistant/ConversationPanel";
 import { InfoPanel } from "@/components/apps/assistant/InfoPanel";
-import { AgentSelector, FeatureBranchSelector } from "@/components/apps/assistant/AgentSelector";
+import { AgentSelector, ConversationSelector, FeatureBranchSelector } from "@/components/apps/assistant/AgentSelector";
 import { CardScopeProvider } from "@/lib/agent/card-collapse";
 import { useConversations, useActiveConversation, newConversation } from "@/lib/agent/conversations";
 import { DEFAULT_AGENT_ID } from "@/lib/agent/agent-ids";
@@ -83,6 +83,9 @@ function AssistantChatInner({
 
   const useToolbar = Boolean(conversationsInToolbar) && !allGroups;
   const showLeftPanel = showConversations && !useToolbar;
+  // Toolbar for allGroups (agent selector) or compact embeds like Build Studio
+  // (conversation dropdown), both paired with the feature-branch selector.
+  const showToolbar = allGroups || useToolbar;
 
   // An embed's agent may start with no conversations — create the first one.
   useEffect(() => {
@@ -112,10 +115,10 @@ function AssistantChatInner({
             : <ConversationPanel agentId={resolvedAgentId} />
         )}
         <div className="flex min-w-0 flex-1 flex-col">
-          {allGroups && (
-            <div className="flex shrink-0 items-center gap-2 border-b border-white/10 bg-white/[0.03] px-2 py-1 text-[11px]">
-              <AgentSelector agentId={currentAgentId} />
-              <FeatureBranchSelector agentId={currentAgentId} />
+          {showToolbar && (
+            <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-white/10 bg-white/[0.03] px-2 py-1 text-[11px]">
+              {allGroups ? <AgentSelector agentId={currentAgentId} /> : <ConversationSelector agentId={resolvedAgentId} />}
+              <FeatureBranchSelector agentId={allGroups ? currentAgentId : resolvedAgentId} />
               <span className="ml-auto flex items-center gap-1.5">
                 {isLoading ? (
                   <>
