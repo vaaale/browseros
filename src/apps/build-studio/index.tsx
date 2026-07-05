@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Markdown } from "@copilotkit/react-ui";
 import "@copilotkit/react-ui/styles.css";
 import {
@@ -104,6 +104,9 @@ export default function BuildStudioApp() {
   const [error, setError] = useState("");
   const [leftWidth, setLeftWidth] = useState<number>(() => readStoredWidth(LEFT_W_KEY, 224));
   const [rightWidth, setRightWidth] = useState<number>(() => readStoredWidth(RIGHT_W_KEY, 520));
+  const treeScrollRef = useRef<HTMLDivElement>(null);
+  const specsRef = useRef(specs);
+  useEffect(() => { specsRef.current = specs; }, [specs]);
 
   useEffect(() => {
     try {
@@ -115,6 +118,14 @@ export default function BuildStudioApp() {
       window.localStorage.setItem(RIGHT_W_KEY, String(rightWidth));
     } catch {}
   }, [rightWidth]);
+
+  // Scroll the active file into view whenever it changes.
+  useEffect(() => {
+    if (!activePath || !treeScrollRef.current) return;
+    const key = activeBranch ? `${activePath}@${activeBranch}` : activePath;
+    const el = treeScrollRef.current.querySelector(`[data-key="${CSS.escape(key)}"]`);
+    el?.scrollIntoView({ block: "nearest" });
+  }, [activePath, activeBranch]);
 
   const specByPath = useMemo(() => new Map(specs.map((s) => [s.path, s])), [specs]);
 
@@ -177,12 +188,16 @@ export default function BuildStudioApp() {
     setActiveBranch(branch);
     const feature = featureIdOf(path);
     setActiveFeature(feature);
-    // Expand the parent feature folder so the file is visible and highlighted in the tree.
+    // Collapse all other feature folders; keep only the active one expanded.
     setCollapsed((prev) => {
-      if (!prev.has(feature)) return prev;
-      const next = new Set(prev);
-      next.delete(feature);
-      return next;
+      const allFeatures = new Set(prev);
+      // Re-collapse everything except the active feature.
+      for (const key of allFeatures) allFeatures.delete(key);
+      // Collapse all feature paths from the spec list, excluding the active one.
+      for (const s of specsRef.current) {
+        if (s.path !== feature) allFeatures.add(s.path);
+      }
+      return allFeatures;
     });
   }, []);
 
@@ -227,7 +242,7 @@ export default function BuildStudioApp() {
             <RefreshCw size={12} />
           </button>
         </div>
-        <div className="min-h-0 flex-1 overflow-auto px-1 py-2">
+        <div ref={treeScrollRef} className="min-h-0 flex-1 overflow-auto px-1 py-2">
           {tree.length === 0 ? (
             <p className="px-3 py-2 text-xs text-white/40">No specs yet. Describe a feature in the chat to create one.</p>
           ) : (
@@ -262,25 +277,30 @@ export default function BuildStudioApp() {
                           )}
                         </button>
                         {!isCollapsed &&
-                          node.children?.map((child) => (
-                            <button
-                              key={child.branch ? `${child.path}@${child.branch}` : child.path}
-                              onClick={() => openFile(child.path, child.branch ?? "")}
-                              style={{ paddingLeft: 30 }}
-                              className={`flex w-full items-center gap-1.5 rounded px-2 py-1 text-left text-xs transition-colors ${
-                                activeKey === (child.branch ? `${child.path}@${child.branch}` : child.path) ? "bg-white/15 text-white" : "text-white/65 hover:bg-white/10"
-                              }`}
-                            >
-                              <FileText size={12} className="shrink-0 opacity-60" />
-                              <span className="truncate">{child.name}</span>
-                            </button>
-                          ))}
+                          node.children?.map((child) => {
+                            const childKey = child.branch ? `${child.path}@${child.branch}` : child.path;
+                            return (
+                              <button
+                                key={childKey}
+                                data-key={childKey}
+                                onClick={() => openFile(child.path, child.branch ?? "")}
+                                style={{ paddingLeft: 30 }}
+                                className={`flex w-full items-center gap-1.5 rounded px-2 py-1 text-left text-xs transition-colors ${
+                                  activeKey === childKey ? "bg-white/15 text-white" : "text-white/65 hover:bg-white/10"
+                                }`}
+                              >
+                                <FileText size={12} className="shrink-0 opacity-60" />
+                                <span className="truncate">{child.name}</span>
+                              </button>
+                            );
+                          })}
                       </div>
                     );
                   }
                   return (
                     <button
                       key={node.path}
+                      data-key={node.path}
                       onClick={() => openFile(node.path)}
                       className={`flex w-full items-center gap-1.5 rounded px-2 py-1 text-left text-xs transition-colors ${
                         activeKey === node.path ? "bg-white/15 text-white" : "text-white/65 hover:bg-white/10"
