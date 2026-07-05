@@ -70,6 +70,17 @@ export async function draftChangedFiles(root: string, branch: string): Promise<s
   return out.split("\n").map((s) => s.trim()).filter(Boolean);
 }
 
+/** All files under a directory as they exist ON a draft branch — a full listing
+ *  (not a diff), so the tree matches the branch/worktree including artifacts that
+ *  are unchanged since the fork point. `dir` is store-relative (e.g. a feature id). */
+export async function listBranchDirFiles(root: string, branch: string, dir: string): Promise<string[]> {
+  requireDraftBranch(branch);
+  const clean = dir.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+  if (!clean || clean.split("/").some((seg) => seg === ".." || seg.startsWith("-"))) return [];
+  const out = await git(root, ["ls-tree", "-r", "--name-only", branch, "--", `${clean}/`]).catch(() => "");
+  return out.split("\n").map((s) => s.trim()).filter(Boolean);
+}
+
 /** Read a file's content at a draft branch (no checkout). `rel` must already be
  *  store-jailed by the caller (spec-fs). */
 export async function readFileAtBranch(root: string, branch: string, rel: string): Promise<string> {

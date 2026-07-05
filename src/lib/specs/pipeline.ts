@@ -1,7 +1,7 @@
 import "server-only";
 import * as specfs from "@/lib/dev/spec-fs";
 import { listStores } from "@/lib/specs/stores";
-import { listDraftBranches, draftChangedFiles } from "@/lib/specs/store-git";
+import { listDraftBranches, draftChangedFiles, listBranchDirFiles } from "@/lib/specs/store-git";
 import { ensureStoresOnce } from "@/lib/specs/seed";
 import {
   ARTIFACT_FILES,
@@ -172,15 +172,24 @@ export async function specTree(): Promise<SpecTreeNode[]> {
     // rendered read-only from base without any checkout or preview.
     for (const branch of await listDraftBranches(store.root).catch(() => [] as string[])) {
       const changed = await draftChangedFiles(store.root, branch).catch(() => [] as string[]);
-      const byFeature = new Map<string, SpecTreeNode[]>();
+      // A feature is "touched" on the branch if any of its files changed. For each
+      // such feature we list its FULL contents on the branch (not just the diff), so
+      // the tree matches the branch/worktree — including artifacts (overview.md, etc.)
+      // that are unchanged since the fork point and would otherwise be invisible.
+      const touched = new Set<string>();
       for (const rel of changed) {
         const [featureId, ...rest] = rel.split("/");
         if (!featureId || !rest.length) continue; // loose root files: skip in the tree
-        const files = byFeature.get(featureId) ?? [];
-        files.push({ type: "file", name: rest.join("/"), path: `${store.id}/${rel}`, branch });
-        byFeature.set(featureId, files);
+        touched.add(featureId);
       }
-      for (const [featureId, files] of byFeature) {
+      for (const featureId of touched) {
+        const all = await listBranchDirFiles(store.root, branch, featureId).catch(() => [] as string[]);
+        const files: SpecTreeNode[] = all.map((rel) => ({
+          type: "file",
+          name: rel.split("/").slice(1).join("/"),
+          path: `${store.id}/${rel}`,
+          branch,
+        }));
         children.push({ type: "feature", name: featureId, path: `${store.id}/${featureId}`, branch, children: files });
       }
     }
