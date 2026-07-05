@@ -1,5 +1,6 @@
 "use client";
 
+import { useRef } from "react";
 import { useCopilotReadable } from "@copilotkit/react-core";
 import { useCopilotAction } from "@/components/agent/gated-action";
 import { useOSStore, useOSStoreApi } from "@/store/os-provider";
@@ -13,6 +14,7 @@ export function OSActions() {
   const apps = useOSStore((s) => s.apps);
   const windows = useOSStore((s) => s.windows);
   const settings = useOSStore((s) => s.settings);
+  const htmlViewerIdRef = useRef<string | null>(null);
 
   useCopilotReadable({
     description: "Current BrowserOS state: installed apps, open windows, and settings.",
@@ -84,7 +86,7 @@ export function OSActions() {
   useCopilotAction({
     name: "web_view",
     description:
-      "Open a sandboxed HTML preview window. Provide `html` (a full HTML document), `filePath` (an absolute VFS path such as /mockups/file.html), or `url` (a same-origin URL or an absolute VFS path — leading-`/` paths that are not `/api/*` are auto-rewritten to `/api/fs/raw?path=...`). The preview runs with `sandbox=allow-scripts` and cannot reach BrowserOS APIs.",
+      "Open a sandboxed HTML preview window. Provide `html` (a full HTML document), `filePath` (an absolute VFS path such as /mockups/file.html), or `url` (a same-origin URL or an absolute VFS path — leading-`/` paths that are not `/api/*` are auto-rewritten to `/api/fs/raw?path=...`). The preview runs with `sandbox=allow-scripts` and cannot reach BrowserOS APIs. Set `update=true` to reuse the existing preview window instead of opening a new one — use this for iterative design where you update an HTML file and want to refresh in place.",
     parameters: [
       { name: "html", type: "string", description: "Full HTML document to render.", required: false },
       {
@@ -101,8 +103,14 @@ export function OSActions() {
         required: false,
       },
       { name: "title", type: "string", description: "Optional window title.", required: false },
+      {
+        name: "update",
+        type: "boolean",
+        description: "If true, close the existing preview window (if still open) and open a new one in its place instead of spawning an additional window. Use for iterative HTML design.",
+        required: false,
+      },
     ],
-    handler: async ({ html, url, filePath, title }) => {
+    handler: async ({ html, url, filePath, title, update }) => {
       const toRawUrl = (p: string) => `/api/fs/raw?path=${encodeURIComponent(p)}`;
       const resolve = (value: string): string => {
         if (value.startsWith("/") && !value.startsWith("/api/")) return toRawUrl(value);
@@ -117,7 +125,13 @@ export function OSActions() {
       }
       if (typeof title === "string" && title) params.title = title;
       if (!params.html && !params.url) return "Provide either html, filePath, or url.";
+      // When update=true, close the previous html-viewer window if it is still open.
+      if (update && htmlViewerIdRef.current) {
+        const stillOpen = store.getState().windows.some((w) => w.id === htmlViewerIdRef.current);
+        if (stillOpen) store.getState().close(htmlViewerIdRef.current);
+      }
       const id = store.getState().launch("html-viewer", params);
+      if (id) htmlViewerIdRef.current = id;
       return id ? `Opened HTML preview (window ${id}).` : "Could not open the preview.";
     },
   });

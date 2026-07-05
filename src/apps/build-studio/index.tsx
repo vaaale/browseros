@@ -42,6 +42,7 @@ const PHASE_ORDER: PipelinePhase["id"][] = [
   "analyze",
   "implement",
   "converge",
+  "test",
 ];
 
 const PHASE_LABEL: Record<PipelinePhase["id"], string> = {
@@ -53,6 +54,7 @@ const PHASE_LABEL: Record<PipelinePhase["id"], string> = {
   analyze: "Analyze",
   implement: "Impl",
   converge: "Converge",
+  test: "Test",
 };
 
 function phaseClass(state: PipelinePhase["state"]): string {

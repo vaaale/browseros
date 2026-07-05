@@ -6,6 +6,7 @@ import { writeFileAtomic } from "@/os/atomic-write";
 import { parseFrontmatter, buildFrontmatter, asString } from "@/lib/agent/subagents/markdown";
 
 const DIR = path.join(dataDir(), "skills");
+const SPEC_SEED_BUNDLE = path.join(process.cwd(), "seed", "spec-store");
 const SKILL_FILE = "SKILL.md";
 const SCRIPTS_DIR = "scripts";
 const REFERENCES_DIR = "references";
@@ -183,6 +184,35 @@ const SEED: Omit<Skill, "id">[] = [
 // the skill shipped. Back-filled only when missing (never clobbering edits).
 const ADDITIVE_SEED = SEED.filter((s) => s.name === "Build Studio");
 
+async function seedFromDiskPath(skillDir: string): Promise<void> {
+  const skillFile = path.join(skillDir, SKILL_FILE);
+  let raw: string;
+  try {
+    raw = await fs.readFile(skillFile, "utf8");
+  } catch {
+    return;
+  }
+  const { meta, body } = parseFrontmatter(raw);
+  const name = asString(meta.name) || path.basename(skillDir);
+  const id = slugify(name);
+  const dirPath = path.join(DIR, id);
+  if (await pathExists(path.join(dirPath, SKILL_FILE))) return; // additive — never overwrite
+  const scripts = await readAssetsDir(path.join(skillDir, SCRIPTS_DIR));
+  const references = await readAssetsDir(path.join(skillDir, REFERENCES_DIR));
+  const skill: Skill = {
+    id,
+    name,
+    description: asString(meta.description) || "",
+    whenToUse: asString(meta.when_to_use),
+    content: body,
+    createdBy: "seed",
+    pinned: asString(meta.pinned) === "true",
+    scripts,
+    references,
+  };
+  await writeSkill(skill);
+}
+
 let seeded = false;
 async function ensureSeed(): Promise<void> {
   if (seeded) return;
@@ -191,10 +221,31 @@ async function ensureSeed(): Promise<void> {
   const existing = await listSkillIds();
   if (existing.length === 0) {
     for (const s of SEED) await writeSkill({ id: slugify(s.name), createdBy: "seed", ...s });
-    return;
+  } else {
+    for (const s of ADDITIVE_SEED) {
+      if (!existing.includes(slugify(s.name))) await writeSkill({ id: slugify(s.name), createdBy: "seed", ...s });
+    }
   }
-  for (const s of ADDITIVE_SEED) {
-    if (!existing.includes(slugify(s.name))) await writeSkill({ id: slugify(s.name), createdBy: "seed", ...s });
+  // Auto-discover skill folders inside the spec-store seed bundle: any subdirectory
+  // at depth 1 or 2 that contains a SKILL.md is seeded additively into data/skills/.
+  const bundleEntries = await fs.readdir(SPEC_SEED_BUNDLE, { withFileTypes: true }).catch(() => []);
+  for (const entry of bundleEntries) {
+    if (!entry.isDirectory()) continue;
+    const featureDir = path.join(SPEC_SEED_BUNDLE, entry.name);
+    // Check for a top-level SKILL.md (skill folder directly in bundle)
+    if (await pathExists(path.join(featureDir, SKILL_FILE))) {
+      await seedFromDiskPath(featureDir);
+      continue;
+    }
+    // Check one level deeper (e.g. seed/spec-store/013-build-studio-agentic/feature-wizard/)
+    const subEntries = await fs.readdir(featureDir, { withFileTypes: true }).catch(() => []);
+    for (const sub of subEntries) {
+      if (!sub.isDirectory()) continue;
+      const subDir = path.join(featureDir, sub.name);
+      if (await pathExists(path.join(subDir, SKILL_FILE))) {
+        await seedFromDiskPath(subDir);
+      }
+    }
   }
 }
 

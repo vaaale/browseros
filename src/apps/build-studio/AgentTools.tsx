@@ -48,5 +48,35 @@ export function BuildStudioAgentTools({
     },
   });
 
+  useCopilotAction({
+    name: "buildstudio_run_tests",
+    description:
+      "Run the Playwright e2e tests for a feature and write test-results.md to its spec folder. Call after the Developer has written tests. The test file must be named e2e/<feature-id>.spec.ts (e.g. e2e/001-my-feature.spec.ts). Refreshes the spec tree when done so the Test phase badge updates.",
+    parameters: [
+      {
+        name: "featurePath",
+        type: "string",
+        description: "Store-prefixed feature path, e.g. 'user-specs/001-my-feature'",
+        required: true,
+      },
+    ],
+    handler: async ({ featurePath }) => {
+      const p = String(featurePath ?? "").trim();
+      if (!p) return "No featurePath provided.";
+      try {
+        const res = await fetch("/api/specs/run-tests", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ featurePath: p }),
+        }).then((r) => r.json());
+        onRefresh();
+        if (res.error) return `Error: ${res.error}`;
+        return res.summary ?? "Tests complete.";
+      } catch (e) {
+        return `Error: ${(e as Error).message}`;
+      }
+    },
+  });
+
   return null;
 }

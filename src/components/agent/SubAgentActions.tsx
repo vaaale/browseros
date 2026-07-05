@@ -6,7 +6,7 @@ import { encodeNested } from "@/lib/agent/nested-events";
 import { startDelegation, pushDelegationEvent, finishDelegation } from "@/lib/agent/subagent-events";
 import { useActiveConversationId, useActiveConversation, setConversationActiveFeatureBranch } from "@/lib/agent/conversations";
 import { DEFAULT_AGENT_ID } from "@/lib/agent/agent-ids";
-import { suggestFeatureBranchName } from "@/lib/agent/feature-branch";
+import { suggestFeatureBranchName, normalizeFeatureBranch } from "@/lib/agent/feature-branch";
 import { sessionHeader } from "@/lib/logging/client/session";
 
 type Choice = "once" | "session" | "local";
@@ -29,12 +29,20 @@ function FeatureBranchCard({
   task,
   convId,
   onDone,
+  suggestedBranch,
 }: {
   task: string;
   convId: string;
   onDone: (result: string) => void;
+  suggestedBranch?: string;
 }) {
-  const [name, setName] = useState(() => suggestFeatureBranchName(task).replace(/^bos\//, ""));
+  const [name, setName] = useState(() => {
+    if (suggestedBranch) {
+      const normalized = normalizeFeatureBranch(suggestedBranch);
+      if (normalized) return normalized.replace(/^bos\//, "");
+    }
+    return suggestFeatureBranchName(task).replace(/^bos\//, "");
+  });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
@@ -105,11 +113,13 @@ function DevBranchElicitation({
   convId,
   existingBranch,
   respond,
+  suggestedBranch,
 }: {
   task: string;
   convId: string;
   existingBranch?: string;
   respond?: (result: string) => void;
+  suggestedBranch?: string;
 }) {
   if (existingBranch) {
     return (
@@ -130,7 +140,7 @@ function DevBranchElicitation({
       </div>
     );
   }
-  return <FeatureBranchCard task={task} convId={convId} onDone={(result) => respond?.(result)} />;
+  return <FeatureBranchCard task={task} convId={convId} suggestedBranch={suggestedBranch} onDone={(result) => respond?.(result)} />;
 }
 
 // Sub-agent delegation: list/create agents, delegate (existing or ephemeral),
@@ -292,8 +302,16 @@ export function SubAgentActions({ agentId = DEFAULT_AGENT_ID }: { agentId?: stri
   useCopilotAction({
     name: "dev_branch_request",
     description:
-      "Set up the active feature branch required to modify BrowserOS itself (its source under src/). Call this BEFORE delegating a BOS source change to the developer when no active feature branch is set; it proposes a name from the task, lets the user confirm/edit, then creates and activates the bos/<kebab-name> branch on this conversation. Returns a message; only delegate to the developer once a branch is active.",
-    parameters: [{ name: "task", type: "string", description: "The BOS source change you want the developer to make", required: true }],
+      "Set up the active feature branch required to modify BrowserOS itself (its source under src/). Call this BEFORE delegating a BOS source change to the developer when no active feature branch is set; it proposes a name from the task (or from suggestedBranch when provided), lets the user confirm/edit, then creates and activates the bos/<kebab-name> branch on this conversation. Returns a message; only delegate to the developer once a branch is active.",
+    parameters: [
+      { name: "task", type: "string", description: "The BOS source change you want the developer to make", required: true },
+      {
+        name: "suggestedBranch",
+        type: "string",
+        description: "Branch slug from the spec's Feature Branch field (without the bos/ prefix, e.g. '001-my-feature'). When provided, pre-fills the branch name input for the user to confirm.",
+        required: false,
+      },
+    ],
     renderAndWaitForResponse: ({ args, status, respond }) => {
       if (status === "complete") {
         return <div className="my-1 rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-xs text-white/60">Feature-branch choice recorded.</div>;
@@ -301,6 +319,7 @@ export function SubAgentActions({ agentId = DEFAULT_AGENT_ID }: { agentId?: stri
       return (
         <DevBranchElicitation
           task={String(args?.task ?? "")}
+          suggestedBranch={typeof args?.suggestedBranch === "string" ? args.suggestedBranch : undefined}
           convId={threadIdRef.current}
           existingBranch={activeBranchRef.current}
           respond={respond}

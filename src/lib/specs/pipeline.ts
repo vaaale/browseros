@@ -79,6 +79,10 @@ async function derivePhases(
   let implementState: PipelinePhase["state"] = "na";
   if (tasks.length > 0) implementState = done === tasks.length ? "done" : done > 0 ? "pending" : "na";
 
+  const testResults = artifactNames.has("test-results.md") ? await readOr(`${featurePath}/test-results.md`) : "";
+  let testState: PipelinePhase["state"] = "na";
+  if (testResults) testState = testResults.includes("**Status**: PASSED") ? "done" : "pending";
+
   return [
     phase("constitution", (await hasConstitution()) ? "done" : "pending"),
     phase("specify", artifactNames.has("spec.md") ? "done" : "pending"),
@@ -88,6 +92,7 @@ async function derivePhases(
     phase("analyze", "na"),
     phase("implement", implementState),
     phase("converge", discrepancies.includes(featureId) ? "done" : "na"),
+    phase("test", testState),
   ];
 }
 

@@ -9,7 +9,8 @@ export type PhaseId =
   | "tasks"
   | "analyze"
   | "implement"
-  | "converge";
+  | "converge"
+  | "test";
 
 export type PhaseState = "done" | "pending" | "na";
 
