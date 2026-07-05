@@ -120,7 +120,7 @@ function AssistantChatInner({
     <CardScopeProvider scope={group}>
       <div className="flex h-full" data-theme="dark" style={THEME_OVERRIDES}>
         <ChatToolRenderer />
-        {showLeftPanel && (allGroups ? <ConversationPanel onPickGroup={onPickGroup} /> : <ConversationPanel group={group} />)}
+        {showLeftPanel && (allGroups ? <ConversationPanel currentGroup={group} onPickGroup={onPickGroup} /> : <ConversationPanel group={group} />)}
         <div className="flex min-w-0 flex-1 flex-col">
           {showToolbar && (
             <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-white/10 bg-white/[0.03] px-2 py-1 text-[11px]">

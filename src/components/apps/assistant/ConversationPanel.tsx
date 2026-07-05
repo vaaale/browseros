@@ -68,7 +68,13 @@ function ConvRow({ c, active, onPick }: { c: Conversation; active: boolean; onPi
 // section is an agent and the "+ New" button creates a conversation pinned to
 // that agent. Picking a conversation calls onPickGroup so the host can follow
 // its underlying conversation-group (which determines which thread is active).
-export function ConversationPanel({ group, onPickGroup }: { group?: string; onPickGroup?: (group: string) => void }) {
+// `currentGroup` is the group that is currently active in the host (only used
+// in the all-groups view): conversations outside this group must not be
+// highlighted even if they are active within their own group. Without this
+// guard, conversations from different groups that share the same effectiveAgent
+// (e.g. a Build Studio embed whose agentId defaults to "assistant") all render
+// as active simultaneously — one highlight per group instead of one globally.
+export function ConversationPanel({ group, currentGroup, onPickGroup }: { group?: string; currentGroup?: string; onPickGroup?: (group: string) => void }) {
   const single = useConversations(group ?? DEFAULT_GROUP);
   const all = useAllConversations();
   const [agents, setAgents] = useState<AgentMeta[]>([]);
@@ -156,7 +162,7 @@ export function ConversationPanel({ group, onPickGroup }: { group?: string; onPi
                 <ConvRow
                   key={c.id}
                   c={c}
-                  active={all.activeByGroup[c.group] === c.id}
+                  active={c.group === (currentGroup ?? DEFAULT_GROUP) && all.activeByGroup[c.group] === c.id}
                   onPick={() => onPickGroup?.(c.group)}
                 />
               ))}
