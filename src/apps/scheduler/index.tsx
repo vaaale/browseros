@@ -16,12 +16,76 @@ import {
   X,
 } from "lucide-react";
 import type {
-  ScheduleConfig,
-  Task,
-  TaskExecution,
+  JobCategory,
+  JobDefinition,
+  JobExecution,
   RecurringUnit,
+  ScheduleConfig,
 } from "@/lib/scheduler/types";
 import { describeSchedule } from "@/lib/scheduler/schedule";
+
+// UI-local aliases so the diff from the legacy Task naming stays small. The
+// runtime shape is JobDefinition (with a nested handler); the UI derives the
+// prompt/agentId it displays from `job.handler` when the kind is 'prompt'.
+type Task = JobDefinition;
+type TaskExecution = JobExecution;
+
+interface AllowedActions {
+  runNow: boolean;
+  pause: boolean;
+  resume: boolean;
+  edit: boolean;
+  delete: boolean;
+}
+
+// Category → pill styling. Kept in one place so the badge/tooltip stay in sync.
+const CATEGORY_BADGE: Record<JobCategory, { label: string; className: string; hint: string }> = {
+  user: {
+    label: "User",
+    className: "bg-violet-500/20 text-violet-200",
+    hint: "User-created job — full control.",
+  },
+  system: {
+    label: "System",
+    className: "bg-sky-500/20 text-sky-200",
+    hint: "Owned by a BrowserOS subsystem. Interval editable; delete disabled.",
+  },
+  integration: {
+    label: "Integration",
+    className: "bg-amber-500/20 text-amber-200",
+    hint: "Owned by an installed integration. Handler read-only; delete via uninstall.",
+  },
+};
+
+// Front-end mirror of getEditableFields/canPerformAction (see lib/scheduler/acl.ts).
+// The server is still the source of truth — this is just so we can grey buttons
+// out without an extra round-trip per row.
+function localAllowedActions(job: JobDefinition): AllowedActions {
+  if (job.category === "user") {
+    return { runNow: true, pause: true, resume: true, edit: true, delete: true };
+  }
+  return { runNow: true, pause: true, resume: true, edit: true, delete: false };
+}
+
+function canEditHandler(job: JobDefinition): boolean {
+  return job.category === "user" && !(job.readOnlyFields ?? []).includes("handler");
+}
+
+// Extract the human-readable "who does this run against" for the row. Prompt
+// jobs show the agent; internal shows the ref; integration shows the target.
+function handlerLabel(job: JobDefinition): string {
+  if (job.handler.kind === "prompt") return job.handler.agentId;
+  if (job.handler.kind === "internal") return job.handler.ref;
+  return `${job.handler.integrationId}:${job.handler.action}`;
+}
+
+// All text worth matching against the search box — prompt body for prompt jobs,
+// handler ref for internal, integration target for integration polls.
+function searchableText(job: JobDefinition): string {
+  if (job.handler.kind === "prompt") return job.handler.prompt.toLowerCase();
+  if (job.handler.kind === "internal") return job.handler.ref.toLowerCase();
+  return `${job.handler.integrationId} ${job.handler.action}`.toLowerCase();
+}
 
 interface AgentOption {
   id: string;
@@ -171,7 +235,7 @@ export default function SchedulerApp() {
     const q = search.trim().toLowerCase();
     return tasks
       .filter((t) => statusFilter === "all" || t.status === statusFilter)
-      .filter((t) => !q || t.name.toLowerCase().includes(q) || t.prompt.toLowerCase().includes(q))
+      .filter((t) => !q || t.name.toLowerCase().includes(q) || searchableText(t).includes(q))
       .slice()
       .sort((a, b) => {
         // active tasks with a nextRunAt first, sorted by soonest; then paused, then completed.
@@ -307,7 +371,7 @@ export default function SchedulerApp() {
         <TaskDetailModal
           task={detailTask}
           history={detailHistory}
-          agentName={agentById.get(detailTask.agentId)?.name ?? detailTask.agentId}
+          agentName={agentLabelFor(detailTask, agentById)}
           onClose={() => {
             setDetailTask(null);
             setDetailHistory([]);
@@ -383,7 +447,8 @@ function TaskTable({
         <thead className="border-b border-white/10 bg-white/[0.03]">
           <tr>
             <Th>Name</Th>
-            <Th>Agent</Th>
+            <Th>Category</Th>
+            <Th>Target</Th>
             <Th>Schedule</Th>
             <Th>Next Run</Th>
             <Th>Status</Th>
@@ -395,7 +460,7 @@ function TaskTable({
             <TaskRow
               key={task.id}
               task={task}
-              agentName={agentById.get(task.agentId)?.name ?? task.agentId}
+              agentName={agentLabelFor(task, agentById)}
               onRunNow={onRunNow}
               onPauseResume={onPauseResume}
               onEdit={onEdit}
@@ -457,7 +522,12 @@ function TaskRow({
         </button>
       </td>
       <td className="px-4 py-3">
-        <span className={`rounded px-2 py-0.5 text-xs ${agentBadgeClass(task.agentId)}`}>{agentName}</span>
+        <CategoryBadge category={task.category} />
+      </td>
+      <td className="px-4 py-3">
+        <span className={`rounded px-2 py-0.5 text-xs ${agentBadgeClass(handlerLabel(task))}`}>
+          {agentName}
+        </span>
       </td>
       <td className="px-4 py-3">
         <div className="text-xs text-white/60">{task.scheduleType === "one-time" ? "One-time" : "Recurring"}</div>
@@ -478,27 +548,84 @@ function TaskRow({
         <StatusBadge status={task.status} />
       </td>
       <td className="px-4 py-3 text-right">
-        <div className="flex items-center justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100">
-          {!completed && (
-            <IconButton onClick={() => onRunNow(task)} title="Run Now">
-              <Play size={14} />
-            </IconButton>
-          )}
-          {!completed && (
-            <IconButton onClick={() => onPauseResume(task)} title={paused ? "Resume" : "Pause"}>
-              {paused ? <Play size={14} /> : <Pause size={14} />}
-            </IconButton>
-          )}
-          <IconButton onClick={() => onEdit(task)} title="Edit">
-            <Pencil size={14} />
-          </IconButton>
-          <IconButton onClick={() => onDelete(task)} title="Delete" danger>
-            <Trash size={14} />
-          </IconButton>
-        </div>
+        <RowActions
+          task={task}
+          onRunNow={onRunNow}
+          onPauseResume={onPauseResume}
+          onEdit={onEdit}
+          onDelete={onDelete}
+        />
       </td>
     </tr>
   );
+}
+
+function RowActions({
+  task,
+  onRunNow,
+  onPauseResume,
+  onEdit,
+  onDelete,
+}: {
+  task: Task;
+  onRunNow: (task: Task) => void;
+  onPauseResume: (task: Task) => void;
+  onEdit: (task: Task) => void;
+  onDelete: (task: Task) => void;
+}) {
+  const paused = task.status === "paused";
+  const completed = task.status === "completed";
+  const allowed = localAllowedActions(task);
+  return (
+    <div className="flex items-center justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+      {!completed && allowed.runNow && (
+        <IconButton onClick={() => onRunNow(task)} title="Run Now">
+          <Play size={14} />
+        </IconButton>
+      )}
+      {!completed && (paused ? allowed.resume : allowed.pause) && (
+        <IconButton onClick={() => onPauseResume(task)} title={paused ? "Resume" : "Pause"}>
+          {paused ? <Play size={14} /> : <Pause size={14} />}
+        </IconButton>
+      )}
+      {allowed.edit && (
+        <IconButton onClick={() => onEdit(task)} title="Edit">
+          <Pencil size={14} />
+        </IconButton>
+      )}
+      {allowed.delete ? (
+        <IconButton onClick={() => onDelete(task)} title="Delete" danger>
+          <Trash size={14} />
+        </IconButton>
+      ) : (
+        <span
+          className="rounded p-1.5 text-white/20"
+          title={`Delete is disabled for ${task.category} jobs — managed by ${task.owner ?? task.category}.`}
+        >
+          <Trash size={14} />
+        </span>
+      )}
+    </div>
+  );
+}
+
+function CategoryBadge({ category }: { category: JobCategory }) {
+  const cfg = CATEGORY_BADGE[category];
+  return (
+    <span
+      className={`inline-block rounded px-2 py-0.5 text-xs ${cfg.className}`}
+      title={cfg.hint}
+    >
+      {cfg.label}
+    </span>
+  );
+}
+
+function agentLabelFor(job: Task, agentById: Map<string, AgentOption>): string {
+  if (job.handler.kind === "prompt") {
+    return agentById.get(job.handler.agentId)?.name ?? job.handler.agentId;
+  }
+  return handlerLabel(job);
 }
 
 function overdueClass(iso: string | null): string {
@@ -566,9 +693,19 @@ function TaskModal({
   onClose: () => void;
   onSaved: () => void;
 }) {
+  // Only 'prompt' handlers are user-editable via this modal. Non-prompt jobs
+  // (internal system loops, integration polls) fall back to schedule-only
+  // editing — their prompt/target fields are locked at seed time.
+  const initialPrompt =
+    initial && initial.handler.kind === "prompt" ? initial.handler.prompt : "";
+  const initialAgentId =
+    initial && initial.handler.kind === "prompt" ? initial.handler.agentId : "";
+  const category = initial?.category ?? "user";
+  const canEditPrompt = !initial || (initial && canEditHandler(initial));
+
   const [name, setName] = useState(initial?.name ?? "");
-  const [prompt, setPrompt] = useState(initial?.prompt ?? "");
-  const [agentId, setAgentId] = useState(initial?.agentId ?? agents[0]?.id ?? "");
+  const [prompt, setPrompt] = useState(initialPrompt);
+  const [agentId, setAgentId] = useState(initialAgentId || agents[0]?.id || "");
   const [scheduleType, setScheduleType] = useState<"one-time" | "recurring">(
     initial?.scheduleType ?? "one-time",
   );
@@ -625,16 +762,20 @@ function TaskModal({
     try {
       const url = initial ? `/api/scheduler/${initial.id}` : "/api/scheduler";
       const method = initial ? "PATCH" : "POST";
+      // Send only what the ACL permits. For system/integration jobs on edit,
+      // that's essentially just the schedule; sending name/prompt/agentId would
+      // be rejected by the server anyway.
+      const body: Record<string, unknown> = { scheduleConfig };
+      if (!initial || canEditPrompt) {
+        body.name = name;
+        body.prompt = prompt;
+        body.agentId = agentId;
+        body.deleteAfterExecution = scheduleType === "one-time" ? deleteAfter : false;
+      }
       const res = await fetch(url, {
         method,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name,
-          prompt,
-          agentId,
-          scheduleConfig,
-          deleteAfterExecution: scheduleType === "one-time" ? deleteAfter : false,
-        }),
+        body: JSON.stringify(body),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({ error: "Save failed" }));
@@ -660,13 +801,21 @@ function TaskModal({
       </div>
 
       <form onSubmit={submit} className="space-y-4">
+        {initial && category !== "user" && (
+          <div className="rounded border border-white/10 bg-white/[0.03] p-3 text-xs text-white/60">
+            <span className="mr-2 font-medium text-white/80">{CATEGORY_BADGE[category].label} job</span>
+            {CATEGORY_BADGE[category].hint}
+          </div>
+        )}
+
         <Field label="Task Name">
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="e.g., Daily Backup"
-            className="w-full rounded border border-white/10 bg-black/30 px-3 py-2 text-sm outline-none focus:border-white/30"
+            className="w-full rounded border border-white/10 bg-black/30 px-3 py-2 text-sm outline-none focus:border-white/30 disabled:opacity-60"
             required
+            disabled={!!initial && !canEditPrompt}
           />
         </Field>
 
@@ -675,9 +824,14 @@ function TaskModal({
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             rows={4}
-            placeholder="Enter the message to send to the agent..."
-            className="w-full resize-none rounded border border-white/10 bg-black/30 px-3 py-2 font-mono text-sm outline-none focus:border-white/30"
-            required
+            placeholder={
+              initial && initial.handler.kind !== "prompt"
+                ? `Handler: ${initial.handler.kind} (${handlerLabel(initial)})`
+                : "Enter the message to send to the agent..."
+            }
+            className="w-full resize-none rounded border border-white/10 bg-black/30 px-3 py-2 font-mono text-sm outline-none focus:border-white/30 disabled:opacity-60"
+            required={!initial || canEditPrompt}
+            disabled={!!initial && !canEditPrompt}
           />
         </Field>
 
@@ -685,8 +839,9 @@ function TaskModal({
           <select
             value={agentId}
             onChange={(e) => setAgentId(e.target.value)}
-            className="w-full rounded border border-white/10 bg-black/30 px-3 py-2 text-sm outline-none focus:border-white/30"
-            required
+            className="w-full rounded border border-white/10 bg-black/30 px-3 py-2 text-sm outline-none focus:border-white/30 disabled:opacity-60"
+            required={!initial || canEditPrompt}
+            disabled={!!initial && !canEditPrompt}
           >
             {agents.length === 0 && <option value="">No agents available</option>}
             {agents.map((a) => (
@@ -855,10 +1010,11 @@ function TaskDetailModal({
       </div>
       <div className="mb-6 space-y-3">
         <Row label="Name" value={<span className="text-sm font-medium text-white">{task.name}</span>} />
+        <Row label="Category" value={<CategoryBadge category={task.category} />} />
         <Row
-          label="Agent"
+          label={task.handler.kind === "prompt" ? "Agent" : "Handler"}
           value={
-            <span className={`inline-block rounded px-2 py-0.5 text-xs ${agentBadgeClass(task.agentId)}`}>
+            <span className={`inline-block rounded px-2 py-0.5 text-xs ${agentBadgeClass(handlerLabel(task))}`}>
               {agentName}
             </span>
           }
@@ -886,9 +1042,15 @@ function TaskDetailModal({
         <Row label="Status" value={<StatusBadge status={task.status} />} />
       </div>
       <div className="mb-6">
-        <label className="mb-1.5 block text-xs font-medium text-white/70">Prompt</label>
+        <label className="mb-1.5 block text-xs font-medium text-white/70">
+          {task.handler.kind === "prompt" ? "Prompt" : "Handler"}
+        </label>
         <div className="max-h-32 overflow-auto rounded border border-white/10 bg-black/30 p-3 font-mono text-sm text-white/80">
-          {task.prompt}
+          {task.handler.kind === "prompt"
+            ? task.handler.prompt
+            : task.handler.kind === "internal"
+              ? `internal:${task.handler.ref}`
+              : `integration:${task.handler.integrationId}/${task.handler.action}`}
         </div>
       </div>
       <div>
