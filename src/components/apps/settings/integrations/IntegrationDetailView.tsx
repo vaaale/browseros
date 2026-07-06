@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { ChevronRight, LogOut, Plug, RefreshCw, Zap } from "lucide-react";
 import type { IntegrationSummary } from "./useIntegrations";
 import { ClientSecretUpload } from "./ClientSecretUpload";
+import { TelegramBotAuthSection } from "./TelegramBotAuthSection";
 
 // Small "auth card" showing the connection status + Connect / Reauthorize /
 // Disconnect controls. When connected + Gmail scope granted, the card can
@@ -93,13 +94,21 @@ export function IntegrationDetailView({ item, onOpenService, onRefresh, onDiscon
 
   const connected = item.state.connected;
 
+  // Telegram uses a bot token, not OAuth — swap the generic OAuth card for the
+  // dedicated TelegramBotAuthSection, which drives the
+  // /api/integrations/telegram/bot/* routes and never opens an OAuth popup.
+  // The rest of the page (services list) is unchanged.
+  const isTelegram = item.manifest.id === "telegram";
+
   return (
     <div className="space-y-4">
-      {!item.hasClientSecret && (
+      {!isTelegram && !item.hasClientSecret && (
         <ClientSecretUpload integrationId={item.manifest.id} onUploaded={onRefresh} />
       )}
 
-      <section className="rounded-lg border border-white/10 bg-white/[0.05] p-4">
+      {isTelegram && <TelegramBotAuthSection onChange={onRefresh} />}
+
+      {!isTelegram && <section className="rounded-lg border border-white/10 bg-white/[0.05] p-4">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
@@ -158,7 +167,7 @@ export function IntegrationDetailView({ item, onOpenService, onRefresh, onDiscon
             )}
           </div>
         </div>
-      </section>
+      </section>}
 
       <section>
         <h4 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-white/40">Services</h4>

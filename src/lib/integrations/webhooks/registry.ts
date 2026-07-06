@@ -1,6 +1,7 @@
 import "server-only";
 import type { WebhookHandler } from "./handler";
 import { GmailWebhookHandler } from "../services/gsuite/adapters/gmail-webhook";
+import { TelegramBotWebhookHandler } from "../services/telegram/adapters/bot-webhook";
 
 // Server-side lookup: for a given (integrationId, serviceId), return the
 // registered handler. Modelled after `actions/adapter-registry.ts`.
@@ -10,6 +11,9 @@ import { GmailWebhookHandler } from "../services/gsuite/adapters/gmail-webhook";
 const HANDLERS: Record<string, Record<string, WebhookHandler>> = {
   gsuite: {
     gmail: new GmailWebhookHandler(),
+  },
+  telegram: {
+    bot: new TelegramBotWebhookHandler(),
   },
 };
 

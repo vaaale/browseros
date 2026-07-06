@@ -8,6 +8,7 @@ import { ScopeToggle } from "./ScopeToggle";
 import { PollingSection } from "./PollingSection";
 import { WebhookSection } from "./WebhookSection";
 import { DriveConfigSection } from "./DriveConfigSection";
+import { TelegramQueueSection } from "./TelegramQueueSection";
 
 type ServiceStateOverrides = Record<string, boolean>;
 
@@ -176,6 +177,9 @@ export function ServiceConfigView({ item, serviceId, onPatch, adapters }: Servic
 
       {/* Webhooks (Phase 2) */}
       <WebhookSection item={item} serviceId={serviceId} supported={canWebhook} />
+
+      {/* Telegram bot: offline send queue viewer. Only surfaces for telegram/bot. */}
+      {item.manifest.id === "telegram" && serviceId === "bot" && <TelegramQueueSection />}
     </div>
   );
 }

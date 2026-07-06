@@ -7,6 +7,7 @@ import { GMAIL_METHOD_DESCRIPTORS } from "@/lib/integrations/services/gsuite/ada
 import { DRIVE_METHOD_DESCRIPTORS } from "@/lib/integrations/services/gsuite/adapters/drive-methods";
 import { CALENDAR_METHOD_DESCRIPTORS } from "@/lib/integrations/services/gsuite/adapters/calendar-methods";
 import { CONTACTS_METHOD_DESCRIPTORS } from "@/lib/integrations/services/gsuite/adapters/contacts-methods";
+import { TELEGRAM_BOT_METHOD_DESCRIPTORS } from "@/lib/integrations/services/telegram/adapters/bot-methods";
 import {
   actionNameFor,
   invokeAdapterMethod,
@@ -37,14 +38,20 @@ export function IntegrationActions() {
   const { byIntegration, connected } = useIntegrationsEffectiveScopes();
   const gsuiteScopes = byIntegration["gsuite"] ?? new Set<string>();
   const gsuiteConnected = connected["gsuite"] ?? false;
+  const telegramScopes = byIntegration["telegram"] ?? new Set<string>();
+  const telegramConnected = connected["telegram"] ?? false;
 
   useCopilotReadable({
     description:
-      "Connected external integrations (Gmail / Drive / Calendar / Contacts / GSuite): which are connected and which scopes are effectively granted right now. If an action is disabled, ask the user to connect the integration or enable the missing scope in Settings → Integrations.",
+      "Connected external integrations (Gmail / Drive / Calendar / Contacts / GSuite / Telegram): which are connected and which scopes are effectively granted right now. If an action is disabled, ask the user to connect the integration or enable the missing scope in Settings → Integrations.",
     value: {
       gsuite: {
         connected: gsuiteConnected,
         effectiveScopes: Array.from(gsuiteScopes),
+      },
+      telegram: {
+        connected: telegramConnected,
+        effectiveScopes: Array.from(telegramScopes),
       },
     },
   });
@@ -102,6 +109,20 @@ export function IntegrationActions() {
           <GsuiteMethodAction
             key={`contacts_${d.method}:${scopeGranted ? "on" : "off"}`}
             serviceId="contacts"
+            method={d.method}
+            scope={d.scope}
+            description={d.description}
+            parameters={d.parameters}
+            scopeGranted={scopeGranted}
+          />
+        );
+      })}
+      {TELEGRAM_BOT_METHOD_DESCRIPTORS.map((d) => {
+        const scopeGranted = telegramScopes.has(d.scope) && telegramConnected;
+        return (
+          <TelegramMethodAction
+            key={`telegram_bot_${d.method}:${scopeGranted ? "on" : "off"}`}
+            serviceId="bot"
             method={d.method}
             scope={d.scope}
             description={d.description}
@@ -191,6 +212,80 @@ function GsuiteMethodAction({
         }
         if (e.code === "config_invalid") {
           return `Error: GSuite is misconfigured (${e.message}). Ask the user to upload client_secrets.json in Settings → Integrations → GSuite.`;
+        }
+        return `Error: ${e.message ?? "call failed"}`;
+      }
+    },
+  });
+  return null;
+}
+
+interface TelegramActionProps {
+  serviceId: string;
+  method: string;
+  scope: string;
+  description: string;
+  parameters: ReadonlyArray<{ name: string; type: string; description: string; required?: boolean }>;
+  scopeGranted: boolean;
+}
+
+/**
+ * One CopilotKit action for a single Telegram adapter method. Mirrors the
+ * GsuiteMethodAction pattern — same static-hook / remount-on-availability
+ * discipline; only the invoke integrationId differs.
+ */
+function TelegramMethodAction({
+  serviceId,
+  method,
+  scope,
+  description,
+  parameters,
+  scopeGranted,
+}: TelegramActionProps): null {
+  const name = actionNameFor("telegram", serviceId, method);
+  const availability: "enabled" | "disabled" = scopeGranted ? "enabled" : "disabled";
+  const fullDescription = scopeGranted
+    ? description
+    : `${description}\n\n(Currently unavailable — requires the '${scope}' scope. Ask the user to connect Telegram or enable this scope in Settings → Integrations.)`;
+
+  useCopilotAction({
+    name,
+    description: fullDescription,
+    available: availability,
+    parameters: parameters.map((p) =>
+      toCopilotParameter({
+        name: p.name,
+        type: p.type as ReturnType<typeof toCopilotParameter>["type"],
+        description: p.description,
+        required: p.required,
+      }),
+    ),
+    handler: async (args: Record<string, unknown>) => {
+      try {
+        const result = await invokeAdapterMethod({
+          integrationId: "telegram",
+          serviceId,
+          method,
+          args: args ?? {},
+        });
+        const json = JSON.stringify(result);
+        if (json.length > 8_000) {
+          return `${json.slice(0, 8_000)}\n\n… response truncated at 8 KB.`;
+        }
+        return json;
+      } catch (err) {
+        const e = err as Error & { code?: string; scope?: string };
+        if (e.code === "scope_disabled") {
+          return `Error: scope '${e.scope}' is not enabled for telegram. Ask the user to enable it in Settings → Integrations → Telegram, or to reconnect if it isn't granted.`;
+        }
+        if (e.code === "auth_failed") {
+          return `Error: Telegram bot token is missing or revoked. Ask the user to reconnect in Settings → Integrations → Telegram.`;
+        }
+        if (e.code === "config_invalid") {
+          return `Error: Telegram is not configured (${e.message}). Ask the user to add a bot token in Settings → Integrations → Telegram.`;
+        }
+        if (e.code === "not_implemented") {
+          return `Error: ${e.message}`;
         }
         return `Error: ${e.message ?? "call failed"}`;
       }

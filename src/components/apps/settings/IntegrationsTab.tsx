@@ -6,6 +6,7 @@ import { IntegrationsBreadcrumb, type BreadcrumbCrumb } from "./integrations/Int
 import { IntegrationListView } from "./integrations/IntegrationListView";
 import { IntegrationDetailView } from "./integrations/IntegrationDetailView";
 import { ServiceConfigView } from "./integrations/ServiceConfigView";
+import { TelegramDetailView } from "./integrations/TelegramDetailView";
 
 // The Integrations settings tab. Drill-down navigation:
 //   list  → detail (per-integration) → service config
@@ -52,7 +53,16 @@ export function IntegrationsTab() {
           onSelect={(id) => setView({ name: "detail", integrationId: id })}
         />
       )}
-      {view.name === "detail" && currentItem && (
+      {view.name === "detail" && currentItem && currentItem.manifest.id === "telegram" && (
+        <TelegramDetailView
+          item={currentItem}
+          onOpenService={(sid) =>
+            setView({ name: "config", integrationId: currentItem.manifest.id, serviceId: sid })
+          }
+          onRefresh={refresh}
+        />
+      )}
+      {view.name === "detail" && currentItem && currentItem.manifest.id !== "telegram" && (
         <IntegrationDetailView
           item={currentItem}
           onOpenService={(sid) =>

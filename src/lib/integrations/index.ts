@@ -11,3 +11,4 @@ export * from "./errors";
 // Side-effect import: registers the GSuite manifest with the registry.
 // Add further service modules here as they come online.
 import "./services/gsuite";
+import "./services/telegram";

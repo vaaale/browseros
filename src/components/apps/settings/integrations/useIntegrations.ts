@@ -189,6 +189,11 @@ export function scopeLabel(scope: string): string {
     "https://www.googleapis.com/auth/calendar.readonly": "Read your calendars & events",
     "https://www.googleapis.com/auth/calendar.events": "Create, edit & delete calendar events",
     "https://www.googleapis.com/auth/contacts.readonly": "Read your contacts",
+    "telegram:bot.read": "Read messages the bot receives",
+    "telegram:bot.send": "Send messages via the bot",
+    "telegram:bot.manage": "Manage chats (delete, pin, set commands)",
+    "telegram:user.read": "Read your Telegram messages (Phase 2)",
+    "telegram:user.send": "Send messages as you (Phase 2)",
   };
   if (map[scope]) return map[scope];
   // Fallback: trim to the trailing path segment.
