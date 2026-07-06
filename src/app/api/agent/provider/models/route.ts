@@ -70,8 +70,8 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ models: extractIds(payload) });
     }
 
-    // OpenAI-family (openai, openai-codex, openai-compatible)
-    const isLocal = cfg.provider === "openai-compatible";
+    // OpenAI-family (openai, openai-codex, openai-compatible, openai-responses)
+    const isLocal = cfg.provider === "openai-compatible" || cfg.provider === "openai-responses";
     if (!apiKey && !isLocal) {
       return NextResponse.json({ models: [], error: "API key required to list models." });
     }

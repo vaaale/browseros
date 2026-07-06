@@ -99,5 +99,5 @@ export async function updateProviderConfig(patch: Partial<ProviderConfig>): Prom
 
 export async function hasCredentials(): Promise<boolean> {
   const c = await getProviderConfig();
-  return !!c.apiKey || c.provider === "openai-compatible";
+  return !!c.apiKey || c.provider === "openai-compatible" || c.provider === "openai-responses";
 }

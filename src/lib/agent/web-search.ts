@@ -53,12 +53,20 @@ export function validateWebSearchInput(input: unknown): WebSearchInput {
 }
 
 function supportsWebSearch(provider: string): boolean {
-  return familyOf(provider as never) === "anthropic" || provider === "openai" || provider === "openai-codex";
+  return (
+    familyOf(provider as never) === "anthropic" ||
+    provider === "openai" ||
+    provider === "openai-codex" ||
+    provider === "openai-responses"
+  );
 }
 
 export async function isNativeWebSearchAvailable(): Promise<boolean> {
   const config = await getProviderConfig();
-  return supportsWebSearch(config.provider) && !!config.apiKey;
+  if (!supportsWebSearch(config.provider)) return false;
+  // Local Responses API servers may not need a key; a configured base URL is enough.
+  if (config.provider === "openai-responses") return !!config.apiKey || !!config.baseUrl;
+  return !!config.apiKey;
 }
 
 export async function webSearch(input: WebSearchInput): Promise<WebSearchOutput> {
@@ -66,9 +74,11 @@ export async function webSearch(input: WebSearchInput): Promise<WebSearchOutput>
   const config = await getProviderConfig();
 
   if (!supportsWebSearch(config.provider)) {
-    throw new Error("Native web search requires Anthropic or OpenAI (not local/compatible providers).");
+    throw new Error("Native web search requires Anthropic, OpenAI, or OpenAI Responses API provider.");
   }
-  if (!config.apiKey) throw new Error(`${config.provider} API key is required for native web search.`);
+  if (config.provider !== "openai-responses" && !config.apiKey) {
+    throw new Error(`${config.provider} API key is required for native web search.`);
+  }
 
   return familyOf(config.provider) === "anthropic"
     ? anthropicWebSearch(valid, config)

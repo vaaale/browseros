@@ -1,6 +1,6 @@
 // Provider metadata shared by client (Settings UI) and server. No secrets here.
 
-export type ProviderType = "anthropic" | "openai" | "openai-codex" | "openai-compatible";
+export type ProviderType = "anthropic" | "openai" | "openai-codex" | "openai-compatible" | "openai-responses";
 export type ProviderFamily = "anthropic" | "openai";
 
 export interface ProviderMeta {
@@ -46,6 +46,15 @@ export const PROVIDERS: Record<ProviderType, ProviderMeta> = {
     defaultModel: "local-model",
     defaultBaseUrl: "http://localhost:1234/v1",
     baseUrlPlaceholder: "http://localhost:1234/v1",
+    keyRequired: false,
+  },
+  "openai-responses": {
+    id: "openai-responses",
+    label: "OpenAI Responses API",
+    family: "openai",
+    defaultModel: "gpt-4o",
+    defaultBaseUrl: "http://localhost:1234/v1",
+    baseUrlPlaceholder: "http://localhost:1234/v1 (or leave blank for api.openai.com)",
     keyRequired: false,
   },
 };

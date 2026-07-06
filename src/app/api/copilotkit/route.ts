@@ -9,9 +9,9 @@ import {
 } from "@copilotkit/runtime";
 import { BuiltInAgent } from "@copilotkit/runtime/v2";
 import { getProviderConfig } from "@/lib/agent/provider";
-import { familyOf } from "@/lib/agent/provider-meta";
+import { familyOf, normalizeApiBase } from "@/lib/agent/provider-meta";
 import { buildRuntimeOptions } from "@/lib/agent/runtime";
-import { OpenAIChatAdapter } from "@/lib/agent/openai-chat-adapter";
+import { OpenAIChatAdapter, OpenAIResponsesAdapter } from "@/lib/agent/openai-chat-adapter";
 import { composeInstructions } from "@/lib/agent/instructions";
 import { getConversationActiveFeatureBranch } from "@/lib/agent/conversations-server";
 import { withCompaction } from "@/lib/agent/compaction/middleware";
@@ -26,6 +26,15 @@ async function buildAdapter(origin: string): Promise<CopilotServiceAdapter> {
       anthropic: new Anthropic({ apiKey: c.apiKey || "MISSING", baseURL: c.baseUrl || undefined }),
       model: c.model,
       promptCaching: { enabled: true },
+      maxInputTokens: c.maxInputTokens,
+    });
+  }
+  if (c.provider === "openai-responses") {
+    // Responses API: use the adapter that targets /responses (not /chat/completions).
+    const baseURL = c.baseUrl ? normalizeApiBase(c.baseUrl) : undefined;
+    return new OpenAIResponsesAdapter({
+      openai: new OpenAI({ apiKey: c.apiKey || "local", baseURL }),
+      model: c.model,
       maxInputTokens: c.maxInputTokens,
     });
   }

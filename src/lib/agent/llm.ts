@@ -2,7 +2,7 @@ import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { DEFAULT_MAX_TOKENS, getProviderConfig, type ProviderConfig } from "./provider";
-import { familyOf } from "./provider-meta";
+import { familyOf, normalizeApiBase } from "./provider-meta";
 
 // OpenAI deprecated `max_tokens` in favor of `max_completion_tokens` (and
 // rejects the old field on newer models). Local OpenAI-compatible servers
@@ -37,8 +37,98 @@ function anthropicClient(c: ProviderConfig): Anthropic {
 }
 
 function openaiClient(c: ProviderConfig): OpenAI {
-  const apiKey = c.apiKey || (c.provider === "openai-compatible" ? "local" : "MISSING");
-  return new OpenAI({ apiKey, baseURL: c.baseUrl || undefined });
+  const apiKey = c.apiKey || (c.provider === "openai-compatible" || c.provider === "openai-responses" ? "local" : "MISSING");
+  const baseURL = c.baseUrl ? normalizeApiBase(c.baseUrl) : undefined;
+  return new OpenAI({ apiKey, baseURL });
+}
+
+function extractResponsesText(output: unknown[]): string {
+  return output
+    .filter((item) => (item as Record<string, unknown>).type === "message")
+    .flatMap((msg) => ((msg as Record<string, unknown>).content as unknown[]))
+    .filter((blk) => (blk as Record<string, unknown>).type === "output_text")
+    .map((blk) => (blk as Record<string, unknown>).text as string)
+    .join("");
+}
+
+async function openaiResponsesComplete(
+  c: ProviderConfig,
+  system: string | undefined,
+  prompt: string,
+  maxTokens: number | undefined,
+): Promise<string> {
+  const client = openaiClient(c);
+  const res = await (client.responses.create({
+    model: c.model,
+    input: prompt,
+    ...(system ? { instructions: system } : {}),
+    ...(maxTokens && maxTokens > 0 ? { max_output_tokens: maxTokens } : {}),
+  } as Parameters<typeof client.responses.create>[0]) as unknown as Promise<Record<string, unknown>>);
+  return extractResponsesText(res.output as unknown[]);
+}
+
+async function openaiResponsesToolLoop(
+  c: ProviderConfig,
+  system: string,
+  prompt: string,
+  tools: Record<string, LlmTool>,
+  maxSteps: number,
+  onEvent?: (e: ToolEvent) => void,
+): Promise<ToolLoopResult> {
+  const client = openaiClient(c);
+  const toolSchemas = Object.entries(tools).map(([name, t]) => ({
+    type: "function" as const,
+    name,
+    description: t.description ?? "",
+    parameters: t.parameters,
+  }));
+  const allToolCalls: { tool: string; input: unknown }[] = [];
+
+  // Start with the user prompt; grow the input array across steps.
+  let input: unknown[] = [{ role: "user", content: prompt }];
+
+  for (let step = 0; step < maxSteps; step++) {
+    const res = await (client.responses.create({
+      model: c.model,
+      instructions: system,
+      input: input as Parameters<typeof client.responses.create>[0]["input"],
+      tools: toolSchemas as Parameters<typeof client.responses.create>[0]["tools"],
+      ...(c.maxTokens && c.maxTokens > 0 ? { max_output_tokens: c.maxTokens } : {}),
+    } as Parameters<typeof client.responses.create>[0]) as unknown as Promise<Record<string, unknown>>);
+
+    const output = (res.output as unknown[]).map((i) => i as Record<string, unknown>);
+    const fnCalls = output.filter((item) => item.type === "function_call");
+
+    if (fnCalls.length === 0) {
+      const text = extractResponsesText(output);
+      return { text, steps: step + 1, toolCalls: allToolCalls };
+    }
+
+    const results: unknown[] = [];
+    for (const call of fnCalls) {
+      let callInput: Record<string, unknown> = {};
+      try { callInput = JSON.parse((call.arguments as string) || "{}"); } catch { /* keep empty */ }
+      onEvent?.({ tool: call.name as string, input: callInput });
+      const t = tools[call.name as string];
+      let out: string;
+      try {
+        out = t ? await t.execute(callInput) : `Unknown tool: ${call.name as string}`;
+      } catch (e) {
+        out = `Error: ${(e as Error).message}`;
+      }
+      allToolCalls.push({ tool: call.name as string, input: callInput });
+      results.push({ type: "function_call_output", call_id: call.call_id as string, output: out });
+    }
+
+    // Next input: previous response output items + tool results
+    input = [...output, ...results];
+  }
+
+  return {
+    text: `Reached the step limit (${maxSteps} steps) before finishing. Partial changes may already be applied — review what was done and delegate a focused follow-up to continue, rather than restarting from scratch.`,
+    steps: maxSteps,
+    toolCalls: allToolCalls,
+  };
 }
 
 /** A single, non-tool completion. */
@@ -55,6 +145,10 @@ export async function complete(opts: { system?: string; prompt: string; maxToken
       messages: [{ role: "user", content: opts.prompt }],
     });
     return res.content.filter((b): b is Anthropic.TextBlock => b.type === "text").map((b) => b.text).join("");
+  }
+
+  if (c.provider === "openai-responses") {
+    return openaiResponsesComplete(c, opts.system, opts.prompt, maxTokens);
   }
 
   const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [];
@@ -262,7 +356,9 @@ export async function runToolLoop(opts: {
 }): Promise<ToolLoopResult> {
   const c = await getProviderConfig();
   const maxSteps = opts.maxSteps ?? MAX_STEPS;
-  return familyOf(c.provider) === "anthropic"
-    ? anthropicToolLoop(c, opts.system, opts.prompt, opts.tools, maxSteps, opts.onEvent)
-    : openaiToolLoop(c, opts.system, opts.prompt, opts.tools, maxSteps, opts.onEvent);
+  if (familyOf(c.provider) === "anthropic")
+    return anthropicToolLoop(c, opts.system, opts.prompt, opts.tools, maxSteps, opts.onEvent);
+  if (c.provider === "openai-responses")
+    return openaiResponsesToolLoop(c, opts.system, opts.prompt, opts.tools, maxSteps, opts.onEvent);
+  return openaiToolLoop(c, opts.system, opts.prompt, opts.tools, maxSteps, opts.onEvent);
 }
