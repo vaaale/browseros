@@ -120,5 +120,26 @@ export function SpecActions({ agentId = DEFAULT_AGENT_ID }: { agentId?: string }
     },
   });
 
+  useCopilotAction({
+    name: "spec_template_read",
+    description: "Read a spec-kit template or command prompt from the engine at .specify/templates (e.g. 'spec-template.md', 'plan-template.md', 'commands/specify.md'). Read-only.",
+    parameters: [{ name: "path", type: "string", description: "Template path relative to .specify/templates", required: true }],
+    handler: async ({ path }) => {
+      const res = await fetch(`/api/specs/templates?path=${encodeURIComponent(String(path ?? ""))}`).then((r) => r.json());
+      return res.error ? `Error: ${res.error}` : String(res.content ?? "");
+    },
+  });
+
+  useCopilotAction({
+    name: "spec_template_list",
+    description: "List available spec-kit templates/command prompts under .specify/templates (optionally a subdir like 'commands').",
+    parameters: [{ name: "path", type: "string", description: "Subdirectory under .specify/templates (optional)", required: false }],
+    handler: async ({ path }) => {
+      const q = path ? `?list=${encodeURIComponent(String(path))}` : "";
+      const res = await fetch(`/api/specs/templates${q}`).then((r) => r.json());
+      return res.error ? `Error: ${res.error}` : JSON.stringify(res.entries);
+    },
+  });
+
   return null;
 }

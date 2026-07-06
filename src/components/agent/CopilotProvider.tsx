@@ -43,16 +43,30 @@ export function CopilotProvider({
   const [loaded, setLoaded] = useState<{ agentId?: string; allow: string[] | null } | null>(null);
   useEffect(() => {
     let alive = true;
-    fetch("/api/assistant/agent")
-      .then((r) => r.json())
-      .then((d: { agents?: AgentInfo[] }) => {
-        if (!alive) return;
-        const agent = (d.agents ?? []).find((a) => a.id === agentId);
-        setLoaded({ agentId, allow: agent?.tools ?? null });
-      })
-      .catch(() => alive && setLoaded({ agentId, allow: null }));
+    const load = () => {
+      fetch("/api/assistant/agent")
+        .then((r) => r.json())
+        .then((d: { agents?: AgentInfo[] }) => {
+          if (!alive) return;
+          const agent = (d.agents ?? []).find((a) => a.id === agentId);
+          setLoaded({ agentId, allow: agent?.tools ?? null });
+        })
+        .catch(() => alive && setLoaded({ agentId, allow: null }));
+    };
+    load();
+    // Live-reload the agent's tool allowlist when Settings edits fire the
+    // shared "bos:agent-updated" event, and when the tab regains focus (covers
+    // any code path that forgets to fire the event). Together these mean tool /
+    // skill / MCP / prompt edits take effect on the next model turn without a
+    // window remount.
+    const onUpdated = () => load();
+    const onVisibility = () => { if (document.visibilityState === "visible") load(); };
+    window.addEventListener("bos:agent-updated", onUpdated);
+    document.addEventListener("visibilitychange", onVisibility);
     return () => {
       alive = false;
+      window.removeEventListener("bos:agent-updated", onUpdated);
+      document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [agentId]);
 

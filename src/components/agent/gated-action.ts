@@ -23,12 +23,6 @@ import { useAgentCapabilities } from "./agent-capabilities";
 //
 // The signature mirrors CopilotKit's generic so each action's parameters still
 // infer its handler argument types.
-// Consent / elicitation cards are safety UI, not scopable capabilities. A custom
-// per-agent allowlist must never be able to silently disable them (that would
-// e.g. drop the feature-branch prompt or the Claude-permission card, leaving the
-// model to flail with no way to ask the user). They are ALWAYS available.
-const ALWAYS_AVAILABLE_ACTIONS = new Set(["dev_branch_request", "agent_request_claude"]);
-
 export function useCopilotAction<const T extends Parameter[] | [] = []>(
   action: FrontendAction<T> | CatchAllFrontendAction,
   dependencies?: unknown[],
@@ -39,7 +33,6 @@ export function useCopilotAction<const T extends Parameter[] | [] = []>(
     a.name !== undefined &&
     a.name !== "*" &&
     a.available === undefined &&
-    !ALWAYS_AVAILABLE_ACTIONS.has(a.name) &&
     !isActionAllowed(a.name);
   let next: FrontendAction<T> | CatchAllFrontendAction = action;
   if (gate) {

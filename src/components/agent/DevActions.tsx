@@ -87,6 +87,53 @@ export function DevActions({ agentId }: { agentId?: string }) {
   });
 
   useCopilotAction({
+    name: "bos_source_list",
+    description: "List files/folders in the BrowserOS source repository (repo-relative path, e.g. 'src/components'). Read-only.",
+    parameters: [
+      { name: "path", type: "string", description: "Repo-relative directory, defaults to '.'", required: false },
+    ],
+    handler: async ({ path }) => {
+      const res = await fetch("/api/dev/source", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ op: "list", path }),
+      }).then((r) => r.json());
+      return res.error ? `Error: ${res.error}` : JSON.stringify(res.result);
+    },
+  });
+
+  useCopilotAction({
+    name: "bos_source_read",
+    description: "Read a source file from the BrowserOS repository (repo-relative path, e.g. 'src/components/apps/settings/SkillsTab.tsx'). Read-only.",
+    parameters: [{ name: "path", type: "string", description: "Repo-relative file path", required: true }],
+    handler: async ({ path }) => {
+      const res = await fetch("/api/dev/source", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ op: "read", path }),
+      }).then((r) => r.json());
+      return res.error ? `Error: ${res.error}` : String(res.result);
+    },
+  });
+
+  useCopilotAction({
+    name: "bos_source_search",
+    description: "Search BrowserOS source files for a string. Returns matching path:line:text. Optionally restrict to a subdirectory (defaults to 'src').",
+    parameters: [
+      { name: "query", type: "string", description: "Text to search for", required: true },
+      { name: "dir", type: "string", description: "Subdirectory to search, defaults to 'src'", required: false },
+    ],
+    handler: async ({ query, dir }) => {
+      const res = await fetch("/api/dev/source", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ op: "search", query, dir }),
+      }).then((r) => r.json());
+      return res.error ? `Error: ${res.error}` : JSON.stringify(res.result);
+    },
+  });
+
+  useCopilotAction({
     name: "agent_prompt_get",
     description:
       "Read THIS conversation's agent's EDITABLE base instructions (its personality) — the exact text agent_prompt_set overwrites. This is NOT the fully composed prompt: the always-injected core policy, memory, and skills index are added at runtime and MUST NOT be edited or written back (doing so bakes them into the personality and corrupts the agent).",

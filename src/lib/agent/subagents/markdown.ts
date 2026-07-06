@@ -36,11 +36,16 @@ export function parseFrontmatter(src: string): Frontmatter {
   return { meta, body: m[2].trim() };
 }
 
-export function buildFrontmatter(meta: Record<string, string | string[] | undefined>, body: string): string {
+export function buildFrontmatter(
+  meta: Record<string, string | string[] | boolean | undefined>,
+  body: string,
+): string {
   const lines: string[] = ["---"];
   for (const [k, v] of Object.entries(meta)) {
     if (v === undefined || v === "") continue;
-    lines.push(Array.isArray(v) ? `${k}: [${v.join(", ")}]` : `${k}: ${v}`);
+    if (Array.isArray(v)) lines.push(`${k}: [${v.join(", ")}]`);
+    else if (typeof v === "boolean") lines.push(`${k}: ${v ? "true" : "false"}`);
+    else lines.push(`${k}: ${v}`);
   }
   lines.push("---", "", body.trim(), "");
   return lines.join("\n");
@@ -54,4 +59,15 @@ export function asString(v: string | string[] | undefined): string | undefined {
 export function asList(v: string | string[] | undefined): string[] | undefined {
   if (v === undefined) return undefined;
   return Array.isArray(v) ? v : v ? [v] : undefined;
+}
+
+/** Parse a frontmatter value as a boolean. Returns undefined when unset so
+ *  callers can distinguish "not provided" from an explicit false. */
+export function asBool(v: string | string[] | undefined): boolean | undefined {
+  const s = asString(v);
+  if (s === undefined) return undefined;
+  const norm = s.trim().toLowerCase();
+  if (norm === "true" || norm === "yes" || norm === "1") return true;
+  if (norm === "false" || norm === "no" || norm === "0") return false;
+  return undefined;
 }

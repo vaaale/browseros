@@ -34,5 +34,22 @@ export function WebSearchActions() {
     },
   });
 
+  useCopilotAction({
+    name: "web_fetch",
+    description: "Fetch a specific URL and return its readable text content. Use for a single known URL when web_search's summaries are not enough.",
+    parameters: [
+      { name: "url", type: "string", description: "Absolute URL to fetch (http/https).", required: true },
+    ],
+    handler: async ({ url }) => {
+      const res = await fetch("/api/web-fetch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url }),
+      }).then((r) => r.json()) as { result?: string; error?: string };
+      if (res.error) return `Error: ${res.error}`;
+      return String(res.result ?? "");
+    },
+  });
+
   return null;
 }

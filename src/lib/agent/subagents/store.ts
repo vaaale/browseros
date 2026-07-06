@@ -4,11 +4,17 @@ import path from "path";
 import { dataDir } from "@/os/data-dir";
 import { writeFileAtomic } from "@/os/atomic-write";
 import type { Agent, AgentType } from "./types";
-import { parseFrontmatter, buildFrontmatter, asString, asList } from "./markdown";
+import { parseFrontmatter, buildFrontmatter, asString, asList, asBool } from "./markdown";
 import { DEFAULT_PERSONALITY } from "@/lib/agent/config";
 import { DEFAULT_AGENT_ID } from "@/lib/agent/agent-ids";
 
 const DIR = path.join(dataDir(), "agents");
+
+// Folder id of the shared "default prompt" template. Not a runnable agent — its
+// body is prepended to any agent whose useDefaultPrompt is true. Managed via
+// Settings → Agents → Default Agent; filtered out of the normal agent list.
+export const DEFAULT_PROMPT_AGENT_ID = "default_agent";
+const SEED_DEFAULT_AGENT = path.join(process.cwd(), "seed", "default_agent", "AGENT.md");
 
 function slugify(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || `agent-${Date.now().toString(36)}`;
@@ -111,7 +117,17 @@ const DEFAULTS: SeedAgent[] = [
 
 function toMarkdown(a: Agent): string {
   return buildFrontmatter(
-    { name: a.name, description: a.description, type: a.type, model: a.model, subagent_type: a.subagentType, tools: a.tools, skills: a.skills, mcp: a.mcp },
+    {
+      name: a.name,
+      description: a.description,
+      type: a.type,
+      model: a.model,
+      subagent_type: a.subagentType,
+      tools: a.tools,
+      skills: a.skills,
+      mcp: a.mcp,
+      useDefaultPrompt: a.useDefaultPrompt,
+    },
     a.systemPrompt,
   );
 }
@@ -128,6 +144,7 @@ function fromMarkdown(id: string, src: string): Agent {
     tools: asList(meta.tools),
     skills: asList(meta.skills),
     mcp: asList(meta.mcp),
+    useDefaultPrompt: asBool(meta.useDefaultPrompt),
     model: asString(meta.model),
     subagentType: asString(meta.subagent_type),
   };
@@ -152,16 +169,35 @@ async function ensureSeed(): Promise<void> {
   const existing = await fs.readdir(DIR).catch(() => [] as string[]);
   if (existing.length === 0) {
     for (const d of DEFAULTS) await writeSeedAgent(d);
+  } else {
+    for (const d of ADDITIVE_DEFAULTS) {
+      if (!existing.includes(slugify(d.name))) await writeSeedAgent(d);
+    }
+    // Back-fill Build Studio's unified capability ids on upgraded installs (016):
+    // its allowlist must contain action ids or per-agent action gating can't apply
+    // (the back-compat rule otherwise leaves an action-id-less allowlist fully open).
+    // Union only — never removes a user's customizations.
+    await reconcileBuildStudioTools();
+  }
+  await ensureDefaultPromptAgent();
+}
+
+// Copies seed/default_agent/AGENT.md into data/agents/default_agent on first
+// run so the shared prompt is user-editable. Never overwrites an existing file.
+async function ensureDefaultPromptAgent(): Promise<void> {
+  const dst = path.join(DIR, DEFAULT_PROMPT_AGENT_ID, "AGENT.md");
+  try {
+    await fs.access(dst);
     return;
+  } catch { /* file missing — seed */ }
+  try {
+    const src = await fs.readFile(SEED_DEFAULT_AGENT, "utf8");
+    await fs.mkdir(path.join(DIR, DEFAULT_PROMPT_AGENT_ID), { recursive: true });
+    await writeFileAtomic(dst, src);
+  } catch {
+    // Seed bundle missing (unexpected) — leave dst absent; composeInstructions
+    // falls back to its baked-in defaults so nothing crashes.
   }
-  for (const d of ADDITIVE_DEFAULTS) {
-    if (!existing.includes(slugify(d.name))) await writeSeedAgent(d);
-  }
-  // Back-fill Build Studio's unified capability ids on upgraded installs (016):
-  // its allowlist must contain action ids or per-agent action gating can't apply
-  // (the back-compat rule otherwise leaves an action-id-less allowlist fully open).
-  // Union only — never removes a user's customizations.
-  await reconcileBuildStudioTools();
 }
 
 async function reconcileBuildStudioTools(): Promise<void> {
@@ -188,6 +224,7 @@ export async function listSubAgents(): Promise<Agent[]> {
   const agents: Agent[] = [];
   for (const d of dirs) {
     if (!d.isDirectory()) continue;
+    if (d.name === DEFAULT_PROMPT_AGENT_ID) continue;
     try {
       const src = await fs.readFile(path.join(DIR, d.name, "AGENT.md"), "utf8");
       agents.push(fromMarkdown(d.name, src));
@@ -196,6 +233,37 @@ export async function listSubAgents(): Promise<Agent[]> {
     }
   }
   return agents;
+}
+
+/** The shared default-prompt template (its body is prepended to agents whose
+ *  useDefaultPrompt is true). Read and edited only via Settings → Agents →
+ *  Default Agent — NOT surfaced by listSubAgents. */
+export async function getDefaultPromptAgent(): Promise<Agent | undefined> {
+  await ensureSeed();
+  try {
+    const src = await fs.readFile(path.join(DIR, DEFAULT_PROMPT_AGENT_ID, "AGENT.md"), "utf8");
+    return fromMarkdown(DEFAULT_PROMPT_AGENT_ID, src);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Rewrite the shared default-prompt template's body (and optionally its meta).
+ *  Kept minimal: the template is a body-first document — description is the only
+ *  frontmatter a user might reasonably want to edit. */
+export async function setDefaultPromptAgent(input: { systemPrompt: string; description?: string }): Promise<Agent> {
+  await ensureSeed();
+  const existing = await getDefaultPromptAgent();
+  const updated: Agent = {
+    id: DEFAULT_PROMPT_AGENT_ID,
+    name: existing?.name || "Default",
+    description: input.description ?? existing?.description ?? "Shared default prompt.",
+    type: "local",
+    systemPrompt: input.systemPrompt,
+  };
+  await fs.mkdir(path.join(DIR, DEFAULT_PROMPT_AGENT_ID), { recursive: true });
+  await writeFileAtomic(path.join(DIR, DEFAULT_PROMPT_AGENT_ID, "AGENT.md"), toMarkdown(updated));
+  return updated;
 }
 
 export async function getAgent(idOrName: string): Promise<Agent | undefined> {

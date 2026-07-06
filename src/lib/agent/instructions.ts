@@ -1,6 +1,6 @@
 import "server-only";
 import { CORE_POLICY, DEFAULT_PERSONALITY } from "./config";
-import { getAgent } from "./subagents/store";
+import { getAgent, getDefaultPromptAgent } from "./subagents/store";
 import { listSkills } from "./skills/store";
 import { memorySnapshot } from "./memory/curated";
 import { listMcpServers } from "@/lib/mcp/store";
@@ -11,11 +11,12 @@ function mcpDescription(s: McpServerConfig): string {
   return s.description?.trim() || `${s.transport ?? "http"} MCP server`;
 }
 
-// Composes the assistant's system instructions: always-on core policy, the
-// agent's personality, the curated memory snapshot (frozen for the session),
-// then a skills index (full skill bodies loaded on demand via skill_load). The
-// skills index is filtered to the agent's allowed skills (011-per-agent-capabilities;
-// unset = all).
+// Composes the assistant's system instructions: an optional shared default
+// prompt (edited in Settings → Agents → Default Agent, opt-in per-agent via
+// useDefaultPrompt), the agent's personality, the curated memory snapshot
+// (frozen for the session), then a skills index (full skill bodies loaded on
+// demand via skill_load). The skills index is filtered to the agent's allowed
+// skills (011-per-agent-capabilities; unset = all).
 //
 // `agentId` is REQUIRED and must resolve to a real agent — there is no global
 // "active agent" to fall back to. A missing/unknown id is a bug (a request that
@@ -24,14 +25,17 @@ function mcpDescription(s: McpServerConfig): string {
 export async function composeInstructions(agentId: string): Promise<string> {
   const id = (agentId ?? "").trim();
   if (!id) throw new Error("composeInstructions requires an agentId (no active-agent fallback).");
-  const [agent, skills, memory, mcpServers] = await Promise.all([
+  const [agent, defaultAgent, skills, memory, mcpServers] = await Promise.all([
     getAgent(id),
+    getDefaultPromptAgent(),
     listSkills(),
     memorySnapshot(),
     listMcpServers(),
   ]);
   const personality = agent?.systemPrompt?.trim() || DEFAULT_PERSONALITY;
-  let out = `${CORE_POLICY}\n\n## Personality\n${personality}`;
+  const includeDefault = agent?.useDefaultPrompt ?? true;
+  const defaultBody = includeDefault ? (defaultAgent?.systemPrompt?.trim() || CORE_POLICY) : "";
+  let out = defaultBody ? `${defaultBody}\n\n## Personality\n${personality}` : personality;
   if (memory) out += `\n\n${memory}`;
   const allowed = filterAllowed(agent?.skills, skills, (s) => s.id);
   if (allowed.length > 0) {

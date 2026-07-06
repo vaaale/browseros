@@ -33,7 +33,7 @@ export const CAPABILITIES: Capability[] = [
 
   // Web
   { id: "web_search", group: "Web", context: "both", description: "Search the web with Anthropic native web search." },
-  { id: "web_fetch", group: "Web", context: "tool", description: "Fetch a URL's readable text (sub-agent)." },
+  { id: "web_fetch", group: "Web", context: "both", description: "Fetch a URL's readable text content." },
   { id: "web_view", group: "Web", context: "action", description: "Open an HTML document or URL in a sandboxed preview window." },
 
   // Files (VFS) — one id per op, used by the main chat and delegated sub-agents.
@@ -118,8 +118,8 @@ export const CAPABILITIES: Capability[] = [
   { id: "spec_write", group: "Specs", context: "both", description: "Create/overwrite a spec artifact." },
   { id: "spec_edit", group: "Specs", context: "both", description: "Find/replace within a spec artifact." },
   { id: "spec_search", group: "Specs", context: "both", description: "Search spec artifacts." },
-  { id: "spec_template_read", group: "Specs", context: "tool", description: "Read a spec-kit template/command prompt (sub-agent)." },
-  { id: "spec_template_list", group: "Specs", context: "tool", description: "List spec-kit templates (sub-agent)." },
+  { id: "spec_template_read", group: "Specs", context: "both", description: "Read a spec-kit template/command prompt." },
+  { id: "spec_template_list", group: "Specs", context: "both", description: "List spec-kit templates." },
 
   // Build Studio app control (registered in the BS app's embedded chat).
   { id: "buildstudio_artifact_open", group: "Build Studio", context: "action", description: "Open a spec artifact in the Build Studio viewer." },
