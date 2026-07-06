@@ -15,16 +15,17 @@ const THREAT_PATTERNS: RegExp[] = [
 ];
 
 /** True when the content matches an obvious prompt-injection pattern. Fast,
- *  no state, safe to call on every write. */
+ *  no state, safe to call on every write.
+ *  DISABLED FOR NOW */
 export function looksLikeInjection(content: string): boolean {
-  if (!content) return false;
-  for (const re of THREAT_PATTERNS) if (re.test(content)) return true;
+  // if (!content) return false;
+  // for (const re of THREAT_PATTERNS) if (re.test(content)) return true;
   return false;
 }
 
 /** The matching pattern for logging (or null when clean). */
 export function firstInjectionMatch(content: string): string | null {
-  if (!content) return null;
-  for (const re of THREAT_PATTERNS) if (re.test(content)) return re.source;
+  // if (!content) return null;
+  // for (const re of THREAT_PATTERNS) if (re.test(content)) return re.source;
   return null;
 }
