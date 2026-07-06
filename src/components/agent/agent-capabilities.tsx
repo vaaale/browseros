@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useMemo, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { resolveActionGate } from "@/lib/agent/capabilities-registry";
 
 // Per-surface gate for main-chat actions (016-unified-agents). One agent has one
@@ -11,12 +11,17 @@ import { resolveActionGate } from "@/lib/agent/capabilities-registry";
 // names ≥1 action id and this action isn't among them. So an unset/empty allowlist
 // — or a legacy allowlist that lists only server *tool* ids — leaves all actions
 // enabled (no agent silently loses its actions on upgrade).
+//
+// The provider also loads global tool-description overrides (Settings → Tools)
+// so the gated useCopilotAction shim can swap an action's description at
+// registration time — the LLM sees the user's edit without a page reload.
 
 interface AgentCapabilities {
   isActionAllowed: (id: string) => boolean;
+  descriptionFor: (id: string) => string | undefined;
 }
 
-const ALLOW_ALL: AgentCapabilities = { isActionAllowed: () => true };
+const ALLOW_ALL: AgentCapabilities = { isActionAllowed: () => true, descriptionFor: () => undefined };
 const Ctx = createContext<AgentCapabilities>(ALLOW_ALL);
 
 export function useAgentCapabilities(): AgentCapabilities {
@@ -31,6 +36,34 @@ export function AgentCapabilitiesProvider({
   allow: string[] | null | undefined;
   children: ReactNode;
 }) {
-  const value = useMemo<AgentCapabilities>(() => ({ isActionAllowed: resolveActionGate(allow) }), [allow]);
+  const [overrides, setOverrides] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    let alive = true;
+    const load = () => {
+      fetch("/api/tool-descriptions")
+        .then((r) => r.json())
+        .then((d: { overrides?: Record<string, string> }) => {
+          if (!alive) return;
+          setOverrides(d.overrides ?? {});
+        })
+        .catch(() => { /* keep previous state */ });
+    };
+    load();
+    const onUpdated = () => load();
+    window.addEventListener("bos:tool-descriptions-updated", onUpdated);
+    return () => {
+      alive = false;
+      window.removeEventListener("bos:tool-descriptions-updated", onUpdated);
+    };
+  }, []);
+
+  const value = useMemo<AgentCapabilities>(
+    () => ({
+      isActionAllowed: resolveActionGate(allow),
+      descriptionFor: (id) => overrides[id],
+    }),
+    [allow, overrides],
+  );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

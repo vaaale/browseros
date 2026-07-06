@@ -1,12 +1,14 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { AutoSaveStatus } from "../AutoSaveStatus";
 import { useAutoSave, type AutoSaveStatus as AutoSaveStatusValue } from "../hooks/useAutoSave";
-import { CapabilitiesSection } from "./CapabilitiesSection";
 import { DangerZone } from "./DangerZone";
 import { DetailsHeader } from "./DetailsHeader";
 import { InstructionsSection } from "./InstructionsSection";
+import { McpGrid } from "./McpGrid";
+import { SkillsGrid } from "./SkillsGrid";
+import { ToolAccordions } from "./ToolAccordions";
 import { PROTECTED_AGENT_ID, type AgentMeta, type CapabilitiesPatch, type Catalog } from "./types";
 
 export interface AgentDetailsProps {
@@ -24,13 +26,22 @@ interface MetaPatch {
   description?: string;
 }
 
+type Tab = "instructions" | "skills" | "tools" | "mcp";
+
 /**
- * Right pane of the Assistant tab: name/description + system prompt for the
- * selected agent, each field auto-saving on blur. The parent re-keys this
- * component on `agent.id` so switching agents resets input state without a
- * bespoke effect.
+ * Right pane of the Agents tab: per-agent editor split into four sub-tabs
+ * (Instructions / Skills / Tools / MCP). Every field auto-saves; a single
+ * indicator top-right shows the combined save state.
  */
 export function AgentDetails({ agent, catalog, onSaved, onDeleted }: AgentDetailsProps) {
+  const [tab, setTab] = useState<Tab>("instructions");
+
+  const notifyAgentUpdated = useCallback(() => {
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("bos:agent-updated"));
+    }
+  }, []);
+
   const patchMeta = useCallback(
     async (patch: MetaPatch) => {
       const res = await fetch(`/api/subagents/${agent.id}`, {
@@ -42,9 +53,10 @@ export function AgentDetails({ agent, catalog, onSaved, onDeleted }: AgentDetail
         const body = (await res.json().catch(() => null)) as { error?: string } | null;
         throw new Error(body?.error || `Failed to update agent (${res.status})`);
       }
+      notifyAgentUpdated();
       onSaved?.();
     },
-    [agent.id, onSaved],
+    [agent.id, onSaved, notifyAgentUpdated],
   );
 
   const patchPrompt = useCallback(
@@ -58,8 +70,9 @@ export function AgentDetails({ agent, catalog, onSaved, onDeleted }: AgentDetail
         const body = (await res.json().catch(() => null)) as { error?: string } | null;
         throw new Error(body?.error || `Failed to update instructions (${res.status})`);
       }
+      notifyAgentUpdated();
     },
-    [agent.id],
+    [agent.id, notifyAgentUpdated],
   );
 
   const patchCapabilities = useCallback(
@@ -73,48 +86,168 @@ export function AgentDetails({ agent, catalog, onSaved, onDeleted }: AgentDetail
         const body = (await res.json().catch(() => null)) as { error?: string } | null;
         throw new Error(body?.error || `Failed to update capabilities (${res.status})`);
       }
+      notifyAgentUpdated();
       onSaved?.();
     },
-    [agent.id, onSaved],
+    [agent.id, onSaved, notifyAgentUpdated],
+  );
+
+  const patchUseDefault = useCallback(
+    async (value: boolean) => {
+      const res = await fetch("/api/assistant/agent", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ agentId: agent.id, useDefaultPrompt: value }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(body?.error || `Failed to toggle default prompt (${res.status})`);
+      }
+      notifyAgentUpdated();
+      onSaved?.();
+    },
+    [agent.id, onSaved, notifyAgentUpdated],
   );
 
   const metaSave = useAutoSave<MetaPatch>(patchMeta);
   const promptSave = useAutoSave<string>(patchPrompt);
   const capsSave = useAutoSave<CapabilitiesPatch>(patchCapabilities);
+  const defaultToggleSave = useAutoSave<boolean>(patchUseDefault);
 
-  // Error dominates so the user notices failures; otherwise show the most
-  // active state (saving > saved) across the hooks.
-  const combinedStatus = mergeStatus(metaSave.status, promptSave.status, capsSave.status);
+  const combinedStatus = mergeStatus(
+    metaSave.status,
+    promptSave.status,
+    capsSave.status,
+    defaultToggleSave.status,
+  );
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex shrink-0 items-center justify-end border-b border-white/10 px-4 py-2">
-        <AutoSaveStatus status={combinedStatus} />
+      <div className="flex shrink-0 items-center gap-1 border-b border-white/10 px-2">
+        <TabButton active={tab === "instructions"} onClick={() => setTab("instructions")}>Instructions</TabButton>
+        <TabButton active={tab === "skills"} onClick={() => setTab("skills")}>Skills</TabButton>
+        <TabButton active={tab === "tools"} onClick={() => setTab("tools")}>Tools</TabButton>
+        <TabButton active={tab === "mcp"} onClick={() => setTab("mcp")}>MCP</TabButton>
+        <div className="ml-auto pr-2">
+          <AutoSaveStatus status={combinedStatus} />
+        </div>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
-        <DetailsHeader
-          name={agent.name}
-          description={agent.description}
-          onSaveName={(value) => metaSave.save({ name: value })}
-          onSaveDescription={(value) => metaSave.save({ description: value })}
-        />
-        <InstructionsSection
-          systemPrompt={agent.systemPrompt}
-          onSave={(value) => promptSave.save(value)}
-        />
-        <CapabilitiesSection
-          agent={agent}
-          catalog={catalog}
-          onSaveCapabilities={(patch) => capsSave.save(patch)}
-        />
-        {agent.id !== PROTECTED_AGENT_ID && onDeleted && (
-          <DangerZone
-            agentId={agent.id}
-            agentName={agent.name}
-            onDeleted={onDeleted}
+        {tab === "instructions" && (
+          <>
+            <DetailsHeader
+              name={agent.name}
+              description={agent.description}
+              onSaveName={(value) => metaSave.save({ name: value })}
+              onSaveDescription={(value) => metaSave.save({ description: value })}
+            />
+            <UseDefaultPromptToggle
+              agentId={agent.id}
+              value={agent.useDefaultPrompt}
+              onChange={(next) => defaultToggleSave.save(next)}
+            />
+            <InstructionsSection
+              systemPrompt={agent.systemPrompt}
+              onSave={(value) => promptSave.save(value)}
+            />
+            {agent.id !== PROTECTED_AGENT_ID && onDeleted && (
+              <DangerZone agentId={agent.id} agentName={agent.name} onDeleted={onDeleted} />
+            )}
+          </>
+        )}
+        {tab === "skills" && (
+          <SkillsGrid
+            all={catalog.skills}
+            allowed={agent.skills}
+            onChange={(skills) => capsSave.save({ skills })}
+          />
+        )}
+        {tab === "tools" && (
+          <ToolAccordions
+            all={catalog.tools}
+            allowed={agent.tools}
+            onChange={(tools) => capsSave.save({ tools })}
+          />
+        )}
+        {tab === "mcp" && (
+          <McpGrid
+            all={catalog.mcp}
+            allowed={agent.mcp}
+            onChange={(mcp) => capsSave.save({ mcp })}
           />
         )}
       </div>
+    </div>
+  );
+}
+
+function TabButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`relative px-3 py-2 text-xs font-medium transition-colors ${
+        active ? "text-white" : "text-white/60 hover:text-white/90"
+      }`}
+    >
+      {children}
+      <span
+        className={`absolute inset-x-2 -bottom-px h-px transition-colors ${
+          active ? "bg-white" : "bg-transparent"
+        }`}
+      />
+    </button>
+  );
+}
+
+function UseDefaultPromptToggle({
+  agentId,
+  value,
+  onChange,
+}: {
+  agentId: string;
+  value: boolean;
+  onChange: (next: boolean) => void;
+}) {
+  const [preview, setPreview] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!value) return;
+    let alive = true;
+    const timer = setTimeout(() => {
+      fetch("/api/assistant/default-agent")
+        .then((r) => r.json())
+        .then((d: { agent?: { systemPrompt?: string } }) => { if (alive) setPreview(d.agent?.systemPrompt ?? ""); })
+        .catch(() => { if (alive) setPreview(""); });
+    }, 0);
+    return () => { alive = false; clearTimeout(timer); };
+  }, [value, agentId]);
+
+  return (
+    <div className="mb-5">
+      <label className="flex cursor-pointer items-start gap-2">
+        <input
+          type="checkbox"
+          checked={value}
+          onChange={(e) => onChange(e.target.checked)}
+          className="mt-0.5 h-3.5 w-3.5 shrink-0 cursor-pointer accent-violet-500"
+        />
+        <span>
+          <span className="text-xs font-semibold text-white">Include default prompt</span>
+          <span className="mt-0.5 block text-[11px] text-white/50">
+            When on, the shared default prompt (Settings → Agents → Default Agent) is prepended to this agent&apos;s system prompt.
+          </span>
+        </span>
+      </label>
+      {value && (
+        <div className="mt-2 rounded border border-white/10 bg-black/20 p-2">
+          <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-white/40">
+            Default prompt (read-only)
+          </div>
+          <pre className="max-h-64 overflow-y-auto whitespace-pre-wrap font-mono text-[11px] leading-relaxed text-white/70">
+            {preview ?? "Loading…"}
+          </pre>
+        </div>
+      )}
     </div>
   );
 }

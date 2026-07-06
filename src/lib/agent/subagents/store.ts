@@ -325,6 +325,16 @@ export async function setAgentCapabilities(
   return updated;
 }
 
+/** Toggle whether the shared default prompt (default_agent template) is
+ *  prepended to this agent's personality. */
+export async function setAgentUseDefaultPrompt(id: string, value: boolean): Promise<Agent | undefined> {
+  const agent = await getAgent(id);
+  if (!agent) return undefined;
+  const updated: Agent = { ...agent, useDefaultPrompt: value };
+  await writeFileAtomic(path.join(DIR, agent.id, "AGENT.md"), toMarkdown(updated));
+  return updated;
+}
+
 /** Update an agent's name and/or description without touching its system prompt
  *  or capability allowlists. Fields left undefined are preserved as-is. */
 export async function setAgentMeta(

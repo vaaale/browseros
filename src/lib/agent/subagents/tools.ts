@@ -8,6 +8,7 @@ import * as specfs from "@/lib/dev/spec-fs";
 import type { LlmTool } from "@/lib/agent/llm";
 import { SCHEDULER_TOOLS } from "@/lib/scheduler/agent-tools";
 import { listSkills, getSkill, readSkillFile, listSkillFiles } from "@/lib/agent/skills/store";
+import { readOverrides } from "@/lib/agent/tool-descriptions";
 
 // Base tools every sub-agent may use: the sandboxed virtual file system, web,
 // and scheduler operations (spread in at module bottom to keep this literal
@@ -217,8 +218,27 @@ const ALL_TOOLS: Record<string, LlmTool> = { ...SUBAGENT_TOOLS, ...DEV_TOOLS, ..
  * Resolve the tools a sub-agent may use. With no explicit allowlist an agent
  * gets only the safe base tools — never the repo-scoped DEV_TOOLS. A developer
  * agent opts into repo access by listing those tool ids in its `tools`.
+ *
+ * Tool descriptions are overlaid from data/tool-descriptions.json (Settings →
+ * Tools) so a user can rewrite the LLM-facing description of any tool without
+ * editing source. Reads on every call — no in-memory cache — so edits take
+ * effect on the next delegated run.
  */
-export function toolsFor(allowed?: string[]): Record<string, LlmTool> {
-  if (!allowed || allowed.length === 0) return SUBAGENT_TOOLS;
-  return Object.fromEntries(allowed.filter((id) => ALL_TOOLS[id]).map((id) => [id, ALL_TOOLS[id]]));
+export async function toolsFor(allowed?: string[]): Promise<Record<string, LlmTool>> {
+  const overrides = await readOverrides();
+  const base = !allowed || allowed.length === 0
+    ? SUBAGENT_TOOLS
+    : Object.fromEntries(allowed.filter((id) => ALL_TOOLS[id]).map((id) => [id, ALL_TOOLS[id]]));
+  return applyDescriptionOverrides(base, overrides);
+}
+
+function applyDescriptionOverrides(
+  tools: Record<string, LlmTool>,
+  overrides: Record<string, string>,
+): Record<string, LlmTool> {
+  const out: Record<string, LlmTool> = {};
+  for (const [id, tool] of Object.entries(tools)) {
+    out[id] = overrides[id] ? { ...tool, description: overrides[id] } : tool;
+  }
+  return out;
 }

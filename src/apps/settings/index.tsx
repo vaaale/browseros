@@ -3,8 +3,9 @@
 import { useCallback, useEffect, useState } from "react";
 import type { ConfigSchemaView } from "@/lib/config/types";
 import { AppearanceTab } from "@/components/apps/settings/AppearanceTab";
-import { AssistantTab } from "@/components/apps/settings/AssistantTab";
+import { AgentsTab } from "@/components/apps/settings/AgentsTab";
 import { SkillsTab } from "@/components/apps/settings/SkillsTab";
+import { ToolsTab } from "@/components/apps/settings/ToolsTab";
 import { AppsTab } from "@/components/apps/settings/AppsTab";
 import { IntegrationsTab } from "@/components/apps/settings/IntegrationsTab";
 import { DevHarnessTab } from "@/components/apps/settings/DevHarnessTab";
@@ -20,8 +21,9 @@ import { ProviderSettings } from "@/components/apps/ProviderSettings";
 const CUSTOM_TABS: Record<string, React.ComponentType> = {
   appearance: AppearanceTab,
   "ai-provider": ProviderSettings,
-  assistant: AssistantTab,
+  agents: AgentsTab,
   skills: SkillsTab,
+  tools: ToolsTab,
   mcp: McpServersTab,
   apps: AppsTab,
   integrations: IntegrationsTab,

@@ -27,16 +27,20 @@ export function useCopilotAction<const T extends Parameter[] | [] = []>(
   action: FrontendAction<T> | CatchAllFrontendAction,
   dependencies?: unknown[],
 ): void {
-  const { isActionAllowed } = useAgentCapabilities();
-  const a = action as { name?: string; available?: unknown };
+  const { isActionAllowed, descriptionFor } = useAgentCapabilities();
+  const a = action as { name?: string; available?: unknown; description?: string };
   const gate =
     a.name !== undefined &&
     a.name !== "*" &&
     a.available === undefined &&
     !isActionAllowed(a.name);
   let next: FrontendAction<T> | CatchAllFrontendAction = action;
+  const override = a.name ? descriptionFor(a.name) : undefined;
+  if (override && override !== a.description) {
+    next = { ...(action as Record<string, unknown>), description: override } as unknown as FrontendAction<T>;
+  }
   if (gate) {
-    const rest = { ...(action as Record<string, unknown>) };
+    const rest = { ...(next as Record<string, unknown>) };
     delete rest.renderAndWaitForResponse;
     delete rest.renderAndWait;
     next = { ...rest, available: "disabled", render: () => null } as unknown as FrontendAction<T>;

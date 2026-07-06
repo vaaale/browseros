@@ -8,8 +8,6 @@ export { DetailsHeader } from "./DetailsHeader";
 export type { DetailsHeaderProps } from "./DetailsHeader";
 export { InstructionsSection } from "./InstructionsSection";
 export type { InstructionsSectionProps } from "./InstructionsSection";
-export { CapabilitiesSection } from "./CapabilitiesSection";
-export type { CapabilitiesSectionProps } from "./CapabilitiesSection";
 export { SkillsGrid } from "./SkillsGrid";
 export type { SkillsGridProps } from "./SkillsGrid";
 export { McpGrid } from "./McpGrid";

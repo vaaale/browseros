@@ -93,7 +93,7 @@ async function runLocal(
   const isDev = ids.some((id) => DEV_TOOL_IDS.includes(id));
   const isExtended = isDev || ids.includes(DELEGATE_TO_DEVELOPER) || ids.some((id) => SPEC_TOOL_IDS.includes(id));
 
-  const tools = { ...toolsFor(agent.tools) };
+  const tools = { ...(await toolsFor(agent.tools)) };
   if (ids.includes(DELEGATE_TO_DEVELOPER)) {
     tools[DELEGATE_TO_DEVELOPER] = makeDelegateTool(opts?.onEvent, depth, opts?.featureBranch, opts?.interactive);
   }

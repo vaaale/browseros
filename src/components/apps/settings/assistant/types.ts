@@ -9,6 +9,9 @@ export interface AgentMeta {
   skills: string[];
   mcp: string[];
   systemPrompt: string;
+  /** Whether the shared default prompt is prepended to this agent's personality.
+   *  Defaults to true server-side when the AGENT.md doesn't set it explicitly. */
+  useDefaultPrompt: boolean;
 }
 
 // One skill entry in the catalog returned alongside `agents` by GET

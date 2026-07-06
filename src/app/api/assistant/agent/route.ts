@@ -3,6 +3,7 @@ import {
   listSubAgents,
   setAgentSystemPrompt,
   setAgentCapabilities,
+  setAgentUseDefaultPrompt,
   createSubAgent,
 } from "@/lib/agent/subagents/store";
 import { composeInstructions } from "@/lib/agent/instructions";
@@ -51,6 +52,7 @@ export async function GET(req: NextRequest) {
       skills: a.skills ?? [],
       mcp: a.mcp ?? [],
       systemPrompt: a.systemPrompt ?? "",
+      useDefaultPrompt: a.useDefaultPrompt ?? true,
     })),
     composed,
     catalog,
@@ -74,6 +76,9 @@ export async function PATCH(req: NextRequest) {
         skills: Array.isArray(body.skills) ? body.skills.map(String) : undefined,
         mcp: Array.isArray(body.mcp) ? body.mcp.map(String) : undefined,
       });
+    }
+    if (typeof body.useDefaultPrompt === "boolean") {
+      await setAgentUseDefaultPrompt(body.agentId, body.useDefaultPrompt);
     }
     return NextResponse.json({ ok: true });
   } catch (err) {

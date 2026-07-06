@@ -18,10 +18,10 @@ const REGISTRATIONS: ConfigRegistration[] = [
   {
     schema: {
       namespace: "assistant",
-      title: "Assistant",
-      description: "The assistant's agents and which one is the active personality.",
+      title: "Agents",
+      description: "The assistant's agents and the shared default prompt they can inherit.",
       order: 5,
-      customComponent: "assistant",
+      customComponent: "agents",
       fields: [],
     },
     load: async () => ({}),
@@ -55,6 +55,19 @@ const REGISTRATIONS: ConfigRegistration[] = [
     save: async (patch) => {
       await patchNamespace("build-studio", patch);
     },
+  },
+  {
+    schema: {
+      namespace: "tools",
+      title: "Tools",
+      description:
+        "Global tool-description overrides. Rewrite what the LLM sees for any tool without editing source. Overrides apply to every agent (main-chat actions and sub-agent tools alike) and take effect on the next model turn.",
+      order: 65,
+      customComponent: "tools",
+      fields: [],
+    },
+    load: async () => ({}),
+    save: async () => {},
   },
   {
     schema: {
