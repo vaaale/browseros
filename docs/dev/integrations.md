@@ -193,6 +193,58 @@ adapters are Phase 3 stubs — any invocation throws
 `IntegrationConfigError("service_not_yet_implemented")` and no capability
 ids are registered for them yet.
 
+## Telegram agent routing
+
+The Telegram bot service can auto-reply to inbound chats through a BOS
+sub-agent — a small extra layer on top of the standard notifications/adapter
+flow.
+
+**Wiring**:
+
+```
+Telegram update  ──▶  pollOnce / webhook.receive
+                            │        │
+                            │        └──▶ agent-router.routeUpdate(update)
+                            │                    │
+                            │                    ├─ readState → agentConfig
+                            │                    ├─ context-cache: append user turn
+                            │                    ├─ runSubAgent(agent, task)
+                            │                    ├─ sendMessage (via telegramFetch)
+                            │                    └─ context-cache: append assistant turn
+                            │
+                            └──▶ IntegrationEvent  ──▶ notifications inbox
+```
+
+The router lives at `src/lib/integrations/services/telegram/agent-router.ts`
+and the per-chat rolling context at `context-cache.ts` (JSON files at
+`data/integrations/telegram/context/<botId>/<chatId>.json`, capped at 20
+turns per chat and 100 chats per bot with LRU eviction).
+
+**Configuration** — the bot service's `config.agentConfig` object:
+
+| Field             | Type                        | Default        | Meaning                                                                                         |
+|-------------------|-----------------------------|----------------|-------------------------------------------------------------------------------------------------|
+| `enabled`         | boolean                     | `false`        | Master switch. When off, routing is skipped entirely.                                            |
+| `agentId`         | string                      | `""`           | Sub-agent folder id under `data/agents/`. Must exist in the sub-agent store.                     |
+| `mode`            | `"auto_reply" \| "manual"`  | `"auto_reply"` | Only `auto_reply` posts back automatically; `manual` is a no-op reserved for future review UI.   |
+| `contextDepth`    | number                      | `10`           | Prior turns injected into each prompt. Clamped to `[1, 50]`.                                     |
+| `fallbackMessage` | string                      | `""`           | Sent verbatim on router error (agent missing / crashed). Empty means stay silent.                |
+
+Edit via **Settings → Integrations → Telegram → Agent auto-reply** (the
+`TelegramBotAgentConfig` component). The section renders only after the bot
+is connected.
+
+**Programmatic entry point** — `agent_route_message` is registered as an
+adapter action (parameters: `chatId`, `text`, optional `agentId`,
+`contextDepth`), so the assistant can drive the router directly for testing
+or for one-off routed messages. Reply is posted back to the chat and both
+turns are recorded in the context store.
+
+**Failure modes** — `routeUpdate` never throws. Configuration errors, agent
+lookup misses, and sub-agent crashes are logged under the
+`integrations.telegram.agent-router` component; if `fallbackMessage` is set,
+it is posted as the visible reply.
+
 ## Acceptance criteria (Phase 1 Definition of Done)
 
 - ✅ Every secret and every Google API call happens on the server.

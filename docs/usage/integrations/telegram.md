@@ -190,6 +190,43 @@ handling is invisible to the LLM.
 
 ---
 
+## Agent auto-reply
+
+Instead of manually watching the Notifications inbox for every incoming
+Telegram message, the bot can hand each new chat off to a BOS **sub-agent**
+and post the agent's reply back to the same chat automatically.
+
+Once the bot is connected, an **Agent auto-reply** card appears in
+**Settings → Integrations → Telegram** with five controls:
+
+| Control              | What it does                                                                                              |
+|----------------------|-----------------------------------------------------------------------------------------------------------|
+| **Enable agent routing** | Master switch. Off by default — incoming messages only flow into Notifications.                       |
+| **Sub-agent**            | Which sub-agent answers. The dropdown lists everything from Settings → Agents.                        |
+| **Mode**                 | *Auto-reply* posts the response automatically. *Manual* keeps the switch on but suppresses replies.   |
+| **Context depth**        | How many prior turns to include when the agent formulates a reply (1–50; default 10).                 |
+| **Fallback message**     | Optional. Sent verbatim if the agent errors. Leave blank to stay silent on errors.                    |
+
+Behaviour notes:
+
+- Only fresh **text messages** and **channel posts** are routed. Edits,
+  callback queries, and non-text updates are ignored (they still show up in
+  Notifications).
+- Each chat has its own **rolling context** capped at the last 20 turns. Old
+  chats are LRU-evicted once a bot exceeds 100 tracked chats.
+- The **Notifications inbox** still fires — nothing else in BOS changes just
+  because routing is on. You can watch the exchange in real time or scroll
+  back later.
+- A missing agent (deleted after configuration) triggers the fallback message
+  and a warning in the server log; routing stays on, so re-selecting an agent
+  is enough to restore replies.
+
+**When to prefer polling vs. webhook for auto-reply**: identical behaviour.
+Both paths call the same router, so use whichever transport suits your
+deployment.
+
+---
+
 ## Troubleshooting
 
 **"Bot token doesn't match the expected @BotFather format"**

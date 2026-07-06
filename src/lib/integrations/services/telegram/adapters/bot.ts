@@ -411,6 +411,23 @@ export class TelegramBotAdapter extends ServiceAdapter {
     });
   }
 
+  /**
+   * Route a message through the configured sub-agent and post its reply. Thin
+   * wrapper around agent-router.routeManualMessage — kept on the adapter so it
+   * appears as an assistant action (see bot-methods.ts).
+   */
+  async routeMessage(input: {
+    chatId: string | number;
+    text: string;
+    agentId?: string;
+    contextDepth?: number;
+  }): Promise<{ handled: boolean; replyText?: string; error?: string }> {
+    return this.withScope(TELEGRAM_BOT_SCOPES.send, async () => {
+      const { routeManualMessage } = await import("../agent-router");
+      return routeManualMessage(input);
+    });
+  }
+
   async getUpdates(input: GetUpdatesInput = {}): Promise<TelegramUpdate[]> {
     return this.withScope(TELEGRAM_BOT_SCOPES.read, async () => {
       const token = await requireBotToken();
@@ -472,6 +489,14 @@ export class TelegramBotAdapter extends ServiceAdapter {
           };
           return { ...prev, services };
         });
+        // Route each inbound update through the agent router. Runs after offset
+        // is persisted so a router crash can't cause the same update to route
+        // twice on the next tick. Sequential to avoid interleaving replies
+        // within one chat. routeUpdate never throws — errors are logged inside.
+        const { routeUpdate } = await import("../agent-router");
+        for (const u of updates) {
+          await routeUpdate(u);
+        }
       }
       return { newMessages: events.length, events };
     });
@@ -587,6 +612,13 @@ const INVOKERS: Record<
       offset: args.offset as number | undefined,
       limit: args.limit as number | undefined,
       timeout: args.timeout as number | undefined,
+    }),
+  agent_route_message: (a, args) =>
+    a.routeMessage({
+      chatId: String(args.chatId),
+      text: String(args.text),
+      agentId: args.agentId as string | undefined,
+      contextDepth: args.contextDepth as number | undefined,
     }),
 };
 

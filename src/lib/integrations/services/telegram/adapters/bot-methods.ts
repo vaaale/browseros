@@ -23,7 +23,8 @@ export type BotMethodName =
   | "chats_get"
   | "bot_answer_callback"
   | "bot_set_commands"
-  | "updates_get";
+  | "updates_get"
+  | "agent_route_message";
 
 export interface BotMethodDescriptor {
   method: BotMethodName;
@@ -195,6 +196,18 @@ export const TELEGRAM_BOT_METHOD_DESCRIPTORS: readonly BotMethodDescriptor[] = [
       { name: "offset", type: "number", description: "Only return updates with id >= offset. Pass previous max+1 to ack.", required: false },
       { name: "limit", type: "number", description: "Cap on returned updates (1–100).", required: false },
       { name: "timeout", type: "number", description: "Long-poll seconds (0–50). Default 0 (short-poll).", required: false },
+    ],
+  },
+  {
+    method: "agent_route_message",
+    scope: TELEGRAM_BOT_SCOPES.send,
+    description:
+      "Route a message through the configured Telegram sub-agent and post its reply back to the chat. Uses the same rolling context store as the auto-reply poller, so this call is transparent to on-going conversations. Useful for testing an agent's behaviour or wiring a one-off message into the reply pipeline.",
+    parameters: [
+      { name: "chatId", type: "string", description: "Chat id whose context to use and where to send the reply.", required: true },
+      { name: "text", type: "string", description: "The message text to route (as if the chat participant sent it).", required: true },
+      { name: "agentId", type: "string", description: "Override the configured agent for this call. Defaults to the bot service's agentConfig.agentId.", required: false },
+      { name: "contextDepth", type: "number", description: "How many prior turns to include. Defaults to the configured contextDepth.", required: false },
     ],
   },
 ];

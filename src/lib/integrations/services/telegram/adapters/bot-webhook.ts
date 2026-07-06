@@ -65,6 +65,11 @@ export class TelegramBotWebhookHandler implements WebhookHandler {
       return { events: [] };
     }
     if (!update || typeof update.update_id !== "number") return { events: [] };
+    // Fire agent routing alongside notification emission. Dynamic import keeps
+    // the module graph acyclic (agent-router imports client/auth from this
+    // service). routeUpdate never throws.
+    const { routeUpdate } = await import("../agent-router");
+    await routeUpdate(update);
     return { events: [updateToEvent(update)] };
   }
 

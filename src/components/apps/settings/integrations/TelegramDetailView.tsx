@@ -3,6 +3,7 @@
 import { Bot, ChevronRight, Zap } from "lucide-react";
 import type { IntegrationSummary } from "./useIntegrations";
 import { TelegramBotAuthSection } from "./TelegramBotAuthSection";
+import { TelegramBotAgentConfig } from "./TelegramBotAgentConfig";
 
 // Telegram-specific detail view. Replaces the generic OAuth flow used by
 // GSuite because Telegram bots authenticate with a single token pasted from
@@ -17,9 +18,12 @@ export interface TelegramDetailViewProps {
 }
 
 export function TelegramDetailView({ item, onOpenService, onRefresh }: TelegramDetailViewProps) {
+  const botConnected = item.state.connected === true;
   return (
     <div className="space-y-4">
       <TelegramBotAuthSection onChange={onRefresh} />
+
+      {botConnected && <TelegramBotAgentConfig onChange={onRefresh} />}
 
       <section>
         <h4 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-white/40">

@@ -100,6 +100,44 @@ export const TELEGRAM_MANIFEST: IntegrationManifest = {
             description:
               "Default parse_mode applied when messages_send is called without one. Empty = plain text.",
           },
+          agentConfig: {
+            type: "object",
+            description:
+              "Route incoming messages through a BOS sub-agent and auto-reply with its response. See docs/dev/integrations.md#telegram-agent-routing.",
+            properties: {
+              enabled: {
+                type: "boolean",
+                default: false,
+                description:
+                  "Master switch. When false, incoming updates only flow to the Notifications inbox (existing behaviour).",
+              },
+              agentId: {
+                type: "string",
+                default: "",
+                description:
+                  "Sub-agent id (folder name under data/agents/) that answers inbound chats. Empty disables routing.",
+              },
+              mode: {
+                type: "string",
+                enum: ["auto_reply", "manual"],
+                default: "auto_reply",
+                description:
+                  "'auto_reply' posts the agent's response back to the chat automatically. 'manual' is a no-op stub for future human-in-the-loop review.",
+              },
+              contextDepth: {
+                type: "number",
+                default: 10,
+                description:
+                  "Number of prior turns prepended to the agent's prompt. Clamped to [1, 50].",
+              },
+              fallbackMessage: {
+                type: "string",
+                default: "",
+                description:
+                  "Sent verbatim on router error (agent missing, agent crashed). Empty means stay silent.",
+              },
+            },
+          },
         },
       },
     },
