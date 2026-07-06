@@ -60,11 +60,17 @@ export const SUBAGENT_TOOLS: Record<string, LlmTool> = {
       },
       required: ["query"],
     },
-    execute: async (input) => formatWebSearchForModel(await webSearch({
-      query: input.query as string,
-      allowed_domains: input.allowed_domains as string[] | undefined,
-      blocked_domains: input.blocked_domains as string[] | undefined,
-    })),
+    execute: async (input) => {
+      try {
+        return formatWebSearchForModel(await webSearch({
+          query: input.query as string,
+          allowed_domains: input.allowed_domains as string[] | undefined,
+          blocked_domains: input.blocked_domains as string[] | undefined,
+        }));
+      } catch (e) {
+        return `web_search unavailable: ${(e as Error).message}`;
+      }
+    },
   },
   // Skill library (progressive disclosure): list skills, load a skill's SKILL.md,
   // and read its bundled reference/script files. Part of every sub-agent's base

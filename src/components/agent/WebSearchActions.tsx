@@ -1,10 +1,23 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import { useCopilotAction } from "@/components/agent/gated-action";
 
 export function WebSearchActions() {
+  const [nativeSearchAvailable, setNativeSearchAvailable] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/agent/provider")
+      .then((r) => r.json())
+      .then((d: { provider?: string; hasApiKey?: boolean }) => {
+        setNativeSearchAvailable(d.provider === "anthropic" && !!d.hasApiKey);
+      })
+      .catch(() => {});
+  }, []);
+
   useCopilotAction({
     name: "web_search",
+    available: nativeSearchAvailable ? undefined : "disabled",
     description:
       "Search the web with Anthropic native web search. Use for current facts, recent events, or source-backed answers. Always cite source URLs from the results.",
     parameters: [
@@ -32,7 +45,7 @@ export function WebSearchActions() {
       lines.push("", "When answering, cite the relevant source URLs explicitly.");
       return lines.join("\n");
     },
-  });
+  }, [nativeSearchAvailable]);
 
   useCopilotAction({
     name: "web_fetch",
