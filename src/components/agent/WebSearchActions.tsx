@@ -9,11 +9,12 @@ export function WebSearchActions() {
   useEffect(() => {
     fetch("/api/agent/provider")
       .then((r) => r.json())
-      .then((d: { provider?: string; hasApiKey?: boolean; baseUrl?: string }) => {
-        const p = d.provider ?? "";
+      .then((d: { config?: { provider?: string; hasApiKey?: boolean; baseUrl?: string } }) => {
+        const cfg = d.config ?? {};
+        const p = cfg.provider ?? "";
         setNativeSearchAvailable(
-          (p === "anthropic" || p === "openai" || p === "openai-codex") && !!d.hasApiKey ||
-          p === "openai-responses" && (!!d.hasApiKey || !!d.baseUrl),
+          (p === "anthropic" || p === "openai" || p === "openai-codex") && !!cfg.hasApiKey ||
+          p === "openai-responses" && (!!cfg.hasApiKey || !!cfg.baseUrl),
         );
       })
       .catch(() => {});
