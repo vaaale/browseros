@@ -24,10 +24,12 @@
     "ai": "^6.0.211",
     "ajv": "^8.20.0",
     "esbuild": "^0.28.1",
+    "flexsearch": "^0.7.43",
     "lucide-react": "^1.21.0",
     "next": "16.2.9",
     "react": "19.2.4",
     "react-dom": "19.2.4",
+    "telegram": "^2.26.16",
     "zustand": "^5.0.14"
   },
   "devDependencies": {

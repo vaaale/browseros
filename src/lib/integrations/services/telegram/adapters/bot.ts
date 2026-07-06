@@ -467,12 +467,17 @@ export class TelegramBotAdapter extends ServiceAdapter {
         timeout: 0,
         allowedUpdates,
       });
-      const events: IntegrationEvent[] = [];
+      const rawEvents: IntegrationEvent[] = [];
       let maxId = previousOffset - 1;
       for (const u of updates) {
         if (u.update_id > maxId) maxId = u.update_id;
-        events.push(updateToEvent(u));
+        rawEvents.push(updateToEvent(u));
       }
+      // Respect the user's per-chat mute state (FR-22). Muted-chat events are
+      // dropped BEFORE the scheduler emits them into the notifications inbox
+      // so a muted group doesn't buzz the badge.
+      const { filterMutedEvents } = await import("../notification-handler");
+      const events = await filterMutedEvents(rawEvents);
       if (updates.length > 0) {
         // Persist next offset. Written to state.services.bot.config.updateOffset
         // so the framework's mutateState is used (mutex + atomic write).

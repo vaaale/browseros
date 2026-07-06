@@ -193,6 +193,158 @@ adapters are Phase 3 stubs — any invocation throws
 `IntegrationConfigError("service_not_yet_implemented")` and no capability
 ids are registered for them yet.
 
+## Telegram (bot + user)
+
+The Telegram integration ships two independent services and each takes a
+non-OAuth code path so the framework's shared connect/disconnect surface is
+partially bypassed:
+
+| Service | Auth | Connect route                                                             | Disconnect route                                           |
+|---------|------|----------------------------------------------------------------------------|-------------------------------------------------------------|
+| `bot`   | BotFather token | `POST /api/integrations/telegram/bot/connect`                          | `POST /api/integrations/telegram/bot/disconnect`           |
+| `user`  | MTProto (gramjs) | `POST /api/integrations/telegram/user/credentials`, `.../user/login/start`, `.../user/login/verify` | `POST /api/integrations/telegram/user/disconnect` |
+
+`state.oauthMeta.granted_scopes` is set to the full bot-scope set on bot
+connect, and the user-scope set on user connect — the framework's generic
+`withScope` gates every adapter method by looking at this list, so mixing
+services in one integration works without any framework changes.
+
+### Bot service — module map
+
+- `manifest.ts` — `TELEGRAM_MANIFEST`, `TELEGRAM_BOT_SCOPES`, `TELEGRAM_USER_SCOPES`.
+- `client.ts` — `telegramFetch` (JSON) / `telegramFetchMultipart` (uploads) with
+  retry + rate-limit handling.
+- `auth.ts` — bot token lifecycle **and** MTProto login flow (see below).
+- `queue.ts` — persistent offline send queue (exponential backoff, per-entry
+  attempt counter).
+- `poller.ts` — `flushQueueOnce()` opportunistically drains the queue on every
+  scheduler tick.
+- `adapters/bot.ts` — `TelegramBotAdapter` + `TELEGRAM_BOT_METHODS`
+  (`messages_send`, `chats_pin_message`, `bot_answer_callback`, `agent_route_message`, …).
+- `adapters/bot-webhook.ts` — Telegram-specific `WebhookHandler`. Verifies the
+  `X-Telegram-Bot-Api-Secret-Token` header, translates the raw Update into an
+  `IntegrationEvent`, and calls `setWebhook`/`deleteWebhook` on enable/disable.
+- `agent-router.ts` + `context-cache.ts` — auto-reply pipeline (see §Telegram agent routing).
+
+### User service — module map (MTProto via gramjs)
+
+- `mtproto-client.ts` — the *only* module that imports `telegram` / `telegram/sessions`.
+  Exposes `createClient()` / `withClient()` (short-lived connections that always
+  disconnect in `finally`), plus SecretsStore helpers for `api_id` / `api_hash` /
+  `session`. A missing gramjs install throws
+  `IntegrationConfigError("config_invalid")` so route handlers can surface a
+  friendly "run `npm install`" message.
+- `auth.ts` — MTProto section: `readUserStatus`, `setUserCredentials`,
+  `startUserLogin` (`sendCode`), `verifyUserCode` (`signInUser`, handles 2FA
+  via `two_factor_required` sentinel), `disconnectUser`.
+  `PENDING` map (in `mtproto-client.ts`) holds the `phoneCodeHash` +
+  in-progress `StringSession` between "start" and "verify".
+- `search-index.ts` — flexsearch full-text index over messages.
+  `indexMessages(msgs[])`, `searchMessages(query, filters)`, `removeChat(id)`.
+  Persists both the raw store (`messages.json`, 20k / chat cap) and the index
+  cache (rebuilt from the store on first use, so a flexsearch upgrade doesn't
+  strand data).
+- `user-cache.ts` — TTL-cached contact and dialog lists (30 min default).
+  `updateCachedChat(id, patch)` is the fast-path used after mute/archive/pin
+  so the UI reflects the state before the next full refresh.
+- `chat-management.ts` — `setMuteState`, `setArchiveState`, `setPinState`. Each
+  wraps a gramjs `client.invoke(new Api.X(...))` call and mirrors the change
+  into the chat cache.
+- `notification-handler.ts` — the ONE place mute is enforced.
+  `dispatchTelegramEvent(ev)` / `filterMutedEvents(events)` reads the muted
+  flag from the chat cache and drops events for muted chats. Both the bot
+  pollOnce and the bot-webhook receive() route their output through
+  `filterMutedEvents`; user-service updates (when a realtime listener lands)
+  will use the same helper.
+- `adapters/user.ts` — `TelegramUserAdapter` + `TELEGRAM_USER_METHODS`
+  (`user_send_message`, `user_list_contacts`, `user_list_chats`,
+  `user_get_chat_history`, `user_search_messages`, `user_{mute,unmute,archive,unarchive,pin,unpin}_chat`).
+  Every method: guards via `withScope(TELEGRAM_USER_SCOPES.*)` → runs inside
+  `withClient(...)` → normalises gramjs wire objects (BigInt ids, TL class
+  tags) into plain JSON before returning.
+
+### Dependencies
+
+`package.json` declares two runtime deps beyond the framework baseline:
+
+- `telegram` — gramjs MTProto client. Pure-JS with optional native crypto; we
+  don't require the optional native module.
+- `flexsearch` — pure-JS full-text index. Chosen over `better-sqlite3` to
+  avoid the native compile step; if you need heavier query features, swap it
+  out inside `search-index.ts` — the `IndexedMessage` shape stays.
+
+Both are loaded via dynamic `import()` in `mtproto-client.ts` / `search-index.ts`
+so a missing dep produces a controlled `IntegrationConfigError` instead of an
+uncaught module-not-found.
+
+### Local data layout
+
+```
+data/integrations/telegram/
+├── queue.json        # bot offline send queue
+├── contacts.json     # user-service contact cache (TTL 30 min)
+├── chats.json        # user-service dialog cache (TTL 30 min)
+├── messages.json     # raw messages fetched via getChatHistory (20k/chat cap)
+├── index.json        # (reserved) flexsearch persistence
+└── context/<botId>/<chatId>.json   # bot agent rolling turns
+```
+
+Secrets live in the shared `data/integrations/secrets.json`, encrypted:
+`telegram:bot_token`, `telegram:user_api_id`, `telegram:user_api_hash`,
+`telegram:user_session`.
+
+### UI components
+
+- `src/components/apps/settings/integrations/TelegramDetailView.tsx` — top-level
+  Telegram detail view (composes `TelegramBotAuthSection` + services list).
+- `src/components/apps/settings/integrations/TelegramBotAuthSection.tsx` — bot
+  token connect / disconnect card.
+- `src/components/apps/settings/integrations/TelegramBotAgentConfig.tsx` —
+  agent auto-reply configuration.
+- `src/components/apps/settings/integrations/TelegramQueueSection.tsx` — offline
+  send queue viewer + flush controls.
+- `src/components/settings/TelegramWebhookConfig.tsx` — Telegram-flavoured
+  webhook config (secret_token, allowed_updates checkboxes).
+- `src/components/integrations/TelegramInlineKeyboard.tsx` — presentational
+  component that renders a Bot API `reply_markup.inline_keyboard` as clickable
+  buttons; caller supplies `onCallback(data, text)` to relay to
+  `bot_answer_callback`.
+
+### Examples
+
+**Bot: send a message from a skill**
+
+```ts
+// Skill code calls the assistant with a specific action.
+await invokeAdapterMethod("telegram", "bot", "messages_send", {
+  chatId: "@ops_team",
+  text: "Deploy is green ✅",
+});
+```
+
+**User: read the latest 100 messages from Alice and search them**
+
+```ts
+await invokeAdapterMethod("telegram", "user", "user_get_chat_history", {
+  chatId: "@alice",
+  limit: 100,
+});
+const results = await invokeAdapterMethod("telegram", "user", "user_search_messages", {
+  query: "budget review",
+  chatId: "@alice",
+});
+// results.results is IndexedMessage[] sorted newest-first.
+```
+
+**User: mute a noisy group for two hours**
+
+```ts
+await invokeAdapterMethod("telegram", "user", "user_mute_chat", {
+  chatId: "-1001234567890",
+  hours: 2,
+});
+```
+
 ## Telegram agent routing
 
 The Telegram bot service can auto-reply to inbound chats through a BOS

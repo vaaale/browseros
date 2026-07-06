@@ -14,12 +14,12 @@ is individually revocable from Settings.
 
 ## Overview
 
-Once connected, Telegram adds one service the assistant can call today:
+Once connected, Telegram exposes two independent services the assistant can call:
 
-| Service                    | What the assistant can do today                                                                                       | Status                                     |
+| Service                    | What the assistant can do                                                                                             | Auth                                       |
 |----------------------------|----------------------------------------------------------------------------------------------------------------------|--------------------------------------------|
-| **Bot**                    | Send text / photos / documents, reply, forward, edit, delete, pin, answer callback queries, set command menu, fetch updates. | Full (Phase 1)                             |
-| **User account (MTProto)** | Surfaces in the UI so scopes can be granted ahead of time.                                                            | Coming — api_id + api_hash flow in Phase 2 |
+| **Bot**                    | Send text / photos / documents, reply, forward, edit, delete, pin, answer callback queries, set command menu, fetch updates. | @BotFather token                           |
+| **User account (MTProto)** | Send as yourself, list contacts, list chats, fetch chat history, full-text search local index, mute / archive / pin. | `api_id` + `api_hash` (from my.telegram.org) + phone code |
 
 On top of the on-demand tools, the bot can also **push** into BOS:
 
@@ -256,15 +256,90 @@ either **Flush now** or delete the affected entries.
 
 ---
 
-## Out of scope (Phase 1)
+## User account (MTProto)
 
-The following belong to Telegram spec §Out of Scope or Phase 2:
+The **User** service acts as your own Telegram account (via gramjs), unlocking
+capabilities the Bot API cannot offer: reading historical messages, listing
+your contacts, chatting from your personal identity, pinning/archiving/muting
+chats server-side.
 
-- User-account (MTProto) messaging — coming in Phase 2 via `api_id` + `api_hash`.
+### Prerequisites
+
+1. Go to <https://my.telegram.org/apps>, create an app (any name/description),
+   and copy `api_id` (a small integer) and `api_hash` (32-character hex).
+2. Have your phone handy — Telegram will send a login code either to another
+   active session in the app or via SMS.
+
+### Connect
+
+1. Open **Settings → Integrations → Telegram → User**.
+2. Paste `api_id` and `api_hash`. Both are stored encrypted in the SecretsStore.
+3. Enter your phone number in international format (e.g. `+14155551234`) and
+   click **Send code**. Telegram delivers a 5-digit code to the app first,
+   falling back to SMS.
+4. Enter the code and click **Verify**. If your account has 2FA, a password
+   prompt appears — enter your Telegram cloud password and re-submit.
+5. You should see **Signed in as @your-username**. The service is now
+   connected; the assistant can call `telegram_user_*` actions.
+
+### What gets stored locally
+
+| File                                                         | Contents                                                                                          |
+|--------------------------------------------------------------|---------------------------------------------------------------------------------------------------|
+| `data/integrations/secrets.json`                             | Encrypted: `api_id`, `api_hash`, and the gramjs session string.                                   |
+| `data/integrations/telegram/contacts.json`                   | 30-minute cached contact list.                                                                    |
+| `data/integrations/telegram/chats.json`                      | 30-minute cached dialog list (last message, unread, pin/mute/archive flags).                      |
+| `data/integrations/telegram/messages.json`                   | Raw messages you've fetched (via `telegram_user_get_chat_history`). Capped at 20k per chat.       |
+| `data/integrations/telegram/index.json`                      | flexsearch full-text index rebuilt from the message archive on startup.                            |
+
+Everything is local. Nothing is sent to Anthropic or any third party — the
+assistant only sees the results of the actions you (or it) explicitly call.
+
+### Search
+
+The **User** service builds a **local full-text index** over messages you've
+fetched. Ask *"Find the message from Bob about the Q3 budget"* and the
+assistant calls `telegram_user_search_messages` with `senderId` + `query`.
+Filters: `chatId`, `senderId`, `since` / `until` (epoch seconds), `limit`.
+
+The index is populated by `telegram_user_get_chat_history` — the assistant
+knows to fetch history first if it needs a corpus to search. You can pre-warm
+the index for a specific chat by running `telegram_user_get_chat_history` a
+few times with a growing `offsetId`.
+
+### Chat management
+
+`telegram_user_mute_chat` / `_unmute_chat`, `_archive_chat` / `_unarchive_chat`,
+`_pin_chat` / `_unpin_chat` all sync **server-side** via MTProto — the change
+appears on every Telegram device within seconds — and update the local cache
+so BOS's Do-Not-Disturb filter takes effect immediately.
+
+**Muted chats are silenced everywhere**. Both bot-service and user-service
+notifications for a muted chat are dropped before ever reaching the
+Notifications inbox / badge, so a muted group can't ambush you regardless of
+which service surfaced the message.
+
+### Disconnect
+
+Click **Disconnect** on the User card. This:
+
+- Deletes the encrypted session string, `api_id`, and `api_hash`.
+- Wipes `contacts.json`, `chats.json`, `messages.json`, and `index.json`.
+- Revokes the `telegram:user.*` scopes so the assistant loses those actions.
+- **Leaves the Bot service untouched.**
+
+If you want to log out from Telegram's side too, do that in your Telegram app
+under Settings → Devices; disconnect here only forgets the credentials
+locally.
+
+---
+
+## Out of scope (still Phase 2+)
+
 - Voice / video calls.
 - Telegram Stories.
 - Telegram Payments / Mini Apps.
-- Local full-text search across chat history (bots don't get read access to
-  historical chat content — Telegram only pushes new updates).
+- End-to-end encrypted "Secret Chats" (they never reach any client but the
+  originating one).
 
 Track progress in `specs/user-specs/telegram-integration/`.

@@ -145,29 +145,33 @@ export const TELEGRAM_MANIFEST: IntegrationManifest = {
       id: "user",
       name: "User account (MTProto)",
       description:
-        "Send / receive messages as a user account via api_id + api_hash. Planned for Phase 2 — currently returns not_implemented for every action.",
+        "Send / receive messages, list contacts + chats, and search history as a real Telegram user account via api_id + api_hash + phone code (gramjs).",
       icon: "User",
       scopes: [TELEGRAM_USER_SCOPES.read, TELEGRAM_USER_SCOPES.send],
       configSchema: {
         type: "object",
         properties: {
-          apiId: {
-            type: "string",
-            default: "",
+          credentialsSet: {
+            type: "boolean",
+            default: false,
             description:
-              "Numeric api_id from my.telegram.org (Phase 2 — not yet used).",
+              "Set by /api/integrations/telegram/user/credentials once api_id + api_hash have been persisted to SecretsStore.",
           },
-          apiHash: {
-            type: "string",
-            default: "",
-            description:
-              "api_hash from my.telegram.org (Phase 2 — not yet used).",
+          userId: {
+            type: "number",
+            default: 0,
+            description: "Cached authorised user id (populated after sign-in).",
           },
-          phone: {
+          username: {
             type: "string",
             default: "",
+            description: "Cached @username of the authorised user.",
+          },
+          cacheTtlMinutes: {
+            type: "number",
+            default: 30,
             description:
-              "Phone number in international format used for the login code flow (Phase 2).",
+              "TTL for the local chat/contact caches. Set to 0 to always fetch live.",
           },
         },
       },

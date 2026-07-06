@@ -70,7 +70,12 @@ export class TelegramBotWebhookHandler implements WebhookHandler {
     // service). routeUpdate never throws.
     const { routeUpdate } = await import("../agent-router");
     await routeUpdate(update);
-    return { events: [updateToEvent(update)] };
+    // Muted-chat filter: drop events whose chat has been muted locally (see
+    // notification-handler / user-cache). Framework webhook receiver emits
+    // whatever we return here directly into the shared notifications inbox.
+    const { filterMutedEvents } = await import("../notification-handler");
+    const events = await filterMutedEvents([updateToEvent(update)]);
+    return { events };
   }
 
   async onEnable(input: {
