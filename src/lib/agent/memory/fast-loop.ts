@@ -397,7 +397,7 @@ export async function runFastLoop(opts: {
       summary.reviewed += 1;
     } catch (err) {
       summary.errors.push({ conversationId: conv.id, error: (err as Error).message });
-      logger().error(LOG, "review failed", { conversationId: conv.id, err: (err as Error).message });
+      logger().error(LOG, "review failed", err, { conversationId: conv.id });
     }
   }
 

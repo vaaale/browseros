@@ -501,7 +501,7 @@ export async function runSlowLoop(opts: { force?: boolean } = {}): Promise<SlowL
         summary.processed += 1;
       } catch (err) {
         summary.errors.push({ episodePath: ep.path, error: (err as Error).message });
-        logger().error(LOG, "episode consolidation failed", { path: ep.path, err: (err as Error).message });
+        logger().error(LOG, "episode consolidation failed", err, { path: ep.path });
       }
     }
     summary.memoryOps = state.memoryOps;

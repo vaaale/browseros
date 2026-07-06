@@ -82,5 +82,19 @@ export class LoggingService {
 function toErr(err: unknown): { message: string; stack?: string } | undefined {
   if (err === undefined || err === null) return undefined;
   if (err instanceof Error) return { message: err.message, ...(err.stack ? { stack: err.stack } : {}) };
+  if (typeof err === "object") {
+    const o = err as { message?: unknown; stack?: unknown };
+    const message = typeof o.message === "string" && o.message ? o.message : safeStringify(err);
+    const stack = typeof o.stack === "string" ? o.stack : undefined;
+    return stack ? { message, stack } : { message };
+  }
   return { message: String(err) };
+}
+
+function safeStringify(v: unknown): string {
+  try {
+    return JSON.stringify(v);
+  } catch {
+    return String(v);
+  }
 }

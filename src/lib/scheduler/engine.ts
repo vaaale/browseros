@@ -381,7 +381,7 @@ async function runJob(job: JobDefinition): Promise<JobExecution> {
   const handler = handlerRegistry.get(job.handler.kind);
   if (!handler) {
     const error = `No handler registered for kind "${job.handler.kind}"`;
-    logger().error(LOG, error, { jobId: job.id });
+    logger().error(LOG, error, undefined, { jobId: job.id });
     await recordExecution(job.id, {
       executedAt,
       status: "error",
@@ -398,7 +398,7 @@ async function runJob(job: JobDefinition): Promise<JobExecution> {
     if (result.status === "success") {
       logger().info(LOG, `job ok: ${job.name}`, { jobId: job.id, duration });
     } else {
-      logger().error(LOG, `job failed: ${job.name}`, { jobId: job.id, error: result.error });
+      logger().error(LOG, `job failed: ${job.name}`, result.error, { jobId: job.id });
     }
     await recordExecution(job.id, {
       executedAt,
@@ -419,7 +419,7 @@ async function runJob(job: JobDefinition): Promise<JobExecution> {
   } catch (err) {
     const duration = Date.now() - startedAt;
     const message = err instanceof Error ? err.message : String(err);
-    logger().error(LOG, `job crashed: ${job.name}`, { jobId: job.id, error: message });
+    logger().error(LOG, `job crashed: ${job.name}`, err, { jobId: job.id });
     await recordExecution(job.id, {
       executedAt,
       status: "error",
