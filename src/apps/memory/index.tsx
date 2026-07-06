@@ -1,128 +1,161 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Brain, Trash2, Plus, UserCircle } from "lucide-react";
+import {
+  Brain,
+  User,
+  FileText,
+  BookOpen,
+  Settings,
+  Search,
+  Clock,
+  CheckCircle,
+  Folder,
+} from "lucide-react";
+import type { LucideIcon } from "lucide-react";
+import ProfileTab from "./components/ProfileTab";
+import EpisodesTab from "./components/EpisodesTab";
+import TopicsTab from "./components/TopicsTab";
+import LoopsTab from "./components/LoopsTab";
+import SearchTab from "./components/SearchTab";
 
-type Target = "user" | "memory";
+type TabId = "profile" | "episodes" | "topics" | "loops" | "search";
+
+interface TabDef {
+  id: TabId;
+  label: string;
+  icon: LucideIcon;
+}
+
+const TABS: TabDef[] = [
+  { id: "profile", label: "Profile & Notes", icon: User },
+  { id: "episodes", label: "Episodes", icon: FileText },
+  { id: "topics", label: "Topics", icon: BookOpen },
+  { id: "loops", label: "Memory Loops", icon: Settings },
+  { id: "search", label: "Search", icon: Search },
+];
+
+interface Stats {
+  pending: number;
+  consolidated: number;
+  topics: number;
+}
 
 export default function MemoryApp() {
-  const [user, setUser] = useState<string[]>([]);
-  const [memory, setMemory] = useState<string[]>([]);
+  const [active, setActive] = useState<TabId>("profile");
+  const [stats, setStats] = useState<Stats>({ pending: 0, consolidated: 0, topics: 0 });
 
-  const load = useCallback(async () => {
-    const res = await fetch("/api/memory").then((r) => r.json());
-    setUser(res.user ?? []);
-    setMemory(res.memory ?? []);
+  const loadStats = useCallback(async () => {
+    try {
+      const [epRes, topicsRes] = await Promise.all([
+        fetch("/api/memory/episodes"),
+        fetch("/api/memory/topics"),
+      ]);
+      const next: Stats = { pending: 0, consolidated: 0, topics: 0 };
+      if (epRes.ok) {
+        const data = (await epRes.json()) as { pending?: unknown[]; consolidated?: unknown[] };
+        next.pending = Array.isArray(data.pending) ? data.pending.length : 0;
+        next.consolidated = Array.isArray(data.consolidated) ? data.consolidated.length : 0;
+      }
+      if (topicsRes.ok) {
+        const data = (await topicsRes.json()) as { topics?: unknown[] };
+        next.topics = Array.isArray(data.topics) ? data.topics.length : 0;
+      }
+      setStats(next);
+    } catch {
+      // Stats are best-effort — leave defaults on failure.
+    }
   }, []);
 
   useEffect(() => {
-    const id = setTimeout(() => void load(), 0);
+    const id = setTimeout(() => void loadStats(), 0);
     return () => clearTimeout(id);
-  }, [load]);
+  }, [loadStats]);
 
-  const add = async (target: Target, content: string) => {
-    if (!content.trim()) return;
-    await fetch("/api/memory", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ target, action: "add", content: content.trim() }),
-    });
-    load();
-  };
-
-  const remove = async (target: Target, text: string) => {
-    await fetch(`/api/memory?target=${target}&text=${encodeURIComponent(text)}`, { method: "DELETE" });
-    load();
-  };
+  const ActiveTab =
+    active === "profile"
+      ? ProfileTab
+      : active === "episodes"
+        ? EpisodesTab
+        : active === "topics"
+          ? TopicsTab
+          : active === "loops"
+            ? LoopsTab
+            : SearchTab;
 
   return (
-    <div className="flex h-full flex-col text-sm">
-      <div className="flex items-center gap-2 border-b border-white/10 bg-white/5 px-3 py-2">
-        <Brain size={16} className="text-violet-300" />
-        <span className="font-medium">Memory</span>
-        <span className="ml-auto text-[11px] text-white/40">Persistent across sessions · injected into the assistant</span>
-      </div>
+    <div className="flex h-full flex-col text-xs">
+      <header className="flex shrink-0 items-center justify-between border-b border-white/10 px-3 py-2.5">
+        <div className="flex items-center gap-2">
+          <Brain className="h-5 w-5 text-violet-300" />
+          <h1 className="text-sm font-semibold">Memory</h1>
+        </div>
+        <div className="flex items-center gap-2">
+          <StatBadge
+            icon={Clock}
+            label={`${stats.pending} Pending`}
+            accent="border-l-amber-400"
+          />
+          <StatBadge
+            icon={CheckCircle}
+            label={`${stats.consolidated} Consolidated`}
+            accent="border-l-emerald-400"
+          />
+          <StatBadge
+            icon={Folder}
+            label={`${stats.topics} Topics`}
+            accent="border-l-white/10"
+          />
+        </div>
+      </header>
 
-      <div className="flex-1 overflow-auto p-3">
-        <Section
-          title="User profile"
-          hint="Who the user is — identity, role, durable preferences, style."
-          icon={<UserCircle size={14} className="text-sky-300" />}
-          entries={user}
-          onAdd={(c) => add("user", c)}
-          onRemove={(t) => remove("user", t)}
-        />
-        <div className="h-4" />
-        <Section
-          title="Agent memory"
-          hint="The assistant's notes — environment facts, conventions, lessons."
-          icon={<Brain size={14} className="text-violet-300" />}
-          entries={memory}
-          onAdd={(c) => add("memory", c)}
-          onRemove={(t) => remove("memory", t)}
-        />
-      </div>
+      <nav className="shrink-0 border-b border-white/10 px-3 py-2">
+        <div className="flex gap-1 rounded-lg border border-white/10 bg-white/[0.02] p-1">
+          {TABS.map((tab) => {
+            const Icon = tab.icon;
+            const isActive = tab.id === active;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setActive(tab.id)}
+                className={`flex flex-1 items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                  isActive
+                    ? "bg-white/15 text-white"
+                    : "text-white/70 hover:bg-white/10 hover:text-white"
+                }`}
+                aria-pressed={isActive}
+              >
+                <Icon className="h-3.5 w-3.5" />
+                <span>{tab.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </nav>
+
+      <main className="min-h-0 flex-1 overflow-auto p-3">
+        <ActiveTab />
+      </main>
     </div>
   );
 }
 
-function Section({
-  title,
-  hint,
-  icon,
-  entries,
-  onAdd,
-  onRemove,
+function StatBadge({
+  icon: Icon,
+  label,
+  accent,
 }: {
-  title: string;
-  hint: string;
-  icon: React.ReactNode;
-  entries: string[];
-  onAdd: (content: string) => void;
-  onRemove: (text: string) => void;
+  icon: LucideIcon;
+  label: string;
+  accent: string;
 }) {
-  const [draft, setDraft] = useState("");
-  const submit = () => {
-    onAdd(draft);
-    setDraft("");
-  };
   return (
-    <section className="rounded-lg border border-white/10 bg-white/[0.02] p-3">
-      <div className="mb-1 flex items-center gap-2">
-        {icon}
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-white/60">{title}</h3>
-        <span className="text-[11px] text-white/35">({entries.length})</span>
-      </div>
-      <p className="mb-2 text-[11px] text-white/40">{hint}</p>
-
-      <div className="mb-2 flex items-center gap-2">
-        <input
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && submit()}
-          placeholder="Add an entry…"
-          className="flex-1 rounded border border-white/10 bg-black/30 px-2 py-1 text-xs outline-none focus:border-white/30"
-        />
-        <button onClick={submit} className="flex items-center gap-1 rounded bg-white/10 px-2 py-1 text-xs hover:bg-white/20">
-          <Plus size={13} /> Add
-        </button>
-      </div>
-
-      <div className="space-y-1">
-        {entries.map((e, i) => (
-          <div key={i} className="group flex items-start gap-2 rounded border border-white/10 bg-white/[0.03] px-2.5 py-1.5">
-            <p className="flex-1 whitespace-pre-wrap text-white/85">{e}</p>
-            <button
-              onClick={() => onRemove(e.slice(0, 60))}
-              className="rounded p-1 text-white/40 opacity-0 hover:bg-white/10 hover:text-white group-hover:opacity-100"
-              title="Remove"
-            >
-              <Trash2 size={13} />
-            </button>
-          </div>
-        ))}
-        {entries.length === 0 && <p className="text-[11px] text-white/35">Nothing yet.</p>}
-      </div>
-    </section>
+    <div
+      className={`flex items-center gap-1.5 rounded-md border-l-2 bg-white/[0.05] px-2.5 py-1 text-[11px] text-white/80 ${accent}`}
+    >
+      <Icon className="h-3 w-3" />
+      <span>{label}</span>
+    </div>
   );
 }
