@@ -11,6 +11,7 @@ const MIME: Record<string, string> = {
   ".gif": "image/gif",
   ".webp": "image/webp",
   ".svg": "image/svg+xml",
+  ".avif": "image/avif",
   ".txt": "text/plain; charset=utf-8",
   ".md": "text/markdown; charset=utf-8",
   ".json": "application/json; charset=utf-8",
@@ -20,6 +21,14 @@ const MIME: Record<string, string> = {
   ".css": "text/css; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
   ".mjs": "text/javascript; charset=utf-8",
+  ".mp3": "audio/mpeg",
+  ".mp4": "video/mp4",
+  ".ogg": "audio/ogg",
+  ".ogv": "video/ogg",
+  ".wav": "audio/wav",
+  ".webm": "video/webm",
+  ".m4a": "audio/mp4",
+  ".mov": "video/quicktime",
 };
 
 export async function GET(req: NextRequest) {

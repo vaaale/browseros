@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { CopilotChat } from "@copilotkit/react-ui";
+import type { AttachmentUploadResult } from "@copilotkit/shared";
 import "@copilotkit/react-ui/styles.css";
 import { CheckCircle2, Loader2 } from "lucide-react";
 import { CopilotProvider } from "@/components/agent/CopilotProvider";
@@ -63,6 +64,17 @@ export function AssistantChat(props: AssistantChatProps) {
   );
 }
 
+function useUploadAttachment() {
+  return useCallback(async (file: File): Promise<AttachmentUploadResult> => {
+    const form = new FormData();
+    form.append("file", file);
+    const res = await fetch("/api/attachments", { method: "POST", body: form });
+    if (!res.ok) throw new Error(`Upload failed: ${res.statusText}`);
+    const { url, mimeType } = (await res.json()) as { url: string; mimeType: string };
+    return { type: "url", value: url, mimeType };
+  }, []);
+}
+
 function AssistantChatInner({
   currentAgentId,
   resolvedAgentId,
@@ -80,6 +92,7 @@ function AssistantChatInner({
   const { isLoading } = useChatPersistence(resolvedAgentId);
   const conv = useConversations(resolvedAgentId);
   const [instructions, setInstructions] = useState(FALLBACK_INSTRUCTIONS);
+  const uploadAttachment = useUploadAttachment();
 
   const useToolbar = Boolean(conversationsInToolbar) && !allGroups;
   const showLeftPanel = showConversations && !useToolbar;
@@ -141,6 +154,11 @@ function AssistantChatInner({
               markdownTagRenderers={markdownRenderers}
               instructions={instructions}
               labels={{ initial: initialLabel ?? "How can I help?" }}
+              attachments={{
+                enabled: true,
+                accept: "image/*,audio/*,video/*,application/pdf",
+                onUpload: uploadAttachment,
+              }}
             />
           </div>
         </div>
