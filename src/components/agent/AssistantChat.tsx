@@ -64,14 +64,35 @@ export function AssistantChat(props: AssistantChatProps) {
   );
 }
 
+// Convert ArrayBuffer to base64 string in chunks to avoid call-stack overflow
+// on large files (spreading a giant Uint8Array into String.fromCharCode blows
+// the stack; chunking keeps peak memory predictable).
+function bufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  const CHUNK = 8192;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode(...Array.from(bytes.subarray(i, i + CHUNK)));
+  }
+  return btoa(binary);
+}
+
 function useUploadAttachment() {
   return useCallback(async (file: File): Promise<AttachmentUploadResult> => {
+    // Read once; reuse the buffer for both the VFS save and the base64 payload.
+    const arrayBuffer = await file.arrayBuffer();
+
+    // Save to VFS in the background — don't block or fail the attachment if it errors.
     const form = new FormData();
-    form.append("file", file);
-    const res = await fetch("/api/attachments", { method: "POST", body: form });
-    if (!res.ok) throw new Error(`Upload failed: ${res.statusText}`);
-    const { url, mimeType } = (await res.json()) as { url: string; mimeType: string };
-    return { type: "url", value: url, mimeType };
+    form.append("file", new Blob([arrayBuffer], { type: file.type }), file.name);
+    fetch("/api/attachments", { method: "POST", body: form }).catch((err) =>
+      console.warn("[BOS] Attachment VFS save failed:", err),
+    );
+
+    // Return base64 data so the image embeds directly in the LLM message payload.
+    // URL-type sources require new URL(value) which throws on relative paths and
+    // wouldn't be reachable by the remote model anyway.
+    return { type: "data", value: bufferToBase64(arrayBuffer), mimeType: file.type };
   }, []);
 }
 
