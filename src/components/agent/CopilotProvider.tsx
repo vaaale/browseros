@@ -28,6 +28,12 @@ interface AgentInfo {
   tools?: string[];
 }
 
+interface ProviderCfg {
+  provider?: string;
+  hasApiKey?: boolean;
+  baseUrl?: string;
+}
+
 export function CopilotProvider({
   children,
   agentId = DEFAULT_AGENT_ID,
@@ -40,18 +46,23 @@ export function CopilotProvider({
     ? `/api/copilotkit?agent=${encodeURIComponent(agentId)}${threadId ? `&conv=${encodeURIComponent(threadId)}` : ""}`
     : "/api/copilotkit";
 
-  const [loaded, setLoaded] = useState<{ agentId?: string; allow: string[] | null } | null>(null);
+  const [loaded, setLoaded] = useState<{ agentId?: string; allow: string[] | null; webSearchAvailable: boolean } | null>(null);
   useEffect(() => {
     let alive = true;
     const load = () => {
-      fetch("/api/assistant/agent")
-        .then((r) => r.json())
-        .then((d: { agents?: AgentInfo[] }) => {
-          if (!alive) return;
-          const agent = (d.agents ?? []).find((a) => a.id === agentId);
-          setLoaded({ agentId, allow: agent?.tools ?? null });
-        })
-        .catch(() => alive && setLoaded({ agentId, allow: null }));
+      Promise.all([
+        fetch("/api/assistant/agent").then((r) => r.json()),
+        fetch("/api/agent/provider").then((r) => r.json()),
+      ]).then(([agentData, providerData]: [{ agents?: AgentInfo[] }, { config?: ProviderCfg }]) => {
+        if (!alive) return;
+        const agent = (agentData.agents ?? []).find((a) => a.id === agentId);
+        const cfg = providerData.config ?? {};
+        const p = cfg.provider ?? "";
+        const webSearchAvailable =
+          ((p === "anthropic" || p === "openai" || p === "openai-codex") && !!cfg.hasApiKey) ||
+          (p === "openai-responses" && (!!cfg.hasApiKey || !!cfg.baseUrl));
+        setLoaded({ agentId, allow: agent?.tools ?? null, webSearchAvailable });
+      }).catch(() => alive && setLoaded({ agentId, allow: null, webSearchAvailable: false }));
     };
     load();
     // Live-reload the agent's tool allowlist when Settings edits fire the
@@ -72,6 +83,7 @@ export function CopilotProvider({
 
   const ready = loaded !== null && loaded.agentId === agentId;
   const allow = ready ? loaded!.allow : null;
+  const webSearchAvailable = ready ? loaded!.webSearchAvailable : false;
 
   return (
     <CopilotKit key={agentId ?? "none"} runtimeUrl={runtimeUrl} threadId={threadId}>
@@ -79,7 +91,7 @@ export function CopilotProvider({
         <AgentCapabilitiesProvider allow={allow}>
           <OSActions />
           <McpActions agentId={agentId} />
-          <WebSearchActions />
+          <WebSearchActions webSearchAvailable={webSearchAvailable} />
           <SubAgentActions agentId={agentId} />
           <MemoryActions />
           <DevActions agentId={agentId} />
