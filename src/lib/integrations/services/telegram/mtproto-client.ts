@@ -42,8 +42,8 @@ async function loadGramjs(): Promise<{ gramjs: GramjsModule; sessions: SessionsM
   try {
     // Named dynamic imports; wrapped in try so a missing dep is a controlled
     // error rather than an uncaught module-not-found blowing up the route.
-    cachedGramjs = (await import("telegram")) as GramjsModule;
-    cachedSessions = (await import("telegram/sessions")) as SessionsModule;
+    cachedGramjs = (await import(/* turbopackIgnore: true */ "telegram")) as GramjsModule;
+    cachedSessions = (await import(/* turbopackIgnore: true */ "telegram/sessions")) as SessionsModule;
     return { gramjs: cachedGramjs, sessions: cachedSessions };
   } catch (err) {
     throw new IntegrationConfigError(

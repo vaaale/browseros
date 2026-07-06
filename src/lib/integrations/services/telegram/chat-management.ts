@@ -19,7 +19,7 @@ interface GramjsApiModule {
 
 async function loadApi(): Promise<GramjsApiModule["Api"]> {
   try {
-    const mod = (await import("telegram")) as GramjsApiModule;
+    const mod = (await import(/* turbopackIgnore: true */ "telegram")) as GramjsApiModule;
     return mod.Api;
   } catch (err) {
     throw new IntegrationError(

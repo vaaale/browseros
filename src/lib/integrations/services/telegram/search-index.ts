@@ -88,7 +88,7 @@ async function writeMessages(map: Map<string, IndexedMessage>): Promise<void> {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function loadFlexsearch(): Promise<any> {
   try {
-    return await import("flexsearch");
+    return await import(/* turbopackIgnore: true */ "flexsearch");
   } catch (err) {
     throw new Error(
       `flexsearch package not installed. Run 'npm install flexsearch' to enable Telegram message search. Original: ${(err as Error).message}`,

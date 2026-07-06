@@ -189,7 +189,7 @@ export class TelegramUserAdapter extends ServiceAdapter {
       const contacts = await withClient(async (client: MtprotoClient) => {
         // Import Api lazily to keep the module graph acyclic.
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const { Api } = (await import("telegram")) as { Api: any };
+        const { Api } = (await import(/* turbopackIgnore: true */ "telegram")) as { Api: any };
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const res: any = await client.invoke(new Api.contacts.GetContacts({ hash: 0 }));
         const out: CachedContact[] = [];
