@@ -512,6 +512,16 @@ export async function runSlowLoop(opts: { force?: boolean } = {}): Promise<SlowL
     summary.markedConsolidated = state.markedConsolidated;
     summary.archived = await archiveOldEpisodes(cfg.episodeArchiveAgeDays).catch(() => 0);
     summary.ran = true;
+    logger().info(LOG, "slow loop run", {
+      processed: summary.processed,
+      memoryOps: summary.memoryOps,
+      topicOps: summary.topicOps,
+      skillsPatched: summary.skillsPatched.length,
+      skillsCreated: summary.skillsCreated.length,
+      skillsRefused: summary.skillsRefused.length,
+      archived: summary.archived,
+      errors: summary.errors.length,
+    });
     return summary;
   } finally {
     await releaseLock(lock);
