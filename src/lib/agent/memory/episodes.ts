@@ -491,6 +491,21 @@ export async function deleteEpisodeByFilename(filename: string): Promise<boolean
   });
 }
 
+/** Move a single episode file to .Archive/ by its on-disk filename. Returns
+ *  true when moved, false when the source did not exist. */
+export async function archiveEpisodeByFilename(filename: string): Promise<boolean> {
+  const safe = assertEpisodeFilename(filename);
+  const src = `${EPISODES_DIR}/${safe}`;
+  const dst = `${EPISODES_ARCHIVE_DIR}/${safe}`;
+  return withFileLock(src, async () => {
+    if (!(await exists(src))) return false;
+    await ensureDir(EPISODES_ARCHIVE_DIR);
+    await vfs.rename(src, dst);
+    logger().info(LOG, "episode archived", { filename: safe });
+    return true;
+  });
+}
+
 /** Move consolidated episodes older than `olderThanDays` into .Archive/. Never
  *  deletes files — a mistaken consolidation can always be recovered by hand. */
 export async function archiveOldEpisodes(olderThanDays: number = 14): Promise<number> {
