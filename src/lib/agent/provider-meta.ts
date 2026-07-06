@@ -55,3 +55,27 @@ export const PROVIDER_LIST: ProviderMeta[] = Object.values(PROVIDERS);
 export function familyOf(provider: ProviderType): ProviderFamily {
   return PROVIDERS[provider]?.family ?? "openai";
 }
+
+// Known OpenAI-compatible endpoint suffixes a user might accidentally paste as
+// the base URL instead of the API root.  Strip them before constructing derived
+// URLs (e.g. /models, /chat/completions) so the right path is always appended.
+const ENDPOINT_SUFFIXES = [
+  "/responses",
+  "/chat/completions",
+  "/completions",
+  "/embeddings",
+  "/models",
+];
+
+/** Normalise a provider base URL: trim trailing slashes and strip any trailing
+ *  endpoint path so callers always get the bare API root. */
+export function normalizeApiBase(rawBase: string): string {
+  let base = rawBase.replace(/\/+$/, "");
+  for (const suffix of ENDPOINT_SUFFIXES) {
+    if (base.endsWith(suffix)) {
+      base = base.slice(0, base.length - suffix.length);
+      break;
+    }
+  }
+  return base;
+}

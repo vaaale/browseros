@@ -1,7 +1,8 @@
 import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
-import { getProviderConfig, DEFAULT_MAX_TOKENS } from "@/lib/agent/provider";
-import { familyOf } from "@/lib/agent/provider-meta";
+import OpenAI from "openai";
+import { getProviderConfig, DEFAULT_MAX_TOKENS, type ProviderConfig } from "@/lib/agent/provider";
+import { familyOf, normalizeApiBase } from "@/lib/agent/provider-meta";
 
 export interface WebSearchInput {
   query: string;
@@ -51,19 +52,30 @@ export function validateWebSearchInput(input: unknown): WebSearchInput {
   return { query, ...(allowed_domains ? { allowed_domains } : {}), ...(blocked_domains ? { blocked_domains } : {}) };
 }
 
+function supportsWebSearch(provider: string): boolean {
+  return familyOf(provider as never) === "anthropic" || provider === "openai" || provider === "openai-codex";
+}
+
 export async function isNativeWebSearchAvailable(): Promise<boolean> {
   const config = await getProviderConfig();
-  return familyOf(config.provider) === "anthropic" && !!config.apiKey;
+  return supportsWebSearch(config.provider) && !!config.apiKey;
 }
 
 export async function webSearch(input: WebSearchInput): Promise<WebSearchOutput> {
   const valid = validateWebSearchInput(input);
   const config = await getProviderConfig();
-  if (familyOf(config.provider) !== "anthropic") {
-    throw new Error("Native web search is currently available only with the Anthropic provider.");
-  }
-  if (!config.apiKey) throw new Error("Anthropic API key is required for native web search.");
 
+  if (!supportsWebSearch(config.provider)) {
+    throw new Error("Native web search requires Anthropic or OpenAI (not local/compatible providers).");
+  }
+  if (!config.apiKey) throw new Error(`${config.provider} API key is required for native web search.`);
+
+  return familyOf(config.provider) === "anthropic"
+    ? anthropicWebSearch(valid, config)
+    : openaiWebSearch(valid, config);
+}
+
+async function anthropicWebSearch(valid: WebSearchInput, config: ProviderConfig): Promise<WebSearchOutput> {
   const client = new Anthropic({ apiKey: config.apiKey, baseURL: config.baseUrl || undefined });
   const res = await client.beta.messages.create({
     model: config.model,
@@ -96,11 +108,39 @@ export async function webSearch(input: WebSearchInput): Promise<WebSearchOutput>
     }
     if (typed.type === "web_search_tool_result") {
       blocks.push({ type: "web_search_tool_result", content: typed });
-      for (const hit of extractHits(typed.content)) hits.push(hit);
+      for (const hit of extractAnthropicHits(typed.content)) hits.push(hit);
     }
   }
 
   return { query: valid.query, hits: dedupeHits(hits), text: text.join("\n").trim(), blocks };
+}
+
+async function openaiWebSearch(valid: WebSearchInput, config: ProviderConfig): Promise<WebSearchOutput> {
+  const baseURL = config.baseUrl ? normalizeApiBase(config.baseUrl) : undefined;
+  const client = new OpenAI({ apiKey: config.apiKey, baseURL });
+  const res = await client.responses.create({
+    model: config.model,
+    input: valid.query,
+    tools: [{ type: "web_search_preview" }],
+  });
+
+  const hits: WebSearchHit[] = [];
+  const text: string[] = [];
+
+  for (const item of res.output) {
+    if (item.type !== "message") continue;
+    for (const content of item.content) {
+      if (content.type !== "output_text") continue;
+      text.push(content.text);
+      for (const ann of content.annotations) {
+        if (ann.type === "url_citation") {
+          hits.push({ title: ann.title, url: ann.url });
+        }
+      }
+    }
+  }
+
+  return { query: valid.query, hits: dedupeHits(hits), text: text.join("\n").trim(), blocks: [] };
 }
 
 export function formatWebSearchForModel(output: WebSearchOutput): string {
@@ -133,7 +173,7 @@ function validateDomains(value: unknown, name: "allowed_domains" | "blocked_doma
   return domains.length ? Array.from(new Set(domains)) : undefined;
 }
 
-function extractHits(content: unknown): WebSearchHit[] {
+function extractAnthropicHits(content: unknown): WebSearchHit[] {
   if (!Array.isArray(content)) return [];
   return content.flatMap((entry) => {
     if (!entry || typeof entry !== "object") return [];

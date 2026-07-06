@@ -10,7 +10,10 @@ export function WebSearchActions() {
     fetch("/api/agent/provider")
       .then((r) => r.json())
       .then((d: { provider?: string; hasApiKey?: boolean }) => {
-        setNativeSearchAvailable(d.provider === "anthropic" && !!d.hasApiKey);
+        const p = d.provider ?? "";
+        setNativeSearchAvailable(
+          (p === "anthropic" || p === "openai" || p === "openai-codex") && !!d.hasApiKey,
+        );
       })
       .catch(() => {});
   }, []);

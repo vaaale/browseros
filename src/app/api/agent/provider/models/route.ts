@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getProviderConfig } from "@/lib/agent/provider";
-import { familyOf, PROVIDERS } from "@/lib/agent/provider-meta";
+import { familyOf, normalizeApiBase, PROVIDERS } from "@/lib/agent/provider-meta";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
@@ -12,7 +12,7 @@ const FETCH_TIMEOUT_MS = 10_000;
 // Builds the /models endpoint URL, tolerating both base URLs that already
 // include /v1 (e.g. https://api.openai.com/v1) and ones that don't.
 function modelsUrl(rawBase: string): string {
-  const base = rawBase.replace(/\/+$/, "");
+  const base = normalizeApiBase(rawBase);
   if (/\/v\d+$/.test(base)) return `${base}/models`;
   return `${base}/v1/models`;
 }
