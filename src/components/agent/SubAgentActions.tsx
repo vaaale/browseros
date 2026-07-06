@@ -277,7 +277,7 @@ export function SubAgentActions({ agentId = DEFAULT_AGENT_ID }: { agentId?: stri
   useCopilotAction({
     name: "agent_request_claude",
     description:
-      "Ask the user for permission to use a Claude (Claude Code) sub-agent for a NON-development task. Returns one of: once, session, local. Required before using a Claude agent for anything that isn't development/coding.",
+      "Ask the user for permission to use a Claude sub-agent for a NON-development task (analysis, research, writing, etc.). Returns 'once', 'session', or 'local'. After receiving permission, immediately call agent_delegate with ephemeralType='claude' (for once/session) or ephemeralType='local' (for local) to actually run the task. Do NOT call this tool for development/coding tasks — use dev_delegate directly instead.",
     parameters: [{ name: "task", type: "string", description: "What you want the Claude agent to do", required: true }],
     renderAndWaitForResponse: ({ args, status, respond }) => {
       if (status === "complete") {
