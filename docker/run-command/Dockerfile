@@ -32,7 +32,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ENV VIRTUAL_ENV=/opt/venv
 RUN python3 -m venv "$VIRTUAL_ENV"
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
-RUN pip install --no-cache-dir ipython "markitdown[pptx]" Pillow python-pptx \
+RUN pip install --no-cache-dir ipython "markitdown[pptx]" Pillow python-pptx docx \
  && chown -R 1000:1000 "$VIRTUAL_ENV"
 
 RUN npm install -g pptxgenjs
