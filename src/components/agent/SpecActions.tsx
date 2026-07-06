@@ -1,12 +1,19 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import { useCopilotAction } from "@/components/agent/gated-action";
+import { useActiveConversation } from "@/lib/agent/conversations";
+import { DEFAULT_AGENT_ID } from "@/lib/agent/agent-ids";
 
 // Client-side specification actions (016-unified-agents FR-006), over /api/specs
 // (jailed to specs/ + .specify/). They let an active-personality agent — Build
 // Studio — author specs directly instead of being forced to delegate. Mirrors the
 // server-side SPEC_TOOLS (read_spec/write_spec/…) used when an agent is delegated to.
 // Gated by the agent's allowlist via the shim import above.
+//
+// Branch coupling (020): reads/writes carry the conversation's active feature
+// branch so specs land on — and are read from — that branch's worktree spec store,
+// the same branch the Developer builds. No branch → base checkout.
 
 interface TreeNode {
   type: string;
@@ -24,7 +31,14 @@ function flattenFiles(nodes: TreeNode[] = []): string[] {
   return out;
 }
 
-export function SpecActions() {
+export function SpecActions({ agentId = DEFAULT_AGENT_ID }: { agentId?: string }) {
+  // Read the active conversation's feature branch through a ref so the (once-created)
+  // action handlers always send the CURRENT selection, not a stale closure value.
+  const activeConversation = useActiveConversation(agentId);
+  const branchRef = useRef(activeConversation?.activeFeatureBranch);
+  useEffect(() => {
+    branchRef.current = activeConversation?.activeFeatureBranch;
+  }, [activeConversation?.activeFeatureBranch]);
   useCopilotAction({
     name: "spec_list",
     description: "List specification artifacts across the spec stores (e.g. 'bos-system-specs', 'user-specs'): feature folders and their files. Paths returned are store-prefixed (`<storeId>/<feature>/<file>`).",
@@ -42,14 +56,16 @@ export function SpecActions() {
     description: "Read a specification artifact by its STORE-PREFIXED path, e.g. 'bos-system-specs/016-unified-agents/spec.md' or 'bos-system-specs/.specify/memory/constitution.md'.",
     parameters: [{ name: "path", type: "string", description: "Store-prefixed artifact path, e.g. 'user-specs/003-x/spec.md'", required: true }],
     handler: async ({ path }) => {
-      const res = await fetch(`/api/specs?path=${encodeURIComponent(String(path ?? ""))}`).then((r) => r.json());
+      const branch = branchRef.current;
+      const qs = `path=${encodeURIComponent(String(path ?? ""))}${branch ? `&branch=${encodeURIComponent(branch)}` : ""}`;
+      const res = await fetch(`/api/specs?${qs}`).then((r) => r.json());
       return res.error ? `Error: ${res.error}` : String(res.content ?? "");
     },
   });
 
   useCopilotAction({
     name: "spec_write",
-    description: "Create or overwrite a specification artifact by STORE-PREFIXED path. New specs go in the user store; edits commit-on-save to the store's checked-out branch. Provide the FULL file content.",
+    description: "Create or overwrite a specification artifact by STORE-PREFIXED path. New specs go in the user store; writes go to the conversation's active feature branch when one is set. Provide the FULL file content.",
     parameters: [
       { name: "path", type: "string", description: "Store-prefixed artifact path, e.g. 'user-specs/003-x/spec.md'", required: true },
       { name: "content", type: "string", description: "Full file content", required: true },
@@ -58,7 +74,7 @@ export function SpecActions() {
       const res = await fetch("/api/specs", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path, content }),
+        body: JSON.stringify({ path, content, ...(branchRef.current ? { branch: branchRef.current } : {}) }),
       }).then((r) => r.json());
       return res.error ? `Error: ${res.error}` : `Wrote ${res.path}`;
     },
@@ -74,7 +90,9 @@ export function SpecActions() {
     ],
     handler: async ({ path, find, replace }) => {
       const p = String(path ?? "");
-      const cur = await fetch(`/api/specs?path=${encodeURIComponent(p)}`).then((r) => r.json());
+      const branch = branchRef.current;
+      const qs = `path=${encodeURIComponent(p)}${branch ? `&branch=${encodeURIComponent(branch)}` : ""}`;
+      const cur = await fetch(`/api/specs?${qs}`).then((r) => r.json());
       if (cur.error) return `Error: ${cur.error}`;
       const content = String(cur.content ?? "");
       const f = String(find ?? "");
@@ -85,7 +103,7 @@ export function SpecActions() {
       const res = await fetch("/api/specs", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: p, content: next }),
+        body: JSON.stringify({ path: p, content: next, ...(branch ? { branch } : {}) }),
       }).then((r) => r.json());
       return res.error ? `Error: ${res.error}` : `Edited ${res.path}`;
     },

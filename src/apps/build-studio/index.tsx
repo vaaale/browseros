@@ -209,7 +209,7 @@ export default function BuildStudioApp() {
       const r = await fetch("/api/specs", {
         method: "PUT",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ path: activePath, content: draft }),
+        body: JSON.stringify({ path: activePath, content: draft, ...(activeBranch ? { branch: activeBranch } : {}) }),
       });
       const res = await r.json();
       if (!r.ok) throw new Error(res.error || "Save failed");
@@ -221,7 +221,7 @@ export default function BuildStudioApp() {
     } finally {
       setSaving(false);
     }
-  }, [activePath, draft, loadTree]);
+  }, [activePath, draft, activeBranch, loadTree]);
 
   const activeSpec = activeFeature ? specByPath.get(activeFeature) : undefined;
   const loading = Boolean(activePath) && loadedKey !== activeKey;

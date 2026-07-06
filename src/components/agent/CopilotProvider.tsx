@@ -76,7 +76,7 @@ export function CopilotProvider({
           <GitActions agentId={agentId} />
           <RunCommandActions />
           <WorkflowActions />
-          <SpecActions />
+          <SpecActions agentId={agentId} />
           <IntegrationActions />
           <ScratchpadActions agentId={agentId} />
           <ToolCallRetry />

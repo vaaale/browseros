@@ -37,7 +37,10 @@ export async function PUT(req: NextRequest) {
     const body = await req.json();
     const path = String(body.path ?? "");
     if (!path) return NextResponse.json({ error: "path is required" }, { status: 400 });
-    const written = await specfs.writeFile(path, String(body.content ?? ""));
+    // When the caller has an active feature branch, the write targets that branch's
+    // worktree spec store (020) so it lands on the same branch as the code.
+    const branch = typeof body.branch === "string" && body.branch ? body.branch : undefined;
+    const written = await specfs.writeFile(path, String(body.content ?? ""), branch ? { branch } : undefined);
     return NextResponse.json({ path: written });
   } catch (err) {
     return NextResponse.json({ error: (err as Error).message }, { status: 400 });

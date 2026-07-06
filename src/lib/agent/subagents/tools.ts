@@ -141,57 +141,66 @@ export const DEV_TOOLS: Record<string, LlmTool> = {
 
 // Spec-scoped tools for Build Studio. Specs live in external stores (018): a
 // path is STORE-PREFIXED `<storeId>/<rel>` (list stores with an empty path).
-// Writes go to the addressed store — refused for read-only stores; edits
-// commit-on-save to the store's checked-out branch (020). Opt-in like DEV_TOOLS.
-export const SPEC_TOOLS: Record<string, LlmTool> = {
-  spec_list: {
-    description: "List entries in the spec stores. An empty/omitted path lists the available stores (e.g. 'bos-system-specs', 'user-specs'); a store-prefixed path like 'user-specs/003-my-feature' lists inside a store.",
-    parameters: { type: "object", properties: { path: { type: "string", description: "Store-prefixed dir, e.g. 'user-specs' or 'user-specs/003-x'. Empty = list stores." } } },
-    execute: async (input) => JSON.stringify(await specfs.listDir((input.path as string) || "")),
-  },
-  spec_read: {
-    description: "Read a specification artifact by its STORE-PREFIXED path, e.g. 'bos-system-specs/001-build-studio/spec.md'. For spec-kit templates use read_template instead.",
-    parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
-    execute: async (input) => specfs.readFile(input.path as string),
-  },
-  spec_write: {
-    description: "Create or overwrite a specification artifact by STORE-PREFIXED path (e.g. 'user-specs/003-x/spec.md'). New user specs go in the user store; edits commit-on-save to the store's checked-out branch. Build the body from a template via read_template.",
-    parameters: {
-      type: "object",
-      properties: { path: { type: "string" }, content: { type: "string" } },
-      required: ["path", "content"],
+// Writes go to the addressed store — refused for read-only stores. When a feature
+// branch is active (bound per-run via makeSpecTools), ALL ops target that branch's
+// worktree spec store (020) so specs land on the same branch the Developer builds;
+// otherwise the base checkout. Opt-in like DEV_TOOLS.
+export function makeSpecTools(branch?: string): Record<string, LlmTool> {
+  const ctx = branch ? { branch } : undefined;
+  return {
+    spec_list: {
+      description: "List entries in the spec stores. An empty/omitted path lists the available stores (e.g. 'bos-system-specs', 'user-specs'); a store-prefixed path like 'user-specs/003-my-feature' lists inside a store.",
+      parameters: { type: "object", properties: { path: { type: "string", description: "Store-prefixed dir, e.g. 'user-specs' or 'user-specs/003-x'. Empty = list stores." } } },
+      execute: async (input) => JSON.stringify(await specfs.listDir((input.path as string) || "", ctx)),
     },
-    execute: async (input) => `Wrote ${await specfs.writeFile(input.path as string, (input.content as string) ?? "")}`,
-  },
-  spec_edit: {
-    description: "Replace a unique snippet of text in a spec artifact (STORE-PREFIXED path; the search text must occur exactly once).",
-    parameters: {
-      type: "object",
-      properties: { path: { type: "string" }, find: { type: "string" }, replace: { type: "string" } },
-      required: ["path", "find", "replace"],
+    spec_read: {
+      description: "Read a specification artifact by its STORE-PREFIXED path, e.g. 'bos-system-specs/001-build-studio/spec.md'. For spec-kit templates use read_template instead.",
+      parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+      execute: async (input) => specfs.readFile(input.path as string, ctx),
     },
-    execute: async (input) => `Edited ${await specfs.editFile(input.path as string, input.find as string, (input.replace as string) ?? "")}`,
-  },
-  spec_search: {
-    description: "Search spec content across all stores for a string. Returns matching path:line:text. Optionally restrict to a store-prefixed subdirectory.",
-    parameters: {
-      type: "object",
-      properties: { query: { type: "string" }, dir: { type: "string", description: "Store-prefixed subdir to search (e.g. 'user-specs'); omit to search all stores." } },
-      required: ["query"],
+    spec_write: {
+      description: "Create or overwrite a specification artifact by STORE-PREFIXED path (e.g. 'user-specs/003-x/spec.md'). New user specs go in the user store; writes go to the conversation's active feature branch when one is set. Build the body from a template via read_template.",
+      parameters: {
+        type: "object",
+        properties: { path: { type: "string" }, content: { type: "string" } },
+        required: ["path", "content"],
+      },
+      execute: async (input) => `Wrote ${await specfs.writeFile(input.path as string, (input.content as string) ?? "", ctx)}`,
     },
-    execute: async (input) => JSON.stringify(await specfs.search(input.query as string, { dir: input.dir as string | undefined })),
-  },
-  spec_template_read: {
-    description: "Read a spec-kit template or command prompt from the engine at .specify/templates (e.g. 'spec-template.md', 'plan-template.md', 'commands/specify.md'). Read-only.",
-    parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
-    execute: async (input) => specfs.readTemplate(input.path as string),
-  },
-  spec_template_list: {
-    description: "List available spec-kit templates/command prompts under .specify/templates (optionally a subdir like 'commands').",
-    parameters: { type: "object", properties: { path: { type: "string" } } },
-    execute: async (input) => JSON.stringify(await specfs.listTemplates((input.path as string) || "")),
-  },
-};
+    spec_edit: {
+      description: "Replace a unique snippet of text in a spec artifact (STORE-PREFIXED path; the search text must occur exactly once).",
+      parameters: {
+        type: "object",
+        properties: { path: { type: "string" }, find: { type: "string" }, replace: { type: "string" } },
+        required: ["path", "find", "replace"],
+      },
+      execute: async (input) => `Edited ${await specfs.editFile(input.path as string, input.find as string, (input.replace as string) ?? "", ctx)}`,
+    },
+    spec_search: {
+      description: "Search spec content across all stores for a string. Returns matching path:line:text. Optionally restrict to a store-prefixed subdirectory.",
+      parameters: {
+        type: "object",
+        properties: { query: { type: "string" }, dir: { type: "string", description: "Store-prefixed subdir to search (e.g. 'user-specs'); omit to search all stores." } },
+        required: ["query"],
+      },
+      execute: async (input) => JSON.stringify(await specfs.search(input.query as string, { dir: input.dir as string | undefined, branch })),
+    },
+    spec_template_read: {
+      description: "Read a spec-kit template or command prompt from the engine at .specify/templates (e.g. 'spec-template.md', 'plan-template.md', 'commands/specify.md'). Read-only.",
+      parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+      execute: async (input) => specfs.readTemplate(input.path as string),
+    },
+    spec_template_list: {
+      description: "List available spec-kit templates/command prompts under .specify/templates (optionally a subdir like 'commands').",
+      parameters: { type: "object", properties: { path: { type: "string" } } },
+      execute: async (input) => JSON.stringify(await specfs.listTemplates((input.path as string) || "")),
+    },
+  };
+}
+
+// Static, unbound instance — used for tool-id enumeration and as the base (base
+// checkout) tool set. Per-run branch binding happens in runLocal via makeSpecTools.
+export const SPEC_TOOLS: Record<string, LlmTool> = makeSpecTools();
 
 // Build Studio delegates implementation to the Developer via this tool. The real
 // implementation is built per-run in the sub-agent runner (it needs the parent

@@ -1,6 +1,6 @@
 import "server-only";
 import { runToolLoop, type ToolEvent, type LlmTool } from "@/lib/agent/llm";
-import { toolsFor, DEV_TOOLS, SPEC_TOOLS, DELEGATE_TO_DEVELOPER } from "./tools";
+import { toolsFor, DEV_TOOLS, SPEC_TOOLS, DELEGATE_TO_DEVELOPER, makeSpecTools } from "./tools";
 import { runClaudeAgent } from "./claude-runner";
 import { getAgent } from "./store";
 import { stageAll } from "@/lib/system/git";
@@ -99,6 +99,13 @@ async function runLocal(
   }
   if (ids.includes("run_command")) {
     tools["run_command"] = makeRunCommandTool(agent.id);
+  }
+  // Bind spec tools to the run's active feature branch so reads/writes target that
+  // branch's worktree spec store (020) — specs land on the same branch as the code.
+  const specIds = ids.filter((id) => SPEC_TOOL_IDS.includes(id));
+  if (specIds.length) {
+    const boundSpec = makeSpecTools(opts?.featureBranch);
+    for (const id of specIds) tools[id] = boundSpec[id];
   }
 
   const result = await runToolLoop({
