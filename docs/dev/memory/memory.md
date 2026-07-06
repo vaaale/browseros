@@ -137,4 +137,27 @@ Exposed via Settings → Memory Loops. Fields: `fastLoop.enabled`,
 - **DELETE** `?target=&text=`.
 - **GET** `/api/memory/search?q=<query>&maxResults=<n>` → `{ query, results: [{ source, content, score }] }`.
 
-The Memory app (`src/apps/memory/index.tsx`) is a thin UI over this.
+---
+
+## User interface
+
+The primary way for a human to manage every memory surface is the **Memory
+app** (`src/apps/memory/`). It's a thin UI over the API above and the memory
+loops:
+
+- **Profile & Notes tab** — `USER.md` / `MEMORY.md` with per-file budget bars.
+- **Episodes tab** — pending vs. consolidated episodic files, with manual
+  *Review Now* / *Archive* / *Delete* actions.
+- **Topics tab** — per-topic shards with entry-level add/delete and per-topic
+  budget bars.
+- **Memory Loops tab** — the `memoryLoops` config namespace exposed as a form,
+  plus run-history from the central log and manual-trigger buttons for both
+  loops (wired to `POST /api/memory/consolidate` and `POST /api/assistant/reflect`).
+- **Search tab** — cross-surface search over Topics + Episodes + MEMORY.md via
+  `/api/memory/search`.
+
+Every tab is composed as one component under `src/apps/memory/components/`,
+loaded by `src/apps/memory/index.tsx`. When extending memory functionality,
+mirror the change in the appropriate tab so the user has a way to see and
+control it. For end-user documentation of the app, see
+[docs/usage/apps/memory.md](../../usage/apps/memory.md).

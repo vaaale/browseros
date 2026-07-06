@@ -657,6 +657,7 @@ function ActionBtn({
       onClick={onClick}
       disabled={disabled}
       title={title}
+      aria-label={label}
       className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${toneClass}`}
     >
       {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Icon className="h-3 w-3" />}

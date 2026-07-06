@@ -203,10 +203,21 @@ function Pane({ target, title, icon: Icon, iconClass, state, onReload }: PanePro
             <textarea
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                  e.preventDefault();
+                  void submitDraft();
+                }
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  cancelDraft();
+                }
+              }}
               placeholder={`New ${target === "user" ? "profile" : "note"} entry…`}
               rows={3}
               autoFocus
               className="w-full resize-none rounded border border-white/10 bg-black/30 px-2 py-1.5 text-xs text-white placeholder-white/30 outline-none focus:border-white/30"
+              aria-label={`New ${target === "user" ? "profile" : "notes"} entry`}
             />
             <div className="mt-2 flex items-center justify-between gap-2">
               <span className="text-[10px] text-white/40">{draft.trim().length} chars</span>
