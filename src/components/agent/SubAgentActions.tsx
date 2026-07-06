@@ -156,6 +156,10 @@ export function SubAgentActions({ agentId = DEFAULT_AGENT_ID }: { agentId?: stri
     threadIdRef.current = threadId;
   }, [threadId]);
 
+  // Tracks whether the user has already granted Claude-agent permission for this
+  // session so subsequent agent_request_claude calls can bypass the consent card.
+  const claudeSessionGrantedRef = useRef(false);
+
   // The active conversation's selected feature branch, read through a ref so the
   // dev_branch_request elicitation reflects the CURRENT selection (not a stale
   // closure) and can skip the create-branch prompt when one is already set.
@@ -279,7 +283,20 @@ export function SubAgentActions({ agentId = DEFAULT_AGENT_ID }: { agentId?: stri
       if (status === "complete") {
         return <div className="my-1 rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-xs text-white/60">Claude-agent choice recorded.</div>;
       }
-      const pick = (c: Choice) => respond?.(c);
+      if (claudeSessionGrantedRef.current) {
+        return (
+          <div className="my-1 rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-xs">
+            <div className="mb-2 text-white/70">Claude agent permission already granted for this session.</div>
+            <button onClick={() => respond?.("session")} className="rounded bg-amber-400/20 px-2.5 py-1 font-medium hover:bg-amber-400/30">
+              Continue
+            </button>
+          </div>
+        );
+      }
+      const pick = (c: Choice) => {
+        if (c === "session") claudeSessionGrantedRef.current = true;
+        respond?.(c);
+      };
       return (
         <div className="my-1 rounded-lg border border-amber-400/30 bg-amber-400/10 p-3 text-xs">
           <div className="mb-2 text-amber-100">
