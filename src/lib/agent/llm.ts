@@ -163,13 +163,62 @@ async function openaiToolLoop(
   const toolCalls: { tool: string; input: unknown }[] = [];
 
   for (let step = 0; step < maxSteps; step++) {
-    const res = await client.chat.completions.create({
+    // Stream and accumulate rather than requesting a single JSON body — same
+    // rationale as `complete()`: some OpenAI-compatible servers frame
+    // non-streaming responses with a Content-Length that Node's `undici`
+    // parser rejects (`HPE_UNEXPECTED_CONTENT_LENGTH`).
+    const stream = await client.chat.completions.create({
       model: c.model,
       messages,
       tools: toolSchemas,
+      stream: true,
       ...openaiTokenParam(c, c.maxTokens),
     });
-    const msg = res.choices[0]?.message;
+    let content = "";
+    let reasoning = "";
+    const toolCallsAcc: OpenAI.Chat.Completions.ChatCompletionMessageFunctionToolCall[] = [];
+    for await (const chunk of stream) {
+      const choice = chunk.choices[0];
+      if (!choice) continue;
+      const delta = choice.delta as {
+        content?: string | null;
+        reasoning_content?: string;
+        tool_calls?: Array<{
+          index: number;
+          id?: string;
+          type?: "function";
+          function?: { name?: string; arguments?: string };
+        }>;
+      } | undefined;
+      if (delta?.content) content += delta.content;
+      if (delta?.reasoning_content) reasoning += delta.reasoning_content;
+      if (delta?.tool_calls) {
+        for (const tc of delta.tool_calls) {
+          const idx = tc.index;
+          const existing = toolCallsAcc[idx];
+          if (!existing) {
+            toolCallsAcc[idx] = {
+              id: tc.id ?? "",
+              type: "function",
+              function: {
+                name: tc.function?.name ?? "",
+                arguments: tc.function?.arguments ?? "",
+              },
+            };
+          } else {
+            if (tc.id) existing.id = tc.id;
+            if (tc.function?.name) existing.function.name = tc.function.name;
+            if (tc.function?.arguments) existing.function.arguments += tc.function.arguments;
+          }
+        }
+      }
+    }
+    const reassembledToolCalls = toolCallsAcc.filter(Boolean);
+    const msg: OpenAI.Chat.Completions.ChatCompletionAssistantMessageParam = {
+      role: "assistant",
+      content: content || null,
+      ...(reassembledToolCalls.length ? { tool_calls: reassembledToolCalls } : {}),
+    };
     if (msg?.tool_calls?.length) {
       messages.push(msg);
       for (const call of msg.tool_calls) {
@@ -194,7 +243,7 @@ async function openaiToolLoop(
       }
       continue;
     }
-    return { text: messageText(msg).trim(), steps: step + 1, toolCalls };
+    return { text: messageText({ content, reasoning_content: reasoning }).trim(), steps: step + 1, toolCalls };
   }
   return {
     text: `Reached the step limit (${maxSteps} steps) before finishing. Partial changes may already be applied — review what was done and delegate a focused follow-up to continue, rather than restarting from scratch.`,
