@@ -94,9 +94,9 @@ export const CAPABILITIES: Capability[] = [
   { id: "dev_git_status", group: "Dev", context: "both", description: "Show git branch and changes (read-only)." },
   { id: "dev_branch_request", group: "Dev", context: "action", description: "Set up the active feature branch needed to modify BOS source." },
   { id: "dev_delegate", group: "Dev", context: "tool", description: "Delegate implementation to the Developer (from a delegated agent)." },
-  { id: "bos_source_list", group: "Dev", context: "tool", description: "List BOS source (read-only, sub-agent)." },
-  { id: "bos_source_read", group: "Dev", context: "tool", description: "Read a BOS source file (read-only, sub-agent)." },
-  { id: "bos_source_search", group: "Dev", context: "tool", description: "Search BOS source (read-only, sub-agent)." },
+  { id: "bos_source_list", group: "Dev", context: "both", description: "List BOS source (read-only, sub-agent)." },
+  { id: "bos_source_read", group: "Dev", context: "both", description: "Read a BOS source file (read-only, sub-agent)." },
+  { id: "bos_source_search", group: "Dev", context: "both", description: "Search BOS source (read-only, sub-agent)." },
   { id: "run_command", group: "Dev", context: "both", description: "Run a command in a sandboxed environment (bash/python/node)." },
 
   // Docs
