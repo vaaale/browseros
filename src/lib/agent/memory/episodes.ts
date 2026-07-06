@@ -454,6 +454,43 @@ export async function countSkillCandidateOccurrences(taskClass: string): Promise
   return n;
 }
 
+// ── Filename-based lookup / deletion (spec 023 API) ──────────────────────
+// The Memory app addresses episodes by their on-disk filename
+// (e.g. "2026-07-05-c-mr8dczbxapny.md"). These helpers refuse path traversal
+// and only look under EPISODES_DIR — never .Archive/ or outside it.
+
+const EPISODE_FILENAME_RE = /^[A-Za-z0-9._-]+\.md$/;
+
+function assertEpisodeFilename(name: string): string {
+  const trimmed = name.trim();
+  if (!trimmed) throw new Error("filename is required");
+  if (!EPISODE_FILENAME_RE.test(trimmed) || trimmed.includes("..")) {
+    throw new Error(`Invalid episode filename: ${name}`);
+  }
+  return trimmed;
+}
+
+/** Read an episode by its on-disk filename. Returns null when missing. */
+export async function getEpisodeByFilename(filename: string): Promise<Episode | null> {
+  const safe = assertEpisodeFilename(filename);
+  const path = `${EPISODES_DIR}/${safe}`;
+  const fallbackConvId = safe.replace(/\.md$/, "");
+  return readEpisodeAt(path, fallbackConvId);
+}
+
+/** Delete an episode file by its on-disk filename. Returns true when deleted,
+ *  false when the file did not exist. */
+export async function deleteEpisodeByFilename(filename: string): Promise<boolean> {
+  const safe = assertEpisodeFilename(filename);
+  const path = `${EPISODES_DIR}/${safe}`;
+  return withFileLock(path, async () => {
+    if (!(await exists(path))) return false;
+    await vfs.remove(path);
+    logger().info(LOG, "episode deleted", { filename: safe });
+    return true;
+  });
+}
+
 /** Move consolidated episodes older than `olderThanDays` into .Archive/. Never
  *  deletes files — a mistaken consolidation can always be recovered by hand. */
 export async function archiveOldEpisodes(olderThanDays: number = 14): Promise<number> {
