@@ -104,10 +104,10 @@ function normaliseChat(dialog: any): CachedChat | null {
     type,
     title:
       entity?.title ??
-      [entity?.firstName ?? entity?.first_name, entity?.lastName ?? entity?.last_name]
+      ([entity?.firstName ?? entity?.first_name, entity?.lastName ?? entity?.last_name]
         .filter(Boolean)
         .join(" ") ||
-      undefined,
+        undefined),
     username: entity?.username ?? undefined,
     unreadCount: typeof dialog.unreadCount === "number" ? dialog.unreadCount : undefined,
     lastMessage: lastMsg
@@ -165,7 +165,6 @@ export class TelegramUserAdapter extends ServiceAdapter {
   }): Promise<{ chatId: string; messageId: number; date: number }> {
     return this.withScope(TELEGRAM_USER_SCOPES.send, async () => {
       return withClient(async (client: MtprotoClient) => {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const peer = input.chatId === "me" ? "me" : input.chatId;
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const res: any = await client.sendMessage(peer, {

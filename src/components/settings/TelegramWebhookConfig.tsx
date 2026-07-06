@@ -192,16 +192,17 @@ export function TelegramWebhookConfig({ onChange }: TelegramWebhookConfigProps) 
     }
   }, [base]);
 
+  const snapshotUrl = snapshot?.url;
   const copyUrl = useCallback(async () => {
-    if (!snapshot?.url) return;
+    if (!snapshotUrl) return;
     try {
-      await navigator.clipboard.writeText(snapshot.url);
+      await navigator.clipboard.writeText(snapshotUrl);
       setCopiedUrl(true);
       setTimeout(() => setCopiedUrl(false), 1500);
     } catch {
       /* clipboard may be blocked — ignore */
     }
-  }, [snapshot?.url]);
+  }, [snapshotUrl]);
 
   const toggleUpdate = useCallback((kind: AllowedUpdate) => {
     setAllowedUpdates((prev) => {

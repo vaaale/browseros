@@ -8,7 +8,6 @@
 declare module "telegram" {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   export const Api: any;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   export class TelegramClient {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     constructor(session: any, apiId: number, apiHash: string, options?: any);

@@ -1,3 +1,5 @@
+// eslint-disable-next-line @typescript-eslint/triple-slash-reference
+/// <reference path="./mtproto-shims.d.ts" />
 import "server-only";
 import { IntegrationAuthError, IntegrationConfigError, IntegrationError } from "../../errors";
 import { getSecretsStore } from "../../secrets/store";
