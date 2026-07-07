@@ -34,6 +34,24 @@ interface ProviderCfg {
   baseUrl?: string;
 }
 
+// Suppress CopilotKit's noisy AbortError console.error calls. These fire
+// whenever a streaming request is cancelled by navigation or conversation
+// deletion — expected teardown, not real errors.
+const _origConsoleError = typeof console !== "undefined" ? console.error.bind(console) : null;
+if (_origConsoleError && !("_ckAbortSuppressed" in console)) {
+  (console as unknown as Record<string, unknown>)._ckAbortSuppressed = true;
+  console.error = (...args: unknown[]) => {
+    const first = String(args[0] ?? "");
+    if (first.includes("[CopilotKit]") && (
+      String(args[1] ?? "").includes("AbortError") ||
+      String(args[1] ?? "").includes("aborted") ||
+      first.includes("AbortError") ||
+      first.includes("aborted")
+    )) return;
+    _origConsoleError(...args);
+  };
+}
+
 export function CopilotProvider({
   children,
   agentId = DEFAULT_AGENT_ID,
