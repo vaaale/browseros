@@ -5,11 +5,14 @@ import type { AuthProvider } from "../auth/index";
 import { issueSession, clearSession, verifySession } from "../sessions";
 import { KeycloakProvider } from "../auth/keycloak";
 
+const parseBody = [express.json(), express.urlencoded({ extended: false })];
+
 export function createAuthRouter(cfg: Config, provider: AuthProvider): Router {
   const router = Router();
-  // Body parsing only for the routes that need it; keeps the proxy path clean.
-  router.use(express.json());
-  router.use(express.urlencoded({ extended: false }));
+  // NOTE: NO router-level body parsers here. This router is mounted at "/" which
+  // matches every path. A router.use(express.json()) would consume the body of
+  // every request — including PATCH /api/* proxied to BOS — before the proxy
+  // catch-all sees it. Body parsers are applied per-route only (POST /login).
 
   // ── Login page redirect ────────────────────────────────────────────────────
   // Authenticated users hitting /login go to / (proxy handles BOS or status).
@@ -22,7 +25,7 @@ export function createAuthRouter(cfg: Config, provider: AuthProvider): Router {
   // NOTE: no GET / handler here — the proxy catch-all owns the root path.
 
   // ── Simple login ───────────────────────────────────────────────────────────
-  router.post("/login", async (req, res) => {
+  router.post("/login", ...parseBody, async (req, res) => {
     const { username, password } = req.body as { username?: string; password?: string };
     if (!username || !password) {
       res.status(400).json({ error: "username and password required" });
