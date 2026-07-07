@@ -91,7 +91,8 @@ async function _getOrProvision(username: string, cfg: Config): Promise<void> {
   updateState(username, { status: "provisioning", lastActive: Date.now() }, cfg);
   try {
     const containerId = await provisionUser(username, cfg);
-    await waitForHealthy(username, 120_000);
+    // 5 min: npm install (if volume is cold) + supervisor startup + next dev startup
+    await waitForHealthy(username, 300_000);
     updateState(username, { containerId, status: "running", lastActive: Date.now() }, cfg);
     resetIdleTimer(username, cfg);
   } catch (err) {

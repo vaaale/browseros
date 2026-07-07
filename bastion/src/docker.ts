@@ -27,7 +27,12 @@ export async function createBosContainer(username: string, cfg: Config): Promise
   const container = await docker.createContainer({
     name,
     Image: cfg.bosImage,
-    Env: [`BOS_DATA_DIR=/app/data`],
+    Env: [
+      `BOS_DATA_DIR=/app/data`,
+      `BOS_PUBLIC_PORT=8090`,   // bastion proxies to this port
+      `BOS_PORT_BASE=3000`,     // next dev internal port
+      `BOS_BASE_DEV=1`,         // supervisor starts next dev automatically
+    ],
     HostConfig: {
       NetworkMode: cfg.bosNet,
       Binds: [
