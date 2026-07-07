@@ -1,4 +1,5 @@
 import { Router } from "express";
+import express from "express";
 import type { Config } from "../config";
 import type { AuthProvider } from "../auth/index";
 import { issueSession, clearSession, verifySession } from "../sessions";
@@ -6,6 +7,9 @@ import { KeycloakProvider } from "../auth/keycloak";
 
 export function createAuthRouter(cfg: Config, provider: AuthProvider): Router {
   const router = Router();
+  // Body parsing only for the routes that need it; keeps the proxy path clean.
+  router.use(express.json());
+  router.use(express.urlencoded({ extended: false }));
 
   // ── Login page redirect ────────────────────────────────────────────────────
   // Authenticated users hitting /login go to / (proxy handles BOS or status).

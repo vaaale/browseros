@@ -1,4 +1,5 @@
 import { Router } from "express";
+import express from "express";
 import type { Request, Response, NextFunction } from "express";
 import type { Config } from "../config";
 import { saveConfig } from "../config";
@@ -33,6 +34,8 @@ function requireAdmin(cfg: Config) {
 
 export function createAdminRouter(cfg: Config, provider: AuthProvider): Router {
   const router = Router();
+  router.use(express.json());
+  router.use(express.urlencoded({ extended: false }));
   const guard = requireAdmin(cfg);
   router.use(guard);
 

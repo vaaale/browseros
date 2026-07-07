@@ -1,4 +1,5 @@
 import { Router } from "express";
+import express from "express";
 import type { Request, Response, NextFunction } from "express";
 import type { Config } from "../config";
 import type { AuthProvider } from "../auth/index";
@@ -26,6 +27,8 @@ function requireAuth(cfg: Config) {
 
 export function createAccountRouter(cfg: Config, provider: AuthProvider): Router {
   const router = Router();
+  router.use(express.json());
+  router.use(express.urlencoded({ extended: false }));
   const guard = requireAuth(cfg);
   router.use(guard);
 
