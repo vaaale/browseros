@@ -4,6 +4,7 @@
 # (supports a per-user named volume for mutable dependencies).
 
 FROM node:20-alpine AS runtime
+RUN apk add --no-cache git
 WORKDIR /app
 
 # Copy source (node_modules excluded by .dockerignore)
