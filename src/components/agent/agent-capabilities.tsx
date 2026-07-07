@@ -36,14 +36,14 @@ export function AgentCapabilitiesProvider({
   allow: string[] | null | undefined;
   children: ReactNode;
 }) {
-  const [overrides, setOverrides] = useState<Record<string, string>>({});
+  const [overrides, setOverrides] = useState<Record<string, { description?: string; deferred?: boolean }>>({});
 
   useEffect(() => {
     let alive = true;
     const load = () => {
       fetch("/api/tool-descriptions")
         .then((r) => r.json())
-        .then((d: { overrides?: Record<string, string> }) => {
+        .then((d: { overrides?: Record<string, { description?: string; deferred?: boolean }> }) => {
           if (!alive) return;
           setOverrides(d.overrides ?? {});
         })
@@ -61,7 +61,7 @@ export function AgentCapabilitiesProvider({
   const value = useMemo<AgentCapabilities>(
     () => ({
       isActionAllowed: resolveActionGate(allow),
-      descriptionFor: (id) => overrides[id],
+      descriptionFor: (id) => overrides[id]?.description,
     }),
     [allow, overrides],
   );

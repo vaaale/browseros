@@ -223,19 +223,48 @@ export function getDangerousToolNames(): readonly string[] {
 const ACTION_IDS = new Set(CAPABILITIES.filter((c) => c.context !== "tool").map((c) => c.id));
 const DEFERRED_IDS = new Set(CAPABILITIES.filter((c) => c.deferred === true).map((c) => c.id));
 
+// Mutable overrides for the `deferred` flag. Populated at server request
+// boundaries by tool-metadata-overrides.ts (via replaceDeferredOverrides) from
+// data/tool-metadata-overrides.json — this module stays framework-free so it
+// can be imported by client code. When a tool id appears in this map its value
+// wins over the registry default; missing ⇒ use registry default.
+const DEFERRED_OVERRIDES = new Map<string, boolean>();
+
+/** Replace the in-memory deferred-override table. Called by the server-side
+ *  reload path so isDeferred / deferredCapabilityIds pick up user edits without
+ *  a restart. Client-side callers never invoke this (map stays empty in the
+ *  browser bundle, so isDeferred returns registry defaults there). */
+export function replaceDeferredOverrides(entries: Record<string, boolean>): void {
+  DEFERRED_OVERRIDES.clear();
+  for (const [id, v] of Object.entries(entries)) {
+    if (typeof v === "boolean") DEFERRED_OVERRIDES.set(id, v);
+  }
+}
+
 /** Is this id a main-chat action (gated client-side)? */
 export function isActionId(id: string): boolean {
   return ACTION_IDS.has(id);
 }
 
-/** Is this capability deferred (hidden from initial context, discovered via find_tools)? */
+/** Is this capability deferred (hidden from initial context, discovered via find_tools)?
+ *  Consults the in-memory override table first, then falls back to the registry
+ *  default. Server-side callers should call reloadDeferredOverrides() (from
+ *  tool-metadata-overrides.ts) before reading this at request boundaries. */
 export function isDeferred(id: string): boolean {
+  const override = DEFERRED_OVERRIDES.get(id);
+  if (override !== undefined) return override;
   return DEFERRED_IDS.has(id);
 }
 
-/** All capability ids currently marked deferred. */
+/** All capability ids currently marked deferred (registry defaults merged with
+ *  the mutable overrides table). */
 export function deferredCapabilityIds(): Set<string> {
-  return new Set(DEFERRED_IDS);
+  const out = new Set(DEFERRED_IDS);
+  for (const [id, v] of DEFERRED_OVERRIDES) {
+    if (v) out.add(id);
+    else out.delete(id);
+  }
+  return out;
 }
 
 // The per-agent action gate (016). Back-compat rule: an action is allowed UNLESS
