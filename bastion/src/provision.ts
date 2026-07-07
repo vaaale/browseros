@@ -46,7 +46,7 @@ export async function provisionUser(username: string, cfg: Config): Promise<stri
 
   // Clone BOS source for this user from the host repo mounted at bosRepoPath.
   if (!fs.existsSync(path.join(src, ".git"))) {
-    await execFileAsync("git", ["clone", "--branch", cfg.bosBaseRef,
+    await execFileAsync("git", ["clone", "--depth=1", "--branch", cfg.bosBaseRef,
       cfg.bosRepoPath, src]);
   }
 
