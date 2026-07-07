@@ -3,7 +3,7 @@ import type { Request, Response, NextFunction } from "express";
 import type { Config } from "../config";
 import type { AuthProvider } from "../auth/index";
 import { verifySession } from "../sessions";
-import { getInstanceState } from "../lifecycle";
+import { getInstanceState, clearInstanceState } from "../lifecycle";
 import {
   reprovisionRestart,
   reprovisionResetData,
@@ -58,6 +58,9 @@ export function createAccountRouter(cfg: Config, provider: AuthProvider): Router
         case "full": await reprovisionFull(username, cfg); break;
         default: res.status(400).json({ error: `Unknown operation: ${operation}` }); return;
       }
+      // Clear stale lifecycle state so the proxy re-checks Docker by name
+      // on the next request rather than using a potentially stale containerId.
+      clearInstanceState(username);
       res.json({ ok: true });
     } catch (err) {
       res.status(500).json({ error: String(err) });

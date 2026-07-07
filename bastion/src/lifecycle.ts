@@ -20,7 +20,6 @@ export interface InstanceState {
   lastActive: number;
 }
 
-// Module-level state
 const instances = new Map<string, InstanceState>();
 const idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const inFlight = new Map<string, Promise<void>>();
@@ -35,7 +34,6 @@ export function initLifecycle(cfg: Config): void {
 // ── Public API ────────────────────────────────────────────────────────────────
 
 export async function getOrProvision(username: string, cfg: Config): Promise<void> {
-  // Prevent concurrent provisions for the same user
   const existing = inFlight.get(username);
   if (existing) return existing;
 
@@ -51,21 +49,18 @@ export async function getOrProvision(username: string, cfg: Config): Promise<voi
 async function _getOrProvision(username: string, cfg: Config): Promise<void> {
   const state = instances.get(username);
 
+  // Fast path: already confirmed running — skip Docker round-trip.
   if (state?.status === "running") {
     resetIdleTimer(username, cfg);
     return;
   }
 
-  if (state?.status === "stopped" && state.containerId) {
-    await startContainer(state.containerId);
-    await waitForHealthy(username, 60_000);
-    updateState(username, { status: "running", lastActive: Date.now() }, cfg);
-    resetIdleTimer(username, cfg);
-    return;
-  }
-
-  // Not provisioned or unknown — check Docker reality first
+  // For every other state (stopped, unknown, absent) always re-check Docker
+  // by container NAME. Stored containerId is intentionally ignored here — it
+  // can be stale after a re-provision, a manual `docker rm`, or a bastion
+  // restart where the instance was recreated with a new ID.
   const info = await inspectContainer(containerName(username));
+
   if (info) {
     const cid = info.Id;
     if (info.State.Running) {
@@ -73,7 +68,8 @@ async function _getOrProvision(username: string, cfg: Config): Promise<void> {
       resetIdleTimer(username, cfg);
       return;
     }
-    // Container exists but stopped
+    // Container exists but is stopped — start it.
+    updateState(username, { containerId: cid, status: "stopped" }, cfg);
     await startContainer(cid);
     await waitForHealthy(username, 60_000);
     updateState(username, { containerId: cid, status: "running", lastActive: Date.now() }, cfg);
@@ -81,17 +77,16 @@ async function _getOrProvision(username: string, cfg: Config): Promise<void> {
     return;
   }
 
-  // Check capacity
-  const running = [...instances.values()].filter((s) => s.status === "running").length;
-  if (running >= cfg.maxConcurrentInstances) {
+  // No container at all — full provision.
+  const runningCount = [...instances.values()].filter((s) => s.status === "running").length;
+  if (runningCount >= cfg.maxConcurrentInstances) {
     throw new Error(`Max concurrent instances (${cfg.maxConcurrentInstances}) reached`);
   }
 
-  // Full provision
   updateState(username, { status: "provisioning", lastActive: Date.now() }, cfg);
   try {
     const containerId = await provisionUser(username, cfg);
-    // 5 min: npm install (if volume is cold) + supervisor startup + next dev startup
+    // 5 min: docker volume copy + supervisor + next dev compile
     await waitForHealthy(username, 300_000);
     updateState(username, { containerId, status: "running", lastActive: Date.now() }, cfg);
     resetIdleTimer(username, cfg);
@@ -111,20 +106,28 @@ export function resetIdleTimer(username: string, cfg: Config): void {
 
   idleTimers.set(username, timer);
 
-  // Update lastActive
   const state = instances.get(username);
-  if (state) {
-    updateState(username, { lastActive: Date.now() }, cfg);
-  }
+  if (state) updateState(username, { lastActive: Date.now() }, cfg);
 }
 
 export async function stopInstance(username: string): Promise<void> {
-  const state = instances.get(username);
-  if (!state?.containerId) return;
-  await stopContainer(state.containerId).catch(console.error);
+  // Re-inspect by name so we use the current container ID, not a stale one.
+  const info = await inspectContainer(containerName(username)).catch(() => null);
+  if (info?.State.Running) {
+    await stopContainer(info.Id).catch(console.error);
+  }
   updateState(username, { status: "stopped" }, _cfg);
   const timer = idleTimers.get(username);
   if (timer) { clearTimeout(timer); idleTimers.delete(username); }
+}
+
+/** Clear a user's lifecycle state so the next getOrProvision re-checks Docker
+ *  from scratch. Call this after any re-provision operation. */
+export function clearInstanceState(username: string): void {
+  const timer = idleTimers.get(username);
+  if (timer) { clearTimeout(timer); idleTimers.delete(username); }
+  instances.delete(username);
+  if (_cfg) persistInstancesToDisk(_cfg);
 }
 
 export function getInstanceState(username: string): InstanceState | undefined {
@@ -140,29 +143,19 @@ export async function reconcileOnStartup(cfg: Config): Promise<void> {
   for (const c of running) {
     const username = c.name.replace(/^bos-/, "");
     const status: InstanceStatus = c.status === "running" ? "running" : "stopped";
-    if (!instances.has(username)) {
-      updateState(username, { containerId: c.id, status, lastActive: Date.now() }, cfg);
-    } else {
-      updateState(username, { containerId: c.id, status }, cfg);
-    }
+    updateState(username, { containerId: c.id, status, lastActive: Date.now() }, cfg);
     if (status === "running") resetIdleTimer(username, cfg);
   }
-  // Mark anything in our map that Docker doesn't know about as unknown
-  for (const [username, state] of instances) {
+  // Anything in our map with no matching Docker container is truly gone.
+  for (const [username] of instances) {
     const found = running.find((c) => c.name === `bos-${username}`);
-    if (!found && state.status !== "unknown") {
-      updateState(username, { status: "unknown" }, cfg);
-    }
+    if (!found) updateState(username, { containerId: undefined, status: "unknown" }, cfg);
   }
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
-function updateState(
-  username: string,
-  patch: Partial<InstanceState>,
-  cfg: Config,
-): void {
+function updateState(username: string, patch: Partial<InstanceState>, cfg: Config): void {
   const prev = instances.get(username) ?? { username, status: "unknown" as InstanceStatus, lastActive: 0 };
   instances.set(username, { ...prev, ...patch, username });
   persistInstancesToDisk(cfg);
@@ -171,8 +164,7 @@ function updateState(
 function persistInstancesToDisk(cfg: Config): void {
   const file = path.join(cfg.dataDir, "instances.json");
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  const data = [...instances.values()];
-  fs.writeFileSync(file, JSON.stringify(data, null, 2));
+  fs.writeFileSync(file, JSON.stringify([...instances.values()], null, 2));
 }
 
 function loadInstancesFromDisk(cfg: Config): void {
@@ -180,7 +172,8 @@ function loadInstancesFromDisk(cfg: Config): void {
   try {
     const data = JSON.parse(fs.readFileSync(file, "utf8")) as InstanceState[];
     for (const s of data) {
-      instances.set(s.username, { ...s, status: "unknown" }); // will be reconciled
+      // Load as "unknown" — reconcileOnStartup will correct the status.
+      instances.set(s.username, { ...s, status: "unknown" });
     }
   } catch { /* no file yet */ }
 }

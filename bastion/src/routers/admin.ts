@@ -8,6 +8,7 @@ import {
   getAllInstances,
   stopInstance,
   getOrProvision,
+  clearInstanceState,
 } from "../lifecycle";
 import {
   reprovisionRestart,
@@ -122,6 +123,7 @@ export function createAdminRouter(cfg: Config, provider: AuthProvider): Router {
     const { operation } = req.body as { operation?: string };
     try {
       await runReprovision(username, operation, cfg);
+      clearInstanceState(username);
       res.json({ ok: true });
     } catch (err) {
       res.status(500).json({ error: String(err) });
