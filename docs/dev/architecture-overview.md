@@ -120,3 +120,47 @@ npm run supervisor   # run under the Supervisor (live version control)
 gen:apps`) to discover built‑in apps. Always typecheck after editing. For UI
 changes, verify in the browser when possible; if you can't, say so rather than
 claiming success.
+
+---
+
+## Multi-user Docker deployment (bastion / 024-docker-multiuser)
+
+For multi-user production deployments BOS uses a **bastion** service (`bastion/`) that sits in front of per-user BOS containers:
+
+```
+Browser ──► bastion:80
+              ├─ /app/login, /app/admin, /app/account  →  Vite SPA (served by bastion)
+              ├─ /login, /logout, /auth/*               →  auth routes (Express)
+              ├─ /admin/*                               →  admin API (Express, admin only)
+              ├─ /account/*                             →  self-service API (Express)
+              └─ /**  (authenticated catch-all)         →  proxy → bos-{username}:8090
+```
+
+### Per-user isolation
+
+Each user gets their own Docker container `bos-{username}` on the `bos-net` bridge network. The bastion reaches it by Docker DNS name — no host port mapping needed. Three volumes per user:
+
+| Mount | Type | Path in container |
+|---|---|---|
+| `VOLUME_BASE/{username}/src` | bind | `/app/src` |
+| `VOLUME_BASE/{username}/data` | bind | `/app/data` (→ `BOS_DATA_DIR`) |
+| `bos-nm-{username}` | named volume | `/app/node_modules` |
+
+### Bastion source layout
+
+```
+bastion/
+  src/
+    config.ts      ← typed config from env + /data/config.json
+    sessions.ts    ← JWT HTTP-only cookie (issue/verify/clear)
+    docker.ts      ← dockerode wrapper (no shell docker)
+    lifecycle.ts   ← per-user state machine, idle timers, startup reconciliation
+    provision.ts   ← git clone + volume + container; 5 re-provision ops
+    proxy.ts       ← session-gated catch-all proxy, WS support
+    auth/          ← simple (bcrypt YAML, hot-reload) + keycloak (OIDC)
+    routers/       ← auth, admin, account Express routers
+  ui/              ← Vite + React SPA (Login, Admin, Account pages)
+  Dockerfile       ← 3-stage: ui-build → ts-build → runtime
+```
+
+See `docs/dev/deployment.md` for the full deployment guide.

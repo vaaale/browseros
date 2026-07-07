@@ -1,0 +1,41 @@
+version: "3.9"
+
+services:
+  bastion:
+    image: bos-bastion:latest
+    build:
+      context: ./bastion
+      dockerfile: Dockerfile
+    ports:
+      - "${BASTION_PORT:-80}:3000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - bastion-data:/data
+      - ${VOLUME_BASE:-./user-data}:/user-data
+    environment:
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required}
+      - AUTH_PROVIDER=${AUTH_PROVIDER:-simple}
+      - BOS_IMAGE=${BOS_IMAGE:-browseros:latest}
+      - VOLUME_BASE=/user-data
+      - IDLE_TIMEOUT_MS=${IDLE_TIMEOUT_MS:-1800000}
+      - MAX_CONCURRENT_INSTANCES=${MAX_CONCURRENT_INSTANCES:-50}
+      - BOS_BASE_REF=${BOS_BASE_REF:-main}
+      - BOS_NET=bos-net
+      - PUBLIC_URL=${PUBLIC_URL:-http://localhost}
+      - KEYCLOAK_ISSUER=${KEYCLOAK_ISSUER:-}
+      - KEYCLOAK_CLIENT_ID=${KEYCLOAK_CLIENT_ID:-}
+      - KEYCLOAK_CLIENT_SECRET=${KEYCLOAK_CLIENT_SECRET:-}
+    networks:
+      - bos-net
+    restart: unless-stopped
+
+# BOS user containers are spawned at runtime by the bastion.
+# They are NOT defined here — the bastion creates them via the Docker API.
+
+networks:
+  bos-net:
+    name: bos-net
+    driver: bridge
+
+volumes:
+  bastion-data:

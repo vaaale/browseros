@@ -23,3 +23,11 @@ BrowserOS (BOS) is a single‑page, server‑side‑rendered "operating system i
 - Settings tabs: `src/components/apps/settings/` + `src/apps/settings/index.tsx` (entry).
 - Sub‑agents / delegation: `src/lib/agent/subagents/`.
 - Build Studio (spec-kit authoring): app `src/apps/build-studio/`, server logic `src/lib/specs/` (`stores.ts` discovery + manifest, `store-git.ts` build-free candidate/promote, `seed.ts`) + `src/lib/dev/spec-fs.ts` (multi-root, store-prefixed paths) + `src/app/api/specs/route.ts`; the agent & "Build Studio" skill are seeded in `subagents/store.ts` / `skills/store.ts`. Specs live in external stores under `BOS_SPECS_ROOT` (`bos-system-specs`, `user-specs`), each a self-describing folder (git repo + `spec-store.json`); the constitution is in the system store at `.specify/memory/constitution.md`. Store config: `src/os/specs-dir.ts`.
+
+## Multi-user Docker deployment (`bastion/`)
+- `bastion/` is a standalone Node.js/Express sub-project with its own `package.json` and `tsconfig.json`. Do not `npm install` in it unless you intend to modify bastion dependencies.
+- `Dockerfile` (repo root) + `docker-entrypoint.sh` — builds BOS as a Docker image exposing port **8090** (the Supervisor). `docker-entrypoint.sh` runs `npm install` if `node_modules` is absent (supports per-user named volumes).
+- `BOS_DATA_DIR` env var (`src/os/data-dir.ts`) — already supported; the bastion sets this to `/app/data` in each user's container.
+- `docker-compose.yml` — bastion + `bos-net` bridge; user BOS containers are spawned at runtime via dockerode, never defined in Compose.
+- `docker-compose.keycloak.yml` — adds a Keycloak OIDC service with a pre-seeded `bos` realm.
+- See `docs/dev/deployment.md` for the deployment guide.
