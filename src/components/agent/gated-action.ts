@@ -40,13 +40,11 @@ export function useCopilotAction<const T extends Parameter[] | [] = []>(
   const disallow =
     a.name !== undefined &&
     a.name !== "*" &&
-    a.available === undefined &&
     !isActionAllowed(a.name);
   const deferHide =
     !disallow &&
     a.name !== undefined &&
     a.name !== "*" &&
-    a.available === undefined &&
     isDeferredAndHidden(a.name);
   let next: FrontendAction<T> | CatchAllFrontendAction = action;
   const override = a.name ? descriptionFor(a.name) : undefined;
