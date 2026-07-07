@@ -35,11 +35,11 @@ npm install
 
 ```bash
 cp .env.example .env.local
-# Edit .env.local — set your API key:
+# Optional: seed a default API key so the wizard is pre-filled:
 #   ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-The minimum required setting is an AI provider key. Everything else is configurable at runtime in Settings.
+No env vars are required — everything including the API key is configurable at runtime through the first-run wizard or **Settings → AI Provider**. Env vars are only a convenience to pre-seed the defaults.
 
 ### 3. Run
 
