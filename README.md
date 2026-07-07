@@ -110,18 +110,17 @@ Visit **http://localhost** — you will be presented with a login page.
 
 ### 4. Create the first admin user
 
-With the bastion running, write a `users.yml` into its data volume:
+Generate a bcrypt hash inside the running bastion container, then write `users.yml`:
 
 ```bash
-docker compose exec bastion sh -c 'cat > /data/users.yml << EOF
-users:
-  admin:
-    passwordHash: $(docker compose exec bastion node -e "const b=require('"'"'bcryptjs'"'"');console.log(b.hashSync('"'"'changeme'"'"',12))")
-    admin: true
-EOF'
+# Step 1: generate the hash (the bastion already has bcryptjs installed)
+HASH=$(docker compose exec bastion node -e "const b=require('bcryptjs'); console.log(b.hashSync('changeme', 12))")
+
+# Step 2: write users.yml into the bastion data volume
+docker compose exec bastion sh -c "printf 'users:\n  admin:\n    passwordHash: %s\n    admin: true\n' '$HASH' > /data/users.yml"
 ```
 
-Then log in at **http://localhost** with `admin` / `changeme` and change your password from the account page.
+Then log in at **http://localhost** with `admin` / `changeme` and change your password from the account page (`/app/account`).
 
 ### Auth providers
 
