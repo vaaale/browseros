@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Sparkles } from "lucide-react";
 import { PROVIDERS, PROVIDER_LIST, type ProviderType } from "@/lib/agent/provider-meta";
 
@@ -10,6 +10,8 @@ export function FirstRunWizard() {
   const [model, setModel] = useState(PROVIDERS.anthropic.defaultModel);
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
+  const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const fetchSeq = useRef(0);
   const [harnessTransport, setHarnessTransport] = useState<"cli" | "opencode" | "stdio" | "http" | "sse">("cli");
   const [harnessCommand, setHarnessCommand] = useState("claude mcp serve");
   const [harnessUrl, setHarnessUrl] = useState("");
@@ -43,10 +45,35 @@ export function FirstRunWizard() {
       .catch(() => {});
   }, []);
 
+  // Fetch available models whenever provider / baseUrl / apiKey changes.
+  useEffect(() => {
+    const seq = ++fetchSeq.current;
+    const params = new URLSearchParams();
+    if (baseUrl) params.set("baseUrl", baseUrl);
+    if (apiKey) params.set("apiKey", apiKey);
+    const qs = params.toString();
+    fetch(`/api/agent/provider/models${qs ? `?${qs}` : ""}`)
+      .then((r) => r.json())
+      .then((d: { models?: string[] }) => {
+        if (seq !== fetchSeq.current) return;
+        const models = d.models ?? [];
+        setAvailableModels(models);
+        // Auto-select first result only when the current value is a generic default
+        // so we don't overwrite a model the user already typed.
+        if (models.length > 0 && models.includes(model) === false) {
+          const def = PROVIDERS[provider].defaultModel;
+          if (model === def || model === "") setModel(models[0]);
+        }
+      })
+      .catch(() => {});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [provider, baseUrl, apiKey]);
+
   const onProvider = (p: ProviderType) => {
     setProvider(p);
     setModel(PROVIDERS[p].defaultModel);
     setBaseUrl(PROVIDERS[p].defaultBaseUrl ?? "");
+    setAvailableModels([]);
   };
 
   const finish = async () => {
@@ -98,7 +125,17 @@ export function FirstRunWizard() {
               {PROVIDER_LIST.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
             </select>
             <label className="text-xs text-white/60">Model</label>
-            <input value={model} onChange={(e) => setModel(e.target.value)} className="rounded border border-white/10 bg-black/30 px-2 py-1.5 text-xs outline-none" />
+            <div>
+              <input
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+                list="wizard-models"
+                className="w-full rounded border border-white/10 bg-black/30 px-2 py-1.5 text-xs outline-none"
+              />
+              <datalist id="wizard-models">
+                {availableModels.map((m) => <option key={m} value={m} />)}
+              </datalist>
+            </div>
             <label className="text-xs text-white/60">Base URL</label>
             <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder={meta.baseUrlPlaceholder} className="rounded border border-white/10 bg-black/30 px-2 py-1.5 text-xs outline-none" />
             <label className="text-xs text-white/60">API key</label>
