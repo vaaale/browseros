@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { useCopilotAction } from "@/components/agent/gated-action";
+import { useCopilotAction } from "@copilotkit/react-core";
 import { DEFAULT_AGENT_ID } from "@/lib/agent/agent-ids";
 import { loadConversationMessages, useActiveConversationId } from "@/lib/agent/conversations";
 import { deleteNote, editNote, readNotes, writeNote } from "@/lib/agent/scratchpad/handlers";
@@ -14,8 +14,8 @@ import type { ToolResult } from "@/lib/agent/scratchpad/types";
 // conversation. On the first tool call for a conversation we lazily replay its
 // history to reconstruct the Map; subsequent calls hit the cache.
 //
-// Uses gated-action's useCopilotAction so the 016-unified-agents allowlist can
-// gate these actions the same way as skill_*, workflow_*, etc.
+// The CopilotKit route gates these actions server-side via the unified
+// capability allowlist, the same way as skill_*, workflow_*, etc.
 
 export function ScratchpadActions({ agentId = DEFAULT_AGENT_ID }: { agentId?: string }) {
   // Read the CURRENT conversation through a ref so handlers never close over a

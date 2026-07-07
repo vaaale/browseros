@@ -19,14 +19,9 @@ import { WebSearchActions } from "./WebSearchActions";
 import { IntegrationActions } from "./IntegrationActions";
 import { ScratchpadActions } from "./ScratchpadActions";
 import { ToolCallRetry } from "./ToolCallRetry";
-import { AgentCapabilitiesProvider } from "./agent-capabilities";
+import { DiscoveryActions } from "./DiscoveryActions";
 import { useActiveConversationId } from "@/lib/agent/conversations";
 import { DEFAULT_AGENT_ID } from "@/lib/agent/agent-ids";
-
-interface AgentInfo {
-  id: string;
-  tools?: string[];
-}
 
 interface ProviderCfg {
   provider?: string;
@@ -64,30 +59,34 @@ export function CopilotProvider({
     ? `/api/copilotkit?agent=${encodeURIComponent(agentId)}${threadId ? `&conv=${encodeURIComponent(threadId)}` : ""}`
     : "/api/copilotkit";
 
-  const [loaded, setLoaded] = useState<{ agentId?: string; allow: string[] | null; webSearchAvailable: boolean } | null>(null);
+  // Tool gating (allowlist 016 + deferred 025) is enforced server-side in the
+  // copilotkit route's withToolGate middleware. The client registers every
+  // action plainly; here we only resolve whether web search is available for
+  // the current provider (used to enable the WebSearchActions tool).
+  const [loaded, setLoaded] = useState<{
+    agentId?: string;
+    webSearchAvailable: boolean;
+  } | null>(null);
   useEffect(() => {
     let alive = true;
     const load = () => {
-      Promise.all([
-        fetch("/api/assistant/agent").then((r) => r.json()),
-        fetch("/api/agent/provider").then((r) => r.json()),
-      ]).then(([agentData, providerData]: [{ agents?: AgentInfo[] }, { config?: ProviderCfg }]) => {
-        if (!alive) return;
-        const agent = (agentData.agents ?? []).find((a) => a.id === agentId);
-        const cfg = providerData.config ?? {};
-        const p = cfg.provider ?? "";
-        const webSearchAvailable =
-          ((p === "anthropic" || p === "openai" || p === "openai-codex") && !!cfg.hasApiKey) ||
-          (p === "openai-responses" && (!!cfg.hasApiKey || !!cfg.baseUrl));
-        setLoaded({ agentId, allow: agent?.tools ?? null, webSearchAvailable });
-      }).catch(() => alive && setLoaded({ agentId, allow: null, webSearchAvailable: false }));
+      fetch("/api/agent/provider")
+        .then((r) => r.json())
+        .then((providerData: { config?: ProviderCfg }) => {
+          if (!alive) return;
+          const cfg = providerData.config ?? {};
+          const p = cfg.provider ?? "";
+          const webSearchAvailable =
+            ((p === "anthropic" || p === "openai" || p === "openai-codex") && !!cfg.hasApiKey) ||
+            (p === "openai-responses" && (!!cfg.hasApiKey || !!cfg.baseUrl));
+          setLoaded({ agentId, webSearchAvailable });
+        })
+        .catch(() => alive && setLoaded({ agentId, webSearchAvailable: false }));
     };
     load();
-    // Live-reload the agent's tool allowlist when Settings edits fire the
-    // shared "bos:agent-updated" event, and when the tab regains focus (covers
-    // any code path that forgets to fire the event). Together these mean tool /
-    // skill / MCP / prompt edits take effect on the next model turn without a
-    // window remount.
+    // Re-check provider-backed web search availability when Settings changes or
+    // the tab regains focus. Tool allowlists/deferred visibility are resolved by
+    // `/api/copilotkit` on each model request.
     const onUpdated = () => load();
     const onVisibility = () => { if (document.visibilityState === "visible") load(); };
     window.addEventListener("bos:agent-updated", onUpdated);
@@ -100,13 +99,13 @@ export function CopilotProvider({
   }, [agentId]);
 
   const ready = loaded !== null && loaded.agentId === agentId;
-  const allow = ready ? loaded!.allow : null;
   const webSearchAvailable = ready ? loaded!.webSearchAvailable : false;
 
   return (
     <CopilotKit key={agentId ?? "none"} runtimeUrl={runtimeUrl} threadId={threadId}>
       {ready && (
-        <AgentCapabilitiesProvider allow={allow}>
+        <>
+          <DiscoveryActions agentId={agentId} />
           <OSActions />
           <McpActions agentId={agentId} />
           <WebSearchActions webSearchAvailable={webSearchAvailable} />
@@ -125,7 +124,7 @@ export function CopilotProvider({
           <ScratchpadActions agentId={agentId} />
           <ToolCallRetry />
           {children}
-        </AgentCapabilitiesProvider>
+        </>
       )}
     </CopilotKit>
   );

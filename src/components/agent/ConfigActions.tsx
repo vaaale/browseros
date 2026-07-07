@@ -1,7 +1,6 @@
 "use client";
 
-import { useCopilotReadable } from "@copilotkit/react-core";
-import { useCopilotAction } from "@/components/agent/gated-action";
+import { useCopilotReadable, useCopilotAction } from "@copilotkit/react-core";
 import { useCallback, useEffect, useState } from "react";
 import type { ConfigSchemaView } from "@/lib/config/types";
 

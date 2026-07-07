@@ -8,7 +8,10 @@ import * as specfs from "@/lib/dev/spec-fs";
 import type { LlmTool } from "@/lib/agent/llm";
 import { SCHEDULER_TOOLS } from "@/lib/scheduler/agent-tools";
 import { listSkills, getSkill, readSkillFile, listSkillFiles } from "@/lib/agent/skills/store";
-import { readOverrides } from "@/lib/agent/tool-descriptions";
+import { readMetadataOverrides } from "@/lib/agent/tool-metadata-overrides";
+import { CAPABILITIES, groupDescription } from "@/lib/agent/capabilities-registry";
+import { scoreCapability, scoreAgent } from "@/lib/agent/discovery-score";
+import { listSubAgents } from "./store";
 
 // Base tools every sub-agent may use: the sandboxed virtual file system, web,
 // and scheduler operations (spread in at module bottom to keep this literal
@@ -214,6 +217,29 @@ export const SPEC_TOOLS: Record<string, LlmTool> = makeSpecTools();
 // event stream + a depth guard), so it is referenced here only by id.
 export const DELEGATE_TO_DEVELOPER = "dev_delegate";
 
+// Static parameter schemas for the two per-run-built tools. Exposed here so
+// discovery (025) can return their JSON schema without the runner needing to
+// have instantiated the concrete tool yet. The runner's per-run factories
+// re-use these constants to keep the schema in one place.
+export const DEV_DELEGATE_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    task: { type: "string", description: "Full implementation task with context and acceptance criteria." },
+  },
+  required: ["task"],
+};
+
+export const RUN_COMMAND_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    command: { type: "string" },
+    language: { type: "string", enum: ["bash", "python", "node"] },
+    skill: { type: "string", description: "Optional skill id to stage into the working dir first." },
+    timeoutMs: { type: "number" },
+  },
+  required: ["command"],
+};
+
 // Re-export scheduler tools for direct access (e.g. UI showing the tool set).
 // They are already merged into SUBAGENT_TOOLS above, so ALL_TOOLS picks them up.
 export { SCHEDULER_TOOLS };
@@ -221,30 +247,189 @@ export { SCHEDULER_TOOLS };
 const ALL_TOOLS: Record<string, LlmTool> = { ...SUBAGENT_TOOLS, ...DEV_TOOLS, ...SPEC_TOOLS };
 
 /**
- * Resolve the tools a sub-agent may use. With no explicit allowlist an agent
- * gets only the safe base tools — never the repo-scoped DEV_TOOLS. A developer
- * agent opts into repo access by listing those tool ids in its `tools`.
+ * Resolve the tools a sub-agent may use (Phase B strict allowlist). Contract:
+ *   - allowed == null/undefined → return {} (zero tools; the on-disk migration
+ *     in subagents/store.ts backfills legacy agents with the full capability
+ *     set so an existing agent never lands here on upgrade).
+ *   - allowed.length === 0 → return {} (an agent configured with no tools
+ *     has no tools; no more "empty means all" surprise).
+ *   - allowed with entries → filter ALL_TOOLS to the listed ids.
  *
- * Tool descriptions are overlaid from data/tool-descriptions.json (Settings →
- * Tools) so a user can rewrite the LLM-facing description of any tool without
- * editing source. Reads on every call — no in-memory cache — so edits take
- * effect on the next delegated run.
+ * Tool descriptions are overlaid from data/tool-metadata-overrides.json
+ * (Settings → Tools) so a user can rewrite the LLM-facing description without
+ * editing source. Per-agent deferred visibility is not read here — the runner
+ * unions the registry defaults with the agent's own `deferredTools` list to
+ * decide what to hide.
  */
 export async function toolsFor(allowed?: string[]): Promise<Record<string, LlmTool>> {
-  const overrides = await readOverrides();
-  const base = !allowed || allowed.length === 0
-    ? SUBAGENT_TOOLS
-    : Object.fromEntries(allowed.filter((id) => ALL_TOOLS[id]).map((id) => [id, ALL_TOOLS[id]]));
+  const overrides = await readMetadataOverrides();
+  if (!allowed || allowed.length === 0) return {};
+  const base = Object.fromEntries(
+    allowed.filter((id) => ALL_TOOLS[id]).map((id) => [id, ALL_TOOLS[id]]),
+  );
   return applyDescriptionOverrides(base, overrides);
 }
 
 function applyDescriptionOverrides(
   tools: Record<string, LlmTool>,
-  overrides: Record<string, string>,
+  overrides: Record<string, { description?: string }>,
 ): Record<string, LlmTool> {
   const out: Record<string, LlmTool> = {};
   for (const [id, tool] of Object.entries(tools)) {
-    out[id] = overrides[id] ? { ...tool, description: overrides[id] } : tool;
+    const desc = overrides[id]?.description;
+    out[id] = desc ? { ...tool, description: desc } : tool;
   }
   return out;
+}
+
+// Static parameter-schema map for every discoverable sub-agent tool. Includes
+// SUBAGENT_TOOLS + DEV_TOOLS + SPEC_TOOLS AND the static schemas for the
+// per-run-built tools (dev_delegate, run_command) so 025 discovery works even
+// before the runner has instantiated them for this run.
+const STATIC_SCHEMAS: Record<string, Record<string, unknown>> = {
+  ...Object.fromEntries(Object.entries(ALL_TOOLS).map(([id, t]) => [id, t.parameters])),
+  [DELEGATE_TO_DEVELOPER]: DEV_DELEGATE_SCHEMA,
+  run_command: RUN_COMMAND_SCHEMA,
+};
+
+/** JSON parameter schema for a sub-agent tool id, or undefined if unknown. */
+export function getToolSchema(id: string): Record<string, unknown> | undefined {
+  return STATIC_SCHEMAS[id];
+}
+
+interface FindToolsResult {
+  id: string;
+  group: string;
+  description: string;
+  schema: Record<string, unknown>;
+  score: number;
+}
+
+interface FindAgentResult {
+  id: string;
+  name: string;
+  type: string;
+  description: string;
+  score: number;
+}
+
+/**
+ * Build the two runtime-discovery tools (025-deferred-tool-discovery).
+ *
+ * - `find_tools(query)` scores every deferred capability the agent is allowed
+ *   to use, returns the top `maxResults` with full JSON schema, and calls
+ *   `reveal(ids)` so the returned tools become visible in the next step of the
+ *   surrounding tool loop.
+ * - `find_agent(query)` scores agents by identity metadata only — never
+ *   exposing the target's tool composition (spec clarification 1).
+ */
+export function makeDiscoveryTools(args: {
+  /** The calling agent's strict allowlist. Empty ⇒ no registry tools. */
+  allow: string[];
+  /** The runner's live tool map. Only ids present here are discoverable. */
+  tools: Record<string, LlmTool>;
+  /** The effective deferred set for THIS agent: registry defaults unioned with
+   *  the agent's own `deferredTools`. A tool is discoverable iff it appears in
+   *  this set. */
+  effectiveDeferred: Set<string>;
+  /** Register discovered ids as revealed so the loop exposes them next step. */
+  reveal: (ids: string[]) => void;
+  /** Cap on results, resolved from Settings → Tools (5..25, default 10). */
+  maxResults: number;
+}): Record<string, LlmTool> {
+  const { allow, tools, effectiveDeferred, reveal, maxResults } = args;
+  const allowSet = new Set(allow);
+
+  return {
+    find_tools: {
+      description:
+        "Discover deferred capabilities by natural-language query. Returns top-scoring deferred tools (id, group, description, JSON schema) that YOU are allowed to use; once returned, each becomes callable in the next step of this loop. Use this whenever a needed tool is not in your visible tools list.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Natural-language description of the capability you need (min 2 chars)." },
+        },
+        required: ["query"],
+      },
+      execute: async (input) => {
+        const query = String(input.query ?? "").trim();
+        if (query.length < 2) return JSON.stringify([]);
+
+        // Score every capability that is deferred FOR THIS AGENT and that the
+        // agent could actually call under its strict allowlist.
+        const candidates = CAPABILITIES
+          .filter((c) => effectiveDeferred.has(c.id))
+          .filter((c) => allowSet.has(c.id))
+          .filter((c) => tools[c.id] !== undefined || getToolSchema(c.id) !== undefined);
+
+        const scored = candidates
+          .map((c) => ({ cap: c, score: scoreCapability(c, query, groupDescription(c.group)) }))
+          .filter((r) => r.score > 0)
+          .sort((a, b) => b.score - a.score)
+          .slice(0, maxResults);
+
+        const results: FindToolsResult[] = scored.map(({ cap, score }) => {
+          const live = tools[cap.id];
+          const schema = live?.parameters ?? getToolSchema(cap.id) ?? { type: "object", properties: {} };
+          return {
+            id: cap.id,
+            group: cap.group,
+            description: live?.description ?? cap.description,
+            schema,
+            score,
+          };
+        });
+
+        // Promote the discovered tools into the loop's visible set. Only tools
+        // the runner actually has can be revealed — schema-only entries (rare)
+        // are informational for the model.
+        const revealable = results.map((r) => r.id).filter((id) => tools[id] !== undefined);
+        if (revealable.length) reveal(revealable);
+        return JSON.stringify(results);
+      },
+    },
+    find_agent: {
+      description:
+        "Discover sub-agents you can delegate to by natural-language query. Returns each candidate agent's identity metadata (id, name, type, description) — never their internal tools list. Use before agent_delegate/dev_delegate when you don't already know which agent should handle a task.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Natural-language description of the task or specialization you need (min 2 chars)." },
+        },
+        required: ["query"],
+      },
+      execute: async (input) => {
+        const query = String(input.query ?? "").trim();
+        if (query.length < 2) return JSON.stringify([]);
+        const agents = await listSubAgents();
+        const scored = agents
+          .map((a) => ({
+            agent: a,
+            score: scoreAgent({ name: a.name, description: a.description, type: a.type }, query),
+          }))
+          .filter((r) => r.score > 0)
+          .sort((a, b) => b.score - a.score)
+          .slice(0, maxResults);
+
+        const results: FindAgentResult[] = scored.map(({ agent, score }) => ({
+          id: agent.id,
+          name: agent.name,
+          type: agent.type,
+          description: agent.description,
+          score,
+        }));
+        return JSON.stringify(results);
+      },
+    },
+  };
+}
+
+// Convenience: which of the runner's tool ids are deferred under the given
+// effective-deferred set. Used by runner.ts to build the initial `hiddenIds`
+// set for the tool loop.
+export function pickDeferredIds(
+  tools: Record<string, LlmTool>,
+  effectiveDeferred: Set<string>,
+): Set<string> {
+  return new Set(Object.keys(tools).filter((id) => effectiveDeferred.has(id)));
 }

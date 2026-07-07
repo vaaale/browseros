@@ -1,7 +1,6 @@
 "use client";
 
-import { useCopilotReadable } from "@copilotkit/react-core";
-import { useCopilotAction } from "@/components/agent/gated-action";
+import { useCopilotReadable, useCopilotAction } from "@copilotkit/react-core";
 import { useIntegrationsEffectiveScopes } from "@/components/apps/settings/integrations/useIntegrations";
 import { GMAIL_METHOD_DESCRIPTORS } from "@/lib/integrations/services/gsuite/adapters/gmail-methods";
 import { DRIVE_METHOD_DESCRIPTORS } from "@/lib/integrations/services/gsuite/adapters/drive-methods";

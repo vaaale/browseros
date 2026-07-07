@@ -26,8 +26,8 @@ the Map is rebuilt from it lazily on first access.
   `editNote` / `deleteNote`. Return `ToolResult` values; do no I/O.
 - `src/components/agent/ScratchpadActions.tsx` — CopilotKit action wrappers.
   Reads the active conversationId via `useActiveConversationId(agentId)`,
-  keeps it in a ref (mirrors `SubAgentActions`), and gates through
-  `@/components/agent/gated-action` so 016‑unified‑agents allowlists apply.
+  keeps it in a ref (mirrors `SubAgentActions`); `/api/copilotkit` applies the
+  016 unified allowlist and 025 deferred visibility server-side.
 - `src/lib/agent/capabilities-registry.ts` — four `scratchpad_*` entries in
   the `Scratchpad` group, `context: "action"` (client‑only; no server tool
   counterpart).

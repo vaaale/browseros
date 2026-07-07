@@ -7,6 +7,7 @@ import type { Agent, AgentType } from "./types";
 import { parseFrontmatter, buildFrontmatter, asString, asList, asBool } from "./markdown";
 import { DEFAULT_PERSONALITY } from "@/lib/agent/config";
 import { DEFAULT_AGENT_ID } from "@/lib/agent/agent-ids";
+import { CAPABILITIES } from "@/lib/agent/capabilities-registry";
 
 const DIR = path.join(dataDir(), "agents");
 
@@ -126,6 +127,7 @@ function toMarkdown(a: Agent): string {
       tools: a.tools,
       skills: a.skills,
       mcp: a.mcp,
+      deferredTools: a.deferredTools,
       useDefaultPrompt: a.useDefaultPrompt,
     },
     a.systemPrompt,
@@ -144,6 +146,7 @@ function fromMarkdown(id: string, src: string): Agent {
     tools: asList(meta.tools),
     skills: asList(meta.skills),
     mcp: asList(meta.mcp),
+    deferredTools: asList(meta.deferredTools),
     useDefaultPrompt: asBool(meta.useDefaultPrompt),
     model: asString(meta.model),
     subagentType: asString(meta.subagent_type),
@@ -179,7 +182,50 @@ async function ensureSeed(): Promise<void> {
     // Union only — never removes a user's customizations.
     await reconcileBuildStudioTools();
   }
+  // Phase B strict-allowlist migration: with `empty allowlist = zero tools`,
+  // any legacy agent that relied on "unset ⇒ all" would silently lose every
+  // tool on upgrade. Backfill each such agent's allowlist with the FULL set
+  // of capability ids the ONE TIME they're first read on the new code. The
+  // per-agent marker file makes this idempotent — a user who later saves an
+  // explicit empty allowlist will keep it (the marker prevents re-migration).
+  await backfillLegacyAllowlists();
   await ensureDefaultPromptAgent();
+}
+
+// One-time backfill executed at first read after upgrade. Uses a per-agent
+// marker file (.capabilities-migrated) instead of a frontmatter field so the
+// Agent schema stays clean.
+const MIGRATION_MARKER = ".capabilities-migrated";
+const ALL_CAPABILITY_IDS: string[] = CAPABILITIES.map((c) => c.id);
+
+async function backfillLegacyAllowlists(): Promise<void> {
+  const entries = await fs.readdir(DIR, { withFileTypes: true }).catch(() => [] as import("fs").Dirent[]);
+  for (const d of entries) {
+    if (!d.isDirectory()) continue;
+    if (d.name === DEFAULT_PROMPT_AGENT_ID) continue;
+    const agentDir = path.join(DIR, d.name);
+    const marker = path.join(agentDir, MIGRATION_MARKER);
+    try {
+      await fs.access(marker);
+      continue; // already migrated
+    } catch { /* not migrated yet */ }
+
+    const file = path.join(agentDir, "AGENT.md");
+    let src: string;
+    try {
+      src = await fs.readFile(file, "utf8");
+    } catch {
+      continue; // no AGENT.md — skip
+    }
+    const agent = fromMarkdown(d.name, src);
+    if (!agent.tools || agent.tools.length === 0) {
+      const updated: Agent = { ...agent, tools: [...ALL_CAPABILITY_IDS] };
+      await writeFileAtomic(file, toMarkdown(updated));
+    }
+    // Marker written regardless — a user who deliberately saves an empty
+    // allowlist after this point should not be re-migrated.
+    await writeFileAtomic(marker, "1");
+  }
 }
 
 // Copies seed/default_agent/AGENT.md into data/agents/default_agent on first
@@ -282,9 +328,16 @@ export async function createSubAgent(input: {
 }): Promise<Agent> {
   await ensureSeed();
   const id = slugify(input.name);
-  const agent: Agent = { id, type: input.type ?? "local", ...input };
+  // Under Phase B, empty/missing tools means ZERO tools. New agents created
+  // without an explicit tools list would otherwise land with no capabilities,
+  // which is not the intent — mirror the migration by defaulting to the full
+  // capability set. Callers that want a locked-down agent should pass tools: [].
+  const tools = input.tools ?? [...ALL_CAPABILITY_IDS];
+  const agent: Agent = { id, type: input.type ?? "local", ...input, tools };
   await fs.mkdir(path.join(DIR, id), { recursive: true });
   await writeFileAtomic(path.join(DIR, id, "AGENT.md"), toMarkdown(agent));
+  // Mark migrated so ensureSeed doesn't try to re-backfill this agent.
+  await writeFileAtomic(path.join(DIR, id, MIGRATION_MARKER), "1");
   return agent;
 }
 
@@ -307,11 +360,13 @@ export async function setAgentSystemPrompt(id: string, systemPrompt: string): Pr
   return updated;
 }
 
-/** Update an agent's capability allowlists (tools/skills/mcp). Only provided
- *  classes are changed; unset/empty means "all" at enforcement time. */
+/** Update an agent's capability allowlists (tools/skills/mcp/deferredTools).
+ *  Only provided classes are changed. Tools use the strict allowlist migrated
+ *  above; skills/MCP keep their unset/empty-means-all behavior; deferredTools
+ *  are additive over registry defaults. */
 export async function setAgentCapabilities(
   id: string,
-  caps: { tools?: string[]; skills?: string[]; mcp?: string[] },
+  caps: { tools?: string[]; skills?: string[]; mcp?: string[]; deferredTools?: string[] },
 ): Promise<Agent | undefined> {
   const agent = await getAgent(id);
   if (!agent) return undefined;
@@ -320,6 +375,7 @@ export async function setAgentCapabilities(
     tools: caps.tools ?? agent.tools,
     skills: caps.skills ?? agent.skills,
     mcp: caps.mcp ?? agent.mcp,
+    deferredTools: caps.deferredTools ?? agent.deferredTools,
   };
   await writeFileAtomic(path.join(DIR, agent.id, "AGENT.md"), toMarkdown(updated));
   return updated;

@@ -1,11 +1,13 @@
 import "server-only";
 import { runToolLoop, type ToolEvent, type LlmTool } from "@/lib/agent/llm";
-import { toolsFor, DEV_TOOLS, SPEC_TOOLS, DELEGATE_TO_DEVELOPER, makeSpecTools } from "./tools";
+import { toolsFor, DEV_TOOLS, SPEC_TOOLS, DELEGATE_TO_DEVELOPER, makeSpecTools, makeDiscoveryTools, pickDeferredIds } from "./tools";
 import { runClaudeAgent } from "./claude-runner";
 import { getAgent } from "./store";
 import { stageAll } from "@/lib/system/git";
 import { runCommand, type RunLanguage } from "@/lib/system/run-command";
 import { getLogContext } from "@/lib/logging/context";
+import { deferredCapabilityIds } from "@/lib/agent/capabilities-registry";
+import { getMaxFindResults } from "@/lib/config/registry";
 import type { Agent, AgentRunResult } from "./types";
 
 export type SubAgentEvent = ToolEvent;
@@ -108,12 +110,35 @@ async function runLocal(
     for (const id of specIds) tools[id] = boundSpec[id];
   }
 
+  // Deferred-tool discovery (025). Compute the per-agent effective deferred set
+  // (registry defaults ∪ this agent's own `deferredTools`) and wire the two
+  // discovery tools + the loop's hidden/revealed sets so an agent can find and
+  // then call deferred tools mid-loop.
+  const registryDeferred = deferredCapabilityIds();
+  const agentDeferred = new Set(agent.deferredTools ?? []);
+  const effectiveDeferred = new Set<string>([...registryDeferred, ...agentDeferred]);
+  const hiddenIds = pickDeferredIds(tools, effectiveDeferred);
+  const revealed = new Set<string>();
+  const maxResults = await getMaxFindResults();
+  Object.assign(
+    tools,
+    makeDiscoveryTools({
+      allow: agent.tools ?? [],
+      tools,
+      effectiveDeferred,
+      reveal: (revealIds) => revealIds.forEach((rid) => revealed.add(rid)),
+      maxResults,
+    }),
+  );
+
   const result = await runToolLoop({
     system: agent.systemPrompt,
     prompt: task,
     tools,
     maxSteps: isExtended ? DEV_MAX_STEPS : undefined,
     onEvent: opts?.onEvent,
+    hiddenIds,
+    revealed,
   });
   let output = result.text;
   if (isDev) {

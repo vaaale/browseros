@@ -8,6 +8,9 @@ export interface AgentMeta {
   tools: string[];
   skills: string[];
   mcp: string[];
+  /** Tool ids this agent hides from its initial context. Additive over the
+   *  registry defaults. */
+  deferredTools: string[];
   systemPrompt: string;
   /** Whether the shared default prompt is prepended to this agent's personality.
    *  Defaults to true server-side when the AGENT.md doesn't set it explicitly. */
@@ -53,6 +56,7 @@ export interface CapabilitiesPatch {
   tools?: string[];
   skills?: string[];
   mcp?: string[];
+  deferredTools?: string[];
 }
 
 // The default agent slot the main assistant adopts as its personality. It is

@@ -83,7 +83,10 @@ function ToolsTab() {
 const STATE_TRANSPORT_KEYS = ["messages", "tools", "copilotkit"];
 
 function SessionStateTab() {
-  const { state } = useCoAgent<Record<string, unknown>>({ name: "default", initialState: {} });
+  // temp: {} pre-seeds the namespace agents use for ephemeral scratch state
+  // (e.g. /temp/tools_found). Without it, JSON Patch `add` at /temp/* fails
+  // because the parent path doesn't exist.
+  const { state } = useCoAgent<Record<string, unknown>>({ name: "default", initialState: { temp: {} } });
   const visible = Object.fromEntries(
     Object.entries(state ?? {}).filter(([k]) => !STATE_TRANSPORT_KEYS.includes(k)),
   );

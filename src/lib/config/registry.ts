@@ -14,6 +14,14 @@ export interface ConfigRegistration {
 const HARNESS_DEFAULT_URL = process.env.BOS_DEV_HARNESS_URL || "http://wingman.akhbar.lan:7272/mcp";
 const HARNESS_DEFAULT_COMMAND = "claude mcp serve";
 
+// Clamps tools.maxFindResults into the spec-mandated 5..25 range (default 10).
+// Shared by the load/save path AND the runtime resolver so a hand-edited config
+// value can never break the discovery loop.
+function clampMaxFindResults(n: number): number {
+  if (!Number.isFinite(n)) return 10;
+  return Math.max(5, Math.min(25, Math.round(n)));
+}
+
 const REGISTRATIONS: ConfigRegistration[] = [
   {
     schema: {
@@ -64,10 +72,28 @@ const REGISTRATIONS: ConfigRegistration[] = [
         "Global tool-description overrides. Rewrite what the LLM sees for any tool without editing source. Overrides apply to every agent (main-chat actions and sub-agent tools alike) and take effect on the next model turn.",
       order: 65,
       customComponent: "tools",
-      fields: [],
+      fields: [
+        {
+          key: "maxFindResults",
+          label: "Max discovery results",
+          type: "number",
+          description: "Max results returned by find_tools / find_agent. 5–25, default 10.",
+        },
+      ],
     },
-    load: async () => ({}),
-    save: async () => {},
+    load: async () => {
+      const s = await readNamespace("tools");
+      const raw = typeof s.maxFindResults === "number" ? s.maxFindResults : 10;
+      return { maxFindResults: clampMaxFindResults(raw) };
+    },
+    save: async (patch) => {
+      const next: Record<string, unknown> = { ...patch };
+      if (next.maxFindResults !== undefined) {
+        const n = typeof next.maxFindResults === "number" ? next.maxFindResults : Number(next.maxFindResults);
+        next.maxFindResults = clampMaxFindResults(Number.isFinite(n) ? n : 10);
+      }
+      await patchNamespace("tools", next);
+    },
   },
   {
     schema: {
@@ -478,4 +504,12 @@ export async function getConfigValue(namespace: string, key: string): Promise<un
   const reg = getRegistration(namespace);
   if (!reg) return undefined;
   return (await reg.load())[key];
+}
+
+/** Resolve the current tools.maxFindResults (used by find_tools / find_agent).
+ *  Always returns a clamped, defaulted number so callers never need to guard. */
+export async function getMaxFindResults(): Promise<number> {
+  const v = await getConfigValue("tools", "maxFindResults");
+  const n = typeof v === "number" ? v : 10;
+  return clampMaxFindResults(n);
 }

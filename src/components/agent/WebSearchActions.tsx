@@ -1,6 +1,6 @@
 "use client";
 
-import { useCopilotAction } from "@/components/agent/gated-action";
+import { useCopilotAction } from "@copilotkit/react-core";
 
 export function WebSearchActions({ webSearchAvailable }: { webSearchAvailable: boolean }) {
   useCopilotAction({

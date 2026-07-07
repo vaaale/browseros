@@ -15,6 +15,9 @@ import { OpenAIChatAdapter, OpenAIResponsesAdapter } from "@/lib/agent/openai-ch
 import { composeInstructions } from "@/lib/agent/instructions";
 import { getConversationActiveFeatureBranch } from "@/lib/agent/conversations-server";
 import { withCompaction } from "@/lib/agent/compaction/middleware";
+import { withToolGate } from "@/lib/agent/tool-gate";
+import { getAgent } from "@/lib/agent/subagents/store";
+import { readMetadataOverrides } from "@/lib/agent/tool-metadata-overrides";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
@@ -73,7 +76,24 @@ export async function POST(req: NextRequest) {
   // the composed prompt so it actually reaches the model. Runtime-level MCP/action
   // tools are still assigned to this agent by CopilotRuntime.
   const rawModel = agentId ? serviceAdapter.getLanguageModel?.() : undefined;
-  const model = rawModel && convId ? withCompaction(rawModel, convId) : rawModel;
+  // Apply compaction to the provider input, then wrap that model with the
+  // server-side tool gate. The gate stays outermost so it derives revealed
+  // deferred tools from the full transcript before compaction can remove old
+  // tool results from what the provider sees.
+  let model = rawModel && convId ? withCompaction(rawModel, convId) : rawModel;
+  if (model && agentId) {
+    const agent = await getAgent(agentId).catch(() => undefined);
+    if (agent) {
+      const descriptions = await readMetadataOverrides().catch(() => ({}));
+      model = withToolGate(model, {
+        allow: agent.tools ?? [],
+        deferredTools: agent.deferredTools ?? [],
+        descriptions: Object.fromEntries(
+          Object.entries(descriptions).map(([id, o]) => [id, o?.description]),
+        ),
+      });
+    }
+  }
   let prompt = agentId ? await composeInstructions(agentId) : "";
   if (model && convId) {
     // Surface this conversation's active feature branch so the model delegates BOS
