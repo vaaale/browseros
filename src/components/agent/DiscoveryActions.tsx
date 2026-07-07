@@ -32,10 +32,15 @@ export function DiscoveryActions({
       };
       if (res.error) return `Error: ${res.error}`;
       const results = res.results ?? [];
+      const json = JSON.stringify(results);
+      // Defer the Zustand update to outside CopilotKit's current action-processing
+      // cycle. Updating synchronously triggers a React re-render that changes the
+      // registered action config mid-run, which CopilotKit rejects with
+      // "Action configuration changed between renders".
       if (results.length && conversationId) {
-        addRevealed(conversationId, results.map((r) => r.id));
+        setTimeout(() => addRevealed(conversationId, results.map((r) => r.id)), 0);
       }
-      return JSON.stringify(results);
+      return json;
     },
     [agentId, conversationId],
   );
