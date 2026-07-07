@@ -10,6 +10,9 @@
 // Framework-free (no react, no server-only) so client gating, the server tool
 // resolver, the Settings catalog, and the InfoPanel all read the same list.
 
+import { actionNameFor } from "@/lib/integrations/actions/dispatcher";
+import { TELEGRAM_BOT_METHOD_DESCRIPTORS } from "@/lib/integrations/services/telegram/adapters/bot-methods";
+
 export type CapabilityContext = "action" | "tool" | "both";
 
 export interface Capability {
@@ -24,6 +27,14 @@ export interface Capability {
    */
   deferred?: boolean;
 }
+
+const TELEGRAM_BOT_CAPABILITIES: Capability[] = TELEGRAM_BOT_METHOD_DESCRIPTORS.map((m) => ({
+  id: actionNameFor("telegram", "bot", m.method),
+  group: "Telegram",
+  context: "action",
+  description: m.description,
+  deferred: true,
+}));
 
 // Tool naming standard: `subsystem_object_verb`, snake_case, one id per logical
 // operation. A "both" capability is a single id exposed on BOTH surfaces — the
@@ -170,6 +181,7 @@ export const CAPABILITIES: Capability[] = [
   { id: "contacts_contacts_list", group: "Google Contacts", context: "action", description: "List the user's contacts (People API connections).", deferred: true },
   { id: "contacts_contacts_get", group: "Google Contacts", context: "action", description: "Fetch a single contact by resourceName.", deferred: true },
   { id: "contacts_contacts_search", group: "Google Contacts", context: "action", description: "Search contacts by free-text query.", deferred: true },
+  ...TELEGRAM_BOT_CAPABILITIES,
 ];
 
 // Group definitions for semantic search expansion (025-deferred-tool-discovery).
@@ -196,6 +208,7 @@ export const GROUP_DEFINITIONS: Record<string, { description: string }> = {
   "Google Drive": { description: "Google Drive integration: listing, searching, downloading, and exporting files and folders." },
   "Google Calendar": { description: "Google Calendar integration: listing calendars, reading events, creating, updating, deleting, moving, RSVPing to events, and querying free/busy times." },
   "Google Contacts": { description: "Google Contacts integration: listing, fetching, and searching contacts from the People API." },
+  "Telegram": { description: "Telegram bot integration: reading bot profile and updates, sending messages and media, managing chat messages and command menus, and routing messages through BOS agents." },
 };
 
 /** Look up a group's description (used for search expansion). Falls back to a
@@ -213,6 +226,7 @@ export function groupDescription(name: string): string {
 const DANGEROUS_TOOL_NAMES: readonly string[] = [
   "file_delete", // destructive VFS delete
   "run_command", // arbitrary command execution (sandboxed, but still powerful)
+  "bot_messages_delete", // destructive Telegram message delete
 ];
 
 /** Ids the UI should annotate as dangerous (warning icon + red description). */

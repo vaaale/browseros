@@ -54,6 +54,7 @@ the main chat and a delegated sub-agent both use `file_read`.
 | `GitActions` | `dev_git_status` |
 | `RunCommandActions` | `run_command` (sandboxed exec; Settings → Command Execution) |
 | `WorkflowActions` | `workflow_create, workflow_modify, workflow_run, workflow_status, workflow_cancel, workflow_export, workflow_validate` |
+| `IntegrationActions` | GSuite actions (`gmail_*`, `drive_*`, `calendar_*`, `contacts_*`) and Telegram bot actions (`bot_*`) generated from adapter method descriptors |
 
 > Removed: `switchAssistantAgent` (agents delegate, they don't self-switch roles),
 > the unsandboxed `runBash` tool (replaced by `run_command`), and the legacy MCP
@@ -65,10 +66,9 @@ the main chat and a delegated sub-agent both use `file_read`.
 
 ### The Tools panel manifest
 
-`src/lib/agent/tool-manifest.ts` (`ASSISTANT_TOOLS`) is a **curated mirror** of the
-above, shown in the Assistant's right **Tools** panel grouped by area. **Keep it in
-sync** when you add/remove an action (it's display‑only — it does not register
-tools).
+`src/lib/agent/tool-manifest.ts` (`ASSISTANT_TOOLS`) is derived from
+`capabilities-registry.ts`, shown in the Assistant's right **Tools** panel grouped
+by area. It is display-only — it does not register tools.
 
 ---
 
