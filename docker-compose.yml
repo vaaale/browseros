@@ -10,11 +10,13 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - bastion-data:/data
       - ${VOLUME_BASE:-./user-data}:/user-data
+      - .:/bos-src:ro        # BOS source repo — cloned into each new user's src/ on first login
     environment:
       - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required}
       - AUTH_PROVIDER=${AUTH_PROVIDER:-simple}
       - BOS_IMAGE=${BOS_IMAGE:-browseros:latest}
       - VOLUME_BASE=/user-data
+      - BOS_REPO_PATH=/bos-src
       - IDLE_TIMEOUT_MS=${IDLE_TIMEOUT_MS:-1800000}
       - MAX_CONCURRENT_INSTANCES=${MAX_CONCURRENT_INSTANCES:-50}
       - BOS_BASE_REF=${BOS_BASE_REF:-main}
