@@ -7,18 +7,15 @@ import { KeycloakProvider } from "../auth/keycloak";
 export function createAuthRouter(cfg: Config, provider: AuthProvider): Router {
   const router = Router();
 
-  // ── Login page ─────────────────────────────────────────────────────────────
+  // ── Login page redirect ────────────────────────────────────────────────────
+  // Authenticated users hitting /login go to / (proxy handles BOS or status).
+  // Unauthenticated users get the SPA login page.
   router.get("/login", (req, res) => {
     const session = verifySession(req, cfg);
-    if (session) { res.redirect("/app/account"); return; }
-    // The SPA serves its own login page; redirect to the SPA app path
+    if (session) { res.redirect("/"); return; }
     res.redirect("/app/login");
   });
-
-  router.get("/", (req, res) => {
-    const session = verifySession(req, cfg);
-    res.redirect(session ? "/app/account" : "/app/login");
-  });
+  // NOTE: no GET / handler here — the proxy catch-all owns the root path.
 
   // ── Simple login ───────────────────────────────────────────────────────────
   router.post("/login", async (req, res) => {
