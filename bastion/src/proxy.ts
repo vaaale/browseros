@@ -3,20 +3,85 @@ import type { RequestHandler } from "express";
 import type { Server } from "http";
 import type { Config } from "./config";
 import { verifySession, clearSession } from "./sessions";
-import { getOrProvision, resetIdleTimer } from "./lifecycle";
+import { getOrProvision, resetIdleTimer, getInstanceState } from "./lifecycle";
 import { containerName } from "./docker";
 
-const ERROR_PAGE = (msg: string, showAccount: boolean) => `
-<!DOCTYPE html><html><head><title>BrowserOS</title>
-<style>body{font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#0f0f0f;color:#ccc}
-.box{text-align:center;max-width:400px}.box h2{color:#e55}.box a{color:#7af}</style>
-</head><body><div class="box">
-<h2>Could not reach your BOS instance</h2>
-<p>${msg}</p>
-${showAccount ? '<p><a href="/app/account">Go to Account page to re-provision</a></p>' : ''}
-</div></body></html>
-`;
+// ── Status page ───────────────────────────────────────────────────────────────
+// Shown while the container is provisioning or starting. Polls /account/instance
+// and auto-redirects to / when status becomes "running".
+const STATUS_PAGE = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>BrowserOS — Starting</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#0f0f0f;color:#ccc;font-family:system-ui,sans-serif;
+       display:flex;align-items:center;justify-content:center;height:100vh}
+  .box{text-align:center;max-width:360px;padding:32px}
+  .logo{font-size:26px;font-weight:600;color:#eee;margin-bottom:12px}
+  .msg{font-size:14px;color:#888;margin-bottom:36px;min-height:20px}
+  .dots{display:inline-flex;gap:8px}
+  .dot{width:9px;height:9px;border-radius:50%;background:#2563eb;
+       animation:pulse 1.4s ease-in-out infinite}
+  .dot:nth-child(2){animation-delay:.2s}
+  .dot:nth-child(3){animation-delay:.4s}
+  @keyframes pulse{0%,80%,100%{opacity:.2;transform:scale(.8)}
+                   40%{opacity:1;transform:scale(1)}}
+  .account{margin-top:32px;font-size:12px}
+  .account a{color:#555;text-decoration:none}
+  .account a:hover{color:#888}
+</style>
+</head>
+<body>
+<div class="box">
+  <div class="logo">BrowserOS</div>
+  <div class="msg" id="msg">Preparing your instance…</div>
+  <div class="dots">
+    <div class="dot"></div><div class="dot"></div><div class="dot"></div>
+  </div>
+  <div class="account"><a href="/app/account">Account settings</a></div>
+</div>
+<script>
+const msgEl = document.getElementById('msg');
+const labels = {
+  provisioning: 'Provisioning your instance…',
+  stopped:      'Starting your instance…',
+  unknown:      'Preparing your instance…',
+  running:      'Ready — loading BrowserOS…'
+};
+function poll() {
+  fetch('/account/instance')
+    .then(r => r.json())
+    .then(d => {
+      msgEl.textContent = labels[d.status] || labels.unknown;
+      if (d.status === 'running') {
+        setTimeout(() => { window.location.replace('/'); }, 300);
+      } else {
+        setTimeout(poll, 2000);
+      }
+    })
+    .catch(() => setTimeout(poll, 2000));
+}
+poll();
+</script>
+</body>
+</html>`;
 
+// ── Error page ────────────────────────────────────────────────────────────────
+const ERROR_PAGE = (msg: string) => `<!DOCTYPE html>
+<html><head><title>BrowserOS</title>
+<style>body{font-family:sans-serif;display:flex;align-items:center;justify-content:center;
+height:100vh;margin:0;background:#0f0f0f;color:#ccc}
+.box{text-align:center;max-width:400px}.box h2{color:#e55;margin-bottom:12px}
+.box a{color:#7af}</style></head>
+<body><div class="box">
+<h2>Could not start your BOS instance</h2>
+<p>${msg}</p>
+<p style="margin-top:16px"><a href="/app/account">Go to Account page</a></p>
+</div></body></html>`;
+
+// ── Proxy factory ─────────────────────────────────────────────────────────────
 export function createBosProxy(cfg: Config): RequestHandler & { upgrade?: (server: Server) => void } {
   const proxyMap = new Map<string, RequestHandler>();
 
@@ -28,10 +93,10 @@ export function createBosProxy(cfg: Config): RequestHandler & { upgrade?: (serve
         changeOrigin: true,
         ws: true,
         on: {
-          error: (err, _req, res) => {
+          error: (_err, _req, res) => {
             if (res && "writeHead" in res) {
               res.writeHead(502, { "Content-Type": "text/html" });
-              res.end(ERROR_PAGE("The connection to your BOS instance failed.", true));
+              res.end(ERROR_PAGE("The connection to your BOS instance failed."));
             }
           },
         },
@@ -40,7 +105,7 @@ export function createBosProxy(cfg: Config): RequestHandler & { upgrade?: (serve
     return proxyMap.get(username)!;
   }
 
-  const middleware: RequestHandler = async (req, res, next) => {
+  const middleware: RequestHandler = (req, res, next) => {
     const session = verifySession(req, cfg);
     if (!session) {
       clearSession(res);
@@ -48,16 +113,31 @@ export function createBosProxy(cfg: Config): RequestHandler & { upgrade?: (serve
       return;
     }
 
-    try {
-      await getOrProvision(session.username, cfg);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      res.status(503).send(ERROR_PAGE(msg, true));
+    const { username } = session;
+    const state = getInstanceState(username);
+
+    // Fast path: already running — proxy immediately.
+    if (state?.status === "running") {
+      resetIdleTimer(username, cfg);
+      getProxy(username)(req, res, next);
       return;
     }
 
-    resetIdleTimer(session.username, cfg);
-    getProxy(session.username)(req, res, next);
+    // Non-HTML requests (assets, API calls) while not running get a simple 503.
+    const acceptsHtml = (req.headers.accept ?? "").includes("text/html");
+    if (!acceptsHtml) {
+      res.status(503).json({ error: "BOS instance not ready", status: state?.status ?? "unknown" });
+      return;
+    }
+
+    // Kick off provisioning / start in the background — do NOT await.
+    getOrProvision(username, cfg).catch((err: Error) => {
+      console.error(`[bastion] provision failed for ${username}:`, err.message);
+    });
+
+    // Return the status page immediately. Its JS polls /account/instance and
+    // redirects to / when status flips to "running".
+    res.status(200).send(STATUS_PAGE);
   };
 
   return middleware;

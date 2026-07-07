@@ -58,8 +58,9 @@ export default function Account() {
     });
     setLoading(null);
     if (!res.ok) { const d = await res.json() as { error: string }; setError(d.error); return; }
-    const updated = await fetch("/account/instance").then(r => r.json());
-    setState(updated as InstanceState);
+    // Go through the proxy — it will show the status page while the container
+    // starts and redirect into BOS automatically when ready.
+    window.location.href = "/";
   }
 
   async function logout() {

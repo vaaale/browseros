@@ -29,7 +29,9 @@ export default function Login() {
       body: JSON.stringify({ username, password }),
     });
     setLoading(false);
-    if (res.ok) { navigate("/account"); return; }
+    // Full page navigation so the proxy picks it up and either routes
+    // directly into BOS (running) or shows the status page (starting).
+    if (res.ok) { window.location.href = "/"; return; }
     setError("Invalid username or password");
   }
 

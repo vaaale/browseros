@@ -65,7 +65,7 @@ export function createAuthRouter(cfg: Config, provider: AuthProvider): Router {
       return;
     }
     issueSession(res, record, cfg);
-    res.redirect("/app/account");
+    res.redirect("/");
   });
 
   // ── Logout ─────────────────────────────────────────────────────────────────
