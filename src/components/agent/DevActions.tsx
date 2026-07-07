@@ -1,6 +1,6 @@
 "use client";
 
-import { useCopilotAction } from "@/components/agent/gated-action";
+import { useCopilotAction } from "@copilotkit/react-core";
 import { useOSStoreApi } from "@/store/os-provider";
 import type { AppManifest } from "@/os/types";
 

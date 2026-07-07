@@ -1,6 +1,6 @@
 "use client";
 
-import { useCopilotAction } from "@/components/agent/gated-action";
+import { useCopilotAction } from "@copilotkit/react-core";
 import { parseToolArgs } from "@/lib/mcp/args";
 
 // Agent-facing MCP tool gateway (014-mcp-tool-gateway). The agent never gets every

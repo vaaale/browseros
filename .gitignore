@@ -52,6 +52,7 @@ next-env.d.ts
 
 # browseros runtime data (VFS, settings, memory, mcp/provider config)
 /data
+/user-data
 
 # browseros user apps — a standalone git repo (GitFS), versioned independently
 # of BOS source. Default location; override with BOS_APPS_DIR. Gitignored here

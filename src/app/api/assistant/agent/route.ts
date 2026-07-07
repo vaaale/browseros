@@ -15,8 +15,8 @@ export const dynamic = "force-dynamic";
 
 // The catalog of capabilities the Settings UI offers per agent. `tools` is the
 // unified capability registry (016): one allowlist governs an agent in both
-// contexts — server tools (toolsFor) and main-chat actions (gated client-side via
-// AgentCapabilities). Each item is { id, group, description, context }.
+// contexts — server tools (toolsFor) and main-chat actions (gated server-side by
+// `/api/copilotkit`). Each item is { id, group, description, context }.
 async function buildCatalog() {
   const [skills, mcp] = await Promise.all([listSkills(), listMcpServers()]);
   return {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCopilotAction } from "@/components/agent/gated-action";
+import { useCopilotAction } from "@copilotkit/react-core";
 import { getSessionId } from "@/lib/logging/client/session";
 
 // Sandboxed command execution for the main chat. Keys the sandbox on the browser

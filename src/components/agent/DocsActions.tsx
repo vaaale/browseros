@@ -1,6 +1,6 @@
 "use client";
 
-import { useCopilotAction } from "@/components/agent/gated-action";
+import { useCopilotAction } from "@copilotkit/react-core";
 
 // Read-only browsing of the project documentation tree: docs/usage/** (end
 // users) and docs/dev/** (developers). The docs are SOURCE files — to change

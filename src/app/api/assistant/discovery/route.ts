@@ -9,18 +9,19 @@ import { scoreCapability, scoreAgent } from "@/lib/agent/discovery-score";
 import { getAgent, listSubAgents } from "@/lib/agent/subagents/store";
 import { getMaxFindResults } from "@/lib/config/registry";
 import { getToolSchema } from "@/lib/agent/subagents/tools";
+import { readMetadataOverrides, type ToolMetadataOverrides } from "@/lib/agent/tool-metadata-overrides";
 
 export const dynamic = "force-dynamic";
 
-// Runtime discovery for the CLIENT-side deferred gate (Phase A of the uniform
-// agent behavior). Mirrors the server-side find_tools / find_agent tools:
+// Runtime discovery for the main-chat server-side deferred gate. Mirrors the
+// delegated runner's find_tools / find_agent tools:
 //
 //   GET /api/assistant/discovery?agentId=<id>&query=<q>&type=tool
 //   GET /api/assistant/discovery?agentId=<id>&query=<q>&type=agent
 //
 // Filters candidates by the caller agent's effective deferred set (registry
-// defaults ∪ agent.deferredTools) and its allowlist (empty ⇒ all), scores by
-// the same deterministic scorer used server-side, and returns the top-N.
+// defaults ∪ agent.deferredTools) and strict tool allowlist, scores by the same
+// deterministic scorer used server-side, and returns the top-N.
 export async function GET(req: NextRequest) {
   const url = new URL(req.url);
   const agentId = url.searchParams.get("agentId") || "";
@@ -35,7 +36,10 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: `Agent "${agentId}" not found` }, { status: 404 });
   }
 
-  const maxResults = await getMaxFindResults();
+  const [maxResults, overrides] = await Promise.all([
+    getMaxFindResults(),
+    readMetadataOverrides().catch((): ToolMetadataOverrides => ({})),
+  ]);
 
   if (query.length < 2) {
     return NextResponse.json({ results: [] });
@@ -68,7 +72,6 @@ export async function GET(req: NextRequest) {
     ...(agent.deferredTools ?? []),
   ]);
   const allow = agent.tools ?? [];
-  const allowAll = allow.length === 0;
   const allowSet = new Set(allow);
 
   const scored = CAPABILITIES
@@ -76,7 +79,7 @@ export async function GET(req: NextRequest) {
     // tools (context "tool") are unreachable from the browser.
     .filter((c) => isActionId(c.id))
     .filter((c) => effectiveDeferred.has(c.id))
-    .filter((c) => allowAll || allowSet.has(c.id))
+    .filter((c) => allowSet.has(c.id))
     .map((c) => ({ cap: c, score: scoreCapability(c, query, groupDescription(c.group)) }))
     .filter((r) => r.score > 0)
     .sort((a, b) => b.score - a.score)
@@ -86,7 +89,7 @@ export async function GET(req: NextRequest) {
     results: scored.map(({ cap, score }) => ({
       id: cap.id,
       group: cap.group,
-      description: cap.description,
+      description: overrides[cap.id]?.description ?? cap.description,
       schema: getToolSchema(cap.id) ?? { type: "object", properties: {} },
       score,
     })),

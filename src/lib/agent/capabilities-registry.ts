@@ -2,7 +2,7 @@
 //
 // One "agent" has one allowlist (`tools`) that governs it in BOTH contexts:
 //  - context "action" → a main-chat CopilotKit action (id = the useCopilotAction
-//    name); gated client-side via the `available` flag (see gated-action.ts).
+//    name); gated server-side in the CopilotKit route's language-model wrapper.
 //  - context "tool"   → a server sub-agent tool (id = the toolsFor() key); gated
 //    server-side in runner.ts.
 //  - context "both"   → exists in both (e.g. spec ops: a client action + a server tool).
@@ -223,7 +223,7 @@ export function getDangerousToolNames(): readonly string[] {
 const ACTION_IDS = new Set(CAPABILITIES.filter((c) => c.context !== "tool").map((c) => c.id));
 const DEFERRED_IDS = new Set(CAPABILITIES.filter((c) => c.deferred === true).map((c) => c.id));
 
-/** Is this id a main-chat action (gated client-side)? */
+/** Is this id a main-chat action? */
 export function isActionId(id: string): boolean {
   return ACTION_IDS.has(id);
 }

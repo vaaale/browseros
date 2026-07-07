@@ -15,22 +15,21 @@ it whether it's the **active personality** (main-chat actions) or **delegated to
 (`src/lib/agent/capabilities-registry.ts`): every tool by stable id, tagged with the
 context(s) it runs in (`action` / `tool` / `both`). `tool-manifest.ts` is a view of it.
 
-- Gating the active chat: the `*Actions` import `useCopilotAction` from the
-  `gated-action.ts` **shim**, which (via `AgentCapabilitiesProvider` →
-  `resolveActionGate`) replaces a disallowed action with a **render-only no-op**
-  (`available:"disabled"` + `render:()=>null`, dropping `renderAndWaitForResponse`).
-  Not just `available:"disabled"`: CopilotKit routes a "disabled" action to its
-  RENDER path and calls the action's `render` unconditionally, so a handler-only
-  action (no render) would throw "render is not a function" when its tool-call card
-  rendered. The no-op keeps it out of the model's tool set AND render-safe; a
-  disabled action's own past cards render blank (rare — an agent's conversations
-  normally hold only its allowed calls). The catch-all renderer keeps importing
-  from CopilotKit (never gated).
-- CopilotKit forbids an action's `available` changing after registration, so
-  `CopilotProvider` mounts the actions + chat together only once the pinned/active
-  agent's allowlist has loaded (and remounts on agent switch).
-- Back-compat rule: an action is allowed unless the allowlist names ≥1 action id — so
-  unset/legacy (tool-id-only) allowlists keep all actions.
+- Gating the active chat: all `*Actions` register plainly with CopilotKit. The
+  `/api/copilotkit` route wraps the AI SDK language model with `withToolGate`,
+  which filters the tool schema before each model step using the active agent's
+  strict `tools` allowlist, the registry default deferred set, and that agent's
+  per-agent `deferredTools`.
+- Deferred discovery: `DiscoveryActions` always registers `find_tools` and
+  `find_agent`. `find_tools` returns matching deferred tool ids and schemas;
+  `withToolGate` derives the revealed ids from prior `find_tools` tool results in
+  the conversation transcript, so no frontend reveal store is needed.
+- Compaction order matters: the tool gate wraps outside the compaction middleware
+  so it can inspect the full transcript for prior `find_tools` results before
+  compaction shrinks the prompt sent to the provider.
+- Back-compat rule: legacy agents are migrated once to an explicit full tool
+  allowlist. After migration, an empty `tools` allowlist means zero registry
+  tools.
 - `SpecActions` (client spec ops over `/api/specs`) let an active-personality agent
   (Build Studio) author specs directly, mirroring the server `SPEC_TOOLS`.
 
@@ -116,7 +115,8 @@ tools).
 1. Add a `useCopilotAction({...})` in the most relevant `*Actions.tsx` (or a new
    component mounted in `CopilotProvider.tsx`). The handler hits a `/api/...` route
    for server work.
-2. Mirror it in `tool-manifest.ts` (Tools panel).
+2. Add the capability to `src/lib/agent/capabilities-registry.ts` with the right
+   `context` and `deferred` default so `/api/copilotkit` can gate it.
 3. Prefer extending an existing grouping over creating new components.
 
 ---

@@ -324,7 +324,7 @@ interface FindAgentResult {
  *   exposing the target's tool composition (spec clarification 1).
  */
 export function makeDiscoveryTools(args: {
-  /** The calling agent's allowlist (empty/unset ⇒ "all tools allowed"). */
+  /** The calling agent's strict allowlist. Empty ⇒ no registry tools. */
   allow: string[];
   /** The runner's live tool map. Only ids present here are discoverable. */
   tools: Record<string, LlmTool>;
@@ -339,7 +339,6 @@ export function makeDiscoveryTools(args: {
 }): Record<string, LlmTool> {
   const { allow, tools, effectiveDeferred, reveal, maxResults } = args;
   const allowSet = new Set(allow);
-  const allowAll = allow.length === 0;
 
   return {
     find_tools: {
@@ -357,11 +356,10 @@ export function makeDiscoveryTools(args: {
         if (query.length < 2) return JSON.stringify([]);
 
         // Score every capability that is deferred FOR THIS AGENT and that the
-        // agent could actually call. The "allow-all when allowlist empty"
-        // invariant matches the rest of BOS's capability gating.
+        // agent could actually call under its strict allowlist.
         const candidates = CAPABILITIES
           .filter((c) => effectiveDeferred.has(c.id))
-          .filter((c) => allowAll || allowSet.has(c.id))
+          .filter((c) => allowSet.has(c.id))
           .filter((c) => tools[c.id] !== undefined || getToolSchema(c.id) !== undefined);
 
         const scored = candidates

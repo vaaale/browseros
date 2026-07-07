@@ -2,23 +2,15 @@
 
 import { useCallback } from "react";
 import { useCopilotAction } from "@copilotkit/react-core";
-import { addRevealed } from "@/lib/agent/revealed-store";
 
-// Client-side runtime discovery for the main-chat gate (025-deferred-tool-
-// discovery). These two actions are registered with the RAW CopilotKit hook
-// (not the gated shim) so they are ALWAYS available to the model regardless of
-// the active agent's allowlist — an agent that has no visible tools can still
-// discover deferred ones.
-//
-// On a successful find_tools call, discovered ids are added to the per-
-// conversation revealed set (revealed-store), and gated-action.ts re-renders
-// those actions with `available: true` in the next step.
+// Runtime discovery for the main-chat backend gate (025-deferred-tool-discovery).
+// These actions are always registered; `/api/copilotkit` filters the model's
+// visible tool schemas server-side and derives revealed tool ids from prior
+// `find_tools` results in the transcript.
 export function DiscoveryActions({
   agentId,
-  conversationId,
 }: {
   agentId: string;
-  conversationId: string;
 }) {
   const findToolsHandler = useCallback(
     async ({ query }: { query: string }) => {
@@ -31,13 +23,9 @@ export function DiscoveryActions({
         error?: string;
       };
       if (res.error) return `Error: ${res.error}`;
-      const results = res.results ?? [];
-      if (results.length && conversationId) {
-        addRevealed(conversationId, results.map((r) => r.id));
-      }
-      return JSON.stringify(results);
+      return JSON.stringify(res.results ?? []);
     },
-    [agentId, conversationId],
+    [agentId],
   );
 
   const findAgentHandler = useCallback(
@@ -53,7 +41,7 @@ export function DiscoveryActions({
       if (res.error) return `Error: ${res.error}`;
       return JSON.stringify(res.results ?? []);
     },
-    [agentId, conversationId],
+    [agentId],
   );
 
   useCopilotAction({
