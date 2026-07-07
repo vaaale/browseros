@@ -8,22 +8,34 @@ export interface ToolAccordionsProps {
   all: CatalogTool[];
   /** The agent's current tool allowlist. Empty array → all allowed. */
   allowed: string[];
+  /** Tool ids the agent hides from its initial context (additive over the
+   *  registry defaults). */
+  deferred: string[];
   onChange: (nextAllowed: string[]) => void;
+  onChangeDeferred: (nextDeferred: string[]) => void;
 }
 
 /**
  * Categorized tool picker: each group ({@link CatalogTool.group}) becomes a
- * card with a "Toggle All" affordance and a grid of `<checkbox + monospace
- * name + description>`. Dangerous tools (per capabilities-registry) render
- * their description in red with a ⚠️ prefix.
+ * card with a "Toggle All" affordance and a grid of `<allow checkbox +
+ * monospace name + deferred checkbox>`. Dangerous tools (per
+ * capabilities-registry) render their description in red with a ⚠️ prefix.
+ *
+ * The deferred column lets the user hide an allowed tool from THIS agent's
+ * initial context; the agent will still be able to discover it via
+ * `find_tools(query=…)`. Per-agent deferred lists are additive over the
+ * registry defaults — a tool that is deferred in the registry stays deferred
+ * regardless of this toggle.
  */
-export function ToolAccordions({ all, allowed, onChange }: ToolAccordionsProps) {
+export function ToolAccordions({ all, allowed, deferred, onChange, onChangeDeferred }: ToolAccordionsProps) {
   const groups = useMemo(() => groupByCategory(all), [all]);
   const dangerous = useMemo(() => new Set(getDangerousToolNames()), []);
 
   const isImplicitAll = allowed.length === 0;
   const allowedSet = new Set(allowed);
+  const deferredSet = new Set(deferred);
   const isChecked = (id: string) => isImplicitAll || allowedSet.has(id);
+  const isDeferred = (id: string) => deferredSet.has(id);
 
   // Any allowlist mutation must first materialize the implicit "all" state
   // into an explicit list — otherwise a single unchecked box would silently
@@ -34,6 +46,11 @@ export function ToolAccordions({ all, allowed, onChange }: ToolAccordionsProps) 
     const base = explicitBase();
     if (base.includes(id)) onChange(base.filter((x) => x !== id));
     else onChange([...base, id]);
+  };
+
+  const toggleDeferred = (id: string) => {
+    if (deferredSet.has(id)) onChangeDeferred(deferred.filter((x) => x !== id));
+    else onChangeDeferred([...deferred, id]);
   };
 
   const toggleAllInGroup = (groupIds: string[]) => {
@@ -81,25 +98,39 @@ export function ToolAccordions({ all, allowed, onChange }: ToolAccordionsProps) 
                 {allOn ? "Uncheck All" : "Toggle All"}
               </button>
             </div>
-            <div className="grid gap-1" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))" }}>
+            <div className="grid gap-1" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))" }}>
               {items.map((tool) => {
                 const checked = isChecked(tool.id);
+                const deferredChecked = isDeferred(tool.id);
                 const isDangerous = dangerous.has(tool.id);
                 return (
-                  <label
+                  <div
                     key={tool.id}
-                    className="flex cursor-pointer flex-col items-start rounded border border-white/10 bg-white/[0.02] px-1.5 py-1 transition-colors hover:border-white/20 hover:bg-white/10"
+                    className="flex flex-col rounded border border-white/10 bg-white/[0.02] px-1.5 py-1 transition-colors hover:border-white/20 hover:bg-white/10"
                   >
-                    <div className="flex w-full items-center">
+                    <div className="flex w-full items-center gap-1.5">
                       <input
                         type="checkbox"
                         checked={checked}
                         onChange={() => toggleOne(tool.id)}
-                        className="mr-1.5 h-3.5 w-3.5 shrink-0 cursor-pointer accent-violet-500"
+                        className="h-3.5 w-3.5 shrink-0 cursor-pointer accent-violet-500"
+                        title="Allow this agent to use this tool"
                       />
                       <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-white">
                         {tool.id}
                       </span>
+                      <label
+                        className="flex shrink-0 cursor-pointer items-center gap-1 text-[9px] uppercase tracking-wide text-white/50 hover:text-white/80"
+                        title="Hide this tool from the agent's initial context (still discoverable via find_tools)"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={deferredChecked}
+                          onChange={() => toggleDeferred(tool.id)}
+                          className="h-3 w-3 shrink-0 cursor-pointer accent-amber-400"
+                        />
+                        <span>deferred</span>
+                      </label>
                     </div>
                     <span
                       className={`mt-0.5 block text-[10px] leading-snug ${
@@ -109,7 +140,7 @@ export function ToolAccordions({ all, allowed, onChange }: ToolAccordionsProps) 
                       {isDangerous ? "⚠️ " : ""}
                       {tool.description || "No description available"}
                     </span>
-                  </label>
+                  </div>
                 );
               })}
             </div>

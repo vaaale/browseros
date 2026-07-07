@@ -14,7 +14,6 @@ interface Capability {
 
 interface MetadataOverride {
   description?: string;
-  deferred?: boolean;
 }
 
 type MetadataOverrides = Record<string, MetadataOverride>;
@@ -34,26 +33,23 @@ function clampMaxFindResults(n: number): number {
 }
 
 // Settings → Tools: global per-tool metadata overrides. Editing a description
-// here rewrites what the LLM sees for that tool across every agent; toggling
-// the "deferred" checkbox flips whether the tool is initially hidden (agents
-// discover it via find_tools) or always visible. Both changes persist to
-// data/tool-metadata-overrides.json and take effect on the next agent turn.
+// here rewrites what the LLM sees for that tool across every agent. The
+// "deferred" badge is read-only and reflects the registry default — per-agent
+// deferred visibility is edited in Settings → Agents → [agent] → Tools, since
+// it is per-agent state.
 export function ToolsTab() {
   const [catalog, setCatalog] = useState<Capability[]>([]);
-  // Description-only view (id → override description) kept alongside the full
-  // metadataOverrides so ToolRow's textarea logic remains a plain string map
-  // and the existing bos:tool-descriptions-updated event contract still works.
+  // Description-only view (id → override description). The
+  // bos:tool-descriptions-updated event contract still fires when a description
+  // is saved so other panels (e.g. ToolManifest) can refresh.
   const [overrides, setOverrides] = useState<Record<string, string>>({});
-  const [metadataOverrides, setMetadataOverrides] = useState<MetadataOverrides>({});
   const [maxFindResults, setMaxFindResults] = useState<number>(MAX_FIND_RESULTS_DEFAULT);
 
   const load = useCallback(async () => {
     try {
       const res = (await fetch("/api/tool-descriptions").then((r) => r.json())) as Payload;
       setCatalog(res.catalog ?? []);
-      const meta = res.overrides ?? {};
-      setMetadataOverrides(meta);
-      setOverrides(descriptionMap(meta));
+      setOverrides(descriptionMap(res.overrides ?? {}));
     } catch { /* keep previous state */ }
     try {
       const res = (await fetch("/api/config").then((r) => r.json())) as {
@@ -82,7 +78,7 @@ export function ToolsTab() {
     } catch { /* silently keep local state */ }
   }, []);
 
-  const patchServer = useCallback(async (patch: { id: string; description?: string; deferred?: boolean | null }) => {
+  const patchServer = useCallback(async (patch: { id: string; description: string }) => {
     const res = await fetch("/api/tool-descriptions", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -105,37 +101,9 @@ export function ToolsTab() {
       else delete next[patch.id];
       return next;
     });
-    setMetadataOverrides((prev) => {
-      const next = { ...prev };
-      const entry: MetadataOverride = { ...(next[patch.id] ?? {}) };
-      if (patch.description) entry.description = patch.description;
-      else delete entry.description;
-      if (entry.description === undefined && entry.deferred === undefined) delete next[patch.id];
-      else next[patch.id] = entry;
-      return next;
-    });
   }, [patchServer]);
 
   const save = useAutoSave<{ id: string; description: string }>(saveDescription);
-
-  // Optimistic toggle. `deferred` is stored ONLY when it differs from the
-  // registry default (see tool-metadata-overrides.setMetadataOverride) — the
-  // server drops it otherwise and we mirror that in local state on reload.
-  const toggleDeferred = useCallback(async (id: string, nextEffective: boolean) => {
-    setMetadataOverrides((prev) => {
-      const next = { ...prev };
-      const entry: MetadataOverride = { ...(next[id] ?? {}) };
-      entry.deferred = nextEffective;
-      next[id] = entry;
-      return next;
-    });
-    try {
-      await patchServer({ id, deferred: nextEffective });
-    } catch {
-      // Roll back on failure by re-reading from the server.
-      void load();
-    }
-  }, [patchServer, load]);
 
   const groups = useMemo(() => groupByCategory(catalog), [catalog]);
 
@@ -143,7 +111,7 @@ export function ToolsTab() {
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex shrink-0 items-center justify-between border-b border-white/10 px-4 py-2">
         <p className="text-[11px] text-white/50">
-          Rewrite what the LLM sees for any tool, or toggle whether it&apos;s hidden until discovered.
+          Rewrite what the LLM sees for any tool. Per-agent deferred visibility is edited in Settings → Agents.
         </p>
         <AutoSaveStatus status={save.status} />
       </div>
@@ -175,27 +143,19 @@ export function ToolsTab() {
                 {group}
               </div>
               <div className="flex flex-col gap-2">
-                {items.map((tool) => {
-                  // Effective deferred = optimistic override in metadataOverrides
-                  // (if the user just toggled) else the value the server returned
-                  // in the catalog (already merged registry ⊕ persisted override).
-                  const overrideDeferred = metadataOverrides[tool.id]?.deferred;
-                  const effectiveDeferred = overrideDeferred ?? tool.deferred === true;
-                  return (
-                    <ToolRow
-                      // Re-key on override presence so a reset (override cleared) or
-                      // an incoming override remounts the row with the new initial
-                      // draft — cleaner than syncing prop→state inside an effect.
-                      key={`${tool.id}:${overrides[tool.id] ?? ""}`}
-                      id={tool.id}
-                      sourceDescription={tool.description}
-                      override={overrides[tool.id]}
-                      deferred={effectiveDeferred}
-                      onSave={(description) => save.save({ id: tool.id, description })}
-                      onToggleDeferred={(next) => void toggleDeferred(tool.id, next)}
-                    />
-                  );
-                })}
+                {items.map((tool) => (
+                  <ToolRow
+                    // Re-key on override presence so a reset (override cleared) or
+                    // an incoming override remounts the row with the new initial
+                    // draft — cleaner than syncing prop→state inside an effect.
+                    key={`${tool.id}:${overrides[tool.id] ?? ""}`}
+                    id={tool.id}
+                    sourceDescription={tool.description}
+                    override={overrides[tool.id]}
+                    deferred={tool.deferred === true}
+                    onSave={(description) => save.save({ id: tool.id, description })}
+                  />
+                ))}
               </div>
             </div>
           ))}
@@ -220,14 +180,12 @@ function ToolRow({
   override,
   deferred,
   onSave,
-  onToggleDeferred,
 }: {
   id: string;
   sourceDescription: string;
   override: string | undefined;
   deferred: boolean;
   onSave: (description: string) => void;
-  onToggleDeferred: (next: boolean) => void;
 }) {
   // Draft = current effective value shown to the user. Blur commits. The
   // parent remounts this row on override changes (via key prop) so we don't
@@ -256,23 +214,11 @@ function ToolRow({
           {deferred && (
             <span
               className="shrink-0 rounded border border-amber-500/40 bg-amber-500/10 px-1 py-[1px] text-[9px] font-medium uppercase tracking-wide text-amber-300"
-              title="Hidden from the agent's initial context — discovered at runtime via find_tools."
+              title="Hidden from every agent's initial context by default — discovered at runtime via find_tools. Per-agent overrides live in Settings → Agents."
             >
               deferred
             </span>
           )}
-          <label
-            className="ml-1 flex shrink-0 cursor-pointer items-center gap-1 text-[10px] text-white/60 hover:text-white/80"
-            title="Toggle whether this tool is hidden from the agent's initial context (discovered via find_tools)."
-          >
-            <input
-              type="checkbox"
-              checked={deferred}
-              onChange={(e) => onToggleDeferred(e.target.checked)}
-              className="h-3 w-3 accent-amber-400"
-            />
-            <span>deferred</span>
-          </label>
         </div>
         {isOverridden && (
           <button

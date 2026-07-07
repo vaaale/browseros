@@ -126,6 +126,7 @@ function toMarkdown(a: Agent): string {
       tools: a.tools,
       skills: a.skills,
       mcp: a.mcp,
+      deferredTools: a.deferredTools,
       useDefaultPrompt: a.useDefaultPrompt,
     },
     a.systemPrompt,
@@ -144,6 +145,7 @@ function fromMarkdown(id: string, src: string): Agent {
     tools: asList(meta.tools),
     skills: asList(meta.skills),
     mcp: asList(meta.mcp),
+    deferredTools: asList(meta.deferredTools),
     useDefaultPrompt: asBool(meta.useDefaultPrompt),
     model: asString(meta.model),
     subagentType: asString(meta.subagent_type),
@@ -307,11 +309,12 @@ export async function setAgentSystemPrompt(id: string, systemPrompt: string): Pr
   return updated;
 }
 
-/** Update an agent's capability allowlists (tools/skills/mcp). Only provided
- *  classes are changed; unset/empty means "all" at enforcement time. */
+/** Update an agent's capability allowlists (tools/skills/mcp/deferredTools).
+ *  Only provided classes are changed; unset/empty means "all" (for allowlists)
+ *  or "registry defaults only" (for deferredTools) at enforcement time. */
 export async function setAgentCapabilities(
   id: string,
-  caps: { tools?: string[]; skills?: string[]; mcp?: string[] },
+  caps: { tools?: string[]; skills?: string[]; mcp?: string[]; deferredTools?: string[] },
 ): Promise<Agent | undefined> {
   const agent = await getAgent(id);
   if (!agent) return undefined;
@@ -320,6 +323,7 @@ export async function setAgentCapabilities(
     tools: caps.tools ?? agent.tools,
     skills: caps.skills ?? agent.skills,
     mcp: caps.mcp ?? agent.mcp,
+    deferredTools: caps.deferredTools ?? agent.deferredTools,
   };
   await writeFileAtomic(path.join(DIR, agent.id, "AGENT.md"), toMarkdown(updated));
   return updated;

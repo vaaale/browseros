@@ -51,6 +51,7 @@ export async function GET(req: NextRequest) {
       tools: a.tools ?? [],
       skills: a.skills ?? [],
       mcp: a.mcp ?? [],
+      deferredTools: a.deferredTools ?? [],
       systemPrompt: a.systemPrompt ?? "",
       useDefaultPrompt: a.useDefaultPrompt ?? true,
     })),
@@ -70,11 +71,12 @@ export async function PATCH(req: NextRequest) {
     if (typeof body.body === "string") {
       await setAgentSystemPrompt(body.agentId, body.body);
     }
-    if (body.tools || body.skills || body.mcp) {
+    if (body.tools || body.skills || body.mcp || body.deferredTools) {
       await setAgentCapabilities(body.agentId, {
         tools: Array.isArray(body.tools) ? body.tools.map(String) : undefined,
         skills: Array.isArray(body.skills) ? body.skills.map(String) : undefined,
         mcp: Array.isArray(body.mcp) ? body.mcp.map(String) : undefined,
+        deferredTools: Array.isArray(body.deferredTools) ? body.deferredTools.map(String) : undefined,
       });
     }
     if (typeof body.useDefaultPrompt === "boolean") {

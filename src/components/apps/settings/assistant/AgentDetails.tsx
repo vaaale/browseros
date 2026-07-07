@@ -166,7 +166,9 @@ export function AgentDetails({ agent, catalog, onSaved, onDeleted }: AgentDetail
           <ToolAccordions
             all={catalog.tools}
             allowed={agent.tools}
+            deferred={agent.deferredTools}
             onChange={(tools) => capsSave.save({ tools })}
+            onChangeDeferred={(deferredTools) => capsSave.save({ deferredTools })}
           />
         )}
         {tab === "mcp" && (

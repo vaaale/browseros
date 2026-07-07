@@ -74,6 +74,10 @@ async function openaiResponsesComplete(
   return extractResponsesText(res.output as unknown[]);
 }
 
+function isVisible(id: string, hiddenIds: Set<string> | undefined, revealed: Set<string>): boolean {
+  return !hiddenIds || !hiddenIds.has(id) || revealed.has(id);
+}
+
 async function openaiResponsesToolLoop(
   c: ProviderConfig,
   system: string,
@@ -81,20 +85,28 @@ async function openaiResponsesToolLoop(
   tools: Record<string, LlmTool>,
   maxSteps: number,
   onEvent?: (e: ToolEvent) => void,
+  hiddenIds?: Set<string>,
+  revealed?: Set<string>,
 ): Promise<ToolLoopResult> {
   const client = openaiClient(c);
-  const toolSchemas = Object.entries(tools).map(([name, t]) => ({
-    type: "function" as const,
-    name,
-    description: t.description ?? "",
-    parameters: t.parameters,
-  }));
+  const revealedSet = revealed ?? new Set<string>();
   const allToolCalls: { tool: string; input: unknown }[] = [];
 
   // Start with the user prompt; grow the input array across steps.
   let input: unknown[] = [{ role: "user", content: prompt }];
 
   for (let step = 0; step < maxSteps; step++) {
+    // Rebuild the visible tool schema per iteration so tools revealed by the
+    // previous step's find_tools call become callable next.
+    const toolSchemas = Object.entries(tools)
+      .filter(([name]) => isVisible(name, hiddenIds, revealedSet))
+      .map(([name, t]) => ({
+        type: "function" as const,
+        name,
+        description: t.description ?? "",
+        parameters: t.parameters,
+      }));
+
     const res = await (client.responses.create({
       model: c.model,
       instructions: system,
@@ -197,17 +209,23 @@ async function anthropicToolLoop(
   tools: Record<string, LlmTool>,
   maxSteps: number,
   onEvent?: (e: ToolEvent) => void,
+  hiddenIds?: Set<string>,
+  revealed?: Set<string>,
 ): Promise<ToolLoopResult> {
   const client = anthropicClient(c);
-  const toolSchemas: Anthropic.Tool[] = Object.entries(tools).map(([name, t]) => ({
-    name,
-    description: t.description,
-    input_schema: t.parameters as Anthropic.Tool.InputSchema,
-  }));
+  const revealedSet = revealed ?? new Set<string>();
   const messages: Anthropic.MessageParam[] = [{ role: "user", content: prompt }];
   const toolCalls: { tool: string; input: unknown }[] = [];
 
   for (let step = 0; step < maxSteps; step++) {
+    const toolSchemas: Anthropic.Tool[] = Object.entries(tools)
+      .filter(([name]) => isVisible(name, hiddenIds, revealedSet))
+      .map(([name, t]) => ({
+        name,
+        description: t.description,
+        input_schema: t.parameters as Anthropic.Tool.InputSchema,
+      }));
+
     const res = await client.messages.create({
       model: c.model,
       max_tokens: c.maxTokens ?? DEFAULT_MAX_TOKENS,
@@ -251,12 +269,11 @@ async function openaiToolLoop(
   tools: Record<string, LlmTool>,
   maxSteps: number,
   onEvent?: (e: ToolEvent) => void,
+  hiddenIds?: Set<string>,
+  revealed?: Set<string>,
 ): Promise<ToolLoopResult> {
   const client = openaiClient(c);
-  const toolSchemas: OpenAI.Chat.Completions.ChatCompletionTool[] = Object.entries(tools).map(([name, t]) => ({
-    type: "function",
-    function: { name, description: t.description, parameters: t.parameters },
-  }));
+  const revealedSet = revealed ?? new Set<string>();
   const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
     { role: "system", content: system },
     { role: "user", content: prompt },
@@ -264,6 +281,13 @@ async function openaiToolLoop(
   const toolCalls: { tool: string; input: unknown }[] = [];
 
   for (let step = 0; step < maxSteps; step++) {
+    const toolSchemas: OpenAI.Chat.Completions.ChatCompletionTool[] = Object.entries(tools)
+      .filter(([name]) => isVisible(name, hiddenIds, revealedSet))
+      .map(([name, t]) => ({
+        type: "function",
+        function: { name, description: t.description, parameters: t.parameters },
+      }));
+
     // Stream and accumulate rather than requesting a single JSON body — same
     // rationale as `complete()`: some OpenAI-compatible servers frame
     // non-streaming responses with a Content-Length that Node's `undici`
@@ -353,19 +377,29 @@ async function openaiToolLoop(
   };
 }
 
-/** Provider-agnostic bounded tool-use loop. */
+/** Provider-agnostic bounded tool-use loop.
+ *
+ *  Deferred-tool discovery (025): callers may pass `hiddenIds` (tools to hide
+ *  from the model's initial visible schema) and `revealed` (a mutable set the
+ *  loop reads each iteration — a `find_tools` execution can push ids into it
+ *  so they become callable in the next step). The executor still resolves the
+ *  full tool map by name, so a revealed tool works even if the model already
+ *  had the schema; hidden-but-not-revealed calls fall through to the "unknown
+ *  tool" branch, which is fine (the model was never told they existed). */
 export async function runToolLoop(opts: {
   system: string;
   prompt: string;
   tools: Record<string, LlmTool>;
   maxSteps?: number;
   onEvent?: (e: ToolEvent) => void;
+  hiddenIds?: Set<string>;
+  revealed?: Set<string>;
 }): Promise<ToolLoopResult> {
   const c = await getProviderConfig();
   const maxSteps = opts.maxSteps ?? MAX_STEPS;
   if (familyOf(c.provider) === "anthropic")
-    return anthropicToolLoop(c, opts.system, opts.prompt, opts.tools, maxSteps, opts.onEvent);
+    return anthropicToolLoop(c, opts.system, opts.prompt, opts.tools, maxSteps, opts.onEvent, opts.hiddenIds, opts.revealed);
   if (c.provider === "openai-responses")
-    return openaiResponsesToolLoop(c, opts.system, opts.prompt, opts.tools, maxSteps, opts.onEvent);
-  return openaiToolLoop(c, opts.system, opts.prompt, opts.tools, maxSteps, opts.onEvent);
+    return openaiResponsesToolLoop(c, opts.system, opts.prompt, opts.tools, maxSteps, opts.onEvent, opts.hiddenIds, opts.revealed);
+  return openaiToolLoop(c, opts.system, opts.prompt, opts.tools, maxSteps, opts.onEvent, opts.hiddenIds, opts.revealed);
 }

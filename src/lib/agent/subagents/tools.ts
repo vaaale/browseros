@@ -8,8 +8,8 @@ import * as specfs from "@/lib/dev/spec-fs";
 import type { LlmTool } from "@/lib/agent/llm";
 import { SCHEDULER_TOOLS } from "@/lib/scheduler/agent-tools";
 import { listSkills, getSkill, readSkillFile, listSkillFiles } from "@/lib/agent/skills/store";
-import { readMetadataOverrides, reloadDeferredOverrides } from "@/lib/agent/tool-metadata-overrides";
-import { CAPABILITIES, groupDescription, isDeferred } from "@/lib/agent/capabilities-registry";
+import { readMetadataOverrides } from "@/lib/agent/tool-metadata-overrides";
+import { CAPABILITIES, groupDescription } from "@/lib/agent/capabilities-registry";
 import { scoreCapability, scoreAgent } from "@/lib/agent/discovery-score";
 import { listSubAgents } from "./store";
 
@@ -251,16 +251,13 @@ const ALL_TOOLS: Record<string, LlmTool> = { ...SUBAGENT_TOOLS, ...DEV_TOOLS, ..
  * gets only the safe base tools — never the repo-scoped DEV_TOOLS. A developer
  * agent opts into repo access by listing those tool ids in its `tools`.
  *
- * Tool descriptions AND the `deferred` flag are overlaid from
- * data/tool-metadata-overrides.json (Settings → Tools) so a user can rewrite
- * the LLM-facing description or toggle whether a tool is initially hidden
- * (discovered via find_tools) without editing source. Overrides are re-read on
- * every call so edits take effect on the next delegated run.
+ * Tool descriptions are overlaid from data/tool-metadata-overrides.json
+ * (Settings → Tools) so a user can rewrite the LLM-facing description without
+ * editing source. Per-agent deferred visibility is not read here — the runner
+ * unions the registry defaults with the agent's own `deferredTools` list to
+ * decide what to hide.
  */
 export async function toolsFor(allowed?: string[]): Promise<Record<string, LlmTool>> {
-  // Reload the mutable deferred-override table so subsequent isDeferred() and
-  // pickDeferredIds() calls in this request reflect any recent Settings edits.
-  await reloadDeferredOverrides();
   const overrides = await readMetadataOverrides();
   const base = !allowed || allowed.length === 0
     ? SUBAGENT_TOOLS
@@ -270,7 +267,7 @@ export async function toolsFor(allowed?: string[]): Promise<Record<string, LlmTo
 
 function applyDescriptionOverrides(
   tools: Record<string, LlmTool>,
-  overrides: Record<string, { description?: string; deferred?: boolean }>,
+  overrides: Record<string, { description?: string }>,
 ): Record<string, LlmTool> {
   const out: Record<string, LlmTool> = {};
   for (const [id, tool] of Object.entries(tools)) {
@@ -326,12 +323,16 @@ export function makeDiscoveryTools(args: {
   allow: string[];
   /** The runner's live tool map. Only ids present here are discoverable. */
   tools: Record<string, LlmTool>;
+  /** The effective deferred set for THIS agent: registry defaults unioned with
+   *  the agent's own `deferredTools`. A tool is discoverable iff it appears in
+   *  this set. */
+  effectiveDeferred: Set<string>;
   /** Register discovered ids as revealed so the loop exposes them next step. */
   reveal: (ids: string[]) => void;
   /** Cap on results, resolved from Settings → Tools (5..25, default 10). */
   maxResults: number;
 }): Record<string, LlmTool> {
-  const { allow, tools, reveal, maxResults } = args;
+  const { allow, tools, effectiveDeferred, reveal, maxResults } = args;
   const allowSet = new Set(allow);
   const allowAll = allow.length === 0;
 
@@ -350,17 +351,11 @@ export function makeDiscoveryTools(args: {
         const query = String(input.query ?? "").trim();
         if (query.length < 2) return JSON.stringify([]);
 
-        // Refresh the mutable deferred-override table so a just-flipped tool in
-        // Settings is scored on this call.
-        await reloadDeferredOverrides();
-
-        // Score every deferred capability the agent could actually call. The
-        // "allow-all when allowlist empty" invariant matches the rest of BOS's
-        // capability gating. `isDeferred` returns the EFFECTIVE flag (registry
-        // default merged with user overrides) so a toggle in Settings changes
-        // which tools are surfaced here without a restart.
+        // Score every capability that is deferred FOR THIS AGENT and that the
+        // agent could actually call. The "allow-all when allowlist empty"
+        // invariant matches the rest of BOS's capability gating.
         const candidates = CAPABILITIES
-          .filter((c) => isDeferred(c.id))
+          .filter((c) => effectiveDeferred.has(c.id))
           .filter((c) => allowAll || allowSet.has(c.id))
           .filter((c) => tools[c.id] !== undefined || getToolSchema(c.id) !== undefined);
 
@@ -426,8 +421,12 @@ export function makeDiscoveryTools(args: {
   };
 }
 
-// Convenience: which of the runner's tool ids are currently deferred. Used by
-// runner.ts to build the initial `hiddenIds` set for the tool loop.
-export function pickDeferredIds(tools: Record<string, LlmTool>): Set<string> {
-  return new Set(Object.keys(tools).filter((id) => isDeferred(id)));
+// Convenience: which of the runner's tool ids are deferred under the given
+// effective-deferred set. Used by runner.ts to build the initial `hiddenIds`
+// set for the tool loop.
+export function pickDeferredIds(
+  tools: Record<string, LlmTool>,
+  effectiveDeferred: Set<string>,
+): Set<string> {
+  return new Set(Object.keys(tools).filter((id) => effectiveDeferred.has(id)));
 }

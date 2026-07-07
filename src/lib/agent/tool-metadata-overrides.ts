@@ -3,41 +3,34 @@ import { promises as fs } from "fs";
 import path from "path";
 import { dataDir } from "@/os/data-dir";
 import { writeFileAtomic } from "@/os/atomic-write";
-import {
-  CAPABILITIES,
-  replaceDeferredOverrides,
-  type Capability,
-} from "@/lib/agent/capabilities-registry";
+import { CAPABILITIES, type Capability } from "@/lib/agent/capabilities-registry";
 
 // Persistent per-tool metadata overrides edited from Settings → Tools. A user
-// can (a) rewrite the LLM-facing description of any tool and (b) toggle whether
-// a tool is `deferred` (hidden from the initial tool schema, discovered via
-// find_tools at runtime). Only fields that DIFFER from the registry default are
-// stored — omitted means "use registry default".
+// can rewrite the LLM-facing description of any tool; the previous global
+// `deferred` toggle has been removed (025 per-agent deferred lists live in
+// each agent's AGENT.md instead). Only fields that DIFFER from the registry
+// default are stored — omitted means "use registry default".
 //
 // File shape:
-//   { [toolId]: { description?: string; deferred?: boolean } }
+//   { [toolId]: { description?: string } }
 //
-// Migration: an older description-only file at data/tool-descriptions.json is
-// folded into this file on first read (its entries become { description }) and
-// then deleted.
+// Migration:
+//  - The older description-only file at data/tool-descriptions.json is folded
+//    into this file on first read and then deleted.
+//  - Any legacy `deferred` entries in an existing metadata-overrides.json are
+//    silently dropped on read (they no longer round-trip through this store).
 
 const FILE = path.join(dataDir(), "tool-metadata-overrides.json");
 const OLD_DESC_FILE = path.join(dataDir(), "tool-descriptions.json");
 
 export interface ToolMetadataOverride {
   description?: string;
-  deferred?: boolean;
 }
 
 export type ToolMetadataOverrides = Record<string, ToolMetadataOverride>;
 
 function baseCapability(id: string): Capability | undefined {
   return CAPABILITIES.find((c) => c.id === id);
-}
-
-function baseDeferred(id: string): boolean {
-  return baseCapability(id)?.deferred === true;
 }
 
 function baseDescription(id: string): string {
@@ -51,10 +44,10 @@ function parseOverrides(raw: unknown): ToolMetadataOverrides {
     if (!v || typeof v !== "object") continue;
     const entry: ToolMetadataOverride = {};
     const desc = (v as Record<string, unknown>).description;
-    const def = (v as Record<string, unknown>).deferred;
     if (typeof desc === "string" && desc.trim().length > 0) entry.description = desc;
-    if (typeof def === "boolean") entry.deferred = def;
-    if (entry.description !== undefined || entry.deferred !== undefined) out[id] = entry;
+    // Legacy `deferred` entries are intentionally ignored — per-agent
+    // deferred lists live in AGENT.md now.
+    if (entry.description !== undefined) out[id] = entry;
   }
   return out;
 }
@@ -115,17 +108,13 @@ export async function readMetadataOverrides(): Promise<ToolMetadataOverrides> {
  *   - `description === null`  ⇒ clear the description override (use registry)
  *   - `description === ""`    ⇒ same as null (empty ≡ reset)
  *   - `description` string    ⇒ store as override
- *   - `deferred === null`     ⇒ clear the deferred override (use registry)
- *   - `deferred` boolean      ⇒ store as override
  *   - omitted field           ⇒ leave existing value untouched
- * Fields that match the registry default are dropped so the file only contains
+ * A field matching the registry default is dropped so the file only contains
  * true overrides. An entry with no remaining fields is removed entirely.
- * After writing, the registry's mutable deferred-overrides table is refreshed
- * so subsequent isDeferred() calls in this process see the change immediately.
  */
 export async function setMetadataOverride(
   id: string,
-  patch: { description?: string | null; deferred?: boolean | null },
+  patch: { description?: string | null },
 ): Promise<void> {
   if (!baseCapability(id)) throw new Error(`unknown tool: ${id}`);
   const current = await readMetadataOverrides();
@@ -142,28 +131,17 @@ export async function setMetadataOverride(
     }
   }
 
-  if ("deferred" in patch) {
-    const v = patch.deferred;
-    if (v === null || v === undefined) {
-      delete entry.deferred;
-    } else if (v === baseDeferred(id)) {
-      delete entry.deferred;
-    } else {
-      entry.deferred = v;
-    }
-  }
-
-  if (entry.description === undefined && entry.deferred === undefined) {
+  if (entry.description === undefined) {
     delete current[id];
   } else {
     current[id] = entry;
   }
   await writeAll(current);
-  await refreshDeferredOverrides(current);
 }
 
 /** Merged (registry + override) view of a capability. Description is always
- *  a non-empty string (falls back to registry). Deferred is always a boolean. */
+ *  a non-empty string (falls back to registry). Deferred is always a boolean,
+ *  sourced directly from the registry (no per-tool override any more). */
 export interface EffectiveTool extends Capability {
   description: string;
   deferred: boolean;
@@ -179,27 +157,11 @@ export async function getEffectiveTool(id: string): Promise<EffectiveTool | unde
 
 function mergeEffective(base: Capability, override: ToolMetadataOverride | undefined): EffectiveTool {
   const desc = override?.description ?? base.description;
-  const def = override?.deferred ?? base.deferred === true;
-  return { ...base, description: desc, deferred: def };
+  return { ...base, description: desc, deferred: base.deferred === true };
 }
 
 /** Effective view of every capability in the registry (sorted by registry order). */
 export async function getEffectiveCatalog(): Promise<EffectiveTool[]> {
   const overrides = await readMetadataOverrides();
   return CAPABILITIES.map((c) => mergeEffective(c, overrides[c.id]));
-}
-
-/** Push the current on-disk deferred overrides into the registry's mutable
- *  table. Call at server request boundaries so runtime code (`isDeferred`,
- *  `pickDeferredIds`, `find_tools`) reflects the latest edits without a restart. */
-export async function reloadDeferredOverrides(): Promise<void> {
-  await refreshDeferredOverrides(await readMetadataOverrides());
-}
-
-async function refreshDeferredOverrides(overrides: ToolMetadataOverrides): Promise<void> {
-  const map: Record<string, boolean> = {};
-  for (const [id, o] of Object.entries(overrides)) {
-    if (typeof o.deferred === "boolean") map[id] = o.deferred;
-  }
-  replaceDeferredOverrides(map);
 }

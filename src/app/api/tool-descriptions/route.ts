@@ -8,11 +8,12 @@ import {
 
 export const dynamic = "force-dynamic";
 
-// GET  -> { catalog: (Capability with EFFECTIVE description+deferred)[], overrides: metadata-override map }
-// PATCH { id, description?: string, deferred?: boolean | null } -> ok
+// GET  -> { catalog: (Capability with EFFECTIVE description + registry-default deferred)[], overrides: metadata-override map }
+// PATCH { id, description?: string } -> ok
 //   - description: string sets/overwrites; empty string clears.
-//   - deferred:    true|false sets an override; null clears (registry default).
 //   - Omitted fields preserve the existing stored value.
+//   - `deferred` is intentionally NOT accepted here — per-agent deferred lists
+//     are edited via /api/assistant/agent (Settings → Agents → Tools).
 export async function GET() {
   const [catalog, overrides] = await Promise.all([getEffectiveCatalog(), readMetadataOverrides()]);
   return NextResponse.json({ catalog, overrides });
@@ -23,7 +24,6 @@ export async function PATCH(req: NextRequest) {
     const body = (await req.json()) as {
       id?: unknown;
       description?: unknown;
-      deferred?: unknown;
     };
     const id = String(body?.id ?? "");
     if (!id) return NextResponse.json({ error: "id is required" }, { status: 400 });
@@ -31,18 +31,12 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json({ error: `unknown tool: ${id}` }, { status: 400 });
     }
 
-    const patch: { description?: string | null; deferred?: boolean | null } = {};
+    const patch: { description?: string | null } = {};
     if (Object.prototype.hasOwnProperty.call(body, "description")) {
       const d = body.description;
       if (typeof d === "string") patch.description = d;
       else if (d === null) patch.description = null;
       else return NextResponse.json({ error: "description must be string or null" }, { status: 400 });
-    }
-    if (Object.prototype.hasOwnProperty.call(body, "deferred")) {
-      const v = body.deferred;
-      if (typeof v === "boolean") patch.deferred = v;
-      else if (v === null) patch.deferred = null;
-      else return NextResponse.json({ error: "deferred must be boolean or null" }, { status: 400 });
     }
 
     await setMetadataOverride(id, patch);
