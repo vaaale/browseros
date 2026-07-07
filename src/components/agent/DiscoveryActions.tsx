@@ -1,5 +1,6 @@
 "use client";
 
+import { useCallback } from "react";
 import { useCopilotAction } from "@copilotkit/react-core";
 import { addRevealed } from "@/lib/agent/revealed-store";
 
@@ -19,19 +20,8 @@ export function DiscoveryActions({
   agentId: string;
   conversationId: string;
 }) {
-  useCopilotAction({
-    name: "find_tools",
-    description:
-      "Discover deferred capabilities by natural-language query. Returns top-scoring deferred tools (id, group, description, JSON schema) that YOU are allowed to use; once returned, each becomes callable in the next step of this loop. Use this whenever a needed tool is not in your visible tools list.",
-    parameters: [
-      {
-        name: "query",
-        type: "string",
-        description: "Natural-language description of the capability you need (min 2 chars).",
-        required: true,
-      },
-    ],
-    handler: async ({ query }) => {
+  const findToolsHandler = useCallback(
+    async ({ query }: { query: string }) => {
       const q = String(query ?? "").trim();
       if (q.length < 2) return JSON.stringify([]);
       const res = await fetch(
@@ -47,6 +37,38 @@ export function DiscoveryActions({
       }
       return JSON.stringify(results);
     },
+    [agentId, conversationId],
+  );
+
+  const findAgentHandler = useCallback(
+    async ({ query }: { query: string }) => {
+      const q = String(query ?? "").trim();
+      if (q.length < 2) return JSON.stringify([]);
+      const res = await fetch(
+        `/api/assistant/discovery?agentId=${encodeURIComponent(agentId)}&query=${encodeURIComponent(q)}&type=agent`,
+      ).then((r) => r.json()) as {
+        results?: { id: string; name: string; type: string; description: string; score: number }[];
+        error?: string;
+      };
+      if (res.error) return `Error: ${res.error}`;
+      return JSON.stringify(res.results ?? []);
+    },
+    [agentId, conversationId],
+  );
+
+  useCopilotAction({
+    name: "find_tools",
+    description:
+      "Discover deferred capabilities by natural-language query. Returns top-scoring deferred tools (id, group, description, JSON schema) that YOU are allowed to use; once returned, each becomes callable in the next step of this loop. Use this whenever a needed tool is not in your visible tools list.",
+    parameters: [
+      {
+        name: "query",
+        type: "string",
+        description: "Natural-language description of the capability you need (min 2 chars).",
+        required: true,
+      },
+    ],
+    handler: findToolsHandler,
   });
 
   useCopilotAction({
@@ -61,18 +83,7 @@ export function DiscoveryActions({
         required: true,
       },
     ],
-    handler: async ({ query }) => {
-      const q = String(query ?? "").trim();
-      if (q.length < 2) return JSON.stringify([]);
-      const res = await fetch(
-        `/api/assistant/discovery?agentId=${encodeURIComponent(agentId)}&query=${encodeURIComponent(q)}&type=agent`,
-      ).then((r) => r.json()) as {
-        results?: { id: string; name: string; type: string; description: string; score: number }[];
-        error?: string;
-      };
-      if (res.error) return `Error: ${res.error}`;
-      return JSON.stringify(res.results ?? []);
-    },
+    handler: findAgentHandler,
   });
 
   return null;
