@@ -18,7 +18,8 @@ RUN npm run build
 
 # Stage 3: production runtime
 FROM node:20-alpine AS runtime
-RUN apk add --no-cache git
+RUN apk add --no-cache git && \
+    git config --global safe.directory '*'
 WORKDIR /app
 COPY package*.json ./
 RUN npm install --omit=dev
