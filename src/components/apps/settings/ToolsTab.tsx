@@ -9,11 +9,21 @@ interface Capability {
   group: string;
   description: string;
   context: "action" | "tool" | "both";
+  deferred?: boolean;
 }
 
 interface Payload {
   catalog: Capability[];
   overrides: Record<string, string>;
+}
+
+const MAX_FIND_RESULTS_MIN = 5;
+const MAX_FIND_RESULTS_MAX = 25;
+const MAX_FIND_RESULTS_DEFAULT = 10;
+
+function clampMaxFindResults(n: number): number {
+  if (!Number.isFinite(n)) return MAX_FIND_RESULTS_DEFAULT;
+  return Math.max(MAX_FIND_RESULTS_MIN, Math.min(MAX_FIND_RESULTS_MAX, Math.round(n)));
 }
 
 // Settings → Tools: global tool-description overrides. Editing a description
@@ -23,6 +33,7 @@ interface Payload {
 export function ToolsTab() {
   const [catalog, setCatalog] = useState<Capability[]>([]);
   const [overrides, setOverrides] = useState<Record<string, string>>({});
+  const [maxFindResults, setMaxFindResults] = useState<number>(MAX_FIND_RESULTS_DEFAULT);
 
   const load = useCallback(async () => {
     try {
@@ -30,12 +41,32 @@ export function ToolsTab() {
       setCatalog(res.catalog ?? []);
       setOverrides(res.overrides ?? {});
     } catch { /* keep previous state */ }
+    try {
+      const res = (await fetch("/api/config").then((r) => r.json())) as {
+        schemas?: { namespace: string; values?: Record<string, unknown> }[];
+      };
+      const tools = (res.schemas ?? []).find((s) => s.namespace === "tools");
+      const v = tools?.values?.maxFindResults;
+      if (typeof v === "number" && Number.isFinite(v)) setMaxFindResults(clampMaxFindResults(v));
+    } catch { /* keep previous value */ }
   }, []);
 
   useEffect(() => {
     const id = setTimeout(() => void load(), 0);
     return () => clearTimeout(id);
   }, [load]);
+
+  const saveMaxFindResults = useCallback(async (value: number) => {
+    const clamped = clampMaxFindResults(value);
+    setMaxFindResults(clamped);
+    try {
+      await fetch("/api/config", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ namespace: "tools", values: { maxFindResults: clamped } }),
+      });
+    } catch { /* silently keep local state */ }
+  }, []);
 
   const savePatch = useCallback(async (patch: { id: string; description: string }) => {
     const res = await fetch("/api/tool-descriptions", {
@@ -71,6 +102,26 @@ export function ToolsTab() {
         <AutoSaveStatus status={save.status} />
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
+        <div className="mb-3 rounded-md border border-white/10 bg-white/[0.03] p-2.5">
+          <label className="flex items-center gap-2 text-[11px] text-white/80">
+            <span className="min-w-0 flex-1">
+              <span className="font-semibold text-white/90">Max discovery results</span>
+              <span className="block text-[10px] text-white/50">
+                Caps results returned by <span className="font-mono">find_tools</span> /{" "}
+                <span className="font-mono">find_agent</span>. Range {MAX_FIND_RESULTS_MIN}–{MAX_FIND_RESULTS_MAX}, default {MAX_FIND_RESULTS_DEFAULT}.
+              </span>
+            </span>
+            <input
+              type="number"
+              min={MAX_FIND_RESULTS_MIN}
+              max={MAX_FIND_RESULTS_MAX}
+              value={maxFindResults}
+              onChange={(e) => setMaxFindResults(Number(e.target.value))}
+              onBlur={(e) => void saveMaxFindResults(Number(e.target.value))}
+              className="w-20 rounded border border-white/10 bg-black/30 px-2 py-1 text-right text-[11px] text-white outline-none focus:border-white/30"
+            />
+          </label>
+        </div>
         <div className="flex flex-col gap-2">
           {groups.map(({ group, items }) => (
             <div key={group} className="rounded-md border border-white/10 bg-white/[0.03] p-2.5">
@@ -87,6 +138,7 @@ export function ToolsTab() {
                     id={tool.id}
                     sourceDescription={tool.description}
                     override={overrides[tool.id]}
+                    deferred={tool.deferred === true}
                     onSave={(description) => save.save({ id: tool.id, description })}
                   />
                 ))}
@@ -104,11 +156,13 @@ function ToolRow({
   id,
   sourceDescription,
   override,
+  deferred,
   onSave,
 }: {
   id: string;
   sourceDescription: string;
   override: string | undefined;
+  deferred: boolean;
   onSave: (description: string) => void;
 }) {
   // Draft = current effective value shown to the user. Blur commits. The
@@ -133,7 +187,17 @@ function ToolRow({
   return (
     <div className="rounded border border-white/10 bg-white/[0.02] p-2">
       <div className="mb-1 flex items-center justify-between gap-2">
-        <span className="min-w-0 truncate font-mono text-[11px] text-white">{id}</span>
+        <div className="flex min-w-0 items-center gap-1.5">
+          <span className="min-w-0 truncate font-mono text-[11px] text-white">{id}</span>
+          {deferred && (
+            <span
+              className="shrink-0 rounded border border-amber-500/40 bg-amber-500/10 px-1 py-[1px] text-[9px] font-medium uppercase tracking-wide text-amber-300"
+              title="Hidden from the agent's initial context — discovered at runtime via find_tools."
+            >
+              deferred
+            </span>
+          )}
+        </div>
         {isOverridden && (
           <button
             type="button"

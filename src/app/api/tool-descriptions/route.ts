@@ -4,12 +4,15 @@ import { readOverrides, setOverride } from "@/lib/agent/tool-descriptions";
 
 export const dynamic = "force-dynamic";
 
-// GET  -> { catalog: CAPABILITIES, overrides: Record<toolId, override> }
+// GET  -> { catalog: (Capability & { deferred: boolean })[], overrides: Record<toolId, override> }
 // PATCH { id, description? } -> ok
 //   `description` empty/omitted clears the override (falls back to source).
 export async function GET() {
   const overrides = await readOverrides();
-  return NextResponse.json({ catalog: CAPABILITIES, overrides });
+  // Normalize `deferred` to an explicit boolean on every catalog entry so the
+  // UI can render badges without special-casing missing fields (025).
+  const catalog = CAPABILITIES.map((c) => ({ ...c, deferred: c.deferred === true }));
+  return NextResponse.json({ catalog, overrides });
 }
 
 export async function PATCH(req: NextRequest) {

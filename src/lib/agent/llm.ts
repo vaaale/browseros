@@ -20,6 +20,13 @@ export interface LlmTool {
   /** JSON Schema for the tool input (accepted by both Anthropic and OpenAI). */
   parameters: Record<string, unknown>;
   execute: (input: Record<string, unknown>) => Promise<string>;
+  /**
+   * Advisory: this tool is discoverable at runtime rather than always visible.
+   * The loop honors visibility via the `hiddenIds` / `revealed` sets on
+   * `runToolLoop`; this field is documentational for callers that want to
+   * know whether the tool is deferred without consulting the registry.
+   */
+  deferred?: boolean;
 }
 
 export interface ToolLoopResult {
