@@ -100,7 +100,15 @@ cp .env.example .env
 echo "JWT_SECRET=$(openssl rand -hex 32)" >> .env
 ```
 
-### 3. Start
+### 3. Create the network
+
+`bos-net` is an external network so it is never recreated by compose (which would break running user containers). Create it once:
+
+```bash
+docker network create bos-net
+```
+
+### 4. Start
 
 ```bash
 docker compose up -d

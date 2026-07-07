@@ -25,7 +25,15 @@ docker build -t browseros:latest .
 docker compose build bastion
 ```
 
-### 3. Configure
+### 3. Create the network (once only)
+
+`bos-net` is declared `external` in compose so it is never recreated on `compose up`. Create it once before first start — and once only, ever:
+
+```bash
+docker network create bos-net
+```
+
+### 4. Configure
 ```bash
 cp .env.example .env
 # Edit .env — JWT_SECRET is required:

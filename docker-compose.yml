@@ -41,7 +41,7 @@ services:
 networks:
   bos-net:
     name: bos-net
-    driver: bridge
+    external: true   # created once with: docker network create bos-net
 
 volumes:
   bastion-data:
