@@ -36,7 +36,10 @@ export async function createBosContainer(username: string, cfg: Config): Promise
     HostConfig: {
       NetworkMode: cfg.bosNet,
       Binds: [
-        `${srcPath}:/app/src`,
+        // Mount the full clone at /app so the Supervisor runs inside a real
+        // git repo. /app/data and /app/node_modules shadow the subdirectories
+        // inside that clone with their own per-user volumes.
+        `${srcPath}:/app`,
         `${dataPath}:/app/data`,
       ],
       Mounts: [
