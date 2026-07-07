@@ -1,5 +1,3 @@
-version: "3.9"
-
 # Keycloak override: adds a local Keycloak instance with a pre-seeded BOS realm.
 # Usage: docker compose -f docker-compose.yml -f docker-compose.keycloak.yml up
 
