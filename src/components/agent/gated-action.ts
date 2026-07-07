@@ -57,5 +57,9 @@ export function useCopilotAction<const T extends Parameter[] | [] = []>(
     delete rest.renderAndWait;
     next = { ...rest, available: "disabled", render: () => null } as unknown as FrontendAction<T>;
   }
-  useRawCopilotAction(next, dependencies as Parameters<typeof useRawCopilotAction>[1]);
+  // Include deferHide and disallow in the CopilotKit dependencies so it
+  // treats a gate-state flip as an intentional config change rather than
+  // throwing "Action configuration changed between renders".
+  const mergedDeps = [...(Array.isArray(dependencies) ? dependencies : []), deferHide, disallow];
+  useRawCopilotAction(next, mergedDeps as Parameters<typeof useRawCopilotAction>[1]);
 }
