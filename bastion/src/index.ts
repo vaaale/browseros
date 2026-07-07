@@ -18,23 +18,26 @@ async function main(): Promise<void> {
 
   const app = express();
 
+  // cookieParser must be global — the proxy middleware reads the session cookie.
   app.use(cookieParser());
-  app.use(express.json());
-  app.use(express.urlencoded({ extended: false }));
+
+  // Body parsers are scoped to bastion-owned routes ONLY.
+  // Applying them globally consumes the request body stream before the proxy
+  // can forward it, causing all POST/PUT/PATCH requests to BOS to arrive empty.
+  const body = [express.json(), express.urlencoded({ extended: false })];
 
   // Serve the Vite-built admin/login/account SPA under /app/*
   const uiDist = path.join(__dirname, "..", "ui", "dist");
   app.use("/app", express.static(uiDist));
-  // SPA fallback for client-side routing
   app.get("/app/*", (_req, res) => {
     res.sendFile(path.join(uiDist, "index.html"));
   });
 
-  app.use("/", createAuthRouter(cfg, provider));
-  app.use("/admin", createAdminRouter(cfg, provider));
-  app.use("/account", createAccountRouter(cfg, provider));
+  app.use("/", body, createAuthRouter(cfg, provider));
+  app.use("/admin", body, createAdminRouter(cfg, provider));
+  app.use("/account", body, createAccountRouter(cfg, provider));
 
-  // BOS proxy — catch-all, must be last
+  // BOS proxy — catch-all, must be last, NO body parsers applied.
   const bosProxy = createBosProxy(cfg);
   app.use(bosProxy);
 
