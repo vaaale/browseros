@@ -36,8 +36,18 @@ export default function LunarLanderApp() {
 
   const input = useKeyboardInput(handleRestart, rootRef);
 
-  // Refocus on mount so arrow keys work immediately when the window opens.
+  // Reclaim focus whenever the phase flips into `playing`. Menu / GameOver
+  // buttons use `autoFocus`, so on transition their focus lingers on the
+  // (now-unmounted) button and falls back to <body> — meaning arrow keys
+  // wouldn't reach us until the user clicked back in. Refocusing the root on
+  // every phase change (including initial mount = "menu") keeps input alive.
   useEffect(() => {
+    rootRef.current?.focus();
+  }, [session.phase]);
+
+  // Clicking anywhere in the game area also reclaims focus — cheap safety net
+  // if some other window in BOS stole focus while the game was running.
+  const handleReclaimFocus = useCallback(() => {
     rootRef.current?.focus();
   }, []);
 
@@ -105,6 +115,7 @@ export default function LunarLanderApp() {
       className="ll-root"
       tabIndex={0}
       data-testid="lunar-lander-root"
+      onMouseDown={handleReclaimFocus}
     >
       <div className="ll-stage">
         <GameCanvas session={session} />

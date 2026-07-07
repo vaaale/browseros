@@ -40,6 +40,14 @@ export function useKeyboardInput(
       const root = scope?.current;
       if (!root) return true;
       const active = document.activeElement;
+      // Overlays with autoFocus (e.g. Menu's Start button) grab focus, then
+      // unmount — leaving activeElement as <body>. Treat "nothing focused" as
+      // in-scope so keys work once the overlay closes. A truly focused other
+      // BOS window has its own focusable container as activeElement, so we
+      // still defer to it correctly.
+      if (!active || active === document.body || active === document.documentElement) {
+        return true;
+      }
       return root === active || root.contains(active);
     };
 
