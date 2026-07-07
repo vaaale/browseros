@@ -12,6 +12,14 @@ export function volumeName(username: string): string {
   return `bos-nm-${username}`;
 }
 
+export async function ensureNetwork(networkName: string): Promise<void> {
+  try {
+    await docker.getNetwork(networkName).inspect();
+  } catch {
+    await docker.createNetwork({ Name: networkName, Driver: "bridge" });
+  }
+}
+
 export async function createBosContainer(username: string, cfg: Config): Promise<string> {
   const name = containerName(username);
   // Docker resolves bind mount sources against the HOST filesystem, not the
@@ -20,6 +28,9 @@ export async function createBosContainer(username: string, cfg: Config): Promise
   const srcPath = `${cfg.bosVolumeBaseHost}/${username}/src`;
   const dataPath = `${cfg.bosVolumeBaseHost}/${username}/data`;
   const nmVol = volumeName(username);
+
+  // Ensure the network exists before touching any containers.
+  await ensureNetwork(cfg.bosNet);
 
   // Evict any existing container with this name (leftover from a failed
   // provision or partial reprovision) before creating a fresh one.
