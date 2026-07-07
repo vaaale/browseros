@@ -18,6 +18,12 @@ export async function createBosContainer(username: string, cfg: Config): Promise
   const dataPath = `${cfg.volumeBase}/${username}/data`;
   const nmVol = volumeName(username);
 
+  // Evict any existing container with this name (leftover from a failed
+  // provision or partial reprovision) before creating a fresh one.
+  const existing = docker.getContainer(name);
+  await existing.stop({ t: 5 }).catch(() => {});
+  await existing.remove({ force: true }).catch(() => {});
+
   const container = await docker.createContainer({
     name,
     Image: cfg.bosImage,
