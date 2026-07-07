@@ -1,0 +1,15 @@
+node_modules
+.next
+data
+user-data
+bastion/node_modules
+bastion/ui/node_modules
+bastion/dist
+bastion/ui/dist
+.git
+.env
+.env.local
+apps
+playwright-report
+test-results
+specs

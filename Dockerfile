@@ -3,20 +3,17 @@
 # node_modules are populated by docker-entrypoint.sh on first start if absent
 # (supports a per-user named volume for mutable dependencies).
 
-FROM node:20-alpine AS deps
-WORKDIR /app
-COPY package.json package-lock.json ./
-RUN npm ci
-
 FROM node:20-alpine AS runtime
 WORKDIR /app
 
-# Source and dependencies
-COPY --from=deps /app/node_modules ./node_modules
+# Copy source (node_modules excluded by .dockerignore)
 COPY . .
 
-# Remove anything that shouldn't be in the image
-RUN rm -rf .next bastion data user-data
+# Install dependencies into the image as a warm cache.
+# docker-entrypoint.sh will re-run npm install if the user's per-user
+# named volume is empty (first start), so this layer just avoids a cold
+# install on every container start for users that haven't changed deps.
+RUN npm install
 
 COPY docker-entrypoint.sh /docker-entrypoint.sh
 RUN chmod +x /docker-entrypoint.sh
