@@ -11,6 +11,7 @@ export interface Config {
   maxConcurrentInstances: number;
   bosBaseRef: string;
   bosRepoPath: string;
+  bosVolumeBaseHost: string;
   dataDir: string;
   bosNet: string;
   // Keycloak OIDC
@@ -56,6 +57,7 @@ export function loadConfig(): Config {
     maxConcurrentInstances: parseInt(process.env.MAX_CONCURRENT_INSTANCES ?? String(persisted.maxConcurrentInstances ?? 50), 10),
     bosBaseRef: process.env.BOS_BASE_REF ?? persisted.bosBaseRef ?? "main",
     bosRepoPath: process.env.BOS_REPO_PATH ?? persisted.bosRepoPath ?? "/bos-src",
+    bosVolumeBaseHost: process.env.VOLUME_BASE_HOST ?? persisted.bosVolumeBaseHost ?? process.env.VOLUME_BASE ?? "/user-data",
     dataDir,
     bosNet: process.env.BOS_NET ?? "bos-net",
     keycloakIssuer: process.env.KEYCLOAK_ISSUER ?? "",
@@ -74,7 +76,7 @@ export function saveConfig(dataDir: string, patch: Partial<Config>): void {
     existing = JSON.parse(fs.readFileSync(file, "utf8")) as Partial<Config>;
   } catch { /* start fresh */ }
   const allowed: (keyof Config)[] = [
-    "bosImage", "volumeBase", "idleTimeoutMs", "maxConcurrentInstances",
+    "bosImage", "volumeBase", "bosVolumeBaseHost", "idleTimeoutMs", "maxConcurrentInstances",
     "bosBaseRef", "bosRepoPath", "bosNet", "keycloakIssuer", "keycloakClientId",
     "keycloakUsernameClaim", "keycloakAdminRole", "publicUrl",
   ];

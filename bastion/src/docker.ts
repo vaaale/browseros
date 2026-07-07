@@ -14,8 +14,11 @@ export function volumeName(username: string): string {
 
 export async function createBosContainer(username: string, cfg: Config): Promise<string> {
   const name = containerName(username);
-  const srcPath = `${cfg.volumeBase}/${username}/src`;
-  const dataPath = `${cfg.volumeBase}/${username}/data`;
+  // Docker resolves bind mount sources against the HOST filesystem, not the
+  // bastion container's filesystem. Use bosVolumeBaseHost (the host-side path)
+  // for mounts, and cfg.volumeBase (the bastion-internal path) for file ops.
+  const srcPath = `${cfg.bosVolumeBaseHost}/${username}/src`;
+  const dataPath = `${cfg.bosVolumeBaseHost}/${username}/data`;
   const nmVol = volumeName(username);
 
   // Evict any existing container with this name (leftover from a failed

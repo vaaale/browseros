@@ -15,7 +15,13 @@ services:
       - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required}
       - AUTH_PROVIDER=${AUTH_PROVIDER:-simple}
       - BOS_IMAGE=${BOS_IMAGE:-browseros:latest}
+      # VOLUME_BASE: bastion's own internal path (for mkdir, git clone, file ops)
       - VOLUME_BASE=/user-data
+      # VOLUME_BASE_HOST: absolute path on the Docker HOST — used when creating
+      # bind mounts for user containers. Docker always resolves bind mount sources
+      # against the host filesystem, not the bastion container's filesystem.
+      # Defaults to $PWD/user-data (i.e. the project directory + /user-data).
+      - VOLUME_BASE_HOST=${VOLUME_BASE_HOST:-${PWD}/user-data}
       - BOS_REPO_PATH=/bos-src
       - IDLE_TIMEOUT_MS=${IDLE_TIMEOUT_MS:-1800000}
       - MAX_CONCURRENT_INSTANCES=${MAX_CONCURRENT_INSTANCES:-50}
