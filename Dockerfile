@@ -10,6 +10,12 @@ WORKDIR /app
 # Copy source (node_modules excluded by .dockerignore)
 COPY . .
 
+# Install Claude Code
+RUN npm install -g @anthropic-ai/claude-code
+
+# install Open Code
+RUN npm install -g opencode-ai
+
 # Install dependencies into the image as a warm cache.
 # docker-entrypoint.sh will re-run npm install if the user's per-user
 # named volume is empty (first start), so this layer just avoids a cold
