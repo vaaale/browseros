@@ -247,9 +247,13 @@ export { SCHEDULER_TOOLS };
 const ALL_TOOLS: Record<string, LlmTool> = { ...SUBAGENT_TOOLS, ...DEV_TOOLS, ...SPEC_TOOLS };
 
 /**
- * Resolve the tools a sub-agent may use. With no explicit allowlist an agent
- * gets only the safe base tools — never the repo-scoped DEV_TOOLS. A developer
- * agent opts into repo access by listing those tool ids in its `tools`.
+ * Resolve the tools a sub-agent may use (Phase B strict allowlist). Contract:
+ *   - allowed == null/undefined → return {} (zero tools; the on-disk migration
+ *     in subagents/store.ts backfills legacy agents with the full capability
+ *     set so an existing agent never lands here on upgrade).
+ *   - allowed.length === 0 → return {} (an agent configured with no tools
+ *     has no tools; no more "empty means all" surprise).
+ *   - allowed with entries → filter ALL_TOOLS to the listed ids.
  *
  * Tool descriptions are overlaid from data/tool-metadata-overrides.json
  * (Settings → Tools) so a user can rewrite the LLM-facing description without
@@ -259,9 +263,10 @@ const ALL_TOOLS: Record<string, LlmTool> = { ...SUBAGENT_TOOLS, ...DEV_TOOLS, ..
  */
 export async function toolsFor(allowed?: string[]): Promise<Record<string, LlmTool>> {
   const overrides = await readMetadataOverrides();
-  const base = !allowed || allowed.length === 0
-    ? SUBAGENT_TOOLS
-    : Object.fromEntries(allowed.filter((id) => ALL_TOOLS[id]).map((id) => [id, ALL_TOOLS[id]]));
+  if (!allowed || allowed.length === 0) return {};
+  const base = Object.fromEntries(
+    allowed.filter((id) => ALL_TOOLS[id]).map((id) => [id, ALL_TOOLS[id]]),
+  );
   return applyDescriptionOverrides(base, overrides);
 }
 

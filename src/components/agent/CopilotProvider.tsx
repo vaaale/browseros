@@ -19,6 +19,7 @@ import { WebSearchActions } from "./WebSearchActions";
 import { IntegrationActions } from "./IntegrationActions";
 import { ScratchpadActions } from "./ScratchpadActions";
 import { ToolCallRetry } from "./ToolCallRetry";
+import { DiscoveryActions } from "./DiscoveryActions";
 import { AgentCapabilitiesProvider } from "./agent-capabilities";
 import { useActiveConversationId } from "@/lib/agent/conversations";
 import { DEFAULT_AGENT_ID } from "@/lib/agent/agent-ids";
@@ -26,6 +27,7 @@ import { DEFAULT_AGENT_ID } from "@/lib/agent/agent-ids";
 interface AgentInfo {
   id: string;
   tools?: string[];
+  deferredTools?: string[];
 }
 
 interface ProviderCfg {
@@ -64,7 +66,12 @@ export function CopilotProvider({
     ? `/api/copilotkit?agent=${encodeURIComponent(agentId)}${threadId ? `&conv=${encodeURIComponent(threadId)}` : ""}`
     : "/api/copilotkit";
 
-  const [loaded, setLoaded] = useState<{ agentId?: string; allow: string[] | null; webSearchAvailable: boolean } | null>(null);
+  const [loaded, setLoaded] = useState<{
+    agentId?: string;
+    allow: string[] | null;
+    deferredTools: string[];
+    webSearchAvailable: boolean;
+  } | null>(null);
   useEffect(() => {
     let alive = true;
     const load = () => {
@@ -79,8 +86,13 @@ export function CopilotProvider({
         const webSearchAvailable =
           ((p === "anthropic" || p === "openai" || p === "openai-codex") && !!cfg.hasApiKey) ||
           (p === "openai-responses" && (!!cfg.hasApiKey || !!cfg.baseUrl));
-        setLoaded({ agentId, allow: agent?.tools ?? null, webSearchAvailable });
-      }).catch(() => alive && setLoaded({ agentId, allow: null, webSearchAvailable: false }));
+        setLoaded({
+          agentId,
+          allow: agent?.tools ?? null,
+          deferredTools: agent?.deferredTools ?? [],
+          webSearchAvailable,
+        });
+      }).catch(() => alive && setLoaded({ agentId, allow: null, deferredTools: [], webSearchAvailable: false }));
     };
     load();
     // Live-reload the agent's tool allowlist when Settings edits fire the
@@ -101,12 +113,18 @@ export function CopilotProvider({
 
   const ready = loaded !== null && loaded.agentId === agentId;
   const allow = ready ? loaded!.allow : null;
+  const deferredTools = ready ? loaded!.deferredTools : [];
   const webSearchAvailable = ready ? loaded!.webSearchAvailable : false;
 
   return (
     <CopilotKit key={agentId ?? "none"} runtimeUrl={runtimeUrl} threadId={threadId}>
       {ready && (
-        <AgentCapabilitiesProvider allow={allow}>
+        <AgentCapabilitiesProvider
+          allow={allow}
+          deferredTools={deferredTools}
+          conversationId={threadId}
+        >
+          <DiscoveryActions agentId={agentId} conversationId={threadId} />
           <OSActions />
           <McpActions agentId={agentId} />
           <WebSearchActions webSearchAvailable={webSearchAvailable} />

@@ -17,18 +17,20 @@ test.describe("Per-agent capabilities", () => {
   });
 });
 
-// The per-agent action gate rule (016), framework-free + back-compatible.
+// The per-agent action gate rule (016 + Phase B strict allowlist). null =
+// loading (allow everything); [] = explicit zero (deny everything); non-empty
+// list = strict allowlist.
 test.describe("Unified agents — action gate", () => {
-  test("unset/empty allowlist allows all actions", () => {
+  test("null allowlist means loading and allows everything", () => {
     expect(resolveActionGate(undefined)("launchApp")).toBe(true);
-    expect(resolveActionGate([])("launchApp")).toBe(true);
+    expect(resolveActionGate(null)("launchApp")).toBe(true);
   });
-  test("legacy allowlist of only server tool ids leaves actions open (back-compat)", () => {
-    const gate = resolveActionGate(["read_spec", "write_spec", "delegate_to_developer"]);
-    expect(gate("launchApp")).toBe(true);
-    expect(gate("listSpecs")).toBe(true);
+  test("empty allowlist strictly disallows every action", () => {
+    const gate = resolveActionGate([]);
+    expect(gate("launchApp")).toBe(false);
+    expect(gate("listSpecs")).toBe(false);
   });
-  test("an allowlist that names actions gates to exactly those", () => {
+  test("a strict allowlist gates to exactly the listed ids", () => {
     const gate = resolveActionGate(["listSpecs", "openSpecArtifact", "read_spec"]);
     expect(gate("listSpecs")).toBe(true);
     expect(gate("openSpecArtifact")).toBe(true);

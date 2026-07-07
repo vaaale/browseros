@@ -243,15 +243,22 @@ export function deferredCapabilityIds(): Set<string> {
   return new Set(DEFERRED_IDS);
 }
 
-// The per-agent action gate (016). Back-compat rule: an action is allowed UNLESS
-// the agent's allowlist names ≥1 action id and this one isn't among them. So an
-// unset/empty allowlist — or a legacy allowlist of only server *tool* ids — leaves
-// every action enabled (no agent silently loses actions on upgrade). Pure +
-// framework-free so the client provider and tests share one source of truth.
+// The per-agent action gate (016 + Phase B strict allowlist). Contract:
+//   - allow == null/undefined → LOADING; temporarily allow everything so the
+//     first render doesn't flicker actions to disabled before the fetch resolves.
+//   - Array.isArray(allow) && allow.length === 0 → EXPLICIT ZERO; disallow every
+//     action id. An agent configured with no tools has no tools.
+//   - Array.isArray(allow) && allow.length > 0 → STRICT allowlist; only ids that
+//     appear in the list are allowed.
+//
+// The on-disk migration in subagents/store.ts backfills legacy agents with the
+// full capability set, so this strict rule cannot silently strip actions from
+// an existing user's agents on upgrade. Framework-free so the client provider
+// and tests share one source of truth.
 export function resolveActionGate(allow: string[] | null | undefined): (id: string) => boolean {
-  const named = (allow ?? []).filter(isActionId);
-  if (named.length === 0) return () => true;
-  const set = new Set(named);
+  if (allow == null) return () => true;
+  if (allow.length === 0) return () => false;
+  const set = new Set(allow);
   return (id) => set.has(id);
 }
 
