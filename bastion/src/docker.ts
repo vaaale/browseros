@@ -29,6 +29,12 @@ export async function createBosContainer(username: string, cfg: Config): Promise
   const dataPath = `${cfg.bosVolumeBaseHost}/${username}/data`;
   const nmVol = volumeName(username);
 
+  // Derive allowed dev origins from PUBLIC_URL so Next.js dev accepts
+  // cross-origin HMR/dev requests when BOS is reached via a LAN hostname.
+  const publicHostname = (() => {
+    try { return new URL(cfg.publicUrl).hostname; } catch { return ""; }
+  })();
+
   // Ensure the network exists before touching any containers.
   await ensureNetwork(cfg.bosNet);
 
@@ -46,6 +52,7 @@ export async function createBosContainer(username: string, cfg: Config): Promise
       `BOS_PUBLIC_PORT=8090`,   // bastion proxies to this port
       `BOS_PORT_BASE=3000`,     // next dev internal port
       `BOS_BASE_DEV=1`,         // supervisor starts next dev automatically
+      ...(publicHostname && publicHostname !== "localhost" ? [`BOS_DEV_ORIGINS=${publicHostname}`] : []),
     ],
     HostConfig: {
       NetworkMode: cfg.bosNet,

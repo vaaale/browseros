@@ -64,6 +64,10 @@ async function _getOrProvision(username: string, cfg: Config): Promise<void> {
   if (info) {
     const cid = info.Id;
     if (info.State.Running) {
+      // Container is running — health-gate before declaring ready so we don't
+      // mark it "running" while the supervisor / Next.js is still starting up.
+      updateState(username, { containerId: cid, status: "provisioning", lastActive: Date.now() }, cfg);
+      await waitForHealthy(username, 300_000);
       updateState(username, { containerId: cid, status: "running", lastActive: Date.now() }, cfg);
       resetIdleTimer(username, cfg);
       return;
