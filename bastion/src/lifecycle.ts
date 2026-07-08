@@ -18,6 +18,8 @@ export interface InstanceState {
   containerId?: string;
   status: InstanceStatus;
   lastActive: number;
+  provisionLog?: string;
+  provisionError?: string;
 }
 
 const instances = new Map<string, InstanceState>();
@@ -46,6 +48,12 @@ export async function getOrProvision(username: string, cfg: Config): Promise<voi
   }
 }
 
+function log(username: string, msg: string, cfg: Config): void {
+  const ts = new Date().toISOString();
+  console.log(`[bastion] [${username}] ${msg}`);
+  updateState(username, { provisionLog: `[${ts}] ${msg}` }, cfg);
+}
+
 async function _getOrProvision(username: string, cfg: Config): Promise<void> {
   const state = instances.get(username);
 
@@ -59,6 +67,7 @@ async function _getOrProvision(username: string, cfg: Config): Promise<void> {
   // by container NAME. Stored containerId is intentionally ignored here — it
   // can be stale after a re-provision, a manual `docker rm`, or a bastion
   // restart where the instance was recreated with a new ID.
+  log(username, "Checking container state…", cfg);
   const info = await inspectContainer(containerName(username));
 
   if (info) {
@@ -66,16 +75,37 @@ async function _getOrProvision(username: string, cfg: Config): Promise<void> {
     if (info.State.Running) {
       // Container is running — health-gate before declaring ready so we don't
       // mark it "running" while the supervisor / Next.js is still starting up.
-      updateState(username, { containerId: cid, status: "provisioning", lastActive: Date.now() }, cfg);
-      await waitForHealthy(username, 300_000);
+      log(username, "Container is running — waiting for supervisor to become healthy…", cfg);
+      updateState(username, { containerId: cid, status: "provisioning", provisionError: undefined, lastActive: Date.now() }, cfg);
+      try {
+        await waitForHealthy(username, 300_000);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        const stack = err instanceof Error ? (err.stack ?? msg) : msg;
+        console.error(`[bastion] [${username}] Health check failed:`, stack);
+        updateState(username, { status: "unknown", provisionError: stack, lastActive: Date.now() }, cfg);
+        throw err;
+      }
+      log(username, "Instance is ready!", cfg);
       updateState(username, { containerId: cid, status: "running", lastActive: Date.now() }, cfg);
       resetIdleTimer(username, cfg);
       return;
     }
     // Container exists but is stopped — start it.
-    updateState(username, { containerId: cid, status: "stopped" }, cfg);
-    await startContainer(cid);
-    await waitForHealthy(username, 300_000);
+    log(username, "Container is stopped — starting…", cfg);
+    updateState(username, { containerId: cid, status: "stopped", provisionError: undefined }, cfg);
+    try {
+      await startContainer(cid);
+      log(username, "Container started — waiting for supervisor and Next.js to become healthy (npm install may run)…", cfg);
+      await waitForHealthy(username, 300_000);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const stack = err instanceof Error ? (err.stack ?? msg) : msg;
+      console.error(`[bastion] [${username}] Start/health failed:`, stack);
+      updateState(username, { status: "unknown", provisionError: stack, lastActive: Date.now() }, cfg);
+      throw err;
+    }
+    log(username, "Instance is ready!", cfg);
     updateState(username, { containerId: cid, status: "running", lastActive: Date.now() }, cfg);
     resetIdleTimer(username, cfg);
     return;
@@ -87,15 +117,21 @@ async function _getOrProvision(username: string, cfg: Config): Promise<void> {
     throw new Error(`Max concurrent instances (${cfg.maxConcurrentInstances}) reached`);
   }
 
-  updateState(username, { status: "provisioning", lastActive: Date.now() }, cfg);
+  log(username, "No container found — starting full provision…", cfg);
+  updateState(username, { status: "provisioning", provisionError: undefined, lastActive: Date.now() }, cfg);
   try {
+    log(username, "Cloning source repository…", cfg);
     const containerId = await provisionUser(username, cfg);
-    // 5 min: docker volume copy + supervisor + next dev compile
+    log(username, "Container created — waiting for supervisor and Next.js to become healthy (npm install will run on first start)…", cfg);
     await waitForHealthy(username, 300_000);
+    log(username, "Instance is ready!", cfg);
     updateState(username, { containerId, status: "running", lastActive: Date.now() }, cfg);
     resetIdleTimer(username, cfg);
   } catch (err) {
-    updateState(username, { status: "unknown", lastActive: Date.now() }, cfg);
+    const msg = err instanceof Error ? err.message : String(err);
+    const stack = err instanceof Error ? (err.stack ?? msg) : msg;
+    console.error(`[bastion] [${username}] Provision failed:`, stack);
+    updateState(username, { status: "unknown", provisionError: stack, lastActive: Date.now() }, cfg);
     throw err;
   }
 }

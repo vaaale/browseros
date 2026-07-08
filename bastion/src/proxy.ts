@@ -17,18 +17,25 @@ const STATUS_PAGE = `<!DOCTYPE html>
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
   body{background:#0f0f0f;color:#ccc;font-family:system-ui,sans-serif;
-       display:flex;align-items:center;justify-content:center;height:100vh}
-  .box{text-align:center;max-width:360px;padding:32px}
+       display:flex;align-items:center;justify-content:center;min-height:100vh;padding:24px}
+  .box{text-align:center;max-width:560px;width:100%;padding:32px}
   .logo{font-size:26px;font-weight:600;color:#eee;margin-bottom:12px}
-  .msg{font-size:14px;color:#888;margin-bottom:36px;min-height:20px}
-  .dots{display:inline-flex;gap:8px}
+  .msg{font-size:14px;color:#888;margin-bottom:24px;min-height:20px}
+  .dots{display:inline-flex;gap:8px;margin-bottom:24px}
   .dot{width:9px;height:9px;border-radius:50%;background:#2563eb;
        animation:pulse 1.4s ease-in-out infinite}
   .dot:nth-child(2){animation-delay:.2s}
   .dot:nth-child(3){animation-delay:.4s}
   @keyframes pulse{0%,80%,100%{opacity:.2;transform:scale(.8)}
                    40%{opacity:1;transform:scale(1)}}
-  .account{margin-top:32px;font-size:12px}
+  .log{text-align:left;font-size:12px;font-family:monospace;color:#555;
+       background:#161616;border:1px solid #222;border-radius:6px;
+       padding:12px 14px;margin-bottom:16px;min-height:28px;word-break:break-all}
+  .error-box{display:none;text-align:left;background:#1a0a0a;border:1px solid #5a2020;
+             border-radius:6px;padding:14px;margin-bottom:16px}
+  .error-title{color:#e55;font-weight:600;font-size:13px;margin-bottom:8px}
+  .error-stack{font-family:monospace;font-size:11px;color:#c77;white-space:pre-wrap;word-break:break-all;margin:0}
+  .account{margin-top:8px;font-size:12px}
   .account a{color:#555;text-decoration:none}
   .account a:hover{color:#888}
 </style>
@@ -37,17 +44,26 @@ const STATUS_PAGE = `<!DOCTYPE html>
 <div class="box">
   <div class="logo">BrowserOS</div>
   <div class="msg" id="msg">Preparing your instance…</div>
-  <div class="dots">
+  <div class="dots" id="dots">
     <div class="dot"></div><div class="dot"></div><div class="dot"></div>
+  </div>
+  <div class="log" id="log">Connecting…</div>
+  <div class="error-box" id="error-box">
+    <div class="error-title">Provisioning failed</div>
+    <pre class="error-stack" id="error-stack"></pre>
   </div>
   <div class="account"><a href="/app/account">Account settings</a></div>
 </div>
 <script>
 const msgEl = document.getElementById('msg');
+const logEl = document.getElementById('log');
+const dotsEl = document.getElementById('dots');
+const errorBox = document.getElementById('error-box');
+const errorStack = document.getElementById('error-stack');
 const labels = {
   provisioning: 'Provisioning your instance…',
   stopped:      'Starting your instance…',
-  unknown:      'Preparing your instance…',
+  unknown:      'Something went wrong — check the error below.',
   running:      'Ready — loading BrowserOS…'
 };
 function poll() {
@@ -55,6 +71,14 @@ function poll() {
     .then(r => r.json())
     .then(d => {
       msgEl.textContent = labels[d.status] || labels.unknown;
+      if (d.provisionLog) logEl.textContent = d.provisionLog;
+      if (d.provisionError) {
+        errorBox.style.display = 'block';
+        dotsEl.style.display = 'none';
+        errorStack.textContent = d.provisionError;
+      } else {
+        errorBox.style.display = 'none';
+      }
       if (d.status === 'running') {
         setTimeout(() => { window.location.replace('/'); }, 300);
       } else {
@@ -132,7 +156,7 @@ export function createBosProxy(cfg: Config): RequestHandler & { upgrade?: (serve
 
     // Kick off provisioning / start in the background — do NOT await.
     getOrProvision(username, cfg).catch((err: Error) => {
-      console.error(`[bastion] provision failed for ${username}:`, err.message);
+      console.error(`[bastion] provision failed for ${username}:`, err.stack ?? err.message);
     });
 
     // Return the status page immediately. Its JS polls /account/instance and
