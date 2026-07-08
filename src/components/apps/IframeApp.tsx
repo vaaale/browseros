@@ -114,7 +114,7 @@ export function IframeApp({ windowId, appId, params }: AppProps) {
     <iframe
       ref={iframeRef}
       src={url}
-      className="h-full w-full border-0 bg-white"
+      className="h-full w-full border-0 bg-transparent"
       sandbox="allow-scripts allow-forms allow-popups allow-same-origin"
       title={`App: ${appId}`}
     />

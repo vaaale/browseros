@@ -30,9 +30,15 @@ export interface OSInit {
 const TOPBAR_H = 32;
 const MARGIN = 24;
 
-function nextLaunchOrigin(count: number): { x: number; y: number } {
+function nextLaunchOrigin(count: number, width: number, height: number): { x: number; y: number } {
   const step = 28;
-  return { x: 80 + (count % 6) * step, y: TOPBAR_H + 24 + (count % 6) * step };
+  const cascade = (count % 6) * step;
+  const vw = typeof window !== "undefined" ? window.innerWidth : 1280;
+  const vh = typeof window !== "undefined" ? window.innerHeight : 800;
+  return {
+    x: Math.max(0, Math.round((vw - width) / 2) + cascade),
+    y: Math.max(TOPBAR_H, Math.round((vh - height) / 2) + cascade),
+  };
 }
 
 export function createOSStore(init: OSInit) {
@@ -63,7 +69,7 @@ export function createOSStore(init: OSInit) {
       }
 
       const id = `${appId}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
-      const origin = nextLaunchOrigin(get().windows.length);
+      const origin = nextLaunchOrigin(get().windows.length, app.defaultWidth, app.defaultHeight);
       const z = get().zCounter + 1;
       const win: WindowInstance = {
         id,

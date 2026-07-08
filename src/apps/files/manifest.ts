@@ -4,8 +4,8 @@ const manifest: AppManifest = {
   id: "files",
   name: "Files",
   icon: "Folder",
-  defaultWidth: 760,
-  defaultHeight: 500,
+  defaultWidth: 960,
+  defaultHeight: 640,
   order: 10,
   builtin: true,
 };
