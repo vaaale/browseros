@@ -2,6 +2,8 @@
 
 BrowserOS (BOS) is an agentic operating system that runs in the browser. It has a desktop, draggable windows, a dock, and a built-in AI assistant that can operate the OS, manage files, browse the web, install apps, and modify BOS itself — including writing and previewing its own code changes on a live branch.
 
+![Desktop](./docs/assets/BOS Intro.png)
+
 ---
 
 ## Getting started
@@ -71,7 +73,23 @@ You can skip the wizard and configure everything from **Settings** at any time.
 
 ---
 
+## AI provider setup
+
+![](docs/assets/BOS%20Welcome%20page.png)
+
+BOS supports any OpenAI-compatible provider. Configure in **Settings → AI Provider** at runtime, or seed defaults in `.env.local`:
+
+| Provider                   | Key to set |
+|----------------------------|---|
+| Anthropic                  | `ANTHROPIC_API_KEY=sk-ant-...` |
+| OpenAI                     | Configure base URL and key in Settings |
+| OpenAI Responses           | Configure base URL and key in Settings |
+| Local (vLLM, Ollama, etc.) | `ANTHROPIC_BASE_URL=http://...` and `ANTHROPIC_API_KEY=local` |
+
+---
+
 ## Docker Compose (multi-user)
+**(Not stable yet)**
 
 For multi-user deployments, BOS ships a **bastion** service that handles authentication, spawns per-user BOS containers dynamically, and proxies traffic to them.
 
@@ -146,18 +164,6 @@ See [docs/dev/deployment.md](docs/dev/deployment.md) for the full deployment gui
 
 ---
 
-## AI provider setup
-
-BOS supports any OpenAI-compatible provider. Configure in **Settings → AI Provider** at runtime, or seed defaults in `.env.local`:
-
-| Provider | Key to set |
-|---|---|
-| Anthropic | `ANTHROPIC_API_KEY=sk-ant-...` |
-| OpenAI | Configure base URL and key in Settings |
-| Local (vLLM, Ollama, etc.) | `ANTHROPIC_BASE_URL=http://...` and `ANTHROPIC_API_KEY=local` |
-
----
-
 ## Developer harness
 
 For the AI assistant to write and preview code changes, it needs a developer harness — an autonomous coder it can delegate to. The default is **Claude CLI (headless)**, which requires Claude Code to be installed on the machine running BOS:
@@ -171,6 +177,8 @@ Then configure the harness URL in **Settings → Dev Harness**. Without a harnes
 ---
 
 ## Documentation
+
+![](docs/assets/BOS%20Docs.png)
 
 - **[docs/usage/](docs/usage/introduction.md)** — using BOS (the desktop, apps, assistant, memory, settings)
 - **[docs/dev/](docs/dev/architecture-overview.md)** — extending and modifying BOS (architecture, API reference, recipes)
