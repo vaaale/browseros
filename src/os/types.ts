@@ -22,7 +22,18 @@ export interface AppManifest {
   url?: string;
   /** For installed apps: path to the app entry inside the VFS. */
   source?: string;
+  /** Capability grants for iframe apps — the set of BOS SDK APIs this app may call.
+   *  Absent or empty means no BOS SDK access (plain sandboxed iframe). */
+  capabilities?: AppCapability[];
 }
+
+/** A BOS SDK capability that can be granted to a user-installed iframe app. */
+export type AppCapability =
+  | "fs:read"       // Read files from the user's VFS
+  | "fs:write"      // Write files to the user's VFS
+  | "settings:read" // Read OS settings
+  | "notify"        // Show desktop notifications via postMessage response
+  | "window:title"; // Set the window title
 
 export type WallpaperFit = "cover" | "contain";
 

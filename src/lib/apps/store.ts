@@ -6,7 +6,7 @@ import { writeFileAtomic } from "@/os/atomic-write";
 import { ensureRepo, commitAll } from "@/lib/gitfs/store";
 import { buildAppDir } from "@/lib/apps/build";
 import { supervisorEnabled, supervisorAppBegin } from "@/lib/devharness/supervisor";
-import type { AppManifest } from "@/os/types";
+import type { AppManifest, AppCapability } from "@/os/types";
 
 // Installed apps are versioned *content* in a standalone git repo (GitFS) rooted
 // at appsDir(). There is NO central registry file: each app is a self-contained
@@ -34,6 +34,8 @@ export interface InstalledApp {
   uninstalledAt?: number;
   /** For built projects: the source entry (e.g. "src/main.tsx") esbuild bundles into dist/. Absent for plain static apps. */
   entry?: string;
+  /** BOS SDK capability grants for this app. Absent/empty = plain sandboxed iframe, no BOS API access. */
+  capabilities?: AppCapability[];
 }
 
 function root(): string {
@@ -73,7 +75,7 @@ export function pickIcon(name: string, spec = ""): string {
   return "Puzzle";
 }
 
-async function readApp(id: string): Promise<InstalledApp | null> {
+export async function readApp(id: string): Promise<InstalledApp | null> {
   try {
     const raw = await fs.readFile(path.join(root(), id, MANIFEST), "utf8");
     const m = JSON.parse(raw) as Partial<InstalledApp>;
@@ -86,6 +88,7 @@ async function readApp(id: string): Promise<InstalledApp | null> {
       status: m.status === "uninstalled" ? "uninstalled" : "installed",
       uninstalledAt: typeof m.uninstalledAt === "number" ? m.uninstalledAt : undefined,
       entry: typeof m.entry === "string" ? m.entry : undefined,
+      capabilities: Array.isArray(m.capabilities) ? (m.capabilities as AppCapability[]) : undefined,
     };
   } catch {
     return null;
@@ -123,6 +126,7 @@ export function toManifest(app: InstalledApp): AppManifest {
     kind: "iframe",
     url: `/apps/${app.id}`,
     source: app.dir,
+    capabilities: app.capabilities,
   };
 }
 
@@ -130,9 +134,19 @@ export async function listInstalledApps(): Promise<InstalledApp[]> {
   return readAll();
 }
 
+/** Build an app's dist/ if it has an entry point but hasn't been built yet. */
+async function ensureBuilt(app: InstalledApp): Promise<void> {
+  if (!app.entry) return;
+  const distIndex = path.join(root(), app.id, "dist", "index.html");
+  const built = await fs.access(distIndex).then(() => true).catch(() => false);
+  if (!built) await buildAppDir(path.join(root(), app.id), app.entry, app.name);
+}
+
 /** Manifests for the desktop — only currently-installed apps (uninstalled ones are hidden). */
 export async function listInstalledManifests(): Promise<AppManifest[]> {
-  return (await readAll()).filter((a) => a.status === "installed").map(toManifest);
+  const installed = (await readAll()).filter((a) => a.status === "installed");
+  await Promise.allSettled(installed.map(ensureBuilt));
+  return installed.map(toManifest);
 }
 
 /**
@@ -148,6 +162,8 @@ export async function installApp(
     files: Record<string, string>;
     /** Built project: source entry (e.g. "src/main.tsx") esbuild bundles into dist/. If set, an index.html is generated and not required in files. */
     entry?: string;
+    /** BOS SDK capability grants. Absent = no BOS SDK access. */
+    capabilities?: AppCapability[];
   },
   opts?: { draft?: boolean },
 ): Promise<AppManifest> {
@@ -183,6 +199,7 @@ export async function installApp(
     dir: `/${id}`,
     status: "installed",
     entry: input.entry,
+    capabilities: input.capabilities,
   };
   await writeManifest(app);
   await commitAll(r, `install app ${id}${opts?.draft ? " (draft)" : ""}`);
@@ -207,6 +224,16 @@ export async function restoreApp(id: string): Promise<AppManifest | undefined> {
   await writeManifest(restored);
   await commitAll(root(), `restore app ${id}`);
   return toManifest(restored);
+}
+
+/** Update the capability grants for an installed app. */
+export async function setAppCapabilities(id: string, capabilities: AppCapability[]): Promise<AppManifest | undefined> {
+  const app = await readApp(id);
+  if (!app) return undefined;
+  const updated: InstalledApp = { ...app, capabilities };
+  await writeManifest(updated);
+  await commitAll(root(), `update capabilities for app ${id}`);
+  return toManifest(updated);
 }
 
 /** Permanently delete an app's directory and commit the removal. */

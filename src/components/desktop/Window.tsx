@@ -184,7 +184,7 @@ export function Window({ win }: { win: WindowInstance }) {
 
       <div className="relative min-h-0 flex-1 bg-[#0f1117] text-white/90">
         {manifest?.kind === "iframe" ? (
-          <IframeApp windowId={win.id} appId={win.appId} params={{ ...win.params, url: manifest.url }} />
+          <IframeApp windowId={win.id} appId={win.appId} params={{ ...win.params, url: manifest.url, capabilities: manifest.capabilities }} />
         ) : AppComponent ? (
           createElement(AppComponent, { windowId: win.id, appId: win.appId, params: win.params })
         ) : (
