@@ -1,0 +1,73 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+# IntelliJ
+.idea/**
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+
+# playwright
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+/.playwright-mcp/
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files (can opt-in for committing if needed)
+.env*
+!.env.example
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# browseros runtime data (VFS, settings, memory, mcp/provider config)
+/data
+# per-user data volumes created by the bastion Docker deployment
+/user-data
+
+# browseros user apps — a standalone git repo (GitFS), versioned independently
+# of BOS source. Default location; override with BOS_APPS_DIR. Gitignored here
+# so the nested app repo never collides with the BOS source tree.
+/apps
+
+# spec stores container (018-external-spec-store) — each store under here is its
+# own git repo, seeded at runtime from seed/spec-store. Default location;
+# override with BOS_SPECS_ROOT. Gitignored so the nested store repos never
+# collide with the BOS source tree.
+/specs
+.memsearch
+
+# generated: built-in app registry (auto-discovered from src/apps/<id>/ by
+# tools/gen-apps.mjs; regenerated on predev/prebuild and `npm run gen:apps`)
+/src/apps/_manifests.generated.ts
+/src/apps/_components.generated.ts

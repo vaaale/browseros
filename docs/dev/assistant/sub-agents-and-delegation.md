@@ -1,0 +1,162 @@
+# Sub-agents & delegation (and how Claude Code runs)
+
+The assistant delegates substantive work to **sub‑agents**. Definitions live under
+`src/lib/agent/subagents/`. **Critical:** all development is done by **Claude**
+sub‑agents, never the local provider.
+
+---
+
+## Definitions (`subagents/store.ts`, `types.ts`)
+
+A sub‑agent is `data/agents/<id>/AGENT.md` — markdown with frontmatter
+(`name, description, type, model?, subagent_type?, tools?`) and a body (the system
+prompt). Parsed/serialized by `subagents/markdown.ts`.
+
+```ts
+type SubAgentType = "local" | "claude";
+interface SubAgent {
+  id; name; description; type; systemPrompt;
+  tools?: string[]; model?; subagentType?; ephemeral?;
+}
+```
+
+**Seeded defaults** (only when `data/agents` is empty):
+
+| id | type | role |
+|---|---|---|
+| `assistant` | local | the default main‑chat **personality** |
+| `researcher` | local | web research + summaries |
+| `file-organizer` | local | tidy the VFS |
+| `writer` | local | drafting/editing |
+| `planner` | local | produce a plan with acceptance criteria |
+| `developer` | **claude** | build apps / modify BOS source (repo‑scoped tools) |
+
+Each conversation carries its own agent id (per‑conversation, the ONLY source of
+truth) — there is no global "active agent". A conversation's personality is the
+`systemPrompt` of its agent; editing it goes through `setAgentSystemPrompt`.
+Ephemeral agents run without being persisted.
+
+---
+
+## Routing (`subagents/runner.ts`)
+
+`runSubAgent(agent, task, { onEvent?, contentOnly?, featureBranch?, interactive? })`:
+
+- **`type:"local"`** → `runLocal` → `runToolLoop` (`llm.ts`) with the configured
+  provider and the agent's tools. A local agent holding repo‑scoped dev tools gets a
+  larger step budget (`DEV_MAX_STEPS = 40`) and its files are `git add`‑ed afterward
+  as a backstop. Errors are returned, not thrown. `featureBranch`/`interactive` are
+  forwarded to a nested `dev_delegate` so escalated dev work stays on the
+  same feature branch.
+- **`type:"claude"`** → `runClaudeAgent` (`claude-runner.ts`). **No local fallback**
+  — development is Claude‑only by design.
+
+`onEvent` streams `{ tool, input }` events live (used by `/api/subagents/delegate`).
+`featureBranch` drives source-edit ownership — see below.
+
+---
+
+## Tools a sub-agent may use (`subagents/tools.ts`)
+
+- **`SUBAGENT_TOOLS`** (default, safe): `file_list`, `file_read`, `file_write`,
+  `file_mkdir` (the **VFS**), `web_fetch`, `web_search`, the skill tools
+  (`skill_list` / `skill_load` / `skill_read_file`), and scheduler tools.
+- **`DEV_TOOLS`** (repo‑scoped, **opt‑in** — an agent must list these ids in its
+  `tools`):
+  - `bos_source_list` / `bos_source_read` / `bos_source_search` via
+    `src/lib/dev/repo-fs.ts` — **read‑only, jailed to the repo root** (reads deny
+    `.env*`/`.git`/`node_modules`/`.next`). Source *writes* were removed: only the
+    Claude/OpenCode dev harness edits BOS source, via its own native file tools.
+  - `dev_git_status` via `src/lib/system/git.ts`.
+- **`run_command`** (sandboxed exec) is injected **per delegated run** (not a static
+  DEV_TOOL) with a `(browser‑session, agent)` sandbox key — see
+  [Command Execution](../run-command/run-command.md). `delegate_to_developer` →
+  `dev_delegate` is likewise built per run.
+
+`toolsFor(allowed?)` returns `SUBAGENT_TOOLS` when no allowlist is given — **never**
+the dev tools implicitly.
+
+---
+
+## How the dev agent runs (`claude-runner.ts` + `devharness/harness-config.ts`)
+
+`getHarnessConfig()` resolves the `dev-harness` namespace to
+`{ mode:"cli", tool:"claude"|"opencode", cwd } | { mode:"mcp", server }`, where
+`cwd` is derived from the running BOS process. The user cannot configure it; source
+edits are always re-pointed to the Supervisor preview worktree before the harness
+starts. Only the binary and event parsing differ — the Supervisor worktree,
+build‑gate, and staging are harness‑agnostic.
+
+- **`cli` tool `claude` (default & recommended):** spawn
+  `claude -p <task> --append-system-prompt <agent prompt> --output-format
+  stream-json --verbose --dangerously-skip-permissions`. BOS parses the stream‑json
+  (`type:"assistant"` → `content[].tool_use` for live events; `type:"result"` →
+  `result`/`is_error`).
+- **`cli` tool `opencode`:** spawn `opencode run <prompt> --format json --dir <cwd>
+  --auto [--model …]`. OpenCode has no inline system‑prompt flag, so the agent
+  prompt is **prepended to the message** (like the MCP path) to avoid writing an
+  `opencode.json` the Supervisor would commit. BOS also aligns `PWD` with `<cwd>` so
+  OpenCode cannot resolve the base checkout when the Supervisor supplied an isolated
+  preview worktree. BOS parses the newline‑delimited events (`tool_use` → `part`
+  `ToolPart` for live events, de‑duped by `callID`; `text` → cumulative `part.text`
+  per id = final output; `error`).
+- Both CLI tools: permissions skipped → **run sandboxed (e.g. Docker)**; files are
+  `git add`‑ed afterward as a backstop; ~590s timeout.
+- **`mcp`:** connect to a Claude Code MCP server (stdio `claude mcp serve` or remote
+  HTTP/SSE) and drive its `Agent` tool with a generated `subagent_type`. For source
+  edits, only stdio MCP is allowed because BOS can spawn it in the Supervisor's
+  preview worktree; remote MCP is refused because BOS cannot enforce its working
+  directory. ⚠️ The
+  `Agent` tool only spawns sub‑agent types **registered at the harness's startup**;
+  if none match it returns `HARNESS_UNAVAILABLE` and the CLI path is preferred.
+  (OpenCode is **CLI‑only** here — it isn't exposed over this MCP `Agent` path.)
+
+---
+
+## Delegation + the Supervisor (code candidates)
+
+`runClaudeAgent` integrates with live version control:
+
+- For source edits, `runClaudeAgent` refuses to run unless BOS is served under the
+  **Supervisor** and the caller supplied a validated active `featureBranch`
+  (`bos/<kebab-name>`). There is no in-place fallback: the harness must edit an
+  isolated feature-branch worktree or fail without applying changes.
+- The branch is resolved **server-side**, not exposed as an LLM tool parameter. Chat
+  delegation sends the current conversation id only so `/api/subagents/delegate` can
+  load that conversation's `activeFeatureBranch`. Automation may pass
+  `featureBranch` directly to trusted server APIs. If no branch resolves, the route
+  returns an error before Claude/OpenCode/MCP is spawned.
+- It calls `supervisorBegin(featureBranch)` to provision (or **resume**) the
+  isolated preview worktree (+ data clone), points the dev harness's `cwd` there,
+  runs, then calls `supervisorBuild(featureBranch)` to build + health-gate the
+  preview.
+- Promote deletes the merged branch/worktree/instance. On Supervisor restart,
+  `bos/*` branches are rediscovered as `not-built` previews and can be selected
+  again from the toolbar.
+- **`contentOnly:true`** (e.g. generating an app's HTML — a *content* op) MUST NOT
+  provision a code candidate; the result is installed via `app_install` onto the
+  GitFS `app-candidate` branch instead.
+- BrowserOS source analysis or implementation MUST NOT use `contentOnly:true`.
+  `contentOnly` is reserved for standalone app content generation, and the
+  runner refuses source-shaped tasks submitted through that bypass.
+
+See [Live version control](../self-modification/live-version-control.md).
+
+---
+
+## The CORE_POLICY contract (`src/lib/agent/config.ts`)
+
+The always‑on policy mandates: delegate substantive tasks; **Claude for any
+coding**; pick the right app path (simple static `app_install` vs. project `app_build`,
+both as previews); modify BOS only via the `developer` agent (never via the VFS);
+ask permission (`agent_request_claude`) before using Claude for a
+**non‑dev** task; save durable memory but not transient failures; call
+`skill_reflect` after non‑trivial tasks; keep the docs under `docs/usage`/`docs/dev` current.
+
+---
+
+## Recipe: add a sub-agent
+
+`agent_create` action, or add to `DEFAULTS` in `subagents/store.ts`. Use
+`type:"claude"` for coding agents; give local dev agents the repo‑scoped `tools` ids
+if they should edit source.

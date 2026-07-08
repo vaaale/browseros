@@ -1,0 +1,113 @@
+import { test, expect } from "@playwright/test";
+
+// Regression guard for Assistant card collapsing (see src/lib/agent/card-collapse.ts
+// + ChatToolRenderer/ReasoningAssistantMessage). Cards form an accordion: the
+// newest insertion is expanded and earlier ones collapse, and clicking a card
+// header toggles it. We drive the most testable path — a persisted assistant
+// message with reasoning (<think>…</think>) followed by an answer — without
+// needing a live model: on load the answer is a newer insertion than the
+// reasoning, so the reasoning card must be collapsed, and its header must toggle.
+test.use({ video: "off" });
+
+test.describe("Assistant card collapse", () => {
+  const CONV_ID = "c-card-collapse-regression";
+  const path = `/Documents/Chats/${CONV_ID}.json`;
+  const REASON = "REASONING_TOKEN_4821";
+  const ANSWER = "ANSWER_TOKEN_4821";
+  const convo = {
+    id: CONV_ID,
+    title: "Card collapse (regression)",
+    createdAt: Date.now(),
+    messages: [
+      { id: "u1", role: "user", content: "Hello there" },
+      { id: "a1", role: "assistant", content: `<think>${REASON}</think>${ANSWER}` },
+    ],
+  };
+
+  test("reasoning collapses under a newer answer and the header toggles it", async ({ page, context, request }) => {
+    test.setTimeout(60_000);
+    await request.post("/api/fs", { data: { op: "write", path, content: JSON.stringify(convo) } });
+    await context.addInitScript((id) => localStorage.setItem("bos.activeConversation", id), CONV_ID);
+
+    await page.goto("/");
+    await page.getByTestId("dock-chat").click();
+    await expect(page.getByTestId("window-chat")).toBeVisible();
+
+    // Select this conversation explicitly (the dev data dir is shared, so several
+    // conversations exist; the active-conversation key is per-group now).
+    await page.getByRole("button", { name: "Card collapse (regression)", exact: true }).click();
+
+    // The agent answer is always shown (never gated by collapse state).
+    await expect(page.getByText(ANSWER)).toBeVisible();
+
+    // The reasoning card header is present, but collapsed because the answer is a
+    // newer insertion in the accordion — so the reasoning body is not rendered.
+    const header = page.getByRole("button", { name: /Reasoning/ });
+    await expect(header).toBeVisible();
+    await expect(page.getByText(REASON)).toHaveCount(0);
+
+    // Clicking the header expands it; clicking again collapses it.
+    await header.click();
+    await expect(page.getByText(REASON)).toBeVisible();
+    await header.click();
+    await expect(page.getByText(REASON)).toHaveCount(0);
+
+    await request.post("/api/fs", { data: { op: "delete", path } });
+  });
+
+  const TOOL_CONV_ID = "c-tool-card-collapse-regression";
+  const toolPath = `/Documents/Chats/${TOOL_CONV_ID}.json`;
+  const TOOL_RESULT = "TOOL_RESULT_TOKEN_9931";
+  const TOOL_ANSWER = "TOOL_ANSWER_TOKEN_9931";
+  const toolConvo = {
+    id: TOOL_CONV_ID,
+    title: "Tool card collapse (regression)",
+    createdAt: Date.now(),
+    messages: [
+      { id: "tu1", role: "user", content: "Read a doc" },
+      {
+        id: "ta1",
+        role: "assistant",
+        content: "",
+        toolCalls: [
+          { id: "tc-9931", type: "function", function: { name: "readDoc", arguments: '{"ref":"DOCREF_9931"}' } },
+        ],
+      },
+      { id: "tt1", role: "tool", content: TOOL_RESULT, toolCallId: "tc-9931" },
+      { id: "ta2", role: "assistant", content: TOOL_ANSWER },
+    ],
+  };
+
+  test("a tool-call card header toggles its body open/closed", async ({ page, context, request }) => {
+    test.setTimeout(60_000);
+    await request.post("/api/fs", { data: { op: "write", path: toolPath, content: JSON.stringify(toolConvo) } });
+    await context.addInitScript((id) => localStorage.setItem("bos.activeConversation", id), TOOL_CONV_ID);
+
+    await page.goto("/");
+    await page.getByTestId("dock-chat").click();
+    await expect(page.getByTestId("window-chat")).toBeVisible();
+
+    // Select this conversation explicitly (the dev data dir is shared, so several
+    // conversations exist; the active-conversation key is per-group now).
+    await page.getByRole("button", { name: "Tool card collapse (regression)", exact: true }).click();
+
+    // The final answer is always shown.
+    await expect(page.getByText(TOOL_ANSWER)).toBeVisible();
+
+    // The tool card header is present; collapsed because the answer is newer, so
+    // the tool body (its args) is not rendered.
+    const header = page.getByRole("button", { name: /readDoc/ });
+    await expect(header).toBeVisible();
+    await expect(page.getByText("DOCREF_9931")).toHaveCount(0);
+
+    // Clicking the header expands it; clicking again collapses it. (Restoring a
+    // conversation must not start an agent run; if it does, the tool-call view
+    // remounts continuously and the header can't be clicked.)
+    await header.click();
+    await expect(page.getByText("DOCREF_9931")).toBeVisible();
+    await header.click();
+    await expect(page.getByText("DOCREF_9931")).toHaveCount(0);
+
+    await request.post("/api/fs", { data: { op: "delete", path: toolPath } });
+  });
+});

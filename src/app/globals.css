@@ -1,0 +1,48 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: dark;
+}
+
+@theme inline {
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-geist-sans), system-ui, sans-serif;
+  overscroll-behavior: none;
+}
+
+/* Desktop chrome (icons, dock, topbar, window titlebars) opts out of selection
+   via the `select-none` utility; app content stays selectable by default. */
+
+/* Thin, unobtrusive scrollbars inside OS windows. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 9999px;
+}
+
+/* CopilotKit chat: lighter blue links for readability on the dark theme.
+   `!important` overrides CopilotKit's hardcoded `color: blue` in markdown.css,
+   which has equal specificity but loads later in source order. */
+a.copilotKitMarkdownElement {
+  color: #7aa3ff !important;
+}
+a.copilotKitMarkdownElement:hover {
+  color: #a8c2ff !important;
+}

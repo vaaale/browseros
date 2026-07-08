@@ -1,93 +1,201 @@
 # BrowserOS
 
+BrowserOS (BOS) is an agentic operating system that runs in the browser. It has a desktop, draggable windows, a dock, and a built-in AI assistant that can operate the OS, manage files, browse the web, install apps, and modify BOS itself — including writing and previewing its own code changes on a live branch.
 
+![Desktop](./docs/assets/BOS Intro.png)
+
+---
 
 ## Getting started
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+There are two ways to run BOS:
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+| Mode | When to use |
+|---|---|
+| **Dev mode** (single user) | Local development, trying BOS out, contributing |
+| **Docker Compose** (multi-user) | Shared team instance, production, or self-hosted deployment |
 
-## Add your files
+---
 
-* [Create](https://docs.gitlab.com/user/project/repository/web_editor/#create-a-file) or [upload](https://docs.gitlab.com/user/project/repository/web_editor/#upload-a-file) files
-* [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
+## Dev mode (single user)
+
+### Prerequisites
+
+- Node.js 20+ and npm
+- Git
+- An API key for an AI provider (Anthropic, OpenAI, or a local OpenAI-compatible server)
+
+### 1. Clone and install
+
+```bash
+git clone <repo-url>
+cd browseros
+npm install
+```
+
+### 2. Configure
+
+```bash
+cp .env.example .env.local
+# Optional: seed a default API key so the wizard is pre-filled:
+#   ANTHROPIC_API_KEY=sk-ant-...
+```
+
+No env vars are required — everything including the API key is configurable at runtime through the first-run wizard or **Settings → AI Provider**. Env vars are only a convenience to pre-seed the defaults.
+
+### 3. Run
+
+**With the Supervisor** (recommended — enables live version control, branch previews, and safe self-modification):
+
+```bash
+BOS_BASE_DEV=1 BOS_PORT_BASE=3000 BOS_PUBLIC_PORT=8090 npm run supervisor
+```
+
+Open **http://localhost:8090**
+
+**Without the Supervisor** (plain Next.js dev server, no self-modification):
+
+```bash
+npm run dev
+```
+
+Open **http://localhost:3000**
+
+### 4. First-time setup
+
+On first launch a setup wizard appears. It configures:
+
+1. **AI Provider** — which model powers the assistant (Anthropic / OpenAI / local)
+2. **Dev Harness** — how the assistant runs the autonomous coder for development tasks (Claude CLI headless is the default)
+3. **Data Isolation** — how preview data is isolated from live data during self-modification
+
+You can skip the wizard and configure everything from **Settings** at any time.
+
+---
+
+## AI provider setup
+
+![](docs/assets/BOS%20Welcome%20page.png)
+
+BOS supports any OpenAI-compatible provider. Configure in **Settings → AI Provider** at runtime, or seed defaults in `.env.local`:
+
+| Provider                   | Key to set |
+|----------------------------|---|
+| Anthropic                  | `ANTHROPIC_API_KEY=sk-ant-...` |
+| OpenAI                     | Configure base URL and key in Settings |
+| OpenAI Responses           | Configure base URL and key in Settings |
+| Local (vLLM, Ollama, etc.) | `ANTHROPIC_BASE_URL=http://...` and `ANTHROPIC_API_KEY=local` |
+
+---
+
+## Docker Compose (multi-user)
+**(Not stable yet)**
+
+For multi-user deployments, BOS ships a **bastion** service that handles authentication, spawns per-user BOS containers dynamically, and proxies traffic to them.
 
 ```
-cd existing_repo
-git remote add origin https://gitlab.schmopilot.com/alex/browseros.git
-git branch -M main
-git push -uf origin main
+Browser → bastion:80 → bos-{username}:8090
 ```
 
-## Integrate with your tools
+Each user gets their own isolated source tree, data directory, and `node_modules` volume.
 
-* [Set up project integrations](https://gitlab.schmopilot.com/alex/browseros/-/settings/integrations)
+### Prerequisites
 
-## Collaborate with your team
+- Docker Engine 24+ and Docker Compose
+- Git
 
-* [Invite team members and collaborators](https://docs.gitlab.com/user/project/members/)
-* [Create a new merge request](https://docs.gitlab.com/user/project/merge_requests/creating_merge_requests/)
-* [Automatically close issues from merge requests](https://docs.gitlab.com/user/project/issues/managing_issues/#closing-issues-automatically)
-* [Enable merge request approvals](https://docs.gitlab.com/user/project/merge_requests/approvals/)
-* [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+### 1. Build the BOS image
 
-## Test and Deploy
+```bash
+docker build -t browseros:latest .
+```
 
-Use the built-in continuous integration in GitLab.
+### 2. Configure
 
-* [Get started with GitLab CI/CD](https://docs.gitlab.com/ci/quick_start/)
-* [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/user/application_security/sast/)
-* [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/topics/autodevops/requirements/)
-* [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/user/clusters/agent/)
-* [Set up protected environments](https://docs.gitlab.com/ci/environments/protected_environments/)
+```bash
+cp .env.example .env
+# Required — generate a secret:
+echo "JWT_SECRET=$(openssl rand -hex 32)" >> .env
+```
 
-***
+### 3. Create the network
 
-# Editing this README
+`bos-net` is an external network so it is never recreated by compose (which would break running user containers). Create it once:
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+```bash
+docker network create bos-net
+```
 
-## Suggestions for a good README
+### 4. Start
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+```bash
+docker compose up -d
+```
 
-## Name
-Choose a self-explaining name for your project.
+Visit **http://localhost** — you will be presented with a login page.
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+### 4. Create the first admin user
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+Generate a bcrypt hash inside the running bastion container, then write `users.yml`:
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+```bash
+# Step 1: generate the hash (the bastion already has bcryptjs installed)
+HASH=$(docker compose exec bastion node -e "const b=require('bcryptjs'); console.log(b.hashSync('changeme', 12))")
 
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
+# Step 2: write users.yml into the bastion data volume
+docker compose exec bastion sh -c "printf 'users:\n  admin:\n    passwordHash: %s\n    admin: true\n' '$HASH' > /data/users.yml"
+```
 
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
+Then log in at **http://localhost** with `admin` / `changeme` and change your password from the account page (`/app/account`).
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
+### Auth providers
 
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
+| Provider | Config |
+|---|---|
+| **Simple** (default) | Users defined in `/data/users.yml` inside bastion. Bcrypt passwords, hot-reloaded. |
+| **Keycloak** | Set `AUTH_PROVIDER=keycloak` and `KEYCLOAK_*` vars. Use the Keycloak compose override. |
 
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
+```bash
+# Start with a local Keycloak (bundled bos realm pre-imported):
+docker compose -f docker-compose.yml -f docker-compose.keycloak.yml up -d
+```
 
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
+See [docs/dev/deployment.md](docs/dev/deployment.md) for the full deployment guide including Keycloak setup, volume layout, idle timeout, and re-provisioning.
 
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
+---
 
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
+## Developer harness
 
-## License
-For open source projects, say how it is licensed.
+For the AI assistant to write and preview code changes, it needs a developer harness — an autonomous coder it can delegate to. The default is **Claude CLI (headless)**, which requires Claude Code to be installed on the machine running BOS:
 
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+```bash
+npm install -g @anthropic-ai/claude-code
+```
+
+Then configure the harness URL in **Settings → Dev Harness**. Without a harness, all BOS features work except self-modification.
+
+---
+
+## Documentation
+
+![](docs/assets/BOS%20Docs.png)
+
+- **[docs/usage/](docs/usage/introduction.md)** — using BOS (the desktop, apps, assistant, memory, settings)
+- **[docs/dev/](docs/dev/architecture-overview.md)** — extending and modifying BOS (architecture, API reference, recipes)
+- **[docs/dev/deployment.md](docs/dev/deployment.md)** — full Docker multi-user deployment guide
+
+The in-OS **Docs app** renders these trees inside BOS itself.
+
+---
+
+## Development workflow
+
+```bash
+npm run dev          # plain Next.js (port 3000)
+npm run supervisor   # with Supervisor (port 8090, enables self-modification)
+npx tsc --noEmit     # typecheck
+npm run lint         # lint
+npm run test:e2e     # Playwright e2e tests
+```
+
+BOS follows a spec-first workflow: features are specified in **Build Studio** before being implemented. See `specs/bos-system-specs/` and `docs/dev/architecture-overview.md`.

@@ -1,0 +1,47 @@
+{
+  "name": "browseros",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "gen:apps": "node tools/gen-apps.mjs",
+    "predev": "node tools/gen-apps.mjs",
+    "dev": "next dev",
+    "prebuild": "node tools/gen-apps.mjs",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "supervisor": "node tools/supervisor/supervisor.mjs"
+  },
+  "dependencies": {
+    "@ai-sdk/openai": "^3.0.75",
+    "@anthropic-ai/sdk": "^0.57.0",
+    "@copilotkit/react-core": "^1.61.2",
+    "@copilotkit/react-ui": "^1.61.2",
+    "@copilotkit/runtime": "^1.61.2",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "ai": "^6.0.211",
+    "ajv": "^8.20.0",
+    "esbuild": "^0.28.1",
+    "flexsearch": "^0.7.43",
+    "lucide-react": "^1.21.0",
+    "next": "16.2.9",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "telegram": "^2.26.16",
+    "zustand": "^5.0.14"
+  },
+  "devDependencies": {
+    "@playwright/mcp": "^0.0.76",
+    "@playwright/test": "^1.61.1",
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.2.9",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  }
+}

@@ -1,0 +1,27 @@
+# BrowserOS — Docker image
+# Runs the Supervisor on port 8090. Per-user data is mounted at BOS_DATA_DIR.
+# node_modules are populated by docker-entrypoint.sh on first start if absent
+# (supports a per-user named volume for mutable dependencies).
+
+FROM node:20-alpine AS runtime
+RUN apk add --no-cache git
+WORKDIR /app
+
+# Copy source (node_modules excluded by .dockerignore)
+COPY . .
+
+# Install Claude Code
+RUN npm install -g @anthropic-ai/claude-code
+
+# install Open Code
+RUN npm install -g opencode-ai
+
+COPY docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
+
+EXPOSE 8090
+
+# BOS_DATA_DIR is set by the bastion when spawning containers (/app/data).
+# The Supervisor listens on 8090.
+ENTRYPOINT ["/docker-entrypoint.sh"]
+CMD ["node", "tools/supervisor/supervisor.mjs"]

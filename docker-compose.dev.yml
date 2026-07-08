@@ -1,0 +1,13 @@
+# Development override: mounts bastion source for hot-reload.
+# Usage: docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+
+services:
+  bastion:
+    build:
+      context: ./bastion
+      target: ts-build   # stop before production runtime stage
+    volumes:
+      - ./bastion/src:/app/src:delegated
+    command: npm run dev
+    environment:
+      - NODE_ENV=development
