@@ -30,6 +30,17 @@ export interface OSInit {
 const TOPBAR_H = 32;
 const MARGIN = 24;
 
+/** Returns the width/height a new window should open at.
+ *  Uses 80% of the viewport, but never smaller than the manifest's default. */
+function launchSize(defaultWidth: number, defaultHeight: number): { width: number; height: number } {
+  const vw = typeof window !== "undefined" ? window.innerWidth : 1280;
+  const vh = typeof window !== "undefined" ? window.innerHeight : 800;
+  return {
+    width:  Math.max(defaultWidth,  Math.round(vw * 0.80)),
+    height: Math.max(defaultHeight, Math.round((vh - TOPBAR_H) * 0.80)),
+  };
+}
+
 function nextLaunchOrigin(count: number, width: number, height: number): { x: number; y: number } {
   const step = 28;
   const cascade = (count % 6) * step;
@@ -69,7 +80,8 @@ export function createOSStore(init: OSInit) {
       }
 
       const id = `${appId}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
-      const origin = nextLaunchOrigin(get().windows.length, app.defaultWidth, app.defaultHeight);
+      const { width, height } = launchSize(app.defaultWidth, app.defaultHeight);
+      const origin = nextLaunchOrigin(get().windows.length, width, height);
       const z = get().zCounter + 1;
       const win: WindowInstance = {
         id,
@@ -77,8 +89,8 @@ export function createOSStore(init: OSInit) {
         title: app.name,
         x: origin.x,
         y: origin.y,
-        width: app.defaultWidth,
-        height: app.defaultHeight,
+        width,
+        height,
         zIndex: z,
         minimized: false,
         maximized: false,
