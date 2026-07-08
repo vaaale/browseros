@@ -106,13 +106,16 @@ export async function reprovisionResetData(username: string, cfg: Config): Promi
 /** git fetch + switch to bosBaseRef if needed + pull, then restart. */
 export async function reprovisionUpdateSrc(username: string, cfg: Config): Promise<void> {
   const src = srcDir(username, cfg);
-  await execFileAsync("git", ["-C", src, "fetch", "origin"]);
+  // Fetch the target branch explicitly — shallow clones only have the branch
+  // they were cloned with, so a generic `fetch origin` won't make other
+  // branches available.
+  await execFileAsync("git", ["-C", src, "fetch", "--depth=1", "origin", cfg.bosBaseRef]);
   const { stdout: currentBranch } = await execFileAsync("git", ["-C", src, "rev-parse", "--abbrev-ref", "HEAD"]);
   if (currentBranch.trim() !== cfg.bosBaseRef) {
-    // Try to switch; if the local branch doesn't exist yet, create it tracking origin.
-    await execFileAsync("git", ["-C", src, "checkout", "-B", cfg.bosBaseRef, `origin/${cfg.bosBaseRef}`]);
+    await execFileAsync("git", ["-C", src, "checkout", "-B", cfg.bosBaseRef, "FETCH_HEAD"]);
+  } else {
+    await execFileAsync("git", ["-C", src, "reset", "--hard", "FETCH_HEAD"]);
   }
-  await execFileAsync("git", ["-C", src, "pull", "--ff-only", "origin", cfg.bosBaseRef]);
   const info = await inspectContainer(containerName(username));
   if (info) {
     if (info.State.Running) await stopContainer(info.Id);
