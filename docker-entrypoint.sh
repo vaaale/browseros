@@ -1,10 +1,9 @@
 #!/bin/sh
 set -e
 
-# Install dependencies if node_modules is absent (e.g. fresh named volume).
-if [ ! -f /app/node_modules/.bin/next ]; then
-  echo "[bos] node_modules not found — running npm install..."
-  npm install
-fi
+# Always run npm install so dependencies stay in sync with the source clone.
+# This is a no-op when package-lock.json hasn't changed (npm uses its cache).
+echo "[bos] running npm install..."
+npm install
 
 exec "$@"

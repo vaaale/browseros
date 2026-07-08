@@ -16,12 +16,6 @@ RUN npm install -g @anthropic-ai/claude-code
 # install Open Code
 RUN npm install -g opencode-ai
 
-# Install dependencies into the image as a warm cache.
-# docker-entrypoint.sh will re-run npm install if the user's per-user
-# named volume is empty (first start), so this layer just avoids a cold
-# install on every container start for users that haven't changed deps.
-RUN npm install
-
 COPY docker-entrypoint.sh /docker-entrypoint.sh
 RUN chmod +x /docker-entrypoint.sh
 
