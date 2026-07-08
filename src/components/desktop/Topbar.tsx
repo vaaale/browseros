@@ -1,9 +1,42 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { LogOut } from "lucide-react";
 import { useOSStore } from "@/store/os-provider";
 import { VersionControls } from "./VersionControls";
 import { IntegrationsBadge } from "./IntegrationsBadge";
+
+function LogoutButton() {
+  const [multiUser, setMultiUser] = useState(false);
+
+  useEffect(() => {
+    fetch("/api/system/session")
+      .then((r) => r.json())
+      .then((d) => {
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        setMultiUser(!!d.multiUser);
+      })
+      .catch(() => {});
+  }, []);
+
+  if (!multiUser) return null;
+
+  const logout = async () => {
+    await fetch("/logout", { method: "POST" }).catch(() => {});
+    window.location.href = "/app/login";
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={logout}
+      title="Log out"
+      className="inline-flex h-6 w-6 items-center justify-center rounded text-white/70 transition-colors hover:bg-white/10 hover:text-white"
+    >
+      <LogOut size={14} strokeWidth={1.75} />
+    </button>
+  );
+}
 
 function Clock() {
   const [now, setNow] = useState<string>("");
@@ -41,6 +74,7 @@ export function Topbar() {
       <div className="flex items-center gap-2 justify-self-end">
         <IntegrationsBadge />
         <Clock />
+        <LogoutButton />
       </div>
     </div>
   );
