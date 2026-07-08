@@ -5,7 +5,6 @@ import { dataDir } from "@/os/data-dir";
 import { writeFileAtomic } from "@/os/atomic-write";
 import type { Agent, AgentType } from "./types";
 import { parseFrontmatter, buildFrontmatter, asString, asList, asBool } from "./markdown";
-import { DEFAULT_PERSONALITY } from "@/lib/agent/config";
 import { DEFAULT_AGENT_ID } from "@/lib/agent/agent-ids";
 import { CAPABILITIES } from "@/lib/agent/capabilities-registry";
 
@@ -15,106 +14,42 @@ const DIR = path.join(dataDir(), "agents");
 // body is prepended to any agent whose useDefaultPrompt is true. Managed via
 // Settings → Agents → Default Agent; filtered out of the normal agent list.
 export const DEFAULT_PROMPT_AGENT_ID = "default_agent";
-const SEED_DEFAULT_AGENT = path.join(process.cwd(), "seed", "default_agent", "AGENT.md");
+
+// Root of the seed directory. Each subfolder contains an AGENT.md that is
+// copied into data/agents/ on first install (additive — never overwrites edits).
+const SEED_DIR = path.join(process.cwd(), "seed", "agents");
 
 function slugify(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || `agent-${Date.now().toString(36)}`;
 }
 
-interface SeedAgent {
-  name: string;
-  description: string;
-  type: AgentType;
-  systemPrompt: string;
-  tools?: string[];
-  skills?: string[];
-  mcp?: string[];
+// ── Seed loading ─────────────────────────────────────────────────────────────
+
+/** Returns all agent ids present in the seed directory. */
+async function listSeedIds(): Promise<string[]> {
+  const entries = await fs.readdir(SEED_DIR, { withFileTypes: true }).catch(() => []);
+  return entries.filter((e) => e.isDirectory()).map((e) => e.name);
 }
 
-const DEFAULTS: SeedAgent[] = [
-  {
-    name: "Assistant",
-    description: "The default BrowserOS assistant personality (used by the main chat).",
-    type: "local",
-    systemPrompt: DEFAULT_PERSONALITY,
-  },
-  {
-    name: "Researcher",
-    description: "Researches topics by fetching web pages and summarizing findings.",
-    type: "local",
-    systemPrompt: "You are a focused research sub-agent. Use web_fetch to gather information, then write a concise, well-sourced summary. Cite URLs you used.",
-  },
-  {
-    name: "File Organizer",
-    description: "Organizes, renames, and tidies files in the virtual file system.",
-    type: "local",
-    systemPrompt: "You are a file organization sub-agent. Inspect the VFS with file_list/file_read and tidy it using file_write/file_mkdir. Explain what you changed.",
-  },
-  {
-    name: "Writer",
-    description: "Drafts and edits documents in the virtual file system.",
-    type: "local",
-    systemPrompt: "You are a writing sub-agent. Produce clear, well-structured documents and save them to the VFS with file_write when asked.",
-  },
-  {
-    name: "Developer",
-    description: "Modifies BrowserOS's own source and builds apps/features. Backed by Claude Code with repo access.",
-    type: "claude",
-    tools: [
-      "dev_git_status",
-      "bos_source_list", "bos_source_read", "bos_source_search",
-      "run_command",
-      "file_list", "file_read", "file_write",
-    ],
-    systemPrompt:
-      "You are the BrowserOS developer sub-agent. You handle two DISTINCT kinds of task — identify which before acting.\n\n" +
-      "A) BUILD A STANDALONE APP (iframe app in a window; task says 'build/create an app'). Do NOT use the source workflow, NEVER install it yourself, and NEVER write data/vfs/Apps or installed-apps.json (deprecated) — the orchestrator installs it. Two shapes: (single static) produce ONE self-contained index.html (inline CSS/JS, no external/CDN/network; same-origin BOS API calls ok) and return ONLY that document. (multi-file project — when asked for a TS/TSX or multi-file app, or told to write into a staging dir) WRITE the project ONLY into the named staging dir: a src/main.tsx (or src/main.ts) entry mounting into #root, plus components/CSS; you MAY import React etc. (provided to the bundler, no npm install); do NOT build/install; report the staging dir path. The orchestrator bundles (esbuild) + installs.\n\n" +
-      "B) MODIFY BROWSEROS'S OWN SOURCE (built-in apps, pages, settings, server logic under src/). Use the workflow below.\n\n" +
-      "BOS is a Next.js (App Router) app: built-in apps live under src/apps/<id>/ (manifest.ts + index.tsx, auto-discovered), shared/app UI under src/components (settings tabs under src/components/apps/settings), server logic and stores under src/lib, OS primitives under src/os, and API routes under src/app/api.\n\n" +
-      "Workflow (path B — source edits only) — follow it every time:\n" +
-      "1. You are ALREADY in an isolated preview worktree on a dedicated branch that the Supervisor provisioned for this change. Do NOT create or switch git branches, do NOT run any git command, and do NOT edit any directory other than your current working directory — the Supervisor commits, builds, and previews your changes for you. Branching or editing the main checkout would break the running version.\n" +
-      "2. Explore with bos_source_list / bos_source_search / bos_source_read to find the exact files to change.\n" +
-      "3. Make focused edits with your native file tools (the Claude/OpenCode harness edits files directly). Edits under src/ hot-reload in dev. Change only what the task needs.\n" +
-      "4. Verify with run_command 'typecheck' (and 'lint'); fix any errors you introduced.\n" +
-      "5. Report exactly what you changed and how to test it.\n\n" +
-      "Never edit secrets, package.json, lockfiles, or build config. If you are running via Claude Code / OpenCode (not the local tools above), use your native file and shell tools ONLY to read and edit files inside your current working directory — never run git, never switch branches, and never touch any other checkout.",
-  },
-  {
-    name: "Planner",
-    description: "Breaks a task into a concrete plan of sub-tasks with acceptance criteria.",
-    type: "local",
-    systemPrompt:
-      "You are a planning sub-agent. Given a task, produce a concise plan as a numbered list of sub-tasks. For EACH sub-task include: **Name**, **Description**, and **Acceptance criteria**. Keep it actionable and ordered by dependency. Do not implement anything — only plan.",
-  },
-  {
-    name: "Build Studio",
-    description:
-      "Authors and refines BOS specifications using spec-kit, and delegates implementation to the Developer sub-agent.",
-    type: "local",
-    // Unified allowlist (016): server tools (delegated runs) + client actions
-    // (as the active personality). Both contexts filter this one list to their own ids.
-    tools: [
-      "spec_list", "spec_read", "spec_write", "spec_edit", "spec_search", "spec_template_read", "spec_template_list",
-      "dev_delegate", "buildstudio_artifact_open", "buildstudio_tree_refresh", "buildstudio_run_tests",
-      "dev_branch_request",
-      "web_view", "file_list", "file_read", "file_write",
-      "agent_delegate", "skill_list", "skill_load", "skill_read_file", "memory_save", "memory_recall", "docs_list", "docs_read",
-    ],
-    skills: ["build-studio", "feature-wizard"],
-    mcp: [],
-    systemPrompt:
-      "You are Build Studio, the BrowserOS spec-authoring agent. You operate the Software-As-A-Prompt workflow: every feature is defined by a specification under specs/ before it is built.\n\n" +
-      'You work through your skills. Load and follow the "Build Studio" skill for spec-kit pipeline steps (constitution, specify, clarify, plan, tasks, analyze, implement, converge), and the "Feature Wizard" skill when guiding a user through building a new feature end-to-end.\n\n' +
-      "Hard rules:\n" +
-      "- Read and write ONLY specification artifacts via your spec tools. Specs live in external stores: paths are STORE-PREFIXED `<storeId>/<rel>` (call spec_list with no path to see the stores, e.g. 'bos-system-specs', 'user-specs'). New specs you author go in the user store; edits commit-on-save to the store's checked-out branch (inside a feature preview: the feature branch, promoted/discarded with the code). You CANNOT and MUST NOT modify BOS source.\n" +
-      "- Build artifact bodies from the spec-kit templates via spec_template_read / spec_template_list (the engine at .specify/templates).\n" +
-      "- For the `implement` step, call dev_delegate with the feature's spec/plan/tasks context and acceptance criteria — never write code yourself.\n" +
-      "- Keep specs and docs in sync; record spec/code drift in the system store's discrepancies.md.\n" +
-      "- The constitution (in the system store at .specify/memory/constitution.md) is special: if a request would require changing it, do NOT blindly comply — confirm it is the right call and explore alternatives with the user first.\n" +
-      "- After the Developer builds a feature, run analyze + converge; if discrepancies are found, ask the user for confirmation before instructing the Developer to fix them.\n" +
-      "- file_write / file_read / file_list operate on the USER'S VFS (for HTML mockups etc.) — never on BOS source.",
-  },
-];
+/** Read and parse one seed AGENT.md, or return undefined if missing. */
+async function readSeedAgent(id: string): Promise<Agent | undefined> {
+  try {
+    const src = await fs.readFile(path.join(SEED_DIR, id, "AGENT.md"), "utf8");
+    return fromMarkdown(id, src);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Copy a seed agent into data/agents/ if the destination doesn't exist yet. */
+async function applySeedAgent(id: string): Promise<void> {
+  const dst = path.join(DIR, id, "AGENT.md");
+  try { await fs.access(dst); return; } catch { /* missing — seed it */ }
+  const src = await readSeedAgent(id);
+  if (!src) return;
+  await fs.mkdir(path.join(DIR, id), { recursive: true });
+  await writeFileAtomic(dst, await fs.readFile(path.join(SEED_DIR, id, "AGENT.md"), "utf8"));
+}
 
 function toMarkdown(a: Agent): string {
   return buildFrontmatter(
@@ -153,35 +88,16 @@ function fromMarkdown(id: string, src: string): Agent {
   };
 }
 
-async function writeSeedAgent(d: SeedAgent): Promise<void> {
-  const id = slugify(d.name);
-  await fs.mkdir(path.join(DIR, id), { recursive: true });
-  await writeFileAtomic(path.join(DIR, id, "AGENT.md"), toMarkdown({ id, ...d }));
-}
-
-// Agents that must exist on EVERY install, including ones upgraded from before
-// the agent shipped. They are back-filled only when missing, never overwriting
-// a user's edits to an existing agent of the same id.
-const ADDITIVE_DEFAULTS = DEFAULTS.filter((d) => d.name === "Build Studio");
 
 let seeded = false;
 async function ensureSeed(): Promise<void> {
   if (seeded) return;
   seeded = true;
   await fs.mkdir(DIR, { recursive: true });
-  const existing = await fs.readdir(DIR).catch(() => [] as string[]);
-  if (existing.length === 0) {
-    for (const d of DEFAULTS) await writeSeedAgent(d);
-  } else {
-    for (const d of ADDITIVE_DEFAULTS) {
-      if (!existing.includes(slugify(d.name))) await writeSeedAgent(d);
-    }
-    // Back-fill Build Studio's unified capability ids on upgraded installs (016):
-    // its allowlist must contain action ids or per-agent action gating can't apply
-    // (the back-compat rule otherwise leaves an action-id-less allowlist fully open).
-    // Union only — never removes a user's customizations.
-    await reconcileBuildStudioTools();
-  }
+  // Apply every seed agent (including default_agent) additively — never
+  // overwrites an existing file so user edits are always preserved.
+  const seedIds = await listSeedIds();
+  for (const id of seedIds) await applySeedAgent(id);
   // Phase B strict-allowlist migration: with `empty allowlist = zero tools`,
   // any legacy agent that relied on "unset ⇒ all" would silently lose every
   // tool on upgrade. Backfill each such agent's allowlist with the FULL set
@@ -189,7 +105,6 @@ async function ensureSeed(): Promise<void> {
   // per-agent marker file makes this idempotent — a user who later saves an
   // explicit empty allowlist will keep it (the marker prevents re-migration).
   await backfillLegacyAllowlists();
-  await ensureDefaultPromptAgent();
 }
 
 // One-time backfill executed at first read after upgrade. Uses a per-agent
@@ -228,41 +143,6 @@ async function backfillLegacyAllowlists(): Promise<void> {
   }
 }
 
-// Copies seed/default_agent/AGENT.md into data/agents/default_agent on first
-// run so the shared prompt is user-editable. Never overwrites an existing file.
-async function ensureDefaultPromptAgent(): Promise<void> {
-  const dst = path.join(DIR, DEFAULT_PROMPT_AGENT_ID, "AGENT.md");
-  try {
-    await fs.access(dst);
-    return;
-  } catch { /* file missing — seed */ }
-  try {
-    const src = await fs.readFile(SEED_DEFAULT_AGENT, "utf8");
-    await fs.mkdir(path.join(DIR, DEFAULT_PROMPT_AGENT_ID), { recursive: true });
-    await writeFileAtomic(dst, src);
-  } catch {
-    // Seed bundle missing (unexpected) — leave dst absent; composeInstructions
-    // falls back to its baked-in defaults so nothing crashes.
-  }
-}
-
-async function reconcileBuildStudioTools(): Promise<void> {
-  const seed = DEFAULTS.find((d) => d.name === "Build Studio");
-  if (!seed) return;
-  const id = slugify(seed.name);
-  const file = path.join(DIR, id, "AGENT.md");
-  let src: string;
-  try {
-    src = await fs.readFile(file, "utf8");
-  } catch {
-    return;
-  }
-  const agent = fromMarkdown(id, src);
-  const have = new Set(agent.tools ?? []);
-  const missing = (seed.tools ?? []).filter((t) => !have.has(t));
-  if (missing.length === 0) return;
-  await writeFileAtomic(file, toMarkdown({ ...agent, tools: [...(agent.tools ?? []), ...missing] }));
-}
 
 export async function listSubAgents(): Promise<Agent[]> {
   await ensureSeed();
