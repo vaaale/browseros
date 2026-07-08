@@ -75,7 +75,7 @@ async function _getOrProvision(username: string, cfg: Config): Promise<void> {
     // Container exists but is stopped — start it.
     updateState(username, { containerId: cid, status: "stopped" }, cfg);
     await startContainer(cid);
-    await waitForHealthy(username, 60_000);
+    await waitForHealthy(username, 300_000);
     updateState(username, { containerId: cid, status: "running", lastActive: Date.now() }, cfg);
     resetIdleTimer(username, cfg);
     return;
