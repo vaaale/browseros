@@ -8,7 +8,7 @@ import { createAuthRouter } from "./routers/auth";
 import { createAdminRouter } from "./routers/admin";
 import { createAccountRouter } from "./routers/account";
 import { createBosProxy } from "./proxy";
-import { initLifecycle, reconcileOnStartup } from "./lifecycle";
+import { initLifecycle, reconcileOnStartup, getAllInstances, stopInstance } from "./lifecycle";
 
 async function main(): Promise<void> {
   const cfg = loadConfig();
@@ -49,6 +49,24 @@ async function main(): Promise<void> {
   reconcileOnStartup(cfg).catch((err: Error) =>
     console.error("[bastion] Reconciliation failed:", err),
   );
+
+  let shuttingDown = false;
+  async function shutdown(signal: string): Promise<void> {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`[bastion] ${signal} received — stopping all user containers…`);
+    server.close();
+    const running = getAllInstances().filter((s) => s.status === "running");
+    await Promise.allSettled(running.map((s) => {
+      console.log(`[bastion] stopping container for ${s.username}`);
+      return stopInstance(s.username);
+    }));
+    console.log("[bastion] all containers stopped, exiting.");
+    process.exit(0);
+  }
+
+  process.on("SIGINT",  () => { void shutdown("SIGINT");  });
+  process.on("SIGTERM", () => { void shutdown("SIGTERM"); });
 }
 
 main().catch((err: Error) => {
