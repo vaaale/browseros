@@ -28,7 +28,7 @@ const STATUS_PAGE = `<!DOCTYPE html>
   .dot:nth-child(3){animation-delay:.4s}
   @keyframes pulse{0%,80%,100%{opacity:.2;transform:scale(.8)}
                    40%{opacity:1;transform:scale(1)}}
-  .log{text-align:left;font-size:12px;font-family:monospace;color:#555;
+  .log{text-align:left;font-size:12px;font-family:monospace;color:#aaa;
        background:#161616;border:1px solid #222;border-radius:6px;
        padding:12px 14px;margin-bottom:16px;min-height:28px;word-break:break-all}
   .error-box{display:none;text-align:left;background:#1a0a0a;border:1px solid #5a2020;
