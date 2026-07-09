@@ -404,7 +404,7 @@ export async function runFastLoop(opts: {
       },
     );
     if (!elig.eligible) {
-      logger().info(LOG, "conversation ineligible", {
+      logger().debug(LOG, "conversation ineligible", {
         conversationId: conv.id,
         reason: elig.reason,
         newTurns: elig.newSlice.length,
@@ -412,19 +412,22 @@ export async function runFastLoop(opts: {
       continue;
     }
     summary.eligible += 1;
-    logger().info(LOG, "reviewing conversation", {
-      conversationId: conv.id,
-      reason: elig.reason,
-      newTurns: elig.newSlice.length,
+    logger().log({
+      level: "info",
+      component: LOG,
+      conversation: conv.id,
+      msg: "reviewing conversation",
+      data: { reason: elig.reason, newTurns: elig.newSlice.length },
     });
 
     try {
       await reviewSlice(conv, elig.newSlice, elig.fromIndex, summary);
       summary.reviewed += 1;
-      logger().info(LOG, "conversation reviewed", { conversationId: conv.id });
+      logger().log({ level: "info", component: LOG, conversation: conv.id, msg: "conversation reviewed" });
     } catch (err) {
       summary.errors.push({ conversationId: conv.id, error: (err as Error).message });
-      logger().error(LOG, "review failed", err, { conversationId: conv.id });
+      const e = err instanceof Error ? { message: err.message, stack: err.stack } : { message: String(err) };
+      logger().log({ level: "error", component: LOG, conversation: conv.id, msg: "review failed", err: e });
     }
   }
 

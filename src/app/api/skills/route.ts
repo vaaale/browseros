@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { listSkills, getSkill, saveSkill, removeSkill, readSkillFile, listSkillFiles, type SkillAsset } from "@/lib/agent/skills/store";
+import { logger } from "@/lib/logging";
 
 export const dynamic = "force-dynamic";
 
@@ -45,8 +46,10 @@ export async function POST(req: NextRequest) {
       references: normalizeAssets(body.references),
       previousId: body.previousId ? String(body.previousId) : undefined,
     });
+    logger().info("skills", body.previousId ? "skill updated" : "skill created", { id: skill.id, name: skill.name });
     return NextResponse.json({ skill });
   } catch (err) {
+    logger().error("skills", "skill save failed", err);
     return NextResponse.json({ error: (err as Error).message }, { status: 400 });
   }
 }
@@ -55,5 +58,6 @@ export async function DELETE(req: NextRequest) {
   const id = new URL(req.url).searchParams.get("id");
   if (!id) return NextResponse.json({ error: "id query param required" }, { status: 400 });
   await removeSkill(id);
+  logger().info("skills", "skill deleted", { id });
   return NextResponse.json({ skills: await listSkills() });
 }

@@ -543,26 +543,36 @@ export async function runSlowLoop(opts: { force?: boolean } = {}): Promise<SlowL
     for (let i = 0; i < pending.length; i++) {
       const ep = pending[i];
       state.currentEpisode = ep;
-      logger().info(LOG, "consolidating episode", {
-        path: ep.path,
-        index: i + 1,
-        total: pending.length,
-        conversationId: ep.meta.conversationId,
+      const convId = ep.meta.conversationId;
+      logger().log({
+        level: "info",
+        component: LOG,
+        conversation: convId,
+        msg: "consolidating episode",
+        data: { path: ep.path, index: i + 1, total: pending.length },
       });
       try {
         await consolidateEpisode(ep, tools);
         // Guarantee progress: if the LLM skipped episode_mark_consolidated, auto-apply it.
         if (!state.markedConsolidated.includes(ep.path)) {
-          logger().warn(LOG, "LLM did not call episode_mark_consolidated — auto-marking", { path: ep.path });
-          await markEpisodePathConsolidated(ep.path).catch((e) =>
-            logger().error(LOG, "auto-mark consolidated failed", e, { path: ep.path }),
-          );
+          logger().log({
+            level: "warn",
+            component: LOG,
+            conversation: convId,
+            msg: "LLM did not call episode_mark_consolidated — auto-marking",
+            data: { path: ep.path },
+          });
+          await markEpisodePathConsolidated(ep.path).catch((e) => {
+            const err = e instanceof Error ? { message: e.message, stack: e.stack } : { message: String(e) };
+            logger().log({ level: "error", component: LOG, conversation: convId, msg: "auto-mark consolidated failed", err, data: { path: ep.path } });
+          });
           state.markedConsolidated.push(ep.path);
         }
         summary.processed += 1;
       } catch (err) {
         summary.errors.push({ episodePath: ep.path, error: (err as Error).message });
-        logger().error(LOG, "episode consolidation failed", err, { path: ep.path });
+        const e = err instanceof Error ? { message: err.message, stack: err.stack } : { message: String(err) };
+        logger().log({ level: "error", component: LOG, conversation: convId, msg: "episode consolidation failed", err: e, data: { path: ep.path } });
       }
     }
     summary.memoryOps = state.memoryOps;

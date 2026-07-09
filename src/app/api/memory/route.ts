@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as vfs from "@/os/vfs";
+import { logger } from "@/lib/logging";
 import { listEntries, removeEntry, type MemoryTarget } from "@/lib/agent/memory/curated";
 import { memoryTool } from "@/lib/agent/memory/tool";
 import {
@@ -64,12 +65,16 @@ export async function POST(req: NextRequest) {
           : "";
       switch (action) {
         case "create":
+          logger().info("memory", "topic created", { slug });
           return NextResponse.json(await createTopic(slug, content));
         case "add":
+          logger().info("memory", "topic entry added", { slug });
           return NextResponse.json(await addTopicEntry(slug, content));
         case "replace":
+          logger().info("memory", "topic entry replaced", { slug });
           return NextResponse.json(await replaceTopicEntry(slug, idOrText, content));
         case "remove":
+          logger().info("memory", "topic entry removed", { slug });
           return NextResponse.json(await removeTopicEntry(slug, idOrText));
         default:
           return NextResponse.json(
@@ -87,6 +92,7 @@ export async function POST(req: NextRequest) {
     });
     return new NextResponse(result, { headers: { "Content-Type": "application/json" } });
   } catch (err) {
+    logger().error("memory", "memory write failed", err);
     return NextResponse.json({ success: false, error: (err as Error).message }, { status: 400 });
   }
 }
@@ -102,10 +108,14 @@ export async function DELETE(req: NextRequest) {
     const slug = (url.searchParams.get("topic") ?? "").trim();
     if (!slug) return NextResponse.json({ success: false, error: "topic query param required" }, { status: 400 });
     const id = (url.searchParams.get("id") ?? "").trim();
-    if (id) return NextResponse.json(await removeTopicEntry(slug, id));
+    if (id) {
+      logger().info("memory", "topic entry removed", { slug, id });
+      return NextResponse.json(await removeTopicEntry(slug, id));
+    }
     // No id → delete the whole topic file.
     try {
       await vfs.remove(topicPath(slug));
+      logger().info("memory", "topic deleted", { slug });
       return NextResponse.json({ success: true, message: `Topic "${slug}" deleted.` });
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
@@ -118,5 +128,6 @@ export async function DELETE(req: NextRequest) {
   const t = asTarget(rawTarget) ?? "memory";
   const text = url.searchParams.get("text") ?? "";
   if (!text) return NextResponse.json({ success: false, error: "text query param required" }, { status: 400 });
+  logger().info("memory", "curated entry removed", { target: t });
   return NextResponse.json(await removeEntry(t, text));
 }

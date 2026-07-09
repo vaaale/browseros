@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { runReview } from "@/lib/agent/review";
 import { runFastLoop } from "@/lib/agent/memory/fast-loop";
+import { logger } from "@/lib/logging";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -20,16 +21,24 @@ export async function POST(req: NextRequest) {
       runAll?: boolean;
     };
     if (body.conversationId) {
+      logger().log({
+        level: "info",
+        component: "memory.fast-loop",
+        conversation: body.conversationId,
+        msg: "manual fast-loop triggered",
+      });
       const summary = await runFastLoop({ onlyConversationId: body.conversationId, waiveIdle: true });
       return NextResponse.json(summary);
     }
     if (body.runAll) {
+      logger().info("memory.fast-loop", "manual fast-loop triggered for all conversations");
       const summary = await runFastLoop({ waiveIdle: true });
       return NextResponse.json(summary);
     }
     if (body.transcript) return NextResponse.json(await runReview(String(body.transcript)));
     return NextResponse.json({ error: "transcript, conversationId, or runAll is required" }, { status: 400 });
   } catch (err) {
+    logger().error("memory.fast-loop", "reflect route failed", err);
     return NextResponse.json({ error: (err as Error).message }, { status: 400 });
   }
 }

@@ -14,6 +14,7 @@ import { buildRuntimeOptions } from "@/lib/agent/runtime";
 import { OpenAIChatAdapter, OpenAIResponsesAdapter } from "@/lib/agent/openai-chat-adapter";
 import { composeInstructions } from "@/lib/agent/instructions";
 import { getConversationActiveFeatureBranch } from "@/lib/agent/conversations-server";
+import { logger } from "@/lib/logging";
 import { withCompaction } from "@/lib/agent/compaction/middleware";
 import { withToolGate } from "@/lib/agent/tool-gate";
 import { getAgent } from "@/lib/agent/subagents/store";
@@ -64,6 +65,17 @@ export async function POST(req: NextRequest) {
   // resolution point never silently falls back to the wrong agent.)
   const agentId = url.searchParams.get("agent") || "";
   const convId = url.searchParams.get("conv") || "";
+
+  if (convId) {
+    logger().log({
+      level: "info",
+      component: "assistant",
+      conversation: convId,
+      msg: "conversation turn",
+      data: { agentId: agentId || undefined },
+    });
+  }
+
   const [runtimeOptions, serviceAdapter] = await Promise.all([
     buildRuntimeOptions(),
     buildAdapter(origin),
