@@ -153,7 +153,7 @@ export async function evaluateSkillCreationGate(
     return `task does not meet complexity threshold — need multi-step body (≥3 steps, ≥200 chars); got ${stepCount} step(s), ${body.length} chars`;
   }
 
-  const occurrences = await countSkillCandidateOccurrences(agentId, taskClass);
+  const occurrences = await countSkillCandidateOccurrences(taskClass);
   if (occurrences < 2) return `first occurrence of task class "${taskClass}" — tag as skill-candidate and wait for recurrence`;
 
   return null;

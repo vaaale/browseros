@@ -2,12 +2,14 @@
 
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { CopilotChat } from "@copilotkit/react-ui";
+import { useCopilotChatInternal } from "@copilotkit/react-core";
 import type { AttachmentUploadResult } from "@copilotkit/shared";
 import "@copilotkit/react-ui/styles.css";
 import { CheckCircle2, Loader2 } from "lucide-react";
 import { CopilotProvider } from "@/components/agent/CopilotProvider";
 import { ChatToolRenderer } from "@/components/agent/ChatToolRenderer";
 import { useChatPersistence } from "@/components/agent/ChatPersistence";
+import { SelfImproveIndicator } from "@/components/agent/SelfImproveIndicator";
 import { ReasoningAssistantMessage } from "@/components/agent/ReasoningAssistantMessage";
 import { markdownRenderers } from "@/components/agent/MarkdownRenderers";
 import { ConversationPanel } from "@/components/apps/assistant/ConversationPanel";
@@ -117,6 +119,22 @@ function AssistantChatInner({
   const [instructions, setInstructions] = useState(FALLBACK_INSTRUCTIONS);
   const uploadAttachment = useUploadAttachment();
 
+  // Thumbs up/down: stamp the assistant message with a feedback attribute and
+  // persist via setMessages → the ChatPersistence save writes it into the
+  // conversation JSON, where the fast loop picks it up (thumbs-down → self_improve,
+  // thumbs-up → skill score nudge).
+  const { agent, setMessages } = useCopilotChatInternal();
+  const stampFeedback = useCallback(
+    (messageId: string, rating: "up" | "down") => {
+      if (!messageId) return;
+      const msgs = ((agent?.messages ?? []) as Array<{ id?: string }>).map((m) =>
+        m.id === messageId ? { ...m, feedback: { rating, at: Date.now() } } : m,
+      );
+      setMessages(msgs as Parameters<typeof setMessages>[0]);
+    },
+    [agent, setMessages],
+  );
+
   // Chat text font + size (Settings → Appearance), exposed as CSS variables the
   // chat's scoped rules (globals.css) and code blocks (MarkdownRenderers) read.
   const settings = useOSStore((s) => s.settings);
@@ -181,12 +199,17 @@ function AssistantChatInner({
               </span>
             </div>
           )}
-          <div className="min-h-0 flex-1">
+          <div className="relative min-h-0 flex-1">
+            <div className="pointer-events-none absolute right-3 top-2 z-10 flex justify-end">
+              <SelfImproveIndicator key={conv.activeId} conversationId={conv.activeId} />
+            </div>
             <CopilotChat
               className="h-full"
               AssistantMessage={ReasoningAssistantMessage}
               markdownTagRenderers={markdownRenderers}
               instructions={instructions}
+              onThumbsUp={(m: { id?: string }) => stampFeedback(m?.id ?? "", "up")}
+              onThumbsDown={(m: { id?: string }) => stampFeedback(m?.id ?? "", "down")}
               labels={{ initial: initialLabel ?? "How can I help?" }}
               attachments={{
                 enabled: true,

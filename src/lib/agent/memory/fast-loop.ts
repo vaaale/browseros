@@ -18,8 +18,14 @@ import {
   type EpisodeUpdate,
 } from "./episodes";
 import { getWatermarkEntry, setWatermark } from "./watermarks";
+import { getFeedbackScanAt, setFeedbackScanAt } from "./feedback-scan";
 import { getMemoryLoopsConfig } from "./config";
+import { nudgeSkillScore } from "@/lib/agent/skills/improve";
+import { startSelfImprove } from "@/lib/agent/self-improve";
 import { DEFAULT_AGENT_ID } from "@/lib/agent/agent-ids";
+
+// Thumbs-up score reinforcement per skill used in a well-rated turn.
+const THUMBS_UP_NUDGE = 0.5;
 
 // Fast loop (spec 021 §Fast loop). Runs as a System JobDefinition every ~2 min
 // through the Unified Job Engine, scans idle conversations, and writes/updates
@@ -92,6 +98,8 @@ interface AnyMessage {
   toolCalls?: unknown[];
   createdAt?: number | string;
   timestamp?: number | string;
+  /** Thumbs up/down feedback stamped onto the message by the chat UI. */
+  feedback?: { rating?: string; at?: number };
 }
 
 interface ConversationFileShape {
@@ -391,12 +399,21 @@ export async function runFastLoop(opts: {
 
   const files = await listChatFiles();
   const now = Date.now();
+  // Per-agent thumbs feedback processing (independent of review eligibility).
+  const scanCache = new Map<string, number>(); // agentId -> lastFeedbackScanAt (loaded once)
+  const advancedScan = new Map<string, number>(); // agentId -> max feedback.at processed this run
   for (const f of files) {
     if (opts.onlyConversationId && f.id !== opts.onlyConversationId) continue;
     summary.scanned += 1;
 
     const conv = await readConversation(f.id, f.path, f.mtimeMs);
     if (!conv || conv.messages.length === 0) continue;
+
+    // Process new thumbs up/down BEFORE the eligibility gate — a fresh rating on
+    // an otherwise-ineligible conversation must still be handled.
+    await processConversationFeedback(conv, scanCache, advancedScan).catch((err) =>
+      logger().log({ level: "error", component: LOG, conversation: conv.id, msg: "feedback processing failed", err: { message: (err as Error).message } }),
+    );
 
     const wm = await getWatermarkEntry(conv.agentId, conv.id);
     const elig = evaluateEligibility(
@@ -437,6 +454,12 @@ export async function runFastLoop(opts: {
     }
   }
 
+  // Advance each agent's feedback watermark to the newest rating processed.
+  for (const [agentId, at] of advancedScan) {
+    const prev = scanCache.get(agentId) ?? 0;
+    if (at > prev) await setFeedbackScanAt(agentId, at).catch(() => undefined);
+  }
+
   summary.ran = true;
   logger().info(LOG, "fast loop run", {
     scanned: summary.scanned,
@@ -446,6 +469,81 @@ export async function runFastLoop(opts: {
     skillsPatched: summary.skillsPatched.length,
   });
   return summary;
+}
+
+// ── Thumbs feedback processing (spec 023 §Feedback) ────────────────────────
+
+function messageSnippet(m: AnyMessage): string {
+  const raw = typeof m.content === "string" ? m.content : safeStringify(m.content);
+  const t = raw.trim();
+  return t.length > 800 ? `${t.slice(0, 800)}…` : t;
+}
+
+/** Skill ids used in the turn that produced message at `idx` (from the preceding
+ *  user message up to and including it). */
+function skillsUsedInTurn(messages: AnyMessage[], idx: number): string[] {
+  let start = idx;
+  while (start > 0 && messages[start - 1]?.role !== "user") start--;
+  return extractSkillsUsed(messages.slice(start, idx + 1));
+}
+
+/** Turn new thumbs-down into a batched self_improve pass and thumbs-up into a
+ *  score nudge for the skills used in that turn. Ratings older than the agent's
+ *  feedback watermark are skipped; the newest processed `at` is recorded so the
+ *  caller can advance the watermark. */
+async function processConversationFeedback(
+  conv: ConversationRef,
+  scanCache: Map<string, number>,
+  advancedScan: Map<string, number>,
+): Promise<void> {
+  let lastScan = scanCache.get(conv.agentId);
+  if (lastScan === undefined) {
+    lastScan = await getFeedbackScanAt(conv.agentId);
+    scanCache.set(conv.agentId, lastScan);
+  }
+
+  const downItems: { text: string }[] = [];
+  const upSkillIds = new Set<string>();
+  let localMax = advancedScan.get(conv.agentId) ?? 0;
+
+  conv.messages.forEach((m, idx) => {
+    const fb = m.feedback;
+    const at = typeof fb?.at === "number" ? fb.at : 0;
+    if (!fb || at <= lastScan!) return;
+    if (at > localMax) localMax = at;
+    if (fb.rating === "down") {
+      downItems.push({ text: messageSnippet(m) });
+    } else if (fb.rating === "up") {
+      for (const id of skillsUsedInTurn(conv.messages, idx)) upSkillIds.add(id);
+    }
+  });
+
+  if (downItems.length > 0) {
+    logger().log({
+      level: "info",
+      component: LOG,
+      conversation: conv.id,
+      msg: "thumbs-down → self_improve",
+      data: { agentId: conv.agentId, count: downItems.length },
+    });
+    startSelfImprove({ agentId: conv.agentId, conversationId: conv.id, trigger: { kind: "thumbs_down", items: downItems } });
+  }
+
+  for (const id of upSkillIds) {
+    const r = await nudgeSkillScore(id, THUMBS_UP_NUDGE).catch(() => null);
+    if (r) {
+      await touchSkill(id, "use").catch(() => undefined);
+      logger().log({
+        level: "info",
+        component: LOG,
+        conversation: conv.id,
+        msg: "thumbs-up → skill score nudged",
+        data: { agentId: conv.agentId, skill: id, score: r.score },
+      });
+    }
+  }
+
+  if (localMax > (advancedScan.get(conv.agentId) ?? 0)) advancedScan.set(conv.agentId, localMax);
 }
 
 async function reviewSlice(

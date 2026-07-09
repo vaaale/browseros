@@ -114,7 +114,7 @@ export function CopilotProvider({
           <DevActions agentId={agentId} />
           <ConfigActions />
           <SkillsActions />
-          <SelfImprovementActions />
+          <SelfImprovementActions agentId={agentId} conversationId={threadId} />
           <DocsActions />
           <GitActions agentId={agentId} />
           <RunCommandActions />

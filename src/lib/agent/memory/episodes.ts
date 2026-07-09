@@ -4,7 +4,7 @@ import * as vfs from "@/os/vfs";
 import { hostPath } from "@/os/vfs";
 import { logger } from "@/lib/logging";
 import { looksLikeInjection } from "./injection";
-import { agentEpisodesDir, agentEpisodesArchiveDir } from "./paths";
+import { agentEpisodesDir, agentEpisodesArchiveDir, MEMORIES_ROOT } from "./paths";
 
 // Per-agent episodic memory (023-per-agent-memory, spec 021 §Episodic store).
 // One markdown file per conversation per day, under
@@ -383,14 +383,30 @@ export async function tagSkillCandidate(vfsPath: string, taskClass: string): Pro
   });
 }
 
-/** Count how many of an agent's episodes carry a matching skill-candidate tag. */
-export async function countSkillCandidateOccurrences(agentId: string, taskClass: string): Promise<number> {
+/** List every agent id that has a memory directory under /Memories. */
+async function listMemoryAgentIds(): Promise<string[]> {
+  try {
+    const entries = await vfs.list(MEMORIES_ROOT);
+    return entries.filter((e) => e.type === "dir").map((e) => e.name);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw err;
+  }
+}
+
+/** Count skill-candidate tag occurrences GLOBALLY, across every agent's episodes.
+ *  Skills are a shared library, so the FR-014 recurrence gate counts across all
+ *  agents rather than per-agent. */
+export async function countSkillCandidateOccurrences(taskClass: string): Promise<number> {
   const slug = taskClass.trim();
   if (!slug) return 0;
-  const all = await listEpisodes(agentId, { includeConsolidated: true });
+  const agentIds = await listMemoryAgentIds();
   let n = 0;
-  for (const ep of all) {
-    if ((ep.meta.skillCandidates ?? []).includes(slug)) n += 1;
+  for (const agentId of agentIds) {
+    const all = await listEpisodes(agentId, { includeConsolidated: true });
+    for (const ep of all) {
+      if ((ep.meta.skillCandidates ?? []).includes(slug)) n += 1;
+    }
   }
   return n;
 }

@@ -294,6 +294,30 @@ export async function summarizeConversation(
   }
 }
 
+// ── Compacted transcript (for self-improvement analysis) ──────────────────
+
+/** Build a size-bounded transcript for a conversation suitable for feeding to an
+ *  analysis LLM (self-improve). Uses the compaction sidecar's summary + verbatim
+ *  tail when available, so a very large conversation doesn't blow the context. */
+export async function buildCompactedTranscript(convId: string): Promise<string> {
+  const client = await loadClientTranscript(convId);
+  if (!client || client.length === 0) return "";
+  const sidecar = await readSidecar(convId);
+  if (sidecar?.summary && sidecar.boundary && sidecar.boundary.count > 0 && sidecar.boundary.count <= client.length) {
+    const tail = client.slice(sidecar.boundary.count);
+    return `## Conversation summary (earlier turns, compacted)\n${sidecar.summary}\n\n## Recent turns (verbatim)\n${renderClientMessages(tail)}`;
+  }
+  // No summary yet — render in full, but cap a very long unsummarized transcript
+  // to its most recent turns so the analysis prompt stays bounded.
+  const full = renderClientMessages(client);
+  const CAP = 24_000;
+  if (full.length <= CAP) return full;
+  const config = await readCompactionConfig();
+  const keep = Math.max(config.keepTailMessages, 20);
+  const tail = client.slice(Math.max(0, client.length - keep));
+  return `## Recent turns (older turns omitted — no summary available)\n${renderClientMessages(tail)}`;
+}
+
 // ── Helpers exported for the middleware / API route ────────────────────────
 
 /** Path a sidecar would live at — used by the GC/opportunistic cleanup path. */

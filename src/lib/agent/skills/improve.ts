@@ -28,9 +28,29 @@ export async function proposeSkillFromConversation(transcript: string): Promise<
   }
 }
 
+/** Lightweight positive/negative reinforcement: nudge a skill's score by `delta`
+ *  (clamped 0-10) without an LLM rewrite. Used for thumbs-up on a turn that used
+ *  the skill — a good response shouldn't trigger a risky rewrite, just raise
+ *  confidence. */
+export async function nudgeSkillScore(idOrName: string, delta: number): Promise<Skill | null> {
+  const skill = await getSkill(idOrName);
+  if (!skill) return null;
+  const score = Math.max(0, Math.min(10, (skill.score ?? 1) + delta));
+  if (score === skill.score) return skill;
+  return saveSkill({
+    name: skill.name,
+    description: skill.description,
+    whenToUse: skill.whenToUse,
+    content: skill.content,
+    scripts: skill.scripts,
+    references: skill.references,
+    score,
+  });
+}
+
 const IMPROVE_SYSTEM =
   "You are a GEPA-style reflective optimizer for agent skills. Given a skill and feedback, produce an improved version. " +
-  'Return ONLY JSON: {"content": string, "description": string, "score": number} where score (0-10) is your confidence the new version is better. ' +
+  'Return ONLY JSON: {"content": string, "description": string, "score": number} where score (0-10) is the QUALITY of the resulting skill after your edit — a fair, absolute rating, not merely confidence that it improved. Lower it when the feedback exposes a real weakness you could only partially address; raise it when the skill is now solid. ' +
   "Keep instructions concrete and concise; incorporate the feedback; preserve what already worked.";
 
 /** GEPA-lite: reflectively improve a skill from feedback (user or self-reflection). */
@@ -44,7 +64,10 @@ export async function improveSkill(idOrName: string, feedback: string): Promise<
     const json = text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1);
     const parsed = JSON.parse(json) as { content?: string; description?: string; score?: number };
     if (!parsed.content) return null;
-    const newScore = Math.max(skill.score ?? 0, typeof parsed.score === "number" ? parsed.score : (skill.score ?? 0));
+    // Score is an absolute quality rating and may move in EITHER direction, so a
+    // criticism-driven improvement can lower a skill's score (no max() clamp).
+    const newScore =
+      typeof parsed.score === "number" ? Math.max(0, Math.min(10, parsed.score)) : (skill.score ?? 0);
     return await saveSkill({
       name: skill.name,
       description: parsed.description || skill.description,

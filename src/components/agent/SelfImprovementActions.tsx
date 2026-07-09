@@ -1,23 +1,36 @@
 "use client";
 
 import { useCopilotAction } from "@copilotkit/react-core";
+import { DEFAULT_AGENT_ID } from "@/lib/agent/agent-ids";
 
-// Self-improvement: run the review after a task (updates memory + skills via a
-// restricted pass), improve a skill from feedback (GEPA), and run the Curator.
-export function SelfImprovementActions() {
+// Self-improvement actions. `self_improve` is the primary path: the agent calls
+// it (with an honest reflection) when the user criticizes HOW a task was done;
+// the conversationId is injected here so the analyzer works from the real
+// conversation and can't be hallucinated. `skill_curate` / `skill_improve`
+// remain as explicit manual tools.
+export function SelfImprovementActions({
+  agentId = DEFAULT_AGENT_ID,
+  conversationId,
+}: {
+  agentId?: string;
+  conversationId?: string;
+}) {
   useCopilotAction({
-    name: "skill_reflect",
+    name: "self_improve",
     description:
-      "Call this after completing a non-trivial task. Provide a transcript/summary of the task and outcome. Runs the self-improvement review — a separate pass that may update persistent memory and patch/create skills based on what was learned.",
-    parameters: [{ name: "transcript", type: "string", description: "Summary of the task, what was done, corrections received, and the outcome", required: true }],
-    handler: async ({ transcript }) => {
-      const res = await fetch("/api/assistant/reflect", {
+      "Call this when the user is dissatisfied with, or questions, HOW you did a task (a criticism of your APPROACH — e.g. 'why did you do X?', 'why not Y?', 'that's not what I asked for', 'you should have…') and it is not neutral curiosity or a one-off whim. Provide an honest, specific reflection: what you did, why the user was dissatisfied, and the better approach. It runs in the BACKGROUND — analyzing this conversation and improving the relevant skill(s) or recording a durable memory item. You do NOT need to name the skill; just reflect honestly and keep helping the user.",
+    parameters: [
+      { name: "reflection", type: "string", description: "Your honest reflection on the criticism and what the better approach would be.", required: true },
+    ],
+    handler: async ({ reflection }) => {
+      if (!conversationId) return "Self-improvement unavailable: no active conversation.";
+      const res = await fetch("/api/assistant/self-improve", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ transcript }),
+        body: JSON.stringify({ agentId, conversationId, reflection }),
       }).then((r) => r.json());
       if (res.error) return `Error: ${res.error}`;
-      return res.ran ? `Review (${res.steps} step(s)): ${res.summary}` : `Review skipped: ${res.summary}`;
+      return "Self-improvement started in the background — I'll keep helping you.";
     },
   });
 
@@ -35,7 +48,7 @@ export function SelfImprovementActions() {
 
   useCopilotAction({
     name: "skill_improve",
-    description: "Improve an existing skill based on feedback (from the user or your own reflection). GEPA-lite reflective optimization.",
+    description: "Improve a SPECIFIC existing skill from explicit feedback (GEPA-lite reflective optimization). For approach criticism from the user, prefer self_improve, which finds the right skill(s) itself.",
     parameters: [
       { name: "skill", type: "string", description: "Skill name or id", required: true },
       { name: "feedback", type: "string", description: "What to improve / what went wrong or well", required: true },

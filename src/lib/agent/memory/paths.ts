@@ -55,3 +55,7 @@ export function agentWatermarksFile(agentId: string): string {
 export function agentLockFile(agentId: string): string {
   return `${agentMemoryRoot(agentId)}/.consolidate.lock`;
 }
+
+export function agentFeedbackScanFile(agentId: string): string {
+  return `${agentMemoryRoot(agentId)}/.feedback-scan.json`;
+}
