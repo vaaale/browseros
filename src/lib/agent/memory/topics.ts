@@ -3,36 +3,32 @@ import * as vfs from "@/os/vfs";
 import { logger } from "@/lib/logging";
 import { looksLikeInjection, firstInjectionMatch } from "./injection";
 import { getMemoryLoopsConfig } from "./config";
+import { agentTopicsDir } from "./paths";
+import { rebuildMemoryIndex } from "./agent-memory";
 
-// Topic-sharded long-term memory (spec 021 FR-012).
-//
-// A topic is a bullet-list of timestamped entries backed by
-// /Documents/Memory/Topics/<slug>.md. The slow loop is the only writer at
+// Per-agent topic-sharded long-term memory (023-per-agent-memory, spec 021
+// FR-012). A topic is a bullet-list of timestamped entries backed by
+// /Memories/<agentId>/Topics/<slug>.md. The slow loop is the only writer at
 // runtime and MUST go through the incremental add/replace/remove helpers here
 // (never a raw file write) — this is the ACE anti-collapse rule from the spec.
 //
-// The file format is intentionally simple markdown so a user can inspect a
-// topic in the Files app without a viewer:
+// Every create/modify/remove rebuilds the agent's MEMORY.md "# Memory index"
+// so the index (slug -> digest) can never drift from what's on disk.
+//
+// File format (so a user can read a topic in the Files app without a viewer):
 //
 //   # <slug>
 //
 //   > <one-line digest>
 //
 //   - [<yyyy-mm-dd>] <entry text>
-//   - [<yyyy-mm-dd>] <entry text>
-//   ...
 
 const LOG = "memory.topics";
-export const TOPICS_DIR = "/Documents/Memory/Topics";
 
 export interface TopicEntry {
-  /** Stable id — first ~8 chars of the entry text hash, or a short user-visible token. */
   id: string;
-  /** Entry text as it appears on disk (leading dash and timestamp are re-added on serialize). */
   text: string;
-  /** ISO date the entry was added or last superseded. */
   timestamp: string;
-  /** If true, the entry text carries an inline "superseded YYYY-MM-DD" marker. */
   superseded?: boolean;
 }
 
@@ -51,16 +47,13 @@ function normalizeSlug(slug: string): string {
   return s;
 }
 
-export function topicPath(slug: string): string {
-  return `${TOPICS_DIR}/${normalizeSlug(slug)}.md`;
+export function topicPath(agentId: string, slug: string): string {
+  return `${agentTopicsDir(agentId)}/${normalizeSlug(slug)}.md`;
 }
 
 // ── Parse / serialize ────────────────────────────────────────────────────
 
 function hashId(text: string): string {
-  // Deterministic short id: FNV-1a 32-bit → 8 hex chars. Good enough for
-  // per-file entry addressing; collisions inside a single topic are impossible
-  // in practice because add/replace ensure uniqueness at write time.
   let h = 0x811c9dc5;
   for (let i = 0; i < text.length; i++) {
     h ^= text.charCodeAt(i);
@@ -121,12 +114,12 @@ function dayStamp(d: Date = new Date()): string {
 
 // ── VFS helpers + per-topic serialization ────────────────────────────────
 
-async function ensureDir(): Promise<void> {
-  await vfs.mkdir(TOPICS_DIR);
+async function ensureDir(agentId: string): Promise<void> {
+  await vfs.mkdir(agentTopicsDir(agentId));
 }
 
-async function readTopicFile(slug: string): Promise<Topic | null> {
-  const path = topicPath(slug);
+async function readTopicFile(agentId: string, slug: string): Promise<Topic | null> {
+  const path = topicPath(agentId, slug);
   try {
     const raw = await vfs.readText(path);
     return parseTopic(normalizeSlug(slug), raw, path);
@@ -136,23 +129,21 @@ async function readTopicFile(slug: string): Promise<Topic | null> {
   }
 }
 
-async function writeTopicFile(topic: Topic): Promise<void> {
-  await ensureDir();
+async function writeTopicFile(agentId: string, topic: Topic): Promise<void> {
+  await ensureDir(agentId);
   await vfs.writeText(topic.path, serializeTopic(topic));
+  // Keep the agent's MEMORY.md index in sync with the topics on disk.
+  await rebuildMemoryIndex(agentId).catch((err) =>
+    logger().warn(LOG, "index rebuild failed", { agentId, err: (err as Error).message }),
+  );
 }
 
 const locks = new Map<string, Promise<unknown>>();
-function withTopicLock<T>(slug: string, fn: () => Promise<T>): Promise<T> {
-  const key = normalizeSlug(slug);
+function withTopicLock<T>(agentId: string, slug: string, fn: () => Promise<T>): Promise<T> {
+  const key = `${agentId}/${normalizeSlug(slug)}`;
   const prev = locks.get(key) ?? Promise.resolve();
   const run = prev.then(fn, fn);
-  locks.set(
-    key,
-    run.then(
-      () => undefined,
-      () => undefined,
-    ),
-  );
+  locks.set(key, run.then(() => undefined, () => undefined));
   return run;
 }
 
@@ -172,10 +163,10 @@ function usageStr(topic: Topic, budget: number): string {
   return `${pct}% — ${c.toLocaleString()}/${budget.toLocaleString()} chars`;
 }
 
-/** List all topic slugs currently on disk. Cheap: one VFS list. */
-export async function listTopicSlugs(): Promise<string[]> {
+/** List all topic slugs currently on disk for an agent. */
+export async function listTopicSlugs(agentId: string): Promise<string[]> {
   try {
-    const entries = await vfs.list(TOPICS_DIR);
+    const entries = await vfs.list(agentTopicsDir(agentId));
     return entries
       .filter((e) => e.type === "file" && e.name.endsWith(".md"))
       .map((e) => e.name.replace(/\.md$/, ""));
@@ -185,59 +176,43 @@ export async function listTopicSlugs(): Promise<string[]> {
   }
 }
 
-/** Read a topic (returns null if it doesn't exist). Cheap read; no lock. */
-export async function getTopic(slug: string): Promise<Topic | null> {
-  return readTopicFile(slug);
+/** Read a topic (null if it doesn't exist). */
+export async function getTopic(agentId: string, slug: string): Promise<Topic | null> {
+  return readTopicFile(agentId, slug);
 }
 
-/** Return a topic, creating an empty one on disk if missing. */
-export async function getOrCreateTopic(slug: string, digest: string = ""): Promise<Topic> {
+/** Create a new topic (fails if it already exists). */
+export async function createTopic(agentId: string, slug: string, digest: string = ""): Promise<TopicOpResult & { topic?: Topic }> {
   const s = normalizeSlug(slug);
-  return withTopicLock(s, async () => {
-    const existing = await readTopicFile(s);
-    if (existing) return existing;
-    const topic: Topic = { slug: s, digest: digest.trim(), entries: [], path: topicPath(s) };
-    await writeTopicFile(topic);
-    logger().info(LOG, "topic created", { slug: s });
-    return topic;
-  });
-}
-
-/** Create a new topic (fails if it already exists). Returns the topic. Used by
- *  the slow loop's `topic_create` tool. */
-export async function createTopic(slug: string, digest: string = ""): Promise<TopicOpResult & { topic?: Topic }> {
-  const s = normalizeSlug(slug);
-  return withTopicLock(s, async () => {
-    if (await readTopicFile(s)) return { success: false, error: `Topic "${s}" already exists.` };
+  return withTopicLock(agentId, s, async () => {
+    if (await readTopicFile(agentId, s)) return { success: false, error: `Topic "${s}" already exists.` };
     if (looksLikeInjection(digest)) {
-      logger().warn(LOG, "topic digest refused", { slug: s, pattern: firstInjectionMatch(digest) });
+      logger().warn(LOG, "topic digest refused", { agentId, slug: s, pattern: firstInjectionMatch(digest) });
       return { success: false, error: "Refused: digest matched a prompt-injection pattern." };
     }
-    const topic: Topic = { slug: s, digest: digest.trim(), entries: [], path: topicPath(s) };
-    await writeTopicFile(topic);
-    logger().info(LOG, "topic created", { slug: s });
+    const topic: Topic = { slug: s, digest: digest.trim(), entries: [], path: topicPath(agentId, s) };
+    await writeTopicFile(agentId, topic);
+    logger().info(LOG, "topic created", { agentId, slug: s });
     return { success: true, message: `Topic "${s}" created.`, topic };
   });
 }
 
-/** Append an entry to a topic. Enforces the per-topic character budget from
- *  the memoryLoops config — rejects the whole op when full (the caller can
- *  supersede an old entry or create a `<slug>-2` shard). */
-export async function addTopicEntry(slug: string, content: string): Promise<TopicOpResult> {
+/** Append an entry to a topic (creating it if missing). Enforces the per-topic budget. */
+export async function addTopicEntry(agentId: string, slug: string, content: string): Promise<TopicOpResult> {
   const s = normalizeSlug(slug);
   const text = content.trim();
   if (!text) return { success: false, error: "content is required." };
   if (looksLikeInjection(text)) {
-    logger().warn(LOG, "entry refused — injection", { slug: s, pattern: firstInjectionMatch(text) });
+    logger().warn(LOG, "entry refused — injection", { agentId, slug: s, pattern: firstInjectionMatch(text) });
     return { success: false, error: "Refused: entry matched a prompt-injection pattern." };
   }
   const { topicBudget } = await getMemoryLoopsConfig();
-  return withTopicLock(s, async () => {
-    const topic = (await readTopicFile(s)) ?? {
+  return withTopicLock(agentId, s, async () => {
+    const topic = (await readTopicFile(agentId, s)) ?? {
       slug: s,
       digest: "",
       entries: [],
-      path: topicPath(s),
+      path: topicPath(agentId, s),
     };
     if (topic.entries.some((e) => e.text === text)) {
       return { success: true, message: "Entry already present; no change.", usage: usageStr(topic, topicBudget) };
@@ -251,15 +226,14 @@ export async function addTopicEntry(slug: string, content: string): Promise<Topi
         usage: usageStr(topic, topicBudget),
       };
     }
-    await writeTopicFile(next);
+    await writeTopicFile(agentId, next);
     return { success: true, message: "Entry added.", entryId: entry.id, usage: usageStr(next, topicBudget) };
   });
 }
 
-/** Supersede an entry: replace its text with `newContent` (marked with a
- *  timestamped "(superseded …)" note in the old entry's history is out of
- *  scope — the slow loop passes the fully-formed replacement text). */
+/** Supersede an entry: replace its text with `newContent`. */
 export async function replaceTopicEntry(
+  agentId: string,
   slug: string,
   entryIdOrSubstring: string,
   newContent: string,
@@ -268,12 +242,12 @@ export async function replaceTopicEntry(
   const text = newContent.trim();
   if (!text) return { success: false, error: "newContent is required (use remove_entry to delete)." };
   if (looksLikeInjection(text)) {
-    logger().warn(LOG, "replace refused — injection", { slug: s, pattern: firstInjectionMatch(text) });
+    logger().warn(LOG, "replace refused — injection", { agentId, slug: s, pattern: firstInjectionMatch(text) });
     return { success: false, error: "Refused: entry matched a prompt-injection pattern." };
   }
   const { topicBudget } = await getMemoryLoopsConfig();
-  return withTopicLock(s, async () => {
-    const topic = await readTopicFile(s);
+  return withTopicLock(agentId, s, async () => {
+    const topic = await readTopicFile(agentId, s);
     if (!topic) return { success: false, error: `Topic "${s}" does not exist.` };
     const idx = findEntryIndex(topic, entryIdOrSubstring);
     if (idx < 0) return { success: false, error: `No matching entry for "${entryIdOrSubstring}".` };
@@ -286,24 +260,42 @@ export async function replaceTopicEntry(
         usage: usageStr(topic, topicBudget),
       };
     }
-    await writeTopicFile(next);
+    await writeTopicFile(agentId, next);
     return { success: true, message: "Entry replaced.", entryId: next.entries[idx].id, usage: usageStr(next, topicBudget) };
   });
 }
 
 /** Remove an entry from a topic. */
-export async function removeTopicEntry(slug: string, entryIdOrSubstring: string): Promise<TopicOpResult> {
+export async function removeTopicEntry(agentId: string, slug: string, entryIdOrSubstring: string): Promise<TopicOpResult> {
   const s = normalizeSlug(slug);
   const { topicBudget } = await getMemoryLoopsConfig();
-  return withTopicLock(s, async () => {
-    const topic = await readTopicFile(s);
+  return withTopicLock(agentId, s, async () => {
+    const topic = await readTopicFile(agentId, s);
     if (!topic) return { success: false, error: `Topic "${s}" does not exist.` };
     const idx = findEntryIndex(topic, entryIdOrSubstring);
     if (idx < 0) return { success: false, error: `No matching entry for "${entryIdOrSubstring}".` };
     const next = { ...topic, entries: topic.entries.slice() };
     next.entries.splice(idx, 1);
-    await writeTopicFile(next);
+    await writeTopicFile(agentId, next);
     return { success: true, message: "Entry removed.", usage: usageStr(next, topicBudget) };
+  });
+}
+
+/** Delete an entire topic file, then rebuild the index. */
+export async function deleteTopic(agentId: string, slug: string): Promise<TopicOpResult> {
+  const s = normalizeSlug(slug);
+  return withTopicLock(agentId, s, async () => {
+    try {
+      await vfs.remove(topicPath(agentId, s));
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        return { success: false, error: `Topic "${s}" not found.` };
+      }
+      throw err;
+    }
+    await rebuildMemoryIndex(agentId).catch(() => undefined);
+    logger().info(LOG, "topic deleted", { agentId, slug: s });
+    return { success: true, message: `Topic "${s}" deleted.` };
   });
 }
 
@@ -312,7 +304,6 @@ function findEntryIndex(topic: Topic, entryIdOrSubstring: string): number {
   if (!needle) return -1;
   const byId = topic.entries.findIndex((e) => e.id === needle);
   if (byId >= 0) return byId;
-  // Fallback: unique substring match on entry text.
   const matches = topic.entries
     .map((e, i) => (e.text.includes(needle) ? i : -1))
     .filter((i) => i >= 0);

@@ -2,7 +2,7 @@ import "server-only";
 import { CORE_POLICY, DEFAULT_PERSONALITY } from "./config";
 import { getAgent, getDefaultPromptAgent } from "./subagents/store";
 import { listSkills } from "./skills/store";
-import { memorySnapshot } from "./memory/curated";
+import { memorySnapshotForAgent } from "./memory/agent-memory";
 import { listMcpServers } from "@/lib/mcp/store";
 import { filterAllowed, isAllowed } from "./capabilities";
 import type { McpServerConfig } from "@/lib/mcp/types";
@@ -29,7 +29,7 @@ export async function composeInstructions(agentId: string): Promise<string> {
     getAgent(id),
     getDefaultPromptAgent(),
     listSkills(),
-    memorySnapshot(),
+    memorySnapshotForAgent(id),
     listMcpServers(),
   ]);
   const personality = agent?.systemPrompt?.trim() || DEFAULT_PERSONALITY;

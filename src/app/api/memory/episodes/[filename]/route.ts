@@ -6,6 +6,7 @@ import {
   type Episode,
   type EpisodeMeta,
 } from "@/lib/agent/memory/episodes";
+import { DEFAULT_AGENT_ID } from "@/lib/agent/agent-ids";
 
 export const dynamic = "force-dynamic";
 
@@ -25,12 +26,13 @@ function toView(ep: Episode): EpisodeView {
 
 // GET /api/memory/episodes/:filename  →  Episode (full content + sections)
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ filename: string }> },
 ) {
   const { filename } = await params;
+  const agentId = new URL(req.url).searchParams.get("agent")?.trim() || DEFAULT_AGENT_ID;
   try {
-    const ep = await getEpisodeByFilename(filename);
+    const ep = await getEpisodeByFilename(agentId, filename);
     if (!ep) return NextResponse.json({ error: `Episode not found: ${filename}` }, { status: 404 });
     return NextResponse.json(toView(ep));
   } catch (err) {
@@ -41,12 +43,13 @@ export async function GET(
 // DELETE /api/memory/episodes/:filename  →  { success: true }
 //   Callers are expected to confirm on the client; the server just deletes.
 export async function DELETE(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ filename: string }> },
 ) {
   const { filename } = await params;
+  const agentId = new URL(req.url).searchParams.get("agent")?.trim() || DEFAULT_AGENT_ID;
   try {
-    const deleted = await deleteEpisodeByFilename(filename);
+    const deleted = await deleteEpisodeByFilename(agentId, filename);
     if (!deleted) return NextResponse.json({ error: `Episode not found: ${filename}` }, { status: 404 });
     return NextResponse.json({ success: true });
   } catch (err) {

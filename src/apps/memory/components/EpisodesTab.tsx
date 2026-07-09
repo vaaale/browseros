@@ -65,7 +65,8 @@ interface DetailState {
 const INITIAL_LIST: ListState = { pending: [], consolidated: [], loading: true, error: null };
 const INITIAL_DETAIL: DetailState = { data: null, loading: false, error: null };
 
-export default function EpisodesTab() {
+export default function EpisodesTab({ agentId }: { agentId: string }) {
+  const agentQ = `agent=${encodeURIComponent(agentId)}`;
   const [list, setList] = useState<ListState>(INITIAL_LIST);
   const [filter, setFilter] = useState<Filter>("all");
   const [selected, setSelected] = useState<string | null>(null);
@@ -77,7 +78,7 @@ export default function EpisodesTab() {
   const loadList = useCallback(async () => {
     setList((prev) => ({ ...prev, loading: true, error: null }));
     try {
-      const res = await fetch("/api/memory/episodes");
+      const res = await fetch(`/api/memory/episodes?${agentQ}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as { pending?: EpisodeMetaView[]; consolidated?: EpisodeMetaView[] };
       setList({
@@ -89,22 +90,28 @@ export default function EpisodesTab() {
     } catch (err) {
       setList({ pending: [], consolidated: [], loading: false, error: (err as Error).message || "Failed to load episodes" });
     }
-  }, []);
+  }, [agentQ]);
 
   const loadDetail = useCallback(async (filename: string) => {
     setDetail({ data: null, loading: true, error: null });
     try {
-      const res = await fetch(`/api/memory/episodes/${encodeURIComponent(filename)}`);
+      const res = await fetch(`/api/memory/episodes/${encodeURIComponent(filename)}?${agentQ}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as EpisodeDetail;
       setDetail({ data, loading: false, error: null });
     } catch (err) {
       setDetail({ data: null, loading: false, error: (err as Error).message || "Failed to load episode" });
     }
-  }, []);
+  }, [agentQ]);
 
+  // Reset selection and reload when the agent (list loader) changes. All state
+  // updates are deferred to avoid cascading renders within the effect body.
   useEffect(() => {
-    const id = setTimeout(() => void loadList(), 0);
+    const id = setTimeout(() => {
+      setSelected(null);
+      setDetail(INITIAL_DETAIL);
+      void loadList();
+    }, 0);
     return () => clearTimeout(id);
   }, [loadList]);
 
@@ -172,7 +179,7 @@ export default function EpisodesTab() {
     setBusy("archive");
     setOpError(null);
     try {
-      const res = await fetch(`/api/memory/episodes/${encodeURIComponent(selected)}/archive`, {
+      const res = await fetch(`/api/memory/episodes/${encodeURIComponent(selected)}/archive?${agentQ}`, {
         method: "POST",
       });
       const data = (await res.json().catch(() => ({}))) as { error?: string };
@@ -188,14 +195,14 @@ export default function EpisodesTab() {
     } finally {
       setBusy(null);
     }
-  }, [loadList, selected]);
+  }, [agentQ, loadList, selected]);
 
   const deleteSelected = useCallback(async () => {
     if (!selected) return;
     setBusy("delete");
     setOpError(null);
     try {
-      const res = await fetch(`/api/memory/episodes/${encodeURIComponent(selected)}`, {
+      const res = await fetch(`/api/memory/episodes/${encodeURIComponent(selected)}?${agentQ}`, {
         method: "DELETE",
       });
       const data = (await res.json().catch(() => ({}))) as { error?: string };
@@ -212,7 +219,7 @@ export default function EpisodesTab() {
     } finally {
       setBusy(null);
     }
-  }, [loadList, selected]);
+  }, [agentQ, loadList, selected]);
 
   return (
     <div className="grid h-full min-h-0 grid-cols-1 gap-3 md:grid-cols-[minmax(0,340px)_minmax(0,1fr)]">

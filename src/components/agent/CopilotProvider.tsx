@@ -110,7 +110,7 @@ export function CopilotProvider({
           <McpActions agentId={agentId} />
           <WebSearchActions webSearchAvailable={webSearchAvailable} />
           <SubAgentActions agentId={agentId} />
-          <MemoryActions />
+          <MemoryActions agentId={agentId} />
           <DevActions agentId={agentId} />
           <ConfigActions />
           <SkillsActions />

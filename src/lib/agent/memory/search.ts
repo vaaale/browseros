@@ -1,12 +1,11 @@
 import "server-only";
 import * as vfs from "@/os/vfs";
-import { EPISODES_DIR } from "./episodes";
-import { TOPICS_DIR } from "./topics";
+import { agentEpisodesDir, agentTopicsDir } from "./paths";
 
-// Memory search (spec 021 FR-017). Substring/word-match ranking over
-// /Documents/Memory/Topics/**.md and /Documents/Memory/Episodes/**.md. No new
-// dependencies. Ranking is isolated behind `rankMatches` so a BM25 (or
-// vector) swap later doesn't touch the public interface.
+// Per-agent memory search (023-per-agent-memory, spec 021 FR-017).
+// Substring/word-match ranking over /Memories/<agentId>/Topics/**.md and
+// /Memories/<agentId>/Episodes/**.md. Ranking is isolated behind `rankMatches`
+// so a BM25 (or vector) swap later doesn't touch the public interface.
 
 export interface SearchResult {
   /** VFS path with an in-file anchor (e.g. #entry-3 or #lessons). */
@@ -27,13 +26,13 @@ interface FileHit {
 
 /** Search topics + episodes for a query. Case-insensitive, whitespace-split
  *  terms; returns up to `maxResults` matches ranked by descending score. */
-export async function memorySearch(query: string, maxResults: number = 10): Promise<SearchResult[]> {
+export async function memorySearch(agentId: string, query: string, maxResults: number = 10): Promise<SearchResult[]> {
   const terms = tokenize(query);
   if (terms.length === 0) return [];
 
   const [topics, episodes] = await Promise.all([
-    collectHits(TOPICS_DIR, terms, "topic"),
-    collectHits(EPISODES_DIR, terms, "episode"),
+    collectHits(agentTopicsDir(agentId), terms, "topic"),
+    collectHits(agentEpisodesDir(agentId), terms, "episode"),
   ]);
   const all = [...topics, ...episodes];
   return rankMatches(all).slice(0, Math.max(1, maxResults));
@@ -142,20 +141,23 @@ async function listMarkdownFiles(vfsDir: string): Promise<string[]> {
 
 import type { LlmTool } from "@/lib/agent/llm";
 
-export const MEMORY_SEARCH_TOOL: LlmTool = {
-  description:
-    "Search long-term memory (topic shards + recent episodes) for entries matching a query. Returns provenance (VFS path with in-file anchor), content, and a relevance score. Case-insensitive substring match; no vector search.",
-  parameters: {
-    type: "object",
-    properties: {
-      query: { type: "string" },
-      maxResults: { type: "number", description: "Default 10." },
+/** Build an agent-scoped memory search tool for local sub-agents / the loops. */
+export function makeMemorySearchTool(agentId: string): LlmTool {
+  return {
+    description:
+      "Search this agent's long-term memory (topic shards + recent episodes) for entries matching a query. Returns provenance (VFS path with in-file anchor), content, and a relevance score. Case-insensitive substring match; no vector search.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: { type: "string" },
+        maxResults: { type: "number", description: "Default 10." },
+      },
+      required: ["query"],
     },
-    required: ["query"],
-  },
-  execute: async (input) => {
-    const query = String(input.query ?? "");
-    const maxResults = typeof input.maxResults === "number" ? input.maxResults : 10;
-    return JSON.stringify(await memorySearch(query, maxResults), null, 2);
-  },
-};
+    execute: async (input) => {
+      const query = String(input.query ?? "");
+      const maxResults = typeof input.maxResults === "number" ? input.maxResults : 10;
+      return JSON.stringify(await memorySearch(agentId, query, maxResults), null, 2);
+    },
+  };
+}

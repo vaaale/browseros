@@ -19,6 +19,7 @@ import {
 } from "./episodes";
 import { getWatermarkEntry, setWatermark } from "./watermarks";
 import { getMemoryLoopsConfig } from "./config";
+import { DEFAULT_AGENT_ID } from "@/lib/agent/agent-ids";
 
 // Fast loop (spec 021 §Fast loop). Runs as a System JobDefinition every ~2 min
 // through the Unified Job Engine, scans idle conversations, and writes/updates
@@ -97,6 +98,7 @@ interface ConversationFileShape {
   id?: string;
   title?: string;
   createdAt?: number;
+  agentId?: string;
   messages?: AnyMessage[];
 }
 
@@ -104,6 +106,8 @@ export interface ConversationRef {
   id: string;
   title: string;
   path: string;
+  /** The agent this conversation belongs to — memory is written to its store. */
+  agentId: string;
   messages: AnyMessage[];
   /** Last-mtime as ms since epoch — used as the idle timer. */
   mtimeMs: number;
@@ -137,10 +141,12 @@ async function readConversation(id: string, path: string, mtimeMs: number): Prom
     const raw = await vfs.readText(path);
     const parsed = JSON.parse(raw) as ConversationFileShape;
     const messages = Array.isArray(parsed.messages) ? parsed.messages : [];
+    const agentId = typeof parsed.agentId === "string" && parsed.agentId.trim() ? parsed.agentId.trim() : DEFAULT_AGENT_ID;
     return {
       id: parsed.id ?? id,
       title: typeof parsed.title === "string" ? parsed.title : "Conversation",
       path,
+      agentId,
       messages,
       mtimeMs,
     };
@@ -392,7 +398,7 @@ export async function runFastLoop(opts: {
     const conv = await readConversation(f.id, f.path, f.mtimeMs);
     if (!conv || conv.messages.length === 0) continue;
 
-    const wm = await getWatermarkEntry(conv.id);
+    const wm = await getWatermarkEntry(conv.agentId, conv.id);
     const elig = evaluateEligibility(
       conv,
       wm?.messageId ?? null,
@@ -417,7 +423,7 @@ export async function runFastLoop(opts: {
       component: LOG,
       conversation: conv.id,
       msg: "reviewing conversation",
-      data: { reason: elig.reason, newTurns: elig.newSlice.length },
+      data: { agentId: conv.agentId, reason: elig.reason, newTurns: elig.newSlice.length },
     });
 
     try {
@@ -448,7 +454,7 @@ async function reviewSlice(
   fromIndex: number,
   summary: FastLoopRunSummary,
 ): Promise<void> {
-  await createEpisode(conv.id);
+  await createEpisode(conv.agentId, conv.id);
 
   const state: FastLoopTools = {
     episodeUpdates: {},
@@ -456,7 +462,7 @@ async function reviewSlice(
     patchedSkills: [],
   };
   const tools = buildFastLoopTools(state);
-  const existing = await getEpisode(conv.id);
+  const existing = await getEpisode(conv.agentId, conv.id);
   const existingBody = existing
     ? Object.entries(existing.sections)
         .filter(([, v]) => v && v.trim())
@@ -490,8 +496,8 @@ async function reviewSlice(
   const updates: EpisodeUpdate = { ...state.episodeUpdates, watermark: lastId };
   if (skillsMechanical.length > 0) updates.skillsUsed = skillsMechanical;
 
-  await updateEpisode(conv.id, updates);
-  await setWatermark(conv.id, lastId);
+  await updateEpisode(conv.agentId, conv.id, updates);
+  await setWatermark(conv.agentId, conv.id, lastId);
 
   summary.episodesUpdated.push(conv.id);
   for (const id of state.patchedSkills) summary.skillsPatched.push(id);

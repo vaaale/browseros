@@ -13,6 +13,7 @@ import {
   Folder,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import { DEFAULT_AGENT_ID } from "@/lib/agent/agent-ids";
 import ProfileTab from "./components/ProfileTab";
 import EpisodesTab from "./components/EpisodesTab";
 import TopicsTab from "./components/TopicsTab";
@@ -41,15 +42,25 @@ interface Stats {
   topics: number;
 }
 
+interface AgentMeta {
+  id: string;
+  name: string;
+  description: string;
+  type: string;
+}
+
 export default function MemoryApp() {
   const [active, setActive] = useState<TabId>("profile");
   const [stats, setStats] = useState<Stats>({ pending: 0, consolidated: 0, topics: 0 });
+  const [agents, setAgents] = useState<AgentMeta[]>([]);
+  const [agentId, setAgentId] = useState<string>(DEFAULT_AGENT_ID);
 
-  const loadStats = useCallback(async () => {
+  const loadStats = useCallback(async (id: string) => {
     try {
+      const q = `?agent=${encodeURIComponent(id)}`;
       const [epRes, topicsRes] = await Promise.all([
-        fetch("/api/memory/episodes"),
-        fetch("/api/memory/topics"),
+        fetch(`/api/memory/episodes${q}`),
+        fetch(`/api/memory/topics${q}`),
       ]);
       const next: Stats = { pending: 0, consolidated: 0, topics: 0 };
       if (epRes.ok) {
@@ -67,10 +78,30 @@ export default function MemoryApp() {
     }
   }, []);
 
+  // Load the agent list once on mount to populate the selector.
   useEffect(() => {
-    const id = setTimeout(() => void loadStats(), 0);
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch("/api/assistant/agent");
+        if (!res.ok) return;
+        const data = (await res.json()) as { agents?: AgentMeta[] };
+        if (cancelled) return;
+        setAgents(Array.isArray(data.agents) ? data.agents : []);
+      } catch {
+        // Best-effort — the selector falls back to the default agent id.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Re-run stats whenever the selected agent changes.
+  useEffect(() => {
+    const id = setTimeout(() => void loadStats(agentId), 0);
     return () => clearTimeout(id);
-  }, [loadStats]);
+  }, [loadStats, agentId]);
 
   const ActiveTab =
     active === "profile"
@@ -89,6 +120,25 @@ export default function MemoryApp() {
         <div className="flex items-center gap-2">
           <Brain className="h-5 w-5 text-violet-300" />
           <h1 className="text-sm font-semibold">Memory</h1>
+          <div className="ml-2 flex items-center gap-1.5">
+            <label htmlFor="memory-agent-select" className="text-[11px] text-white/50">
+              Agent
+            </label>
+            <select
+              id="memory-agent-select"
+              value={agentId}
+              onChange={(e) => setAgentId(e.target.value)}
+              className="rounded-md border border-white/10 bg-black/30 px-2 py-1 text-[11px] text-white outline-none focus:border-white/30"
+              aria-label="Select agent"
+            >
+              {agents.length === 0 && <option value={agentId}>{agentId}</option>}
+              {agents.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name || a.id}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
         <div className="flex items-center gap-2">
           <StatBadge
@@ -135,7 +185,7 @@ export default function MemoryApp() {
       </nav>
 
       <main className="min-h-0 flex-1 overflow-auto p-3">
-        <ActiveTab />
+        <ActiveTab agentId={agentId} />
       </main>
     </div>
   );

@@ -1,7 +1,8 @@
 import "server-only";
 import { runToolLoop, type LlmTool } from "@/lib/agent/llm";
 import { hasCredentials } from "@/lib/agent/provider";
-import { MEMORY_LLM_TOOL } from "@/lib/agent/memory/tool";
+import { makeMemoryTools } from "@/lib/agent/memory/tool";
+import { DEFAULT_AGENT_ID } from "@/lib/agent/agent-ids";
 import { listSkills, getSkill, saveSkill, patchSkill } from "@/lib/agent/skills/store";
 import { touchSkill } from "@/lib/agent/skills/usage";
 
@@ -70,7 +71,7 @@ const SKILL_TOOLS: Record<string, LlmTool> = {
 const REVIEW_SYSTEM = [
   "You are the self-improvement review for the BrowserOS assistant. You are given a completed conversation. Decide what is worth saving so the next session is better. You may ONLY use the memory and skill tools — you take no other action.",
   "",
-  "MEMORY (the `memory` tool): save to target 'user' when the user revealed identity, durable preferences, or expectations; to target 'memory' when a durable environment fact, convention, or lesson emerged.",
+  "MEMORY (memory_save): save durable facts into a topic file — pick a stable lower-kebab topic slug (e.g. 'user-preferences', 'gmail-workflows'). Save when the user revealed identity, durable preferences, or expectations, or when a durable environment fact, convention, or lesson emerged. Use memory_recall to check what is already stored.",
   "",
   "SKILLS: be active — most non-trivial sessions yield at least one skill update. Signals (any one warrants action): the user corrected your style/format/verbosity/approach (frustration is a first-class signal); the user corrected a workflow; a non-trivial technique/fix/workaround emerged; a skill that was used proved wrong or outdated.",
   "Preference order — pick the earliest that fits: (1) skill_patch a skill already relevant to the task; (2) skill_patch an existing umbrella skill; (3) skill_create a new CLASS-LEVEL skill only when nothing covers the class.",
@@ -87,15 +88,15 @@ export interface ReviewResult {
   summary: string;
 }
 
-/** Run the self-improvement review over a conversation transcript. */
-export async function runReview(transcript: string): Promise<ReviewResult> {
+/** Run the self-improvement review over a conversation transcript for an agent. */
+export async function runReview(transcript: string, agentId: string = DEFAULT_AGENT_ID): Promise<ReviewResult> {
   if (!transcript.trim()) return { ran: false, steps: 0, summary: "Empty transcript." };
   if (!(await hasCredentials())) return { ran: false, steps: 0, summary: "No AI provider configured." };
   try {
     const result = await runToolLoop({
       system: REVIEW_SYSTEM,
       prompt: `Conversation to review:\n\n${transcript}`,
-      tools: { memory: MEMORY_LLM_TOOL, ...SKILL_TOOLS },
+      tools: { ...makeMemoryTools(agentId), ...SKILL_TOOLS },
       maxSteps: 12,
     });
     return { ran: true, steps: result.steps, summary: result.text.trim() || "Done." };

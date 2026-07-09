@@ -87,7 +87,8 @@ interface FeedbackMsg {
   text: string;
 }
 
-export default function LoopsTab() {
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export default function LoopsTab({ agentId }: { agentId?: string } = {}) {
   const [schema, setSchema] = useState<ConfigSchemaView | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);

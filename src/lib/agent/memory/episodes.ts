@@ -4,20 +4,15 @@ import * as vfs from "@/os/vfs";
 import { hostPath } from "@/os/vfs";
 import { logger } from "@/lib/logging";
 import { looksLikeInjection } from "./injection";
+import { agentEpisodesDir, agentEpisodesArchiveDir } from "./paths";
 
-// Episodic memory (specs/bos-system-specs/021-memory-loops §Episodic store).
+// Per-agent episodic memory (023-per-agent-memory, spec 021 §Episodic store).
 // One markdown file per conversation per day, under
-// /Documents/Memory/Episodes/<yyyy-mm-dd>-<conversationId>.md. The fast loop is
-// the ONLY writer at runtime; the slow loop reads pending episodes, marks them
-// consolidated, and archives entries older than the archive age.
-//
-// Files are markdown with YAML-ish frontmatter delimited by "---" — the same
-// pattern used by SKILL.md. Writes go through VFS.writeText (atomic temp+rename
-// via writeFileAtomic), so a crash mid-write never leaves a torn file.
+// /Memories/<agentId>/Episodes/<yyyy-mm-dd>-<conversationId>.md. The fast loop
+// is the ONLY writer at runtime; the slow loop reads pending episodes, marks
+// them consolidated, and archives entries older than the archive age.
 
 const LOG = "memory.episodes";
-export const EPISODES_DIR = "/Documents/Memory/Episodes";
-export const EPISODES_ARCHIVE_DIR = "/Documents/Memory/Episodes/.Archive";
 
 const SECTION_HEADERS = [
   "Task & outcome",
@@ -34,20 +29,15 @@ export interface EpisodeMeta {
   conversationId: string;
   createdAt: string;
   updatedAt: string;
-  /** Last reviewed message id (or index-as-string) — advances with each review. */
   watermark: string;
-  /** Ids of skills observed during the reviewed slice. Populated mechanically. */
   skillsUsed: string[];
   status: EpisodeStatus;
-  /** Task-class slugs to feed the slow-loop recurrence gate. */
   skillCandidates?: string[];
 }
 
 export interface Episode {
   meta: EpisodeMeta;
-  /** Section body keyed by section header (in canonical order). Missing == "". */
   sections: Partial<Record<EpisodeSection, string>>;
-  /** VFS path this episode lives at. */
   path: string;
 }
 
@@ -77,14 +67,11 @@ function safeConvId(id: string): string {
   return t;
 }
 
-export function episodePath(conversationId: string, day: string = dayStamp()): string {
-  return `${EPISODES_DIR}/${day}-${safeConvId(conversationId)}.md`;
+export function episodePath(agentId: string, conversationId: string, day: string = dayStamp()): string {
+  return `${agentEpisodesDir(agentId)}/${day}-${safeConvId(conversationId)}.md`;
 }
 
 // ── Frontmatter (de)serialization ─────────────────────────────────────────
-// Kept intentionally minimal — YAML-ish, one key per line, string arrays as
-// JSON literals. This avoids pulling in yaml as a dependency and matches how
-// the skills store does it.
 
 function serializeMeta(meta: EpisodeMeta): string {
   const lines: string[] = [];
@@ -223,62 +210,42 @@ async function exists(vfsPath: string): Promise<boolean> {
   }
 }
 
-/** Serialize writes per (conversationId, day) file so read-modify-write
- *  reviews don't clobber concurrent updates. Node is single-threaded but
- *  awaits interleave. */
 const fileLocks = new Map<string, Promise<unknown>>();
 function withFileLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
   const prev = fileLocks.get(key) ?? Promise.resolve();
   const run = prev.then(fn, fn);
-  fileLocks.set(
-    key,
-    run.then(
-      () => undefined,
-      () => undefined,
-    ),
-  );
+  fileLocks.set(key, run.then(() => undefined, () => undefined));
   return run;
 }
 
 // ── Public API ────────────────────────────────────────────────────────────
 
-/** Create a fresh episode file for a conversation on today's date. Idempotent:
- *  if a file already exists for (convId, today), returns the parsed existing
- *  episode without overwriting anything. */
-export async function createEpisode(conversationId: string): Promise<Episode> {
+/** Create a fresh episode for (agent, conversation, today). Idempotent. */
+export async function createEpisode(agentId: string, conversationId: string): Promise<Episode> {
   safeConvId(conversationId);
-  const path = episodePath(conversationId);
+  const path = episodePath(agentId, conversationId);
   return withFileLock(path, async () => {
     if (await exists(path)) return parseFile(path, conversationId);
     const now = new Date().toISOString();
     const episode: Episode = {
-      meta: {
-        conversationId,
-        createdAt: now,
-        updatedAt: now,
-        watermark: "",
-        status: "pending",
-        skillsUsed: [],
-      },
+      meta: { conversationId, createdAt: now, updatedAt: now, watermark: "", status: "pending", skillsUsed: [] },
       sections: {},
       path,
     };
-    await ensureDir(EPISODES_DIR);
+    await ensureDir(agentEpisodesDir(agentId));
     await vfs.writeText(path, serializeEpisode(episode));
     return episode;
   });
 }
 
-/** Merge an update into today's episode for a conversation. Sections are
- *  replaced when supplied and non-empty; other metadata is merged. Injection
- *  scans reject suspicious content in every supplied section body.
- *  Idempotent per (convId, day). */
+/** Merge an update into today's episode for (agent, conversation). */
 export async function updateEpisode(
+  agentId: string,
   conversationId: string,
   updates: EpisodeUpdate,
 ): Promise<Episode> {
   safeConvId(conversationId);
-  const path = episodePath(conversationId);
+  const path = episodePath(agentId, conversationId);
   return withFileLock(path, async () => {
     const current = (await readEpisodeAt(path, conversationId)) ?? {
       meta: {
@@ -301,10 +268,7 @@ export async function updateEpisode(
         const text = (v ?? "").toString();
         if (!text.trim()) continue;
         if (looksLikeInjection(text)) {
-          logger().warn(LOG, "dropped section — injection pattern", {
-            conversationId,
-            section: header,
-          });
+          logger().warn(LOG, "dropped section — injection pattern", { agentId, conversationId, section: header });
           continue;
         }
         sections[header] = text.trim();
@@ -321,14 +285,11 @@ export async function updateEpisode(
         : {}),
     };
     if (updates.skillCandidates && updates.skillCandidates.length > 0) {
-      nextMeta.skillCandidates = dedupeStrings([
-        ...(current.meta.skillCandidates ?? []),
-        ...updates.skillCandidates,
-      ]);
+      nextMeta.skillCandidates = dedupeStrings([...(current.meta.skillCandidates ?? []), ...updates.skillCandidates]);
     }
 
     const next: Episode = { meta: nextMeta, sections, path };
-    await ensureDir(EPISODES_DIR);
+    await ensureDir(agentEpisodesDir(agentId));
     await vfs.writeText(path, serializeEpisode(next));
     return next;
   });
@@ -362,16 +323,16 @@ async function parseFile(path: string, fallbackConvId: string): Promise<Episode>
   return ep;
 }
 
-/** Read today's episode for a conversation (returns null if none). */
-export async function getEpisode(conversationId: string): Promise<Episode | null> {
-  return readEpisodeAt(episodePath(conversationId), conversationId);
+/** Read today's episode for (agent, conversation) (null if none). */
+export async function getEpisode(agentId: string, conversationId: string): Promise<Episode | null> {
+  return readEpisodeAt(episodePath(agentId, conversationId), conversationId);
 }
 
-/** List every episode file under Episodes/ (excluding .Archive/), oldest-first
- *  by embedded `createdAt`. */
-export async function listEpisodes(opts: { includeConsolidated?: boolean } = {}): Promise<Episode[]> {
-  await ensureDir(EPISODES_DIR);
-  const entries = await vfs.list(EPISODES_DIR).catch(() => []);
+/** List every episode file for an agent (excluding .Archive/), oldest-first. */
+export async function listEpisodes(agentId: string, opts: { includeConsolidated?: boolean } = {}): Promise<Episode[]> {
+  const dir = agentEpisodesDir(agentId);
+  await ensureDir(dir);
+  const entries = await vfs.list(dir).catch(() => []);
   const files = entries.filter((e) => e.type === "file" && e.name.endsWith(".md"));
   const out: Episode[] = [];
   for (const e of files) {
@@ -384,38 +345,19 @@ export async function listEpisodes(opts: { includeConsolidated?: boolean } = {})
   return out;
 }
 
-/** List pending episodes oldest-first. */
-export async function listPendingEpisodes(limit?: number): Promise<Episode[]> {
-  const all = await listEpisodes();
+/** List pending episodes for an agent oldest-first. */
+export async function listPendingEpisodes(agentId: string, limit?: number): Promise<Episode[]> {
+  const all = await listEpisodes(agentId);
   const pending = all.filter((e) => e.meta.status === "pending");
   return limit ? pending.slice(0, Math.max(0, limit)) : pending;
 }
 
-/** Mark today's episode as consolidated. No-op if the episode does not exist. */
-export async function markEpisodeConsolidated(conversationId: string): Promise<Episode | null> {
-  const path = episodePath(conversationId);
-  return withFileLock(path, async () => {
-    const ep = await readEpisodeAt(path, conversationId);
-    if (!ep) return null;
-    const next: Episode = {
-      ...ep,
-      meta: { ...ep.meta, status: "consolidated", updatedAt: new Date().toISOString() },
-    };
-    await vfs.writeText(path, serializeEpisode(next));
-    return next;
-  });
-}
-
-/** Mark any episode file (by VFS path) as consolidated — used by the slow loop
- *  when it processes historical files, not just today's. */
+/** Mark any episode file (by VFS path) as consolidated. */
 export async function markEpisodePathConsolidated(vfsPath: string): Promise<Episode | null> {
   return withFileLock(vfsPath, async () => {
     const ep = await readEpisodeAt(vfsPath, "");
     if (!ep) return null;
-    const next: Episode = {
-      ...ep,
-      meta: { ...ep.meta, status: "consolidated", updatedAt: new Date().toISOString() },
-    };
+    const next: Episode = { ...ep, meta: { ...ep.meta, status: "consolidated", updatedAt: new Date().toISOString() } };
     await vfs.writeText(vfsPath, serializeEpisode(next));
     return next;
   });
@@ -441,12 +383,11 @@ export async function tagSkillCandidate(vfsPath: string, taskClass: string): Pro
   });
 }
 
-/** Count how many episode files carry a matching skill-candidate tag.
- *  Cheap linear scan — episodes are text markdown, dozens per week at most. */
-export async function countSkillCandidateOccurrences(taskClass: string): Promise<number> {
+/** Count how many of an agent's episodes carry a matching skill-candidate tag. */
+export async function countSkillCandidateOccurrences(agentId: string, taskClass: string): Promise<number> {
   const slug = taskClass.trim();
   if (!slug) return 0;
-  const all = await listEpisodes({ includeConsolidated: true });
+  const all = await listEpisodes(agentId, { includeConsolidated: true });
   let n = 0;
   for (const ep of all) {
     if ((ep.meta.skillCandidates ?? []).includes(slug)) n += 1;
@@ -455,9 +396,6 @@ export async function countSkillCandidateOccurrences(taskClass: string): Promise
 }
 
 // ── Filename-based lookup / deletion (spec 023 API) ──────────────────────
-// The Memory app addresses episodes by their on-disk filename
-// (e.g. "2026-07-05-c-mr8dczbxapny.md"). These helpers refuse path traversal
-// and only look under EPISODES_DIR — never .Archive/ or outside it.
 
 const EPISODE_FILENAME_RE = /^[A-Za-z0-9._-]+\.md$/;
 
@@ -470,49 +408,42 @@ function assertEpisodeFilename(name: string): string {
   return trimmed;
 }
 
-/** Read an episode by its on-disk filename. Returns null when missing. */
-export async function getEpisodeByFilename(filename: string): Promise<Episode | null> {
+export async function getEpisodeByFilename(agentId: string, filename: string): Promise<Episode | null> {
   const safe = assertEpisodeFilename(filename);
-  const path = `${EPISODES_DIR}/${safe}`;
-  const fallbackConvId = safe.replace(/\.md$/, "");
-  return readEpisodeAt(path, fallbackConvId);
+  const path = `${agentEpisodesDir(agentId)}/${safe}`;
+  return readEpisodeAt(path, safe.replace(/\.md$/, ""));
 }
 
-/** Delete an episode file by its on-disk filename. Returns true when deleted,
- *  false when the file did not exist. */
-export async function deleteEpisodeByFilename(filename: string): Promise<boolean> {
+export async function deleteEpisodeByFilename(agentId: string, filename: string): Promise<boolean> {
   const safe = assertEpisodeFilename(filename);
-  const path = `${EPISODES_DIR}/${safe}`;
+  const path = `${agentEpisodesDir(agentId)}/${safe}`;
   return withFileLock(path, async () => {
     if (!(await exists(path))) return false;
     await vfs.remove(path);
-    logger().info(LOG, "episode deleted", { filename: safe });
+    logger().info(LOG, "episode deleted", { agentId, filename: safe });
     return true;
   });
 }
 
-/** Move a single episode file to .Archive/ by its on-disk filename. Returns
- *  true when moved, false when the source did not exist. */
-export async function archiveEpisodeByFilename(filename: string): Promise<boolean> {
+export async function archiveEpisodeByFilename(agentId: string, filename: string): Promise<boolean> {
   const safe = assertEpisodeFilename(filename);
-  const src = `${EPISODES_DIR}/${safe}`;
-  const dst = `${EPISODES_ARCHIVE_DIR}/${safe}`;
+  const src = `${agentEpisodesDir(agentId)}/${safe}`;
+  const dst = `${agentEpisodesArchiveDir(agentId)}/${safe}`;
   return withFileLock(src, async () => {
     if (!(await exists(src))) return false;
-    await ensureDir(EPISODES_ARCHIVE_DIR);
+    await ensureDir(agentEpisodesArchiveDir(agentId));
     await vfs.rename(src, dst);
-    logger().info(LOG, "episode archived", { filename: safe });
+    logger().info(LOG, "episode archived", { agentId, filename: safe });
     return true;
   });
 }
 
-/** Move consolidated episodes older than `olderThanDays` into .Archive/. Never
- *  deletes files — a mistaken consolidation can always be recovered by hand. */
-export async function archiveOldEpisodes(olderThanDays: number = 14): Promise<number> {
+/** Move an agent's consolidated episodes older than `olderThanDays` into .Archive/. */
+export async function archiveOldEpisodes(agentId: string, olderThanDays: number = 14): Promise<number> {
   if (!Number.isFinite(olderThanDays) || olderThanDays < 0) return 0;
-  await ensureDir(EPISODES_ARCHIVE_DIR);
+  await ensureDir(agentEpisodesArchiveDir(agentId));
   const cutoff = Date.now() - olderThanDays * 86_400_000;
-  const entries = await vfs.list(EPISODES_DIR).catch(() => []);
+  const entries = await vfs.list(agentEpisodesDir(agentId)).catch(() => []);
   const files = entries.filter((e) => e.type === "file" && e.name.endsWith(".md"));
   let moved = 0;
   for (const e of files) {
@@ -520,14 +451,14 @@ export async function archiveOldEpisodes(olderThanDays: number = 14): Promise<nu
     if (!ep || ep.meta.status !== "consolidated") continue;
     const created = Date.parse(ep.meta.createdAt);
     if (!Number.isFinite(created) || created > cutoff) continue;
-    const target = `${EPISODES_ARCHIVE_DIR}/${e.name}`;
+    const target = `${agentEpisodesArchiveDir(agentId)}/${e.name}`;
     try {
       await vfs.rename(e.path, target);
       moved += 1;
     } catch (err) {
-      logger().warn(LOG, "archive rename failed", { path: e.path, err: (err as Error).message });
+      logger().warn(LOG, "archive rename failed", { agentId, path: e.path, err: (err as Error).message });
     }
   }
-  if (moved > 0) logger().info(LOG, `archived ${moved} episode(s)`, { olderThanDays });
+  if (moved > 0) logger().info(LOG, `archived ${moved} episode(s)`, { agentId, olderThanDays });
   return moved;
 }

@@ -9,8 +9,8 @@ export const maxDuration = 300;
 // on-demand debugging works even when the loop is paused.
 export async function POST(req: Request): Promise<NextResponse> {
   try {
-    const body = (await req.json().catch(() => ({}))) as { force?: boolean };
-    const summary = await runSlowLoop({ force: !!body.force });
+    const body = (await req.json().catch(() => ({}))) as { force?: boolean; agent?: string };
+    const summary = await runSlowLoop({ force: !!body.force, onlyAgentId: body.agent?.trim() || undefined });
     return NextResponse.json(summary);
   } catch (err) {
     return NextResponse.json({ error: (err as Error).message }, { status: 500 });
