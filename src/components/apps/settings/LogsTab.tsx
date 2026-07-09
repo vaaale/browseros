@@ -175,7 +175,7 @@ export function LogsTab() {
   const [level, setLevel] = useState<string>("");
   const [component, setComponent] = useState<string>("");
   const [conversation, setConversation] = useState<string>("");
-  const [records, setRecords] = useState<LogRec[]>([]);
+  const [allRecords, setAllRecords] = useState<LogRec[]>([]);
   const [loading, setLoading] = useState(false);
   const [auto, setAuto] = useState(true);
   const [settings, setSettings] = useState<Settings | null>(null);
@@ -202,32 +202,45 @@ export function LogsTab() {
       if (session) qs.set("session", session);
       if (stream) qs.set("stream", stream);
       if (level) qs.set("level", level);
-      if (component.trim()) qs.set("component", component.trim());
-      if (conversation.trim()) qs.set("conversation", conversation.trim());
+      // component + conversation are filtered client-side for instant response
       qs.set("limit", "500");
       const r = await fetch(`/api/logs?${qs.toString()}`).then((res) => res.json());
-      setRecords(Array.isArray(r.records) ? r.records : []);
+      setAllRecords(Array.isArray(r.records) ? r.records : []);
     } catch {
-      setRecords([]);
+      setAllRecords([]);
     } finally {
       setLoading(false);
     }
-  }, [session, stream, level, component, conversation]);
+  }, [session, stream, level]);
+
+  // Client-side component/conversation filter — instant, no round-trip.
+  const records = useMemo(() => {
+    let out = allRecords;
+    if (component.trim()) {
+      const lc = component.trim().toLowerCase();
+      out = out.filter((r) => r.component?.toLowerCase().includes(lc));
+    }
+    if (conversation.trim()) {
+      const lc = conversation.trim().toLowerCase();
+      out = out.filter((r) => r.conversation?.toLowerCase().includes(lc));
+    }
+    return out;
+  }, [allRecords, component, conversation]);
 
   // Accumulate unique component/conversation values from each load result.
   useEffect(() => {
-    if (records.length === 0) return;
+    if (allRecords.length === 0) return;
     setKnownComponents((prev) => {
       const s = new Set(prev);
-      for (const r of records) if (r.component) s.add(r.component);
+      for (const r of allRecords) if (r.component) s.add(r.component);
       return Array.from(s).sort();
     });
     setKnownConversations((prev) => {
       const s = new Set(prev);
-      for (const r of records) if (r.conversation) s.add(r.conversation);
+      for (const r of allRecords) if (r.conversation) s.add(r.conversation);
       return Array.from(s).sort();
     });
-  }, [records]);
+  }, [allRecords]);
 
   useEffect(() => {
     fetch("/api/config")
@@ -329,7 +342,11 @@ export function LogsTab() {
         <label className="flex items-center gap-1 text-white/60">
           <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} /> auto
         </label>
-        <span className="text-white/30">{records.length} record(s)</span>
+        <span className="text-white/30">
+          {records.length !== allRecords.length
+            ? `${records.length} / ${allRecords.length} record(s)`
+            : `${records.length} record(s)`}
+        </span>
       </div>
 
       {/* Timeline */}
