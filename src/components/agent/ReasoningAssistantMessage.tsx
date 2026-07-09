@@ -17,11 +17,13 @@ function splitReasoning(content: string): { reasoning: string; answer: string; l
     // Still streaming reasoning — no answer yet.
     return { reasoning: content.slice(afterOpen).trim(), answer: "", live: true };
   }
-  return {
-    reasoning: content.slice(afterOpen, close).trim(),
-    answer: content.slice(close + THINK_CLOSE.length).replace(/^\s+/, ""),
-    live: false,
-  };
+  const reasoning = content.slice(afterOpen, close).trim();
+  // Strip all subsequent <think>…</think> blocks from the answer. Persisted messages
+  // can accumulate duplicate blocks when the provider replays full content on each
+  // streaming chunk instead of sending incremental deltas.
+  const rawAnswer = content.slice(close + THINK_CLOSE.length).replace(/^\s+/, "");
+  const answer = rawAnswer.replace(/<think>[\s\S]*?<\/think>/g, "").replace(/^\s+/, "");
+  return { reasoning, answer, live: false };
 }
 
 // Renders an assistant message with the model's reasoning (<think>…</think>) in

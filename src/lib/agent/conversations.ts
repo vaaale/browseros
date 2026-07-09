@@ -2,7 +2,7 @@
 
 import { useSyncExternalStore } from "react";
 import { fsClient } from "@/lib/os-client";
-import { sanitizeLoadedMessages } from "@/lib/agent/conversations-sanitize";
+import { sanitizeLoadedMessages, normalizeMessages } from "@/lib/agent/conversations-sanitize";
 import { DEFAULT_AGENT_ID } from "@/lib/agent/agent-ids";
 
 /**
@@ -346,6 +346,7 @@ export async function saveConversationMessages(id: string, messages: unknown[]):
   const meta = current?.conversations.find((c) => c.id === id);
   const existing = await readConversationFile(id);
   if (messages.length === 0 && existing && existing.messages.length > 0) return;
+  messages = normalizeMessages(messages);
   const file: ConversationFile = {
     id,
     title: meta?.title ?? existing?.title ?? "Conversation",
