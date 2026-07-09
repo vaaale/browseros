@@ -102,11 +102,7 @@ export function CopilotProvider({
   const webSearchAvailable = ready ? loaded!.webSearchAvailable : false;
 
   return (
-    // Key includes threadId so CopilotKit gets a fresh empty instance on every
-    // conversation switch. Without this, setMessages() appends to the old
-    // instance's state, duplicating messages and leaving CopilotKit in a state
-    // that auto-triggers a new agent turn without user input.
-    <CopilotKit key={(agentId ?? "none") + "-" + (threadId ?? "")} runtimeUrl={runtimeUrl} threadId={threadId}>
+    <CopilotKit key={agentId ?? "none"} runtimeUrl={runtimeUrl} threadId={threadId}>
       {ready && (
         <>
           <DiscoveryActions agentId={agentId} />
@@ -127,11 +123,9 @@ export function CopilotProvider({
           <IntegrationActions />
           <ScratchpadActions agentId={agentId} />
           <ToolCallRetry />
+          {children}
         </>
       )}
-      {/* Render children (chat UI) regardless of ready state so switching
-          conversations never shows a blank screen while config re-fetches. */}
-      {children}
     </CopilotKit>
   );
 }
