@@ -46,6 +46,26 @@ export function useChatPersistence(agentId: string = DEFAULT_AGENT_ID): { isLoad
     };
   }, []);
 
+  // Abort any in-flight run when leaving a conversation (threadId change) or on
+  // unmount. The agent instance is shared per-agentId across ALL of its
+  // conversations (CopilotKit's useAgent({ agentId })). A run left mid-flight
+  // (e.g. web_search) when the user switches away keeps the shared agent's run
+  // pipeline active; when it errors it enters RUN_ERROR, so returning to the
+  // conversation throws "Cannot send event type 'RUN_STARTED': the run has
+  // already errored with 'RUN_ERROR'" and the chat is stuck/stale. A clean
+  // abort on leave stops the run before it can poison the shared agent.
+  useEffect(() => {
+    if (!agent) return;
+    const a = agent as unknown as { isRunning?: boolean; abortRun?: () => void };
+    return () => {
+      try {
+        if (a.isRunning && typeof a.abortRun === "function") a.abortRun();
+      } catch {
+        /* best-effort; teardown must never throw */
+      }
+    };
+  }, [agent, threadId]);
+
   useEffect(() => {
     if (!agent || !threadId || threadId === "default") return;
     if (claimedRef.current === threadId) return;
