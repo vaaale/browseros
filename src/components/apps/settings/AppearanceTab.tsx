@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Check } from "lucide-react";
 import { WALLPAPERS, wallpaperToCss } from "@/os/wallpapers";
+import { CHAT_FONTS, CHAT_FONT_SIZES, chatFontCss } from "@/os/chat-fonts";
 import type { OSSettings } from "@/os/types";
 import { useOSStore } from "@/store/os-provider";
 import { settingsClient } from "@/lib/os-client";
@@ -77,6 +78,46 @@ export function AppearanceTab() {
           onChange={(e) => apply({ accent: e.target.value })}
           className="h-8 w-16 cursor-pointer rounded border border-white/10 bg-transparent"
         />
+      </div>
+
+      <div>
+        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-white/50">Chat text</h3>
+        <div className="flex flex-wrap items-center gap-4 text-xs text-white/70">
+          <label className="flex items-center gap-2">
+            <span>Font</span>
+            <select
+              value={settings.chatFont ?? "system"}
+              onChange={(e) => apply({ chatFont: e.target.value })}
+              className="rounded border border-white/10 bg-black/30 px-2 py-1 text-xs text-white outline-none focus:border-white/30"
+            >
+              {CHAT_FONTS.map((f) => (
+                <option key={f.id} value={f.id} className="bg-neutral-900">
+                  {f.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="flex items-center gap-2">
+            <span>Size</span>
+            <select
+              value={settings.chatFontSize ?? 15}
+              onChange={(e) => apply({ chatFontSize: Number(e.target.value) })}
+              className="rounded border border-white/10 bg-black/30 px-2 py-1 text-xs text-white outline-none focus:border-white/30"
+            >
+              {CHAT_FONT_SIZES.map((s) => (
+                <option key={s} value={s} className="bg-neutral-900">
+                  {s}px
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <div
+          className="mt-3 rounded-lg border border-white/10 bg-black/20 p-3 text-white/85"
+          style={{ fontFamily: chatFontCss(settings.chatFont ?? "system"), fontSize: `${settings.chatFontSize ?? 15}px` }}
+        >
+          The quick brown fox jumps over the lazy dog. Code and other blocks are shown with syntax highlighting in a monospace font.
+        </div>
       </div>
 
       <div

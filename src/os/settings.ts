@@ -14,6 +14,8 @@ export const DEFAULT_SETTINGS: OSSettings = {
   wallpaperFit: "cover",
   accent: "#5b8cff",
   theme: "dark",
+  chatFont: "system",
+  chatFontSize: 15,
 };
 
 export async function getSettings(): Promise<OSSettings> {

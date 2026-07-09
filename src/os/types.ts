@@ -43,6 +43,10 @@ export interface OSSettings {
   wallpaperFit: WallpaperFit;
   accent: string;
   theme: "dark" | "light";
+  /** Chat "normal" text font family id (see src/os/chat-fonts.ts). */
+  chatFont: string;
+  /** Chat "normal" text font size in px. Code blocks track this minus 1px. */
+  chatFontSize: number;
 }
 
 export interface WindowBounds {

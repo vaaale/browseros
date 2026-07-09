@@ -16,6 +16,8 @@ import { AgentSelector, ConversationSelector, FeatureBranchSelector } from "@/co
 import { CardScopeProvider } from "@/lib/agent/card-collapse";
 import { useConversations, useActiveConversation, newConversation } from "@/lib/agent/conversations";
 import { DEFAULT_AGENT_ID } from "@/lib/agent/agent-ids";
+import { useOSStore } from "@/store/os-provider";
+import { chatFontCss } from "@/os/chat-fonts";
 
 const FALLBACK_INSTRUCTIONS = "You are the BrowserOS assistant.";
 
@@ -115,6 +117,17 @@ function AssistantChatInner({
   const [instructions, setInstructions] = useState(FALLBACK_INSTRUCTIONS);
   const uploadAttachment = useUploadAttachment();
 
+  // Chat text font + size (Settings → Appearance), exposed as CSS variables the
+  // chat's scoped rules (globals.css) and code blocks (MarkdownRenderers) read.
+  const settings = useOSStore((s) => s.settings);
+  const chatFontSize = settings.chatFontSize ?? 15;
+  const chatStyle: React.CSSProperties = {
+    ...THEME_OVERRIDES,
+    ["--bos-chat-font" as string]: chatFontCss(settings.chatFont ?? "system"),
+    ["--bos-chat-font-size" as string]: `${chatFontSize}px`,
+    ["--bos-chat-code-font-size" as string]: `${Math.max(11, chatFontSize - 1)}px`,
+  };
+
   const useToolbar = Boolean(conversationsInToolbar) && !allGroups;
   const showLeftPanel = showConversations && !useToolbar;
   // Toolbar for allGroups (agent selector) or compact embeds like Build Studio
@@ -141,7 +154,7 @@ function AssistantChatInner({
 
   return (
     <CardScopeProvider scope={resolvedAgentId}>
-      <div className="flex h-full" data-theme="dark" style={THEME_OVERRIDES}>
+      <div className="flex h-full" data-theme="dark" data-bos-chat style={chatStyle}>
         <ChatToolRenderer />
         {showLeftPanel && (
           allGroups

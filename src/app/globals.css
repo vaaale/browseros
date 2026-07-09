@@ -46,3 +46,18 @@ a.copilotKitMarkdownElement {
 a.copilotKitMarkdownElement:hover {
   color: #a8c2ff !important;
 }
+
+/* Chat text font + size (Settings → Appearance). The CSS variables are set on
+   the chat container ([data-bos-chat]) by AssistantChat; these scoped rules
+   apply them. The descendant selectors out-specify CopilotKit's own
+   `.copilotKitMessage { font-size: 1rem }`, so ordering doesn't matter.
+   Headings use `em`, so overriding the message font-size scales them too.
+   Code blocks set their own monospace family, so they're unaffected by the
+   normal-text font. */
+[data-bos-chat] {
+  font-family: var(--bos-chat-font, var(--font-geist-sans), system-ui, sans-serif);
+}
+[data-bos-chat] .copilotKitMessage {
+  font-size: var(--bos-chat-font-size, 1rem);
+  font-family: var(--bos-chat-font, inherit);
+}
