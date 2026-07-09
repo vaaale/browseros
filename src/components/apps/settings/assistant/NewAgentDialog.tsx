@@ -100,7 +100,7 @@ function NewAgentDialogInner({
               onChange={(e) => setSystemPrompt(e.target.value)}
               rows={6}
               spellCheck={false}
-              className="w-full resize-none rounded border border-white/10 bg-black/30 px-2 py-1.5 font-mono text-[11px] leading-relaxed outline-none focus:border-white/30"
+              className="w-full resize-y rounded border border-white/10 bg-black/30 px-2 py-1.5 font-mono text-[11px] leading-relaxed outline-none focus:border-white/30"
             />
           </div>
         </div>
