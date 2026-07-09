@@ -213,6 +213,17 @@ async function transformCall(convId: string, params: { prompt: unknown; maxOutpu
 
   if (finalRest === rest) return {};
   const nextPrompt = [...system, ...finalRest];
+  log("info", convId, "compaction.applied", {
+    estBefore: initialEst,
+    estAfter: estimateTokens(finalRest),
+    budget,
+    clearedResults: applied.stats.clearedResults,
+    summarySpliced: applied.stats.summarySpliced,
+    droppedByBoundary: applied.stats.droppedByBoundary,
+    hardLimitFallback: layerOneEst >= hardLimitTokens,
+    messagesBefore: rest.length,
+    messagesAfter: finalRest.length,
+  });
   return { prompt: nextPrompt };
 }
 
