@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Loader2, RefreshCw, Save } from "lucide-react";
 
 // Logs viewer (specs/017-central-logging). Reads the central timeline via /api/logs
@@ -72,8 +72,17 @@ function AutocompleteInput({ value, allSuggestions, onCommit, placeholder, class
   const [draft, setDraft] = useState(value);
   const [open, setOpen] = useState(false);
 
+  // draftRef mirrors draft state synchronously so onBlur always reads the
+  // current value even when React hasn't flushed the re-render yet.
+  const draftRef = useRef(draft);
+
+  // Set when the user mouses down on a suggestion so onBlur knows not to
+  // override the commit that onMouseDown already performed.
+  const pickingRef = useRef(false);
+
   // Keep draft in sync when the committed value changes from outside.
   useEffect(() => {
+    draftRef.current = value;
     setDraft(value);
   }, [value]);
 
@@ -86,6 +95,7 @@ function AutocompleteInput({ value, allSuggestions, onCommit, placeholder, class
   const commit = useCallback(
     (val: string) => {
       const trimmed = val.trim();
+      draftRef.current = trimmed;
       setDraft(trimmed);
       setOpen(false);
       onCommit(trimmed);
@@ -98,15 +108,17 @@ function AutocompleteInput({ value, allSuggestions, onCommit, placeholder, class
       <input
         value={draft}
         onChange={(e) => {
+          draftRef.current = e.target.value;
           setDraft(e.target.value);
           setOpen(true);
         }}
         onKeyDown={(e) => {
           if (e.key === "Enter") {
             e.preventDefault();
-            commit(draft);
+            commit(draftRef.current);
           }
           if (e.key === "Escape") {
+            draftRef.current = value;
             setDraft(value);
             setOpen(false);
           }
@@ -115,10 +127,15 @@ function AutocompleteInput({ value, allSuggestions, onCommit, placeholder, class
           if (allSuggestions.length > 0) setOpen(true);
         }}
         onBlur={() => {
-          // onMouseDown on a suggestion calls e.preventDefault() which keeps
-          // focus on the input, so this blur only fires for real focus-loss.
+          // If the user clicked a suggestion, onMouseDown already committed.
+          // Skip here to avoid overwriting with a stale draft value.
+          if (pickingRef.current) {
+            pickingRef.current = false;
+            setOpen(false);
+            return;
+          }
           setOpen(false);
-          onCommit(draft.trim());
+          onCommit(draftRef.current.trim());
         }}
         placeholder={placeholder}
         className={className}
@@ -131,9 +148,9 @@ function AutocompleteInput({ value, allSuggestions, onCommit, placeholder, class
           {filtered.map((s) => (
             <div
               key={s}
-              // preventDefault keeps input focused so blur doesn't fire before commit.
               onMouseDown={(e) => {
-                e.preventDefault();
+                e.preventDefault(); // keep input focused
+                pickingRef.current = true;
                 commit(s);
               }}
               className={`cursor-pointer truncate px-2 py-1 text-xs hover:bg-white/10 ${
