@@ -134,26 +134,30 @@ export function AgentDetails({ agent, catalog, onSaved, onDeleted }: AgentDetail
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
         {tab === "instructions" && (
-          <>
-            <DetailsHeader
-              name={agent.name}
-              description={agent.description}
-              onSaveName={(value) => metaSave.save({ name: value })}
-              onSaveDescription={(value) => metaSave.save({ description: value })}
-            />
-            <UseDefaultPromptToggle
-              agentId={agent.id}
-              value={agent.useDefaultPrompt}
-              onChange={(next) => defaultToggleSave.save(next)}
-            />
+          <div className="flex h-full flex-col">
+            <div className="shrink-0">
+              <DetailsHeader
+                name={agent.name}
+                description={agent.description}
+                onSaveName={(value) => metaSave.save({ name: value })}
+                onSaveDescription={(value) => metaSave.save({ description: value })}
+              />
+              <UseDefaultPromptToggle
+                agentId={agent.id}
+                value={agent.useDefaultPrompt}
+                onChange={(next) => defaultToggleSave.save(next)}
+              />
+            </div>
             <InstructionsSection
               systemPrompt={agent.systemPrompt}
               onSave={(value) => promptSave.save(value)}
             />
             {agent.id !== PROTECTED_AGENT_ID && onDeleted && (
-              <DangerZone agentId={agent.id} agentName={agent.name} onDeleted={onDeleted} />
+              <div className="shrink-0">
+                <DangerZone agentId={agent.id} agentName={agent.name} onDeleted={onDeleted} />
+              </div>
             )}
-          </>
+          </div>
         )}
         {tab === "skills" && (
           <SkillsGrid
