@@ -9,6 +9,7 @@ import { CheckCircle2, Loader2 } from "lucide-react";
 import { CopilotProvider } from "@/components/agent/CopilotProvider";
 import { ChatToolRenderer } from "@/components/agent/ChatToolRenderer";
 import { useChatPersistence } from "@/components/agent/ChatPersistence";
+import { AgentActivityIndicator } from "@/components/agent/AgentActivityIndicator";
 import { SelfImproveIndicator } from "@/components/agent/SelfImproveIndicator";
 import { ReasoningAssistantMessage } from "@/components/agent/ReasoningAssistantMessage";
 import { markdownRenderers } from "@/components/agent/MarkdownRenderers";
@@ -200,7 +201,8 @@ function AssistantChatInner({
             </div>
           )}
           <div className="relative min-h-0 flex-1">
-            <div className="pointer-events-none absolute right-3 top-2 z-10 flex justify-end">
+            <div className="pointer-events-none absolute right-3 top-2 z-10 flex flex-col items-end gap-1">
+              <AgentActivityIndicator />
               <SelfImproveIndicator key={conv.activeId} conversationId={conv.activeId} />
             </div>
             <CopilotChat
