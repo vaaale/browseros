@@ -225,13 +225,21 @@ function buildSlowLoopTools(state: SlowLoopState): Record<string, LlmTool> {
         if (topic === "memory" || topic === "user") {
           if (topic === "user") return "Refused: the slow loop MUST NOT write USER.md (per spec).";
           const r = await memoryAdd("memory", content);
-          if (!r.success) return `Error: ${r.error}`;
+          if (!r.success) {
+            logger().error(LOG, "memory_add_entry failed", undefined, { topic, error: r.error });
+            return `Error: ${r.error}`;
+          }
           state.memoryOps += 1;
+          logger().info(LOG, "op: memory_add_entry", { topic: "memory", preview: content.slice(0, 100) });
           return `Added to MEMORY.md (${r.usage}).`;
         }
         const r = await addTopicEntry(topic, content);
-        if (!r.success) return `Error: ${r.error}`;
+        if (!r.success) {
+          logger().error(LOG, "memory_add_entry failed", undefined, { topic, error: r.error });
+          return `Error: ${r.error}`;
+        }
         state.topicOps += 1;
+        logger().info(LOG, "op: memory_add_entry", { topic, preview: content.slice(0, 100) });
         return `Added to topics/${topic} (${r.usage}).`;
       },
     },
@@ -254,14 +262,22 @@ function buildSlowLoopTools(state: SlowLoopState): Record<string, LlmTool> {
         if (!topic || !key || !newContent) return "Error: topic, entryIdOrText, and newContent are required.";
         if (topic === "memory") {
           const r = await memoryReplace("memory", key, newContent);
-          if (!r.success) return `Error: ${r.error}`;
+          if (!r.success) {
+            logger().error(LOG, "memory_replace_entry failed", undefined, { topic, error: r.error });
+            return `Error: ${r.error}`;
+          }
           state.memoryOps += 1;
+          logger().info(LOG, "op: memory_replace_entry", { topic: "memory", key: key.slice(0, 60) });
           return `Replaced in MEMORY.md.`;
         }
         if (topic === "user") return "Refused: the slow loop MUST NOT write USER.md.";
         const r = await replaceTopicEntry(topic, key, newContent);
-        if (!r.success) return `Error: ${r.error}`;
+        if (!r.success) {
+          logger().error(LOG, "memory_replace_entry failed", undefined, { topic, error: r.error });
+          return `Error: ${r.error}`;
+        }
         state.topicOps += 1;
+        logger().info(LOG, "op: memory_replace_entry", { topic, key: key.slice(0, 60) });
         return `Replaced in topics/${topic}.`;
       },
     },
@@ -281,13 +297,21 @@ function buildSlowLoopTools(state: SlowLoopState): Record<string, LlmTool> {
         if (topic === "user") return "Refused: the slow loop MUST NOT write USER.md.";
         if (topic === "memory") {
           const r = await memoryRemove("memory", key);
-          if (!r.success) return `Error: ${r.error}`;
+          if (!r.success) {
+            logger().error(LOG, "memory_remove_entry failed", undefined, { topic, error: r.error });
+            return `Error: ${r.error}`;
+          }
           state.memoryOps += 1;
+          logger().info(LOG, "op: memory_remove_entry", { topic: "memory", key: key.slice(0, 60) });
           return "Removed from MEMORY.md.";
         }
         const r = await removeTopicEntry(topic, key);
-        if (!r.success) return `Error: ${r.error}`;
+        if (!r.success) {
+          logger().error(LOG, "memory_remove_entry failed", undefined, { topic, error: r.error });
+          return `Error: ${r.error}`;
+        }
         state.topicOps += 1;
+        logger().info(LOG, "op: memory_remove_entry", { topic, key: key.slice(0, 60) });
         return `Removed from topics/${topic}.`;
       },
     },
@@ -306,10 +330,14 @@ function buildSlowLoopTools(state: SlowLoopState): Record<string, LlmTool> {
         const digest = String(input.digest ?? "").trim();
         if (!slug || !digest) return "Error: slug and digest are required.";
         const r = await createTopic(slug, digest);
-        if (!r.success) return `Error: ${r.error}`;
+        if (!r.success) {
+          logger().error(LOG, "topic_create failed", undefined, { slug, error: r.error });
+          return `Error: ${r.error}`;
+        }
         // Add the index line to MEMORY.md so live sessions see it.
         await memoryAdd("memory", `- ${slug}: ${digest}`).catch(() => undefined);
         state.topicOps += 1;
+        logger().info(LOG, "op: topic_create", { slug, digest });
         return `Topic "${slug}" created.`;
       },
     },
@@ -335,9 +363,13 @@ function buildSlowLoopTools(state: SlowLoopState): Record<string, LlmTool> {
       },
       execute: async (input) => {
         const r = await patchSkill(String(input.id), String(input.find), String(input.replace));
-        if ("error" in r) return `Error: ${r.error}`;
+        if ("error" in r) {
+          logger().error(LOG, "skill_patch failed", undefined, { id: input.id, error: r.error });
+          return `Error: ${r.error}`;
+        }
         await touchSkill(r.id, "patch");
         state.patchedSkills.push(r.id);
+        logger().info(LOG, "op: skill_patch", { id: r.id, name: r.name });
         return `Patched "${r.name}".`;
       },
     },
@@ -385,6 +417,7 @@ function buildSlowLoopTools(state: SlowLoopState): Record<string, LlmTool> {
         });
         await touchSkill(skill.id, "patch");
         state.createdSkills.push(skill.id);
+        logger().info(LOG, "op: skill_create", { id: skill.id, name: skill.name, taskClass });
         return `Created skill "${skill.name}".`;
       },
     },
@@ -405,6 +438,7 @@ function buildSlowLoopTools(state: SlowLoopState): Record<string, LlmTool> {
         const path = String(input.episodePath ?? state.currentEpisode?.path ?? "").trim();
         if (!path) return "Error: no episode path.";
         await tagSkillCandidate(path, taskClass);
+        logger().info(LOG, "op: episode_tag_candidate", { taskClass, path });
         return `Tagged "${taskClass}" on ${path}.`;
       },
     },
@@ -420,6 +454,7 @@ function buildSlowLoopTools(state: SlowLoopState): Record<string, LlmTool> {
         if (!path) return "Error: no episode path.";
         await markEpisodePathConsolidated(path);
         state.markedConsolidated.push(path);
+        logger().info(LOG, "op: episode_mark_consolidated", { path });
         return `Marked ${path} as consolidated.`;
       },
     },
@@ -458,6 +493,7 @@ export async function runSlowLoop(opts: { force?: boolean } = {}): Promise<SlowL
 
   const cfg = await getMemoryLoopsConfig();
   if (!cfg.slowLoop.enabled && !opts.force) {
+    logger().info(LOG, "slow loop disabled; skipping");
     summary.reason = "slow loop disabled";
     return summary;
   }
@@ -467,11 +503,15 @@ export async function runSlowLoop(opts: { force?: boolean } = {}): Promise<SlowL
     // FR-010 zero-cost exit: never call the LLM when nothing is pending. Still
     // do archive maintenance — that's file movement, not an LLM call.
     summary.archived = await archiveOldEpisodes(cfg.episodeArchiveAgeDays).catch(() => 0);
+    logger().info(LOG, "slow loop: no pending episodes", { archived: summary.archived });
     summary.reason = "no pending episodes";
     return summary;
   }
 
   if (!(await hasCredentials())) {
+    logger().warn(LOG, "slow loop: no AI credentials configured — cannot run", {
+      pending: pending.length,
+    });
     summary.reason = "no AI provider configured";
     return summary;
   }
@@ -481,6 +521,12 @@ export async function runSlowLoop(opts: { force?: boolean } = {}): Promise<SlowL
     summary.reason = "slow-loop lock held by another run";
     return summary;
   }
+
+  logger().info(LOG, "slow loop starting", {
+    pending: pending.length,
+    batchSize: cfg.slowLoop.batchSize,
+    batchId: lock.batchId,
+  });
 
   const state: SlowLoopState = {
     currentEpisode: null,
@@ -494,10 +540,25 @@ export async function runSlowLoop(opts: { force?: boolean } = {}): Promise<SlowL
   const tools = buildSlowLoopTools(state);
 
   try {
-    for (const ep of pending) {
+    for (let i = 0; i < pending.length; i++) {
+      const ep = pending[i];
       state.currentEpisode = ep;
+      logger().info(LOG, "consolidating episode", {
+        path: ep.path,
+        index: i + 1,
+        total: pending.length,
+        conversationId: ep.meta.conversationId,
+      });
       try {
         await consolidateEpisode(ep, tools);
+        // Guarantee progress: if the LLM skipped episode_mark_consolidated, auto-apply it.
+        if (!state.markedConsolidated.includes(ep.path)) {
+          logger().warn(LOG, "LLM did not call episode_mark_consolidated — auto-marking", { path: ep.path });
+          await markEpisodePathConsolidated(ep.path).catch((e) =>
+            logger().error(LOG, "auto-mark consolidated failed", e, { path: ep.path }),
+          );
+          state.markedConsolidated.push(ep.path);
+        }
         summary.processed += 1;
       } catch (err) {
         summary.errors.push({ episodePath: ep.path, error: (err as Error).message });

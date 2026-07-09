@@ -291,12 +291,17 @@ function buildFastLoopTools(state: FastLoopTools): Record<string, LlmTool> {
         }
         if (Object.keys(nextSections).length > 0) {
           state.episodeUpdates.sections = { ...(state.episodeUpdates.sections ?? {}), ...nextSections };
+          logger().info(LOG, "op: episode_write", { sections: Object.keys(nextSections) });
         }
         if (Array.isArray(input.skillCandidates)) {
+          const candidates = input.skillCandidates.filter((s): s is string => typeof s === "string");
           state.episodeUpdates.skillCandidates = [
             ...(state.episodeUpdates.skillCandidates ?? []),
-            ...input.skillCandidates.filter((s): s is string => typeof s === "string"),
+            ...candidates,
           ];
+          if (candidates.length > 0) {
+            logger().info(LOG, "op: episode_write skillCandidates", { candidates });
+          }
         }
         return "ok";
       },
@@ -318,11 +323,18 @@ function buildFastLoopTools(state: FastLoopTools): Record<string, LlmTool> {
         const find = String(input.find ?? "");
         const replace = String(input.replace ?? "");
         const skill = await getSkill(id);
-        if (!skill) return `No skill "${id}".`;
+        if (!skill) {
+          logger().warn(LOG, "op: skill_patch — skill not found", { id });
+          return `No skill "${id}".`;
+        }
         const r = await patchSkill(skill.id, find, replace);
-        if ("error" in r) return `Error: ${r.error}`;
+        if ("error" in r) {
+          logger().error(LOG, "op: skill_patch failed", undefined, { id, error: r.error });
+          return `Error: ${r.error}`;
+        }
         await touchSkill(r.id, "patch");
         state.patchedSkills.push(r.id);
+        logger().info(LOG, "op: skill_patch", { id: r.id, name: r.name });
         return `Patched "${r.name}".`;
       },
     },
@@ -361,10 +373,12 @@ export async function runFastLoop(opts: {
 
   const cfg = await getMemoryLoopsConfig();
   if (!cfg.fastLoop.enabled) {
+    logger().info(LOG, "fast loop disabled; skipping");
     summary.reason = "fast loop disabled";
     return summary;
   }
   if (!(await hasCredentials())) {
+    logger().warn(LOG, "fast loop: no AI credentials configured — cannot run");
     summary.reason = "no AI provider configured";
     return summary;
   }
@@ -389,12 +403,25 @@ export async function runFastLoop(opts: {
         minNewTurns: cfg.fastLoop.minNewTurns,
       },
     );
-    if (!elig.eligible) continue;
+    if (!elig.eligible) {
+      logger().info(LOG, "conversation ineligible", {
+        conversationId: conv.id,
+        reason: elig.reason,
+        newTurns: elig.newSlice.length,
+      });
+      continue;
+    }
     summary.eligible += 1;
+    logger().info(LOG, "reviewing conversation", {
+      conversationId: conv.id,
+      reason: elig.reason,
+      newTurns: elig.newSlice.length,
+    });
 
     try {
       await reviewSlice(conv, elig.newSlice, elig.fromIndex, summary);
       summary.reviewed += 1;
+      logger().info(LOG, "conversation reviewed", { conversationId: conv.id });
     } catch (err) {
       summary.errors.push({ conversationId: conv.id, error: (err as Error).message });
       logger().error(LOG, "review failed", err, { conversationId: conv.id });
