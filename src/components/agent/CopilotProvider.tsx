@@ -60,15 +60,15 @@ export function CopilotProvider({
     : "/api/copilotkit";
 
   // CopilotKit hands out ONE long-lived agent per agentId (useAgent({ agentId })),
-  // shared across every conversation of that agent. That single instance is the
-  // root of two classes of bug: (1) a conversation's history has to be pushed in
-  // imperatively after mount, which races CopilotKit's own threadId-driven init
-  // (empty chat / flaky double-click select); (2) once a run hits RUN_ERROR the
-  // ag-ui pipeline stays poisoned and every later RUN_STARTED throws until a full
-  // reload. We give each conversation its own agent lifecycle by remounting the
-  // provider on threadId — the thread is fixed for the mount's life (one load, no
-  // race) and a poisoned run can't leak across conversations. `recoveryGen` bumps
-  // to force a fresh, un-poisoned agent when a run errors in place.
+  // shared across every conversation. We deliberately do NOT remount on threadId:
+  // CopilotKit owns the runtime connection at this boundary, so keying on threadId
+  // would reconnect on every conversation switch (janky) and churn the agent
+  // through its provisional→connected swap each time. Instead ChatPersistence
+  // reseeds the message list on threadId change (and across that agent swap), and
+  // switching aborts any in-flight run. The one case that genuinely needs a fresh
+  // agent is RUN_ERROR: the ag-ui pipeline stays poisoned and every later
+  // RUN_STARTED throws until reload. `recoveryGen` bumps on a failed run to remount
+  // with a clean, un-poisoned agent seeded from the just-flushed history.
   const [recoveryGen, setRecoveryGen] = useState(0);
   const lastRecoverRef = useRef(0);
   const recover = useCallback(() => {
@@ -124,7 +124,7 @@ export function CopilotProvider({
 
   return (
     <CopilotKit
-      key={`${agentId ?? "none"}::${threadId || "none"}::${recoveryGen}`}
+      key={`${agentId ?? "none"}::${recoveryGen}`}
       runtimeUrl={runtimeUrl}
       threadId={threadId}
     >

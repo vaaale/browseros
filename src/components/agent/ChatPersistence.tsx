@@ -14,13 +14,12 @@ import { DEFAULT_AGENT_ID } from "@/lib/agent/agent-ids";
  * /Documents/Chats/<threadId>.json.
  *
  * CopilotKit 1.61 renders from the AG-UI `agent.messages` store, NOT the legacy
- * `useCopilotMessagesContext`. So we read/write that store directly. The provider
- * remounts per conversation (CopilotProvider keys CopilotKit on threadId), so the
- * threadId here is fixed for this mount's life: we load the file once and seed the
- * fresh agent via setMessages (no post-mount thread-switch race), then debounce-
- * save on every agent message change. `agent.messages` are plain AG-UI objects
- * ({ id, role, content, toolCalls? }) and serialize as-is, so no class
- * rehydration is needed on load.
+ * `useCopilotMessagesContext`. So we read/write that store directly: on thread
+ * change (or when CopilotKit swaps the provisional agent for the connected one)
+ * we load the file and seed it into the agent via setMessages; on every agent
+ * message change we debounce-save the agent's messages. `agent.messages` are
+ * plain AG-UI objects ({ id, role, content, toolCalls? }) and serialize as-is,
+ * so no class rehydration is needed on load.
  *
  * Exposed as a hook (not a component) so the host calls one
  * useCopilotChatInternal() instead of adding another chat-agent subscriber.
@@ -32,7 +31,12 @@ export function useChatPersistence(agentId: string = DEFAULT_AGENT_ID): { isLoad
   const threadId = useActiveConversationId(agentId);
   const { agent, setMessages, isLoading } = useCopilotChatInternal();
 
-  const claimedRef = useRef<string | null>(null);
+  // What we last seeded, keyed by BOTH the agent instance and the threadId.
+  // CopilotKit returns a provisional agent while the runtime is (re)connecting,
+  // then swaps in the real connected instance — a different object. Keying the
+  // seed only on threadId (the old bug) seeds the throwaway provisional agent and
+  // then skips the real one, leaving the chat empty until an unrelated switch.
+  const seededRef = useRef<{ agent: unknown; threadId: string } | null>(null);
   const loadedForRef = useRef<string | null>(null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const setMessagesRef = useRef(setMessages);
@@ -48,11 +52,11 @@ export function useChatPersistence(agentId: string = DEFAULT_AGENT_ID): { isLoad
     };
   }, []);
 
-  // Abort any in-flight run on unmount. The provider now remounts per
-  // conversation (CopilotProvider keys CopilotKit on threadId), so switching
-  // away tears down this whole subtree and disposes the agent — this abort is
-  // the hygiene step that stops a dangling stream (e.g. mid web_search) before
-  // the instance is discarded, rather than leaving a fetch running detached.
+  // Abort any in-flight run when leaving a conversation (threadId change) or on
+  // unmount. The agent is shared per-agentId across ALL of its conversations, so
+  // a run left mid-flight (e.g. web_search) when the user switches away would
+  // otherwise keep streaming into the shared agent; the cleanup here stops it
+  // before we reseed for the next conversation.
   useEffect(() => {
     if (!agent) return;
     const a = agent as unknown as { isRunning?: boolean; abortRun?: () => void };
@@ -67,12 +71,14 @@ export function useChatPersistence(agentId: string = DEFAULT_AGENT_ID): { isLoad
 
   useEffect(() => {
     if (!agent || !threadId || threadId === "default") return;
-    if (claimedRef.current === threadId) return;
-    claimedRef.current = threadId;
+    const seeded = seededRef.current;
+    if (seeded && seeded.agent === agent && seeded.threadId === threadId) return;
+    seededRef.current = { agent, threadId };
     loadedForRef.current = null;
     void (async () => {
       const raw = await loadConversationMessages(threadId);
-      if (!mountedRef.current || claimedRef.current !== threadId) return;
+      const cur = seededRef.current;
+      if (!mountedRef.current || !cur || cur.agent !== agent || cur.threadId !== threadId) return;
       setMessagesRef.current(raw as Parameters<typeof setMessages>[0]);
       loadedForRef.current = threadId;
     })();
