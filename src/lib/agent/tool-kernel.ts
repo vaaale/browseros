@@ -116,16 +116,27 @@ function notifyActiveRuns(): void {
 let stopRequested: string | null = null;
 
 /** User-initiated stop (Stop button, conversation switch): aborts every
- *  in-flight handler AND flags queued/future handlers to settle immediately
- *  until the next commanded run. Returns how many in-flight runs were aborted. */
+ *  in-flight handler AND flags queued/future handlers to settle immediately.
+ *  The flag survives until the user explicitly sends a new message — runs,
+ *  reconnects, or recovery cascades never clear it, so a stopped agent stays
+ *  stopped. Returns how many in-flight runs were aborted. */
 export function signalUserStop(detail = "aborted by user"): number {
   stopRequested = detail;
-  return abortActiveToolRuns(detail);
+  const aborted = abortActiveToolRuns(detail);
+  console.info(`[BOS kernel] user stop: "${detail}" (${aborted} in-flight handler(s) aborted)`);
+  return aborted;
 }
 
-/** Clears the user-stop flag (a new commanded run is starting). */
+/** Clears the user-stop flag. ONLY an explicit user command (send) may call
+ *  this — see ChatInput.send. */
 export function clearUserStop(): void {
+  if (stopRequested !== null) console.info("[BOS kernel] user stop cleared (new user command)");
   stopRequested = null;
+}
+
+/** True while a user stop is in force (no run or tool may proceed). */
+export function isUserStopActive(): boolean {
+  return stopRequested !== null;
 }
 
 export interface RunToolOpts {
@@ -150,7 +161,10 @@ export async function runToolHandler(
   opts: RunToolOpts = {},
 ): Promise<string> {
   // A user stop covers the WHOLE turn: queued handlers settle before starting.
-  if (stopRequested) return toolError(tool, stopRequested);
+  if (stopRequested) {
+    console.info(`[BOS kernel] tool "${tool}" settled without executing (stop active)`);
+    return toolError(tool, stopRequested);
+  }
   const timeoutMs = opts.timeoutMs ?? getToolTimeoutMs();
   const ctl = new AbortController();
   // Why the abort happened, recorded BEFORE ctl.abort() so the race rejection

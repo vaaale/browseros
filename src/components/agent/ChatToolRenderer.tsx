@@ -104,7 +104,10 @@ function EventCard({ name, status, args, result }: { name: string; status: strin
       </button>
 
       <div className={`grid transition-[grid-template-rows] duration-200 ease-out ${open ? "grid-rows-[1fr]" : "grid-rows-[0fr]"}`}>
-        <div className={`min-h-0 overflow-hidden transition-opacity duration-150 ease-out ${open ? "opacity-100" : "opacity-0"}`}>
+        {/* `invisible` when closed: the body stays in the DOM for the height
+            animation, but its content must be genuinely imperceivable (and
+            excluded from visibility queries / a11y) while collapsed. */}
+        <div className={`min-h-0 overflow-hidden transition-opacity duration-150 ease-out ${open ? "opacity-100" : "invisible opacity-0"}`}>
           <div className="max-h-64 overflow-auto overscroll-contain px-2 pb-2">
             {argText && argText !== "{}" && (
               <section>

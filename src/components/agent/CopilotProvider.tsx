@@ -22,7 +22,7 @@ import { ToolCallRetry } from "./ToolCallRetry";
 import { DiscoveryActions } from "./DiscoveryActions";
 import { useActiveConversationId, saveConversationMessages } from "@/lib/agent/conversations";
 import { DEFAULT_AGENT_ID } from "@/lib/agent/agent-ids";
-import { clearUserStop } from "@/lib/agent/tool-kernel";
+import { isUserStopActive } from "@/lib/agent/tool-kernel";
 
 interface ProviderCfg {
   provider?: string;
@@ -158,19 +158,33 @@ export function CopilotProvider({
   );
 }
 
-// Clears the kernel's user-stop flag when a NEW run initializes. A run only
-// initializes on an explicit command (send, regenerate) or as the follow-up of
-// an unstopped turn — after a user stop the follow-up is already suppressed by
-// CopilotKit's own run controller (stopGeneration → patched abortRun), so any
-// run reaching this point is commanded and must not inherit stop suppression.
+// Enforces "stop means STOP until the next send": while the kernel's user-stop
+// flag is active, ANY run that initializes on this agent is aborted at the
+// gate. This is deliberately belt-and-braces on top of CopilotKit's own
+// follow-up suppression (stopGeneration → patched abortRun → run controller):
+// if that suppression fails for any reason — model retry turns, suggestion
+// runs, reconnect replays, recovery remounts — the run still dies here. The
+// flag is cleared ONLY by an explicit user send (ChatInput), never by run
+// lifecycle events, so no cascade can silently resume a stopped agent.
 function RunStopGuard() {
   const { agent } = useCopilotChatInternal();
   useEffect(() => {
     const a = agent as unknown as {
+      abortRun?: () => void;
       subscribe?: (s: { onRunInitialized?: () => void }) => { unsubscribe: () => void };
     } | undefined;
     if (!a || typeof a.subscribe !== "function") return;
-    const sub = a.subscribe({ onRunInitialized: () => clearUserStop() });
+    const sub = a.subscribe({
+      onRunInitialized: () => {
+        if (!isUserStopActive()) return;
+        console.info("[BOS kernel] run initialized while stop active — aborting it");
+        try {
+          a.abortRun?.();
+        } catch {
+          /* best-effort; the tool gate still blocks its handlers */
+        }
+      },
+    });
     return () => sub.unsubscribe();
   }, [agent]);
   return null;
@@ -200,6 +214,13 @@ function RunErrorRecovery({ threadId, onRecover }: { threadId: string; onRecover
     let handled = false;
     const onFailure = () => {
       if (handled) return;
+      // A user stop is not a failure: aborting a run can surface as a
+      // failed-run event, and remount-recovery here would cascade (fresh core,
+      // reconnect, replay) while the user explicitly wants the agent halted.
+      if (isUserStopActive()) {
+        console.info("[BOS kernel] run failed while stop active — skipping recovery remount");
+        return;
+      }
       handled = true;
       void (async () => {
         try {

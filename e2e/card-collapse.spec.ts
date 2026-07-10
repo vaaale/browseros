@@ -94,19 +94,23 @@ test.describe("Assistant card collapse", () => {
     // The final answer is always shown.
     await expect(page.getByText(TOOL_ANSWER)).toBeVisible();
 
-    // The tool card header is present; collapsed because the answer is newer, so
-    // the tool body (its args) is not rendered.
+    // The tool card header is present; collapsed because the answer is newer.
+    // The body stays in the DOM (animated CSS collapse) but must be hidden —
+    // assert visibility, not DOM absence.
     const header = page.getByRole("button", { name: /readDoc/ });
     await expect(header).toBeVisible();
-    await expect(page.getByText("DOCREF_9931")).toHaveCount(0);
+    await expect(header).toHaveAttribute("aria-expanded", "false");
+    await expect(page.getByText("DOCREF_9931")).toBeHidden();
 
     // Clicking the header expands it; clicking again collapses it. (Restoring a
     // conversation must not start an agent run; if it does, the tool-call view
     // remounts continuously and the header can't be clicked.)
     await header.click();
+    await expect(header).toHaveAttribute("aria-expanded", "true");
     await expect(page.getByText("DOCREF_9931")).toBeVisible();
     await header.click();
-    await expect(page.getByText("DOCREF_9931")).toHaveCount(0);
+    await expect(header).toHaveAttribute("aria-expanded", "false");
+    await expect(page.getByText("DOCREF_9931")).toBeHidden();
 
     await request.post("/api/fs", { data: { op: "delete", path: toolPath } });
   });

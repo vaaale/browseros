@@ -210,7 +210,9 @@ test.describe("Stop actually stops the run", () => {
       await page.getByRole("button", { name: "Stop run (other)", exact: true }).click();
       await expect(page.getByText("Other conversation")).toBeVisible({ timeout: 15_000 });
       await page.getByRole("button", { name: TITLE, exact: true }).click();
-      await expect(page.getByText(/Error: docs_list: aborted by user/).first()).toBeVisible({
+      // The aborted results are restored inside (collapsed) tool cards —
+      // assert presence, not visibility.
+      await expect(page.getByText(/Error: docs_list: aborted by user/).first()).toBeAttached({
         timeout: 15_000,
       });
       await page.waitForTimeout(2_000);
