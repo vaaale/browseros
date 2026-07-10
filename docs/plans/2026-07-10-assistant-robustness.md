@@ -543,3 +543,11 @@ Latest stable: **1.62.3** (2026-07-08). **Verdict: upgrading fixes none of our t
 3. **AG-UI remote/server agents:** supported server-resident pattern remains `CopilotRuntime` + `HttpAgent` + `copilotkit.runAgent({agent})` (frontend tools injected only via the high-level entrypoint — #5813 "by design"). 1.62.2 added reconnect hardening + multi-device run-activity sync. Open gaps relevant to the Phase 6 spec: #3531 (connect streams can't follow future runs), #4943 (thread hydration on replay).
 
 Upgrade risk if done later: low (same ag-ui pins); one behavior change in 1.62.0 — unhandled tool calls render nothing instead of a default card.
+
+### Task 3.1 — VFS write atomicity (2026-07-10)
+
+Already atomic: `src/os/vfs.ts` `writeText`/`writeBuffer` route through `src/os/atomic-write.ts` `writeFileAtomic` (same-dir temp + fsync + rename). No server change needed.
+
+### Pre-existing e2e failure — card-collapse tool-card test (2026-07-10, for Phase 4)
+
+`e2e/card-collapse.spec.ts:81` ("a tool-call card header toggles its body open/closed") fails on load: the tool card should be collapsed under the newer answer but renders OPEN. Pre-existing — fails identically at 62fa8224e and at 2f7867860 (pre-Phase-2); introduced by the earlier assistant-fix commits, NOT by the kernel/persistence work. Diagnosis: `card-collapse.ts` is a first-seen-wins accordion (`registerCard` opens the newest registration); on a RESTORED conversation the tool-call card mounts AFTER the final answer (the wildcard tool renderer registers via effect, then CopilotKit re-renders tool calls), so mount order ≠ transcript order and the tool card wins. Fix in Task 4.1: make restore-time registration transcript-ordered rather than mount-ordered (e.g. `registerCard` with a sequence/message-index hint, or register-without-opening for cards belonging to non-final messages on restore). The spec is the regression gate.

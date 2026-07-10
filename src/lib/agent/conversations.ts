@@ -2,8 +2,9 @@
 
 import { useSyncExternalStore } from "react";
 import { fsClient } from "@/lib/os-client";
-import { sanitizeLoadedMessages, normalizeMessages } from "@/lib/agent/conversations-sanitize";
+import { sanitizeLoadedMessages, normalizeMessages, isStaleSnapshot } from "@/lib/agent/conversations-sanitize";
 import { DEFAULT_AGENT_ID } from "@/lib/agent/agent-ids";
+import { enqueuePerKey } from "@/lib/agent/write-queue";
 
 /**
  * Conversations live as one JSON file per chat under the user's VFS at
@@ -93,6 +94,11 @@ async function readConversationFile(id: string): Promise<ConversationFile | null
   }
 }
 
+// Raw write — call only from inside an enqueuePerKey(<conversation id>) task.
+// Every read-modify-write of a conversation file must be a queued critical
+// section so concurrent writers (debounced saves, RUN_ERROR flush, rename/
+// agent/branch changes, a second mounted surface) cannot interleave. The
+// server side is crash-safe already (writeFileAtomic: temp + fsync + rename).
 async function writeConversationFile(file: ConversationFile): Promise<void> {
   await fsClient.write(chatPath(file.id), JSON.stringify(file, null, 2));
 }
@@ -157,7 +163,7 @@ async function loadFromVfs(): Promise<void> {
     const seed = freshConversation(DEFAULT_AGENT_ID);
     conversations = [seed, ...conversations];
     try {
-      await writeConversationFile({ ...seed, messages: [] });
+      await enqueuePerKey(seed.id, () => writeConversationFile({ ...seed, messages: [] }));
     } catch {
       /* show the seed anyway; save retries on next mutation */
     }
@@ -199,15 +205,17 @@ export async function newConversation(agentId: string = DEFAULT_AGENT_ID): Promi
     loaded: true,
   });
   try {
-    const file: ConversationFile = {
-      id: conv.id,
-      title: conv.title,
-      createdAt: conv.createdAt,
-      agentId: conv.agentId,
-      messages: [],
-    };
-    if (conv.activeFeatureBranch) file.activeFeatureBranch = conv.activeFeatureBranch;
-    await writeConversationFile(file);
+    await enqueuePerKey(conv.id, async () => {
+      const file: ConversationFile = {
+        id: conv.id,
+        title: conv.title,
+        createdAt: conv.createdAt,
+        agentId: conv.agentId,
+        messages: [],
+      };
+      if (conv.activeFeatureBranch) file.activeFeatureBranch = conv.activeFeatureBranch;
+      await writeConversationFile(file);
+    });
   } catch (err) {
     console.error("Failed to persist new conversation", err);
   }
@@ -235,14 +243,16 @@ export async function setConversationActiveFeatureBranch(id: string, branch: str
     conversations: current.conversations.map((c) => (c.id === id ? next : c)),
   });
   try {
-    const file = (await readConversationFile(id)) ?? { ...next, messages: [] };
-    if (activeFeatureBranch) {
-      await writeConversationFile({ ...file, activeFeatureBranch });
-    } else {
-      const rest = { ...file };
-      delete rest.activeFeatureBranch;
-      await writeConversationFile(rest);
-    }
+    await enqueuePerKey(id, async () => {
+      const file = (await readConversationFile(id)) ?? { ...next, messages: [] };
+      if (activeFeatureBranch) {
+        await writeConversationFile({ ...file, activeFeatureBranch });
+      } else {
+        const rest = { ...file };
+        delete rest.activeFeatureBranch;
+        await writeConversationFile(rest);
+      }
+    });
   } catch (err) {
     console.error("Failed to persist active feature branch change", err);
   }
@@ -262,8 +272,10 @@ export async function setConversationAgent(id: string, agentId: string): Promise
     conversations: current.conversations.map((c) => (c.id === id ? next : c)),
   });
   try {
-    const file = (await readConversationFile(id)) ?? { ...next, messages: [] };
-    await writeConversationFile({ ...file, agentId });
+    await enqueuePerKey(id, async () => {
+      const file = (await readConversationFile(id)) ?? { ...next, messages: [] };
+      await writeConversationFile({ ...file, agentId });
+    });
   } catch (err) {
     console.error("Failed to persist conversation agent change", err);
   }
@@ -293,7 +305,7 @@ export async function deleteConversation(id: string): Promise<void> {
     activeByAgent[DEFAULT_AGENT_ID] = seed.id;
     persistActiveId(DEFAULT_AGENT_ID, seed.id);
     try {
-      await writeConversationFile({ ...seed, messages: [] });
+      await enqueuePerKey(seed.id, () => writeConversationFile({ ...seed, messages: [] }));
     } catch (err) {
       console.error("Failed to seed replacement conversation", err);
     }
@@ -309,7 +321,9 @@ export async function deleteConversation(id: string): Promise<void> {
 
   setState({ conversations, activeByAgent, loaded: true });
   try {
-    await fsClient.remove(chatPath(id));
+    // Queued so a pending debounced save for this conversation settles first
+    // instead of racing the removal.
+    await enqueuePerKey(id, () => fsClient.remove(chatPath(id)));
   } catch {
     /* file may not exist yet — ignore */
   }
@@ -325,8 +339,10 @@ export async function renameConversation(id: string, title: string): Promise<voi
     conversations: current.conversations.map((c) => (c.id === id ? next : c)),
   });
   try {
-    const file = (await readConversationFile(id)) ?? { ...next, messages: [] };
-    await writeConversationFile({ ...file, title });
+    await enqueuePerKey(id, async () => {
+      const file = (await readConversationFile(id)) ?? { ...next, messages: [] };
+      await writeConversationFile({ ...file, title });
+    });
   } catch (err) {
     console.error("Failed to rename conversation file", err);
   }
@@ -340,22 +356,29 @@ export async function loadConversationMessages(id: string): Promise<unknown[]> {
   return sanitizeLoadedMessages(file?.messages ?? []);
 }
 
-/** Persist the messages of a conversation, preserving its metadata. */
+/** Persist the messages of a conversation, preserving its metadata. The whole
+ *  read-modify-write runs as a queued critical section per conversation, and
+ *  stale snapshots (an older debounced save arriving after a newer write) are
+ *  skipped so they can never clobber fresher history. */
 export async function saveConversationMessages(id: string, messages: unknown[]): Promise<void> {
-  const current = state;
-  const meta = current?.conversations.find((c) => c.id === id);
-  const existing = await readConversationFile(id);
-  if (messages.length === 0 && existing && existing.messages.length > 0) return;
-  messages = normalizeMessages(messages);
-  const file: ConversationFile = {
-    id,
-    title: meta?.title ?? existing?.title ?? "Conversation",
-    createdAt: existing?.createdAt ?? meta?.createdAt ?? Date.now(),
-    agentId: meta?.agentId ?? existing?.agentId ?? DEFAULT_AGENT_ID,
-    activeFeatureBranch: meta?.activeFeatureBranch ?? existing?.activeFeatureBranch,
-    messages,
-  };
-  await writeConversationFile(file);
+  await enqueuePerKey(id, async () => {
+    const meta = state?.conversations.find((c) => c.id === id);
+    const existing = await readConversationFile(id);
+    if (messages.length === 0 && existing && existing.messages.length > 0) return;
+    if (existing && isStaleSnapshot(messages, existing.messages)) {
+      console.warn(`[BOS] skipped stale conversation write (${messages.length} < ${existing.messages.length} messages)`, id);
+      return;
+    }
+    const file: ConversationFile = {
+      id,
+      title: meta?.title ?? existing?.title ?? "Conversation",
+      createdAt: existing?.createdAt ?? meta?.createdAt ?? Date.now(),
+      agentId: meta?.agentId ?? existing?.agentId ?? DEFAULT_AGENT_ID,
+      activeFeatureBranch: meta?.activeFeatureBranch ?? existing?.activeFeatureBranch,
+      messages: normalizeMessages(messages),
+    };
+    await writeConversationFile(file);
+  });
   void maybeGenerateTitleInBackground(id, messages);
 }
 

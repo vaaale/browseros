@@ -131,6 +131,26 @@ function isSettled(m: unknown): boolean {
   return false;
 }
 
+/** A snapshot is stale when it is a strict prefix-regression of what is already
+ *  persisted: fewer messages AND every incoming id already present. That is a
+ *  late/debounced writer losing the race — writing it would delete the newest
+ *  turns. A legitimately shortened history (regenerate, edit) replaces the tail
+ *  with NEW message ids, so it does not match and still writes. Messages
+ *  without ids make the comparison unsafe → never report stale. */
+export function isStaleSnapshot(incoming: unknown[], existing: unknown[]): boolean {
+  if (incoming.length === 0 || incoming.length >= existing.length) return false;
+  const existingIds = new Set<string>();
+  for (const m of existing) {
+    const mid = m && typeof m === "object" ? (m as Msg).id : undefined;
+    if (typeof mid === "string") existingIds.add(mid);
+  }
+  for (const m of incoming) {
+    const mid = m && typeof m === "object" ? (m as Msg).id : undefined;
+    if (typeof mid !== "string" || !existingIds.has(mid)) return false;
+  }
+  return true;
+}
+
 const INTERRUPTED_NOTE =
   "_(The previous turn was interrupted before the assistant replied. Send a message to continue.)_";
 
