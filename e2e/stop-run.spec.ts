@@ -115,16 +115,20 @@ test.describe("Stop actually stops the run", () => {
         runLog.push(`run#${runCount} last-role=${last?.role ?? "none"}`);
         const bookends = { threadId: input.threadId ?? "t", runId: input.runId ?? "r" };
         if (runCount === 1) {
+          // The real-world failure signature: SEVERAL parallel tool calls in
+          // one assistant turn. CopilotKit executes them sequentially, so a
+          // Stop during call #1 must also settle the QUEUED calls #2-#4 —
+          // before the stop-flag fix those kept executing ("the agent
+          // continues in the background").
+          const calls = ["tc-1", "tc-2", "tc-3", "tc-4"].flatMap((id) => [
+            { type: "TOOL_CALL_START", toolCallId: id, toolCallName: "docs_list" },
+            { type: "TOOL_CALL_ARGS", toolCallId: id, delta: "{}" },
+            { type: "TOOL_CALL_END", toolCallId: id },
+          ]);
           return route.fulfill({
             status: 200,
             headers: { "content-type": "text/event-stream" },
-            body: sse([
-              { type: "RUN_STARTED", ...bookends },
-              { type: "TOOL_CALL_START", toolCallId: "tc-hang", toolCallName: "docs_list" },
-              { type: "TOOL_CALL_ARGS", toolCallId: "tc-hang", delta: "{}" },
-              { type: "TOOL_CALL_END", toolCallId: "tc-hang" },
-              { type: "RUN_FINISHED", ...bookends },
-            ]),
+            body: sse([{ type: "RUN_STARTED", ...bookends }, ...calls, { type: "RUN_FINISHED", ...bookends }]),
           });
         }
         // Any later run answers instantly with text (if a follow-up sneaks
@@ -173,12 +177,27 @@ test.describe("Stop actually stops the run", () => {
       await expect(stopButton).toHaveAttribute("aria-label", "Stop", { timeout: 15_000 });
       await stopButton.click();
 
-      // (a) The handler settles with the in-band abort error.
+      // (a) The RUNNING handler settles with the in-band abort error.
       await expect(page.getByText(/Error: docs_list: aborted by user/).first()).toBeVisible({
         timeout: 10_000,
       });
 
-      // (b) No follow-up run starts. Give the pipeline a beat to (wrongly)
+      // (b) The QUEUED handlers (#2-#4) settle as aborted too — instantly,
+      // without executing. Assert via the persisted conversation: the
+      // debounced save must show all 4 tool results as aborted.
+      await expect(async () => {
+        const res = await request.get(
+          `/api/fs?op=read&path=${encodeURIComponent(CHAT_PATH)}`,
+        );
+        const { content } = (await res.json()) as { content?: string };
+        const persisted = JSON.parse(content ?? "{}") as { messages?: AgMessage[] };
+        const abortedResults = (persisted.messages ?? []).filter(
+          (m) => m.role === "tool" && /aborted/.test(m.content ?? ""),
+        );
+        expect(abortedResults.length).toBe(4);
+      }).toPass({ timeout: 15_000 });
+
+      // (c) No follow-up run starts. Give the pipeline a beat to (wrongly)
       // launch one, then assert the run count stayed at 1 and no follow-up
       // text rendered.
       await page.waitForTimeout(4_000);

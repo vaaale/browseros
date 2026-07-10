@@ -8,7 +8,7 @@ import {
   useActiveConversationId,
 } from "@/lib/agent/conversations";
 import { DEFAULT_AGENT_ID } from "@/lib/agent/agent-ids";
-import { abortActiveToolRuns } from "@/lib/agent/tool-kernel";
+import { signalUserStop } from "@/lib/agent/tool-kernel";
 
 /**
  * Bridges the chat agent's message list with on-disk persistence at
@@ -72,11 +72,10 @@ export function useChatPersistence(agentId: string = DEFAULT_AGENT_ID): { isLoad
       }
       // abortRun only cancels the model stream — CopilotKit keeps awaiting any
       // in-flight client tool handler, which would then stream its result into
-      // the NEXT conversation's reseeded agent. Settle them now with an
-      // in-band error so the run closes out before the switch completes, and
-      // latch the stop guard so the recorded results can't spawn an
-      // uncommanded follow-up run.
-      const aborted = abortActiveToolRuns(
+      // the NEXT conversation's reseeded agent. signalUserStop settles the
+      // running handler AND flags this turn's queued handlers so they settle
+      // before starting (the flag clears when the next commanded run starts).
+      const aborted = signalUserStop(
         "the conversation was switched — the tool call was abandoned client-side; its work may still complete server-side",
       );
       if (aborted > 0) window.dispatchEvent(new CustomEvent("bos:agent-stop"));

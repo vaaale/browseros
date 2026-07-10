@@ -3,8 +3,9 @@
 import { useCallback, useRef, useState, useSyncExternalStore } from "react";
 import { useChatContext, type InputProps } from "@copilotkit/react-ui";
 import {
-  abortActiveToolRuns,
+  clearUserStop,
   hasActiveToolRuns,
+  signalUserStop,
   subscribeActiveToolRuns,
 } from "@/lib/agent/tool-kernel";
 
@@ -47,19 +48,22 @@ export function ChatInput({ inProgress, onSend, onStop, onUpload, hideStopButton
     if (!value) return;
     setText("");
     requestAnimationFrame(autoResize);
-    // Clears the stop latch (RunStopGuard) BEFORE the run starts: a fresh user
-    // message is an explicit command, so follow-up suppression must end.
-    window.dispatchEvent(new CustomEvent("bos:agent-send"));
+    // A fresh user message is an explicit command — end stop suppression.
+    clearUserStop();
     void onSend(value);
   }, [text, onSend, autoResize]);
 
   const stop = useCallback(() => {
+    // Order matters: onStop → stopGeneration → agent.abortRun() (patched by
+    // CopilotKit's RunHandler during a run) aborts the core run controller,
+    // which suppresses the automatic follow-up run. signalUserStop() then
+    // settles the running handler AND flags the turn's queued handlers.
     try {
       onStop?.();
     } catch {
       /* best-effort */
     }
-    abortActiveToolRuns();
+    signalUserStop();
     window.dispatchEvent(new CustomEvent("bos:agent-stop"));
   }, [onStop]);
 

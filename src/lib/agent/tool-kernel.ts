@@ -104,6 +104,30 @@ function notifyActiveRuns(): void {
   for (const l of activeRunListeners) l();
 }
 
+// User-stop flag. CopilotKit executes a turn's tool calls SEQUENTIALLY and its
+// React wrapper drops the per-handler abort signal (react-core, verified in
+// 1.61.2 and 1.62.3), so aborting the RUNNING handler is not enough: the
+// QUEUED handlers of the same turn would still execute afterwards ("the agent
+// continues in the background"). While this flag is set, runToolHandler
+// settles every newly-starting handler immediately with the stop detail —
+// the check CopilotKit's own machinery would have done had the signal reached
+// the handler. Cleared when a new run initializes (an explicit command:
+// send/regenerate) — see RunStopGuard in CopilotProvider.tsx.
+let stopRequested: string | null = null;
+
+/** User-initiated stop (Stop button, conversation switch): aborts every
+ *  in-flight handler AND flags queued/future handlers to settle immediately
+ *  until the next commanded run. Returns how many in-flight runs were aborted. */
+export function signalUserStop(detail = "aborted by user"): number {
+  stopRequested = detail;
+  return abortActiveToolRuns(detail);
+}
+
+/** Clears the user-stop flag (a new commanded run is starting). */
+export function clearUserStop(): void {
+  stopRequested = null;
+}
+
 export interface RunToolOpts {
   /** Override; defaults to the configured Settings → Tools value. */
   timeoutMs?: number;
@@ -125,6 +149,8 @@ export async function runToolHandler(
   fn: (ctx: { signal: AbortSignal }) => Promise<unknown>,
   opts: RunToolOpts = {},
 ): Promise<string> {
+  // A user stop covers the WHOLE turn: queued handlers settle before starting.
+  if (stopRequested) return toolError(tool, stopRequested);
   const timeoutMs = opts.timeoutMs ?? getToolTimeoutMs();
   const ctl = new AbortController();
   // Why the abort happened, recorded BEFORE ctl.abort() so the race rejection

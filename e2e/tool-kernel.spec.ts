@@ -6,7 +6,40 @@ import {
   readNdjsonStream,
   abortActiveToolRuns,
   hasActiveToolRuns,
+  signalUserStop,
+  clearUserStop,
 } from "../src/lib/agent/tool-kernel";
+
+test.describe("user-stop flag", () => {
+  test.afterEach(() => clearUserStop());
+
+  test("a queued handler settles instantly after signalUserStop, without executing", async () => {
+    let executed = false;
+    signalUserStop("aborted by user");
+    const r = await runToolHandler("demo", async () => {
+      executed = true;
+      return "ran";
+    }, { timeoutMs: 1000 });
+    expect(r).toBe("Error: demo: aborted by user");
+    expect(executed).toBe(false);
+  });
+
+  test("signalUserStop settles the running handler AND future ones with the same detail", async () => {
+    const running = runToolHandler("demo_run", () => new Promise<string>(() => {}), { timeoutMs: 30_000 });
+    await new Promise((res) => setTimeout(res, 20));
+    signalUserStop("the conversation was switched");
+    expect(await running).toMatch(/^Error: demo_run: the conversation was switched/);
+    const queued = await runToolHandler("demo_q", async () => "ran", { timeoutMs: 1000 });
+    expect(queued).toMatch(/^Error: demo_q: the conversation was switched/);
+  });
+
+  test("clearUserStop restores normal execution", async () => {
+    signalUserStop();
+    clearUserStop();
+    const r = await runToolHandler("demo", async () => "ran", { timeoutMs: 1000 });
+    expect(r).toBe("ran");
+  });
+});
 
 test.describe("tool-run abort registry", () => {
   test("abortActiveToolRuns settles every pending handler with the given detail", async () => {
