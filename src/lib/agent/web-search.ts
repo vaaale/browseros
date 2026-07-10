@@ -29,6 +29,12 @@ export interface WebSearchOutput {
   blocks: WebSearchResultBlock[];
 }
 
+// Cap the upstream provider call so a stuck web-search request can't hang the
+// route (and, transitively, CopilotKit's sequential tool loop) for the SDK's
+// ~10-minute default. Kept under the client handler's own timeout so the client
+// usually receives a structured error rather than aborting the fetch.
+const PROVIDER_TIMEOUT_MS = 90_000;
+
 const MIN_QUERY_LENGTH = 2;
 const MAX_QUERY_LENGTH = 1000;
 const MAX_DOMAINS = 20;
@@ -99,7 +105,7 @@ async function anthropicWebSearch(valid: WebSearchInput, config: ProviderConfig)
         ...(valid.blocked_domains ? { blocked_domains: valid.blocked_domains } : {}),
       },
     ],
-  } as Parameters<typeof client.beta.messages.create>[0]) as { content: unknown[] };
+  } as Parameters<typeof client.beta.messages.create>[0], { timeout: PROVIDER_TIMEOUT_MS }) as { content: unknown[] };
 
   const blocks: WebSearchResultBlock[] = [];
   const hits: WebSearchHit[] = [];
@@ -128,11 +134,14 @@ async function anthropicWebSearch(valid: WebSearchInput, config: ProviderConfig)
 async function openaiWebSearch(valid: WebSearchInput, config: ProviderConfig): Promise<WebSearchOutput> {
   const baseURL = config.baseUrl ? normalizeApiBase(config.baseUrl) : undefined;
   const client = new OpenAI({ apiKey: config.apiKey, baseURL });
-  const res = await client.responses.create({
-    model: config.model,
-    input: valid.query,
-    tools: [{ type: "web_search_preview" }],
-  });
+  const res = await client.responses.create(
+    {
+      model: config.model,
+      input: valid.query,
+      tools: [{ type: "web_search_preview" }],
+    },
+    { timeout: PROVIDER_TIMEOUT_MS },
+  );
 
   const hits: WebSearchHit[] = [];
   const text: string[] = [];

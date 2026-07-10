@@ -52,6 +52,20 @@ function log(level: "debug" | "info" | "warn" | "error", convId: string, msg: st
   });
 }
 
+/** Provider-timing log. Uses the "assistant" component (not "compaction") so it
+ *  groups with the conversation turn logs, and keeps `conversation` at top level
+ *  so the Settings→Log conversation filter picks it up. */
+function providerLog(level: "info" | "warn", convId: string, msg: string, data?: Record<string, unknown>, err?: unknown): void {
+  logger().log({
+    level,
+    component: "assistant",
+    conversation: convId,
+    msg,
+    ...(data ? { data } : {}),
+    ...(err ? { err: err instanceof Error ? { message: err.message, ...(err.stack ? { stack: err.stack } : {}) } : { message: String(err) } } : {}),
+  });
+}
+
 function extractPromptMessages(prompt: unknown): CompactionPrompt | null {
   if (!Array.isArray(prompt)) return null;
   return prompt as CompactionPrompt;
@@ -249,6 +263,45 @@ export function withCompaction(model: LanguageModel, convId: string): LanguageMo
       } catch (err) {
         log("error", convId, "middleware.error", undefined, err);
         return params;
+      }
+    },
+    // Provider-call timing. Every model call (the first user turn AND each
+    // intra-turn tool-loop continuation) passes through here, so this is where a
+    // "the tool finished but nothing happens for minutes" stall is measurable:
+    // it records time-to-first-chunk and total duration of the actual provider
+    // request. A large TTFB after a tool result means the provider is slow on
+    // the grown context, not a client-side hang.
+    wrapStream: async ({ doStream }) => {
+      const t0 = Date.now();
+      providerLog("info", convId, "provider.request", { mode: "stream" });
+      const { stream, ...rest } = await doStream();
+      let first = true;
+      let chunks = 0;
+      const monitor = new TransformStream({
+        transform(chunk, controller) {
+          if (first) {
+            first = false;
+            providerLog("info", convId, "provider.first-chunk", { ttfbMs: Date.now() - t0 });
+          }
+          chunks++;
+          controller.enqueue(chunk);
+        },
+        flush() {
+          providerLog("info", convId, "provider.done", { totalMs: Date.now() - t0, chunks });
+        },
+      });
+      return { stream: stream.pipeThrough(monitor), ...rest };
+    },
+    wrapGenerate: async ({ doGenerate }) => {
+      const t0 = Date.now();
+      providerLog("info", convId, "provider.request", { mode: "generate" });
+      try {
+        const r = await doGenerate();
+        providerLog("info", convId, "provider.done", { totalMs: Date.now() - t0, mode: "generate" });
+        return r;
+      } catch (err) {
+        providerLog("warn", convId, "provider.failed", { totalMs: Date.now() - t0 }, err);
+        throw err;
       }
     },
   };
