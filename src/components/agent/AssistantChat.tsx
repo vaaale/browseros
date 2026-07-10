@@ -8,6 +8,7 @@ import "@copilotkit/react-ui/styles.css";
 import { CheckCircle2, Loader2 } from "lucide-react";
 import { CopilotProvider } from "@/components/agent/CopilotProvider";
 import { ChatToolRenderer } from "@/components/agent/ChatToolRenderer";
+import { ChatInput } from "@/components/agent/ChatInput";
 import { useChatPersistence } from "@/components/agent/ChatPersistence";
 import { AgentActivityIndicator } from "@/components/agent/AgentActivityIndicator";
 import { SelfImproveIndicator } from "@/components/agent/SelfImproveIndicator";
@@ -207,6 +208,7 @@ function AssistantChatInner({
             </div>
             <CopilotChat
               className="h-full"
+              Input={ChatInput}
               AssistantMessage={ReasoningAssistantMessage}
               markdownTagRenderers={markdownRenderers}
               instructions={instructions}

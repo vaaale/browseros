@@ -71,6 +71,39 @@ export function toolError(tool: string, detail: string, hint?: string): string {
   return `Error: ${tool}: ${detail}${hint ? ` — ${hint}` : ""}`;
 }
 
+// Registry of in-flight tool runs. CopilotKit awaits client tool handlers with
+// no cancellation of its own, so Stop and conversation switches must be able to
+// settle them from the outside: each runToolHandler enrolls here for its
+// lifetime, and abortActiveToolRuns() settles every pending handler with an
+// in-band error the model can react to.
+const activeRuns = new Set<(detail: string) => void>();
+
+/** Abort every in-flight tool handler (Stop button, conversation switch).
+ *  Each settles immediately with `Error: <tool>: <detail>`. Returns how many
+ *  runs were aborted. */
+export function abortActiveToolRuns(detail = "aborted by user"): number {
+  const aborted = activeRuns.size;
+  for (const abort of [...activeRuns]) abort(detail);
+  return aborted;
+}
+
+/** True while any tool handler is executing (drives Stop-button visibility). */
+export function hasActiveToolRuns(): boolean {
+  return activeRuns.size > 0;
+}
+
+const activeRunListeners = new Set<() => void>();
+
+/** Subscribe to active-run count changes (for useSyncExternalStore). */
+export function subscribeActiveToolRuns(cb: () => void): () => void {
+  activeRunListeners.add(cb);
+  return () => activeRunListeners.delete(cb);
+}
+
+function notifyActiveRuns(): void {
+  for (const l of activeRunListeners) l();
+}
+
 export interface RunToolOpts {
   /** Override; defaults to the configured Settings → Tools value. */
   timeoutMs?: number;
@@ -110,6 +143,12 @@ export async function runToolHandler(
     if (external.aborted) onExternalAbort();
     else external.addEventListener("abort", onExternalAbort, { once: true });
   }
+  const registryAbort = (detail: string) => {
+    abortDetail = detail;
+    ctl.abort();
+  };
+  activeRuns.add(registryAbort);
+  notifyActiveRuns();
   try {
     const result = await Promise.race([
       fn({ signal: ctl.signal }),
@@ -131,6 +170,8 @@ export async function runToolHandler(
   } finally {
     clearTimeout(timer);
     external?.removeEventListener("abort", onExternalAbort);
+    activeRuns.delete(registryAbort);
+    notifyActiveRuns();
   }
 }
 

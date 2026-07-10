@@ -2,15 +2,15 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useCopilotChatInternal } from "@copilotkit/react-core";
-import { Loader2, Square } from "lucide-react";
+import { Loader2 } from "lucide-react";
 
-// A continuous "the agent is working" pill WITH an always-available Stop button.
-// CopilotKit's own Stop button (driven by isRunning) disappears between runs —
-// notably while a client tool call is executing (e.g. a long agent_delegate) — so
-// the chat can look frozen/crashed and there is no way to cancel. This stays
-// visible whenever the agent is streaming OR a tool call is still awaiting its
-// result, shows an elapsed timer (a climbing count reads as "alive"; an
-// ever-growing one hints the run is stuck), and lets the user stop at any point.
+// A continuous "the agent is working" STATUS pill. It stays visible whenever
+// the agent is streaming OR a client tool call is still awaiting its result and
+// shows an elapsed timer (a climbing count reads as "alive"; an ever-growing
+// one hints the run is stuck). Stopping lives in ONE place — the chat input's
+// send/stop button (ChatInput.tsx) — which announces a stop via the
+// "bos:agent-stop" event so this pill can dismiss itself for aborted turns
+// whose tool calls never receive a result.
 
 interface AnyMsg {
   role?: string;
@@ -38,7 +38,7 @@ function hasPendingToolCall(messages: AnyMsg[]): boolean {
 }
 
 export function AgentActivityIndicator() {
-  const { agent, isLoading, stopGeneration } = useCopilotChatInternal();
+  const { agent, isLoading } = useCopilotChatInternal();
   const [pending, setPending] = useState(false);
 
   useEffect(() => {
@@ -52,9 +52,10 @@ export function AgentActivityIndicator() {
     return () => sub.unsubscribe();
   }, [agent]);
 
-  // Manual stop: aborting a run mid tool-call does NOT append a tool result, so
-  // `pending` would stay true forever and pin the pill. Suppress it after a stop
-  // until the next run begins (isLoading rising edge), or when the user resumes.
+  // Manual stop (from the chat input's stop button): aborting a run whose tool
+  // calls never started executing appends no tool result, so `pending` would
+  // stay true forever and pin the pill. Suppress it after a stop until the next
+  // run begins (isLoading rising edge).
   const [stopped, setStopped] = useState(false);
   const prevLoadingRef = useRef(false);
   useEffect(() => {
@@ -62,6 +63,11 @@ export function AgentActivityIndicator() {
     if (loading && !prevLoadingRef.current) setStopped(false);
     prevLoadingRef.current = loading;
   }, [isLoading]);
+  useEffect(() => {
+    const onStop = () => setStopped(true);
+    window.addEventListener("bos:agent-stop", onStop);
+    return () => window.removeEventListener("bos:agent-stop", onStop);
+  }, []);
 
   const working = (Boolean(isLoading) || pending) && !stopped;
 
@@ -77,28 +83,10 @@ export function AgentActivityIndicator() {
 
   if (!working) return null;
 
-  const stop = () => {
-    try {
-      stopGeneration?.();
-    } catch {
-      /* best-effort */
-    }
-    setStopped(true);
-  };
-
   return (
-    <div className="pointer-events-auto flex items-center gap-1.5 rounded-full border border-sky-400/30 bg-sky-400/15 py-0.5 pl-2 pr-1 text-[11px] text-sky-100 shadow">
+    <div className="flex items-center gap-1.5 rounded-full border border-sky-400/30 bg-sky-400/15 px-2 py-0.5 text-[11px] text-sky-100 shadow">
       <Loader2 size={11} className="animate-spin" />
       <span>{elapsed >= 3 ? `Working ${elapsed}s` : "Working…"}</span>
-      <button
-        type="button"
-        onClick={stop}
-        title="Stop"
-        aria-label="Stop the agent"
-        className="ml-0.5 flex items-center justify-center rounded-full bg-white/10 p-1 text-sky-50 transition-colors hover:bg-red-500/70 hover:text-white"
-      >
-        <Square size={9} className="fill-current" />
-      </button>
     </div>
   );
 }

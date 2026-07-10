@@ -1,5 +1,33 @@
 import { test, expect } from "@playwright/test";
-import { runToolHandler, toolError, fetchToolJson, readNdjsonStream } from "../src/lib/agent/tool-kernel";
+import {
+  runToolHandler,
+  toolError,
+  fetchToolJson,
+  readNdjsonStream,
+  abortActiveToolRuns,
+  hasActiveToolRuns,
+} from "../src/lib/agent/tool-kernel";
+
+test.describe("tool-run abort registry", () => {
+  test("abortActiveToolRuns settles every pending handler with the given detail", async () => {
+    const a = runToolHandler("demo_a", () => new Promise<string>(() => {}), { timeoutMs: 30_000 });
+    const b = runToolHandler("demo_b", () => new Promise<string>(() => {}), { timeoutMs: 30_000 });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(hasActiveToolRuns()).toBe(true);
+    const aborted = abortActiveToolRuns("the conversation was switched");
+    expect(aborted).toBe(2);
+    expect(await a).toMatch(/^Error: demo_a: the conversation was switched/);
+    expect(await b).toMatch(/^Error: demo_b: the conversation was switched/);
+    expect(hasActiveToolRuns()).toBe(false);
+  });
+
+  test("a settled handler leaves the registry (no abort after completion)", async () => {
+    const r = await runToolHandler("demo", async () => "done", { timeoutMs: 1000 });
+    expect(r).toBe("done");
+    expect(hasActiveToolRuns()).toBe(false);
+    expect(abortActiveToolRuns()).toBe(0);
+  });
+});
 
 // Pure-module spec (no `page` fixture): exercises the tool-execution kernel in
 // Node. The kernel contract (assistant-robustness plan, Phase 2): a handler

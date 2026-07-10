@@ -1,13 +1,14 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
-import { Plus, Trash2, MessageSquare } from "lucide-react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { Plus, Trash2, MessageSquare, Pencil } from "lucide-react";
 import {
   useConversations,
   useAllConversations,
   newConversation,
   selectConversation,
   deleteConversation,
+  renameConversation,
   type Conversation,
 } from "@/lib/agent/conversations";
 import { DEFAULT_AGENT_ID } from "@/lib/agent/agent-ids";
@@ -88,6 +89,21 @@ function humanize(id: string): string {
 }
 
 function ConvRow({ c, active, onPick }: { c: Conversation; active: boolean; onPick?: () => void }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(c.title);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  const startEditing = () => {
+    setDraft(c.title);
+    setEditing(true);
+    requestAnimationFrame(() => inputRef.current?.select());
+  };
+  const commit = () => {
+    setEditing(false);
+    const title = draft.trim();
+    if (title && title !== c.title) void renameConversation(c.id, title);
+  };
+
   return (
     <div
       className={`group flex items-center gap-1.5 rounded px-2 py-1.5 text-xs ${
@@ -95,15 +111,41 @@ function ConvRow({ c, active, onPick }: { c: Conversation; active: boolean; onPi
       }`}
     >
       <MessageSquare size={12} className="shrink-0 text-white/40" />
-      <button
-        onClick={() => {
-          selectConversation(c.id);
-          onPick?.();
-        }}
-        className="flex-1 truncate text-left"
-      >
-        {c.title}
-      </button>
+      {editing ? (
+        <input
+          ref={inputRef}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") commit();
+            else if (e.key === "Escape") setEditing(false);
+          }}
+          aria-label="Conversation title"
+          className="min-w-0 flex-1 rounded border border-white/20 bg-black/40 px-1 py-0.5 text-xs text-white outline-none focus:border-white/40"
+        />
+      ) : (
+        <button
+          onClick={() => {
+            selectConversation(c.id);
+            onPick?.();
+          }}
+          onDoubleClick={startEditing}
+          title={`${c.title} (double-click to rename)`}
+          className="flex-1 truncate text-left"
+        >
+          {c.title}
+        </button>
+      )}
+      {!editing && (
+        <button
+          onClick={startEditing}
+          title="Rename"
+          className="rounded p-0.5 text-white/30 opacity-0 hover:bg-white/10 hover:text-white group-hover:opacity-100"
+        >
+          <Pencil size={11} />
+        </button>
+      )}
       <button
         onClick={() => void deleteConversation(c.id)}
         title="Delete"

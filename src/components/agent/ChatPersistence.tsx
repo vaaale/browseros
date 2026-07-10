@@ -8,6 +8,7 @@ import {
   useActiveConversationId,
 } from "@/lib/agent/conversations";
 import { DEFAULT_AGENT_ID } from "@/lib/agent/agent-ids";
+import { abortActiveToolRuns } from "@/lib/agent/tool-kernel";
 
 /**
  * Bridges the chat agent's message list with on-disk persistence at
@@ -66,6 +67,13 @@ export function useChatPersistence(agentId: string = DEFAULT_AGENT_ID): { isLoad
       } catch {
         /* best-effort; teardown must never throw */
       }
+      // abortRun only cancels the model stream — CopilotKit keeps awaiting any
+      // in-flight client tool handler, which would then stream its result into
+      // the NEXT conversation's reseeded agent. Settle them now with an
+      // in-band error so the run closes out before the switch completes.
+      abortActiveToolRuns(
+        "the conversation was switched — the tool call was abandoned client-side; its work may still complete server-side",
+      );
     };
   }, [agent, threadId]);
 
