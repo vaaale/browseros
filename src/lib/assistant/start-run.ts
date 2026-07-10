@@ -6,6 +6,7 @@ import { conversationIO, loadConversationMessages } from "./conversation-store";
 import { lastUserIndex } from "./messages";
 import { assistantTools, gateFor } from "./registry";
 import type { AssistantTool, ToolDeclaration } from "./tools";
+import { composeHooks, globalRunHooks, type RunHooks } from "./hooks";
 import { composeInstructions } from "@/lib/agent/instructions";
 import { getConversationActiveFeatureBranch } from "@/lib/agent/conversations-server";
 import { getConfigValue } from "@/lib/config/registry";
@@ -25,7 +26,20 @@ export interface StartRunOptions {
   editOfMessageId?: string;
   /** Frontend tools contributed by the starting surface for THIS run. */
   surfaceTools?: ToolDeclaration[];
+  /** Per-run interception hooks (in-process starters only; composed with the
+   *  global registry). */
+  hooks?: RunHooks[];
 }
+
+// The conversation's active feature branch is surfaced to the model as prompt
+// context — the first built-in extendSystemPrompt hook.
+const featureBranchHook: RunHooks = {
+  extendSystemPrompt: async (ctx) => {
+    const branch = await getConversationActiveFeatureBranch(ctx.conversationId).catch(() => undefined);
+    if (!branch) return undefined;
+    return `## Active feature branch\nThis conversation already has an active feature branch \`${branch}\` for BrowserOS source changes. Do NOT call dev_branch_request — delegate the source change directly to the "developer" sub-agent.`;
+  },
+};
 
 async function toolTimeoutMs(): Promise<number> {
   const sec = await getConfigValue("tools", "toolCallTimeoutSec").catch(() => undefined);
@@ -69,14 +83,10 @@ export async function startAssistantRun(opts: StartRunOptions): Promise<Run> {
 
   const [gate, timeoutMs] = await Promise.all([gateFor(opts.agentId), toolTimeoutMs()]);
 
-  const composeSystem = async () => {
-    let prompt = await composeInstructions(opts.agentId);
-    const branch = await getConversationActiveFeatureBranch(opts.conversationId).catch(() => undefined);
-    if (branch) {
-      prompt += `\n\n## Active feature branch\nThis conversation already has an active feature branch \`${branch}\` for BrowserOS source changes. Do NOT call dev_branch_request — delegate the source change directly to the "developer" sub-agent.`;
-    }
-    return prompt;
-  };
+  const hooks = composeHooks(
+    [featureBranchHook, ...globalRunHooks(), ...(opts.hooks ?? [])],
+    (msg) => logger().error("assistant.hooks", msg),
+  );
 
   logger().log({
     level: "info",
@@ -90,14 +100,16 @@ export async function startAssistantRun(opts: StartRunOptions): Promise<Run> {
     try {
       const result = await runAgentLoop(
         {
+          runId: run.id,
           conversationId: opts.conversationId,
           agentId: opts.agentId,
           signal: run.abort.signal,
           emit: (e) => manager.emit(run, e),
           streamTurn: streamModelTurn,
-          composeSystem,
+          composeSystem: () => composeInstructions(opts.agentId),
           tools,
           gate,
+          hooks,
           io: conversationIO(opts.conversationId, opts.agentId),
           awaitFrontendResult: (callId, ms) => manager.awaitFrontendResult(run, callId, ms),
           maxSteps: DEFAULT_MAX_STEPS,

@@ -19,6 +19,7 @@ import type { RunEventInput } from "./run-events";
 import type { AssistantTool, ToolDeclaration, ToolGateConfig, ToolContext } from "./tools";
 import { visibleTools } from "./tools";
 import type { FrontendOutcome } from "./run-manager";
+import type { RunHooks, HookContext } from "./hooks";
 
 export interface TurnToolCall {
   id: string;
@@ -49,6 +50,7 @@ export interface AgentLoopIO {
 }
 
 export interface AgentLoopDeps {
+  runId: string;
   conversationId: string;
   agentId: string;
   signal: AbortSignal;
@@ -65,6 +67,8 @@ export interface AgentLoopDeps {
    *  tool progress events reset the deadline (idle semantics for streamers). */
   toolTimeoutMs: number;
   leakRetryLimit?: number;
+  /** Pre-composed interception hooks (composeHooks). Optional. */
+  hooks?: RunHooks;
 }
 
 export interface AgentLoopInput {
@@ -140,8 +144,12 @@ export interface AgentLoopResult {
 }
 
 export async function runAgentLoop(deps: AgentLoopDeps, input: AgentLoopInput): Promise<AgentLoopResult> {
-  const { signal, emit, io } = deps;
-  const finish = (r: AgentLoopResult): AgentLoopResult => r;
+  const { signal, emit, io, hooks } = deps;
+  const hookCtx: HookContext = { runId: deps.runId, conversationId: deps.conversationId, agentId: deps.agentId };
+  const finish = async (r: AgentLoopResult): Promise<AgentLoopResult> => {
+    await hooks?.onRunFinished?.({ reason: r.reason, error: r.error }, hookCtx);
+    return r;
+  };
 
   try {
     // ── Transcript entry: (truncate +) append the user message, atomically. ──
@@ -158,7 +166,9 @@ export async function runAgentLoop(deps: AgentLoopDeps, input: AgentLoopInput): 
     await io.saveMessages(messages);
     emit({ type: "message", message: userMessage });
 
-    const system = await deps.composeSystem();
+    let system = await deps.composeSystem();
+    const extra = await hooks?.extendSystemPrompt?.(hookCtx);
+    if (extra?.trim()) system += `\n\n${extra.trim()}`;
     let leakRetries = 0;
     const leakRetryLimit = deps.leakRetryLimit ?? 2;
 
@@ -234,7 +244,10 @@ export async function runAgentLoop(deps: AgentLoopDeps, input: AgentLoopInput): 
           result = CANCELLED_RESULT;
         } else {
           emit({ type: "tool_call", callId: call.id, name: call.name, args: call.arguments, execution });
-          if (!tool) {
+          const decision = await hooks?.beforeToolCall?.(call, hookCtx);
+          if (decision && decision.allow === false) {
+            result = toolError(call.name, `blocked${decision.reason ? `: ${decision.reason}` : " by policy"}`);
+          } else if (!tool) {
             result = toolError(call.name, "unknown tool", "use find_tools to discover available tools");
           } else if (tool.execution === "server") {
             let parsed: Record<string, unknown> = {};
@@ -267,6 +280,7 @@ export async function runAgentLoop(deps: AgentLoopDeps, input: AgentLoopInput): 
           if (result === CANCELLED_RESULT) emit({ type: "tool_cancelled", callId: call.id });
         }
 
+        await hooks?.afterToolCall?.(call, result, hookCtx);
         const toolMessage: ChatMessage = {
           id: newMessageId(),
           role: "tool",

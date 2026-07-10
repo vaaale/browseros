@@ -253,6 +253,19 @@ state (`openFile`, `loadTree`). v2 makes this pattern explicit:
 - Semantics match today: surface tools exist only while the surface is mounted, invisible
   to other agents/conversations.
 
+### 2.6c Server-side run hooks (user requirement, 2026-07-11 — IMPLEMENTED with Milestone A)
+
+`src/lib/assistant/hooks.ts` — the interception seam for features and embedding
+surfaces. `RunHooks = { extendSystemPrompt, beforeToolCall, afterToolCall,
+onRunFinished }`; registered globally (`registerRunHooks(id, hooks)` — applies to
+every run; hot-reload-safe) or per-run (in-process starters via
+`startAssistantRun({ hooks })`). Composition: prompt extensions concatenate,
+first tool-call deny wins (deny → in-band `Error: <tool>: blocked: …` result),
+observers fan out. Every hook invocation is caught + time-boxed (10 s) — a broken
+hook can never wedge a run. First built-in consumer: the active-feature-branch
+prompt note. HTTP embeds don't get code hooks; their interface is the runs API +
+event stream + surfaceTools.
+
 ### 2.7 Edit & resubmit the last user message (user requirement, 2026-07-11)
 
 Must work **even when the message has no agent response** (run failed/stopped/died after

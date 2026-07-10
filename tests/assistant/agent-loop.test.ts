@@ -9,6 +9,7 @@ import type { ChatMessage } from "../../src/lib/assistant/messages";
 import type { RunEventInput } from "../../src/lib/assistant/run-events";
 import type { AssistantTool, ToolGateConfig } from "../../src/lib/assistant/tools";
 import type { FrontendOutcome } from "../../src/lib/assistant/run-manager";
+import type { RunHooks } from "../../src/lib/assistant/hooks";
 
 type TurnScript = TurnResult | ((opts: Parameters<StreamTurn>[0]) => Promise<TurnResult>);
 
@@ -39,11 +40,13 @@ function harness(opts: {
   maxSteps?: number;
   toolTimeoutMs?: number;
   frontend?: (callId: string) => Promise<FrontendOutcome>;
+  hooks?: RunHooks;
 }): Harness {
   const store = { messages: [...(opts.initial ?? [])] };
   const events: RunEventInput[] = [];
   const abort = new AbortController();
   const deps: AgentLoopDeps = {
+    runId: "run-test",
     conversationId: "c-test",
     agentId: "default_agent",
     signal: abort.signal,
@@ -63,6 +66,7 @@ function harness(opts: {
       : async () => ({ kind: "timeout" }),
     maxSteps: opts.maxSteps ?? 8,
     toolTimeoutMs: opts.toolTimeoutMs ?? 500,
+    hooks: opts.hooks,
   };
   return { deps, store, events, abort };
 }
