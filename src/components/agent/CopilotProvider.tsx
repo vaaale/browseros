@@ -1,7 +1,7 @@
 "use client";
 
-import { CopilotKit } from "@copilotkit/react-core";
-import { useEffect, useState, type ReactNode } from "react";
+import { CopilotKit, useCopilotChatInternal } from "@copilotkit/react-core";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { OSActions } from "./OSActions";
 import { McpActions } from "./McpActions";
 import { SubAgentActions } from "./SubAgentActions";
@@ -20,7 +20,7 @@ import { IntegrationActions } from "./IntegrationActions";
 import { ScratchpadActions } from "./ScratchpadActions";
 import { ToolCallRetry } from "./ToolCallRetry";
 import { DiscoveryActions } from "./DiscoveryActions";
-import { useActiveConversationId } from "@/lib/agent/conversations";
+import { useActiveConversationId, saveConversationMessages } from "@/lib/agent/conversations";
 import { DEFAULT_AGENT_ID } from "@/lib/agent/agent-ids";
 
 interface ProviderCfg {
@@ -58,6 +58,27 @@ export function CopilotProvider({
   const runtimeUrl = agentId
     ? `/api/copilotkit?agent=${encodeURIComponent(agentId)}${threadId ? `&conv=${encodeURIComponent(threadId)}` : ""}`
     : "/api/copilotkit";
+
+  // CopilotKit hands out ONE long-lived agent per agentId (useAgent({ agentId })),
+  // shared across every conversation of that agent. That single instance is the
+  // root of two classes of bug: (1) a conversation's history has to be pushed in
+  // imperatively after mount, which races CopilotKit's own threadId-driven init
+  // (empty chat / flaky double-click select); (2) once a run hits RUN_ERROR the
+  // ag-ui pipeline stays poisoned and every later RUN_STARTED throws until a full
+  // reload. We give each conversation its own agent lifecycle by remounting the
+  // provider on threadId — the thread is fixed for the mount's life (one load, no
+  // race) and a poisoned run can't leak across conversations. `recoveryGen` bumps
+  // to force a fresh, un-poisoned agent when a run errors in place.
+  const [recoveryGen, setRecoveryGen] = useState(0);
+  const lastRecoverRef = useRef(0);
+  const recover = useCallback(() => {
+    // Debounce: onRunFailed and onRunErrorEvent can both fire for one failure,
+    // and a fresh agent that errors again shouldn't spin a remount loop.
+    const now = Date.now();
+    if (now - lastRecoverRef.current < 2000) return;
+    lastRecoverRef.current = now;
+    setRecoveryGen((g) => g + 1);
+  }, []);
 
   // Tool gating (allowlist 016 + deferred 025) is enforced server-side in the
   // copilotkit route's withToolGate middleware. The client registers every
@@ -102,9 +123,14 @@ export function CopilotProvider({
   const webSearchAvailable = ready ? loaded!.webSearchAvailable : false;
 
   return (
-    <CopilotKit key={agentId ?? "none"} runtimeUrl={runtimeUrl} threadId={threadId}>
+    <CopilotKit
+      key={`${agentId ?? "none"}::${threadId || "none"}::${recoveryGen}`}
+      runtimeUrl={runtimeUrl}
+      threadId={threadId}
+    >
       {ready && (
         <>
+          <RunErrorRecovery threadId={threadId} onRecover={recover} />
           <DiscoveryActions agentId={agentId} />
           <OSActions />
           <McpActions agentId={agentId} />
@@ -128,4 +154,49 @@ export function CopilotProvider({
       )}
     </CopilotKit>
   );
+}
+
+// Watches the active agent for a failed/errored run and triggers a recovery
+// remount (via onRecover → bumped provider key). Before remounting it flushes the
+// current message list to disk so the fresh agent reseeds from ChatPersistence
+// with the user's latest turn intact rather than the last debounced save.
+function RunErrorRecovery({ threadId, onRecover }: { threadId: string; onRecover: () => void }) {
+  const { agent } = useCopilotChatInternal();
+  const onRecoverRef = useRef(onRecover);
+  useEffect(() => {
+    onRecoverRef.current = onRecover;
+  });
+
+  useEffect(() => {
+    const a = agent as unknown as {
+      messages?: unknown[];
+      subscribe?: (s: {
+        onRunFailed?: () => void;
+        onRunErrorEvent?: () => void;
+      }) => { unsubscribe: () => void };
+    } | undefined;
+    if (!a || typeof a.subscribe !== "function") return;
+
+    let handled = false;
+    const onFailure = () => {
+      if (handled) return;
+      handled = true;
+      void (async () => {
+        try {
+          const msgs = a.messages;
+          if (threadId && threadId !== "default" && Array.isArray(msgs) && msgs.length > 0) {
+            await saveConversationMessages(threadId, msgs);
+          }
+        } catch {
+          /* best-effort flush; recovery must proceed regardless */
+        }
+        onRecoverRef.current();
+      })();
+    };
+
+    const sub = a.subscribe({ onRunFailed: onFailure, onRunErrorEvent: onFailure });
+    return () => sub.unsubscribe();
+  }, [agent, threadId]);
+
+  return null;
 }

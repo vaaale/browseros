@@ -14,11 +14,13 @@ import { DEFAULT_AGENT_ID } from "@/lib/agent/agent-ids";
  * /Documents/Chats/<threadId>.json.
  *
  * CopilotKit 1.61 renders from the AG-UI `agent.messages` store, NOT the legacy
- * `useCopilotMessagesContext`. So we read/write that store directly: on thread
- * change we load the file and push it into the agent via setMessages; on every
- * agent message change we debounce-save the agent's messages. `agent.messages`
- * are plain AG-UI objects ({ id, role, content, toolCalls? }) and serialize
- * as-is, so no class rehydration is needed on load.
+ * `useCopilotMessagesContext`. So we read/write that store directly. The provider
+ * remounts per conversation (CopilotProvider keys CopilotKit on threadId), so the
+ * threadId here is fixed for this mount's life: we load the file once and seed the
+ * fresh agent via setMessages (no post-mount thread-switch race), then debounce-
+ * save on every agent message change. `agent.messages` are plain AG-UI objects
+ * ({ id, role, content, toolCalls? }) and serialize as-is, so no class
+ * rehydration is needed on load.
  *
  * Exposed as a hook (not a component) so the host calls one
  * useCopilotChatInternal() instead of adding another chat-agent subscriber.
@@ -46,14 +48,11 @@ export function useChatPersistence(agentId: string = DEFAULT_AGENT_ID): { isLoad
     };
   }, []);
 
-  // Abort any in-flight run when leaving a conversation (threadId change) or on
-  // unmount. The agent instance is shared per-agentId across ALL of its
-  // conversations (CopilotKit's useAgent({ agentId })). A run left mid-flight
-  // (e.g. web_search) when the user switches away keeps the shared agent's run
-  // pipeline active; when it errors it enters RUN_ERROR, so returning to the
-  // conversation throws "Cannot send event type 'RUN_STARTED': the run has
-  // already errored with 'RUN_ERROR'" and the chat is stuck/stale. A clean
-  // abort on leave stops the run before it can poison the shared agent.
+  // Abort any in-flight run on unmount. The provider now remounts per
+  // conversation (CopilotProvider keys CopilotKit on threadId), so switching
+  // away tears down this whole subtree and disposes the agent — this abort is
+  // the hygiene step that stops a dangling stream (e.g. mid web_search) before
+  // the instance is discarded, rather than leaving a fetch running detached.
   useEffect(() => {
     if (!agent) return;
     const a = agent as unknown as { isRunning?: boolean; abortRun?: () => void };
