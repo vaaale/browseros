@@ -3,6 +3,33 @@
 import { useCopilotAction } from "@copilotkit/react-core";
 import { DEFAULT_AGENT_ID } from "@/lib/agent/agent-ids";
 
+interface MemoryFetchResult {
+  ok: boolean;
+  status: number;
+  data: Record<string, unknown>;
+}
+
+async function fetchMemoryJson(url: string, init?: RequestInit): Promise<MemoryFetchResult> {
+  const res = await fetch(url, init);
+  const text = await res.text();
+  let data: Record<string, unknown> = {};
+  if (text.trim()) {
+    try {
+      data = JSON.parse(text) as Record<string, unknown>;
+    } catch {
+      data = { error: text.slice(0, 500) };
+    }
+  }
+  return { ok: res.ok, status: res.status, data };
+}
+
+function memoryError(result: MemoryFetchResult): string {
+  const msg = typeof result.data.error === "string" && result.data.error.trim()
+    ? result.data.error.trim()
+    : `HTTP ${result.status}`;
+  return `Error: ${msg}`;
+}
+
 // Per-agent memory actions (023-per-agent-memory). Durable knowledge lives in
 // this agent's topic files under /Memories/<agentId>/Topics/; the user-preferences
 // summary + topic index (MEMORY.md) is injected into the system prompt at session
@@ -31,11 +58,13 @@ export function MemoryActions({ agentId = DEFAULT_AGENT_ID }: { agentId?: string
           body: JSON.stringify({ target: "topic", topic: slug, action: "create", content: String(digest).trim() }),
         }).catch(() => undefined);
       }
-      const res = await fetch(`/api/memory${q}`, {
+      const result = await fetchMemoryJson(`/api/memory${q}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ target: "topic", topic: slug, action: "add", content: text }),
-      }).then((r) => r.json());
+      });
+      const res = result.data;
+      if (!result.ok) return memoryError(result);
       if (res.error) return `Error: ${res.error}`;
       return `${res.message ?? "Saved."} (topics/${slug} ${res.usage ?? ""})`;
     },
@@ -51,14 +80,21 @@ export function MemoryActions({ agentId = DEFAULT_AGENT_ID }: { agentId?: string
     handler: async ({ topic }) => {
       if (topic && String(topic).trim()) {
         const slug = String(topic).trim();
-        const res = await fetch(`/api/memory${q}&topic=${encodeURIComponent(slug)}`).then((r) => r.json());
+        const result = await fetchMemoryJson(`/api/memory${q}&topic=${encodeURIComponent(slug)}`);
+        const res = result.data;
+        if (!result.ok && result.status === 404) {
+          return `No topic "${slug}". Call memory_recall with no argument to see the index, or use memory_search with a keyword query.`;
+        }
+        if (!result.ok) return memoryError(result);
         if (res.error) return `Error: ${res.error}`;
         const entries = (res.entries ?? []) as { text: string; timestamp: string }[];
         if (!entries.length) return `Topic "${slug}" is empty.`;
         const digest = res.digest ? `> ${res.digest}\n` : "";
         return `## Topic: ${res.topic}\n${digest}\n- ${entries.map((e) => `[${e.timestamp}] ${e.text}`).join("\n- ")}`;
       }
-      const res = await fetch(`/api/memory${q}`).then((r) => r.json());
+      const result = await fetchMemoryJson(`/api/memory${q}`);
+      if (!result.ok) return memoryError(result);
+      const res = result.data;
       const preferences = String(res.preferences ?? "").trim();
       const index = (res.index ?? []) as { file: string; description: string }[];
       if (!preferences && index.length === 0) return "Memory is empty.";
