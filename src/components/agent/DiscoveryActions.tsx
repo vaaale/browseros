@@ -1,48 +1,39 @@
 "use client";
 
-import { useCallback } from "react";
+import { useMemo } from "react";
 import { useCopilotAction } from "@copilotkit/react-core";
+import { fetchToolJson, runToolHandler } from "@/lib/agent/tool-kernel";
 
 // Runtime discovery for the main-chat backend gate (025-deferred-tool-discovery).
 // These actions are always registered; `/api/copilotkit` filters the model's
 // visible tool schemas server-side and derives revealed tool ids from prior
 // `find_tools` results in the transcript.
+
+/** Shared handler for find_tools/find_agent — same endpoint, different `type`. */
+function makeDiscoveryHandler(tool: string, type: "tool" | "agent", agentId: string) {
+  return ({ query }: { query: string }) =>
+    runToolHandler(tool, async ({ signal }) => {
+      const q = String(query ?? "").trim();
+      if (q.length < 2) return JSON.stringify([]);
+      const out = await fetchToolJson(
+        tool,
+        `/api/assistant/discovery?agentId=${encodeURIComponent(agentId)}&query=${encodeURIComponent(q)}&type=${type}`,
+        { signal },
+      );
+      if (!out.ok) return out.error;
+      const res = out.data as { results?: unknown[]; error?: string };
+      if (res.error) return `Error: ${res.error}`;
+      return JSON.stringify(res.results ?? []);
+    });
+}
+
 export function DiscoveryActions({
   agentId,
 }: {
   agentId: string;
 }) {
-  const findToolsHandler = useCallback(
-    async ({ query }: { query: string }) => {
-      const q = String(query ?? "").trim();
-      if (q.length < 2) return JSON.stringify([]);
-      const res = await fetch(
-        `/api/assistant/discovery?agentId=${encodeURIComponent(agentId)}&query=${encodeURIComponent(q)}&type=tool`,
-      ).then((r) => r.json()) as {
-        results?: { id: string; group: string; description: string; schema: Record<string, unknown>; score: number }[];
-        error?: string;
-      };
-      if (res.error) return `Error: ${res.error}`;
-      return JSON.stringify(res.results ?? []);
-    },
-    [agentId],
-  );
-
-  const findAgentHandler = useCallback(
-    async ({ query }: { query: string }) => {
-      const q = String(query ?? "").trim();
-      if (q.length < 2) return JSON.stringify([]);
-      const res = await fetch(
-        `/api/assistant/discovery?agentId=${encodeURIComponent(agentId)}&query=${encodeURIComponent(q)}&type=agent`,
-      ).then((r) => r.json()) as {
-        results?: { id: string; name: string; type: string; description: string; score: number }[];
-        error?: string;
-      };
-      if (res.error) return `Error: ${res.error}`;
-      return JSON.stringify(res.results ?? []);
-    },
-    [agentId],
-  );
+  const findToolsHandler = useMemo(() => makeDiscoveryHandler("find_tools", "tool", agentId), [agentId]);
+  const findAgentHandler = useMemo(() => makeDiscoveryHandler("find_agent", "agent", agentId), [agentId]);
 
   useCopilotAction({
     name: "find_tools",

@@ -7,6 +7,7 @@ import { loadConversationMessages, useActiveConversationId } from "@/lib/agent/c
 import { deleteNote, editNote, readNotes, writeNote } from "@/lib/agent/scratchpad/handlers";
 import { ensureInitialized } from "@/lib/agent/scratchpad/replay";
 import type { ToolResult } from "@/lib/agent/scratchpad/types";
+import { runToolHandler } from "@/lib/agent/tool-kernel";
 
 // Conversation-scoped note-taking exposed to the assistant. Notes live in a
 // module-level Map keyed by conversationId (see src/lib/agent/scratchpad/); they
@@ -16,6 +17,10 @@ import type { ToolResult } from "@/lib/agent/scratchpad/types";
 //
 // The CopilotKit route gates these actions server-side via the unified
 // capability allowlist, the same way as skill_*, workflow_*, etc.
+//
+// Handlers are local (no fetch) but still run inside runToolHandler (the tool
+// kernel) for the uniform always-settles contract; the kernel timeout bounds
+// the lazy history replay in ensureInitialized.
 
 export function ScratchpadActions({ agentId = DEFAULT_AGENT_ID }: { agentId?: string }) {
   // Read the CURRENT conversation through a ref so handlers never close over a
@@ -40,7 +45,8 @@ export function ScratchpadActions({ agentId = DEFAULT_AGENT_ID }: { agentId?: st
       { name: "title", type: "string", description: "Unique note title within this conversation.", required: true },
       { name: "content", type: "string", description: "Note body (any text; empty string allowed).", required: true },
     ],
-    handler: async ({ title, content }) => JSON.stringify(await withInit((id) => writeNote(id, title, content))),
+    handler: ({ title, content }) =>
+      runToolHandler("scratchpad_write", async () => JSON.stringify(await withInit((id) => writeNote(id, title, content)))),
   });
 
   useCopilotAction({
@@ -50,7 +56,8 @@ export function ScratchpadActions({ agentId = DEFAULT_AGENT_ID }: { agentId?: st
     parameters: [
       { name: "title", type: "string", description: "Optional: specific note title to fetch in full.", required: false },
     ],
-    handler: async ({ title }) => JSON.stringify(await withInit((id) => readNotes(id, title))),
+    handler: ({ title }) =>
+      runToolHandler("scratchpad_read", async () => JSON.stringify(await withInit((id) => readNotes(id, title)))),
   });
 
   useCopilotAction({
@@ -61,7 +68,8 @@ export function ScratchpadActions({ agentId = DEFAULT_AGENT_ID }: { agentId?: st
       { name: "title", type: "string", description: "Title of the note to update.", required: true },
       { name: "content", type: "string", description: "New note body (replaces the previous content).", required: true },
     ],
-    handler: async ({ title, content }) => JSON.stringify(await withInit((id) => editNote(id, title, content))),
+    handler: ({ title, content }) =>
+      runToolHandler("scratchpad_edit", async () => JSON.stringify(await withInit((id) => editNote(id, title, content)))),
   });
 
   useCopilotAction({
@@ -71,7 +79,8 @@ export function ScratchpadActions({ agentId = DEFAULT_AGENT_ID }: { agentId?: st
     parameters: [
       { name: "title", type: "string", description: "Title of the note to remove.", required: true },
     ],
-    handler: async ({ title }) => JSON.stringify(await withInit((id) => deleteNote(id, title))),
+    handler: ({ title }) =>
+      runToolHandler("scratchpad_delete", async () => JSON.stringify(await withInit((id) => deleteNote(id, title)))),
   });
 
   return null;

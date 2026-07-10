@@ -2,6 +2,7 @@
 
 import { useCopilotAction } from "@copilotkit/react-core";
 import { DEFAULT_AGENT_ID } from "@/lib/agent/agent-ids";
+import { fetchToolJson, runToolHandler } from "@/lib/agent/tool-kernel";
 
 // Self-improvement actions. `self_improve` is the primary path: the agent calls
 // it (with an honest reflection) when the user criticizes HOW a task was done;
@@ -22,16 +23,20 @@ export function SelfImprovementActions({
     parameters: [
       { name: "reflection", type: "string", description: "Your honest reflection on the criticism and what the better approach would be.", required: true },
     ],
-    handler: async ({ reflection }) => {
-      if (!conversationId) return "Self-improvement unavailable: no active conversation.";
-      const res = await fetch("/api/assistant/self-improve", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ agentId, conversationId, reflection }),
-      }).then((r) => r.json());
-      if (res.error) return `Error: ${res.error}`;
-      return "Self-improvement started in the background — I'll keep helping you.";
-    },
+    handler: ({ reflection }) =>
+      runToolHandler("self_improve", async ({ signal }) => {
+        if (!conversationId) return "Self-improvement unavailable: no active conversation.";
+        const out = await fetchToolJson("self_improve", "/api/assistant/self-improve", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ agentId, conversationId, reflection }),
+          signal,
+        });
+        if (!out.ok) return out.error;
+        const res = out.data as { error?: string };
+        if (res.error) return `Error: ${res.error}`;
+        return "Self-improvement started in the background — I'll keep helping you.";
+      }),
   });
 
   useCopilotAction({
@@ -39,11 +44,14 @@ export function SelfImprovementActions({
     description:
       "Run the skill Curator: archives stale, agent-created, unpinned skills (never deletes — archived skills are restorable). Use occasionally to keep the skill library tidy.",
     parameters: [],
-    handler: async () => {
-      const res = await fetch("/api/skills/curator", { method: "POST" }).then((r) => r.json());
-      if (res.error) return `Error: ${res.error}`;
-      return `Curator reviewed ${res.reviewed} skill(s); archived ${res.archived?.length ?? 0}${res.archived?.length ? `: ${res.archived.join(", ")}` : ""}.`;
-    },
+    handler: () =>
+      runToolHandler("skill_curate", async ({ signal }) => {
+        const out = await fetchToolJson("skill_curate", "/api/skills/curator", { method: "POST", signal });
+        if (!out.ok) return out.error;
+        const res = out.data as { error?: string; reviewed?: number; archived?: string[] };
+        if (res.error) return `Error: ${res.error}`;
+        return `Curator reviewed ${res.reviewed} skill(s); archived ${res.archived?.length ?? 0}${res.archived?.length ? `: ${res.archived.join(", ")}` : ""}.`;
+      }),
   });
 
   useCopilotAction({
@@ -53,14 +61,18 @@ export function SelfImprovementActions({
       { name: "skill", type: "string", description: "Skill name or id", required: true },
       { name: "feedback", type: "string", description: "What to improve / what went wrong or well", required: true },
     ],
-    handler: async ({ skill, feedback }) => {
-      const res = await fetch("/api/skills/improve", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ skill, feedback }),
-      }).then((r) => r.json());
-      return res.error ? `Error: ${res.error}` : `Improved skill "${res.skill.name}" (score ${res.skill.score}).`;
-    },
+    handler: ({ skill, feedback }) =>
+      runToolHandler("skill_improve", async ({ signal }) => {
+        const out = await fetchToolJson("skill_improve", "/api/skills/improve", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ skill, feedback }),
+          signal,
+        });
+        if (!out.ok) return out.error;
+        const res = out.data as { error?: string; skill: { name: string; score: number } };
+        return res.error ? `Error: ${res.error}` : `Improved skill "${res.skill.name}" (score ${res.skill.score}).`;
+      }),
   });
 
   return null;

@@ -2,6 +2,7 @@
 
 import { useCopilotAction } from "@copilotkit/react-core";
 import { parseToolArgs } from "@/lib/mcp/args";
+import { fetchToolJson, runToolHandler } from "@/lib/agent/tool-kernel";
 
 // Agent-facing MCP tool gateway (014-mcp-tool-gateway). The agent never gets every
 // server's tools in context — it follows a staged discovery flow:
@@ -11,6 +12,9 @@ import { parseToolArgs } from "@/lib/mcp/args";
 //   4. callMcpTool(server, tool, args) → execute with schema-matching arguments
 // The `agentId` (the chat's pinned agent) scopes the gateway to that agent's allowed
 // servers (011); omitted = the globally active agent.
+//
+// All handlers run inside runToolHandler (the tool kernel): they always settle
+// and return an in-band `Error: …` string on failure so the run never hangs.
 export function McpActions({ agentId }: { agentId?: string }) {
   const scope = agentId ? `&agent=${encodeURIComponent(agentId)}` : "";
 
@@ -18,10 +22,12 @@ export function McpActions({ agentId }: { agentId?: string }) {
     name: "mcp_server_list",
     description: "List the MCP servers available to you, with their descriptions (what each is for).",
     parameters: [],
-    handler: async () => {
-      const res = await fetch("/api/mcp").then((r) => r.json());
-      return JSON.stringify(res.servers ?? []);
-    },
+    handler: () =>
+      runToolHandler("mcp_server_list", async ({ signal }) => {
+        const out = await fetchToolJson("mcp_server_list", "/api/mcp", { signal });
+        if (!out.ok) return out.error;
+        return JSON.stringify(out.data.servers ?? []);
+      }),
   });
 
   useCopilotAction({
@@ -32,18 +38,21 @@ export function McpActions({ agentId }: { agentId?: string }) {
       { name: "query", type: "string", description: "Search text or wildcard pattern, e.g. 'repo*' or 'create issue'", required: true },
       { name: "server", type: "string", description: "Optional: restrict search to this MCP server only", required: false },
     ],
-    handler: async ({ query, server }) => {
-      if (server) {
-        const res = await fetch(`/api/mcp/tools?server=${encodeURIComponent(String(server))}${scope}`).then((r) => r.json());
-        const match = String(query ?? "").toLowerCase();
-        const tools = (res.tools ?? []).filter((t: { name: string; description?: string }) =>
-          t.name.toLowerCase().includes(match) || (t.description ?? "").toLowerCase().includes(match),
-        );
-        return JSON.stringify({ tools });
-      }
-      const res = await fetch(`/api/mcp/tools?find=${encodeURIComponent(String(query ?? ""))}${scope}`).then((r) => r.json());
-      return JSON.stringify(res);
-    },
+    handler: ({ query, server }) =>
+      runToolHandler("mcp_tool_search", async ({ signal }) => {
+        if (server) {
+          const out = await fetchToolJson("mcp_tool_search", `/api/mcp/tools?server=${encodeURIComponent(String(server))}${scope}`, { signal });
+          if (!out.ok) return out.error;
+          const match = String(query ?? "").toLowerCase();
+          const tools = ((out.data.tools ?? []) as { name: string; description?: string }[]).filter(
+            (t) => t.name.toLowerCase().includes(match) || (t.description ?? "").toLowerCase().includes(match),
+          );
+          return JSON.stringify({ tools });
+        }
+        const out = await fetchToolJson("mcp_tool_search", `/api/mcp/tools?find=${encodeURIComponent(String(query ?? ""))}${scope}`, { signal });
+        if (!out.ok) return out.error;
+        return JSON.stringify(out.data);
+      }),
   });
 
   useCopilotAction({
@@ -51,10 +60,12 @@ export function McpActions({ agentId }: { agentId?: string }) {
     description:
       "List all tools a specific MCP server exposes, each with its description and input JSON schema.",
     parameters: [{ name: "server", type: "string", description: "MCP server name", required: true }],
-    handler: async ({ server }) => {
-      const res = await fetch(`/api/mcp/tools?server=${encodeURIComponent(String(server ?? ""))}${scope}`).then((r) => r.json());
-      return JSON.stringify(res);
-    },
+    handler: ({ server }) =>
+      runToolHandler("mcp_server_tools", async ({ signal }) => {
+        const out = await fetchToolJson("mcp_server_tools", `/api/mcp/tools?server=${encodeURIComponent(String(server ?? ""))}${scope}`, { signal });
+        if (!out.ok) return out.error;
+        return JSON.stringify(out.data);
+      }),
   });
 
   useCopilotAction({
@@ -65,10 +76,16 @@ export function McpActions({ agentId }: { agentId?: string }) {
       { name: "server", type: "string", description: "MCP server name", required: true },
       { name: "tool", type: "string", description: "Tool name on that server", required: true },
     ],
-    handler: async ({ server, tool }) => {
-      const res = await fetch(`/api/mcp/tools?server=${encodeURIComponent(String(server ?? ""))}&tool=${encodeURIComponent(String(tool ?? ""))}${scope}`).then((r) => r.json());
-      return JSON.stringify(res);
-    },
+    handler: ({ server, tool }) =>
+      runToolHandler("mcp_tool_schema", async ({ signal }) => {
+        const out = await fetchToolJson(
+          "mcp_tool_schema",
+          `/api/mcp/tools?server=${encodeURIComponent(String(server ?? ""))}&tool=${encodeURIComponent(String(tool ?? ""))}${scope}`,
+          { signal },
+        );
+        if (!out.ok) return out.error;
+        return JSON.stringify(out.data);
+      }),
   });
 
   useCopilotAction({
@@ -90,16 +107,19 @@ export function McpActions({ agentId }: { agentId?: string }) {
         required: false,
       },
     ],
-    handler: async ({ server, tool, args }) => {
-      const parsed = parseToolArgs(args);
-      if (parsed.error) return `Error: ${parsed.error}`;
-      const res = await fetch("/api/mcp/tools", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ server, tool, arguments: parsed.args, agent: agentId }),
-      }).then((r) => r.json());
-      return res.error ? `Error: ${res.error}` : String(res.result ?? "");
-    },
+    handler: ({ server, tool, args }) =>
+      runToolHandler("mcp_tool_call", async ({ signal }) => {
+        const parsed = parseToolArgs(args);
+        if (parsed.error) return `Error: ${parsed.error}`;
+        const out = await fetchToolJson("mcp_tool_call", "/api/mcp/tools", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ server, tool, arguments: parsed.args, agent: agentId }),
+          signal,
+        });
+        if (!out.ok) return out.error;
+        return out.data.error ? `Error: ${out.data.error}` : String(out.data.result ?? "");
+      }),
   });
 
   useCopilotAction({
@@ -117,24 +137,32 @@ export function McpActions({ agentId }: { agentId?: string }) {
       { name: "args", type: "string[]", description: "Command arguments (stdio)", required: false },
       { name: "env", type: "object", description: "Environment variables (stdio)", required: false },
     ],
-    handler: async ({ name, description, transport, endpoint, apiKey, headers, command, args, env }) => {
-      const res = await fetch("/api/mcp", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, description, transport, endpoint, apiKey, headers, command, args, env }),
-      }).then((r) => r.json());
-      return res.error ? `Error: ${res.error}` : `Connected. Servers: ${JSON.stringify(res.servers)}`;
-    },
+    handler: ({ name, description, transport, endpoint, apiKey, headers, command, args, env }) =>
+      runToolHandler("mcp_server_add", async ({ signal }) => {
+        const out = await fetchToolJson("mcp_server_add", "/api/mcp", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, description, transport, endpoint, apiKey, headers, command, args, env }),
+          signal,
+        });
+        if (!out.ok) return out.error;
+        return out.data.error ? `Error: ${out.data.error}` : `Connected. Servers: ${JSON.stringify(out.data.servers)}`;
+      }),
   });
 
   useCopilotAction({
     name: "mcp_server_remove",
     description: "Disconnect an MCP server by its name.",
     parameters: [{ name: "name", type: "string", description: "MCP server name", required: true }],
-    handler: async ({ name }) => {
-      const res = await fetch(`/api/mcp?name=${encodeURIComponent(name as string)}`, { method: "DELETE" }).then((r) => r.json());
-      return `Remaining servers: ${JSON.stringify(res.servers ?? [])}`;
-    },
+    handler: ({ name }) =>
+      runToolHandler("mcp_server_remove", async ({ signal }) => {
+        const out = await fetchToolJson("mcp_server_remove", `/api/mcp?name=${encodeURIComponent(name as string)}`, {
+          method: "DELETE",
+          signal,
+        });
+        if (!out.ok) return out.error;
+        return `Remaining servers: ${JSON.stringify(out.data.servers ?? [])}`;
+      }),
   });
 
   return null;

@@ -12,6 +12,7 @@ import {
   invokeAdapterMethod,
   toCopilotParameter,
 } from "@/lib/integrations/actions/dispatcher";
+import { runToolHandler } from "@/lib/agent/tool-kernel";
 
 // Registers one CopilotKit action per adapter method. Every action is rendered
 // on every render (never conditionally mounted / unmounted) — the number of
@@ -134,6 +135,45 @@ export function IntegrationActions() {
   );
 }
 
+type AdapterError = Error & { code?: string; scope?: string };
+
+/**
+ * Shared adapter-invoke path for the integration actions: runs the method,
+ * JSON-stringifies + truncates the result, and maps known error codes to the
+ * integration-specific, model-facing guidance strings (`mapError`). Runs
+ * inside the caller's runToolHandler wrapper, so it may return error strings
+ * but never needs to throw.
+ */
+async function invokeMapped(opts: {
+  integrationId: string;
+  serviceId: string;
+  method: string;
+  args: Record<string, unknown>;
+  truncationNote: string;
+  mapError: (e: AdapterError) => string;
+}): Promise<string> {
+  try {
+    const result = await invokeAdapterMethod({
+      integrationId: opts.integrationId,
+      serviceId: opts.serviceId,
+      method: opts.method,
+      args: opts.args,
+    });
+    // Trim large payloads so the LLM's context isn't blown out by a giant
+    // list of messages / files. 8 KB is enough to preserve small responses
+    // but avoids dumping raw bodies verbatim. Binary downloads (Drive)
+    // already enforce their own maxBytes cap and return base64 that we
+    // never truncate below its own limit.
+    const json = JSON.stringify(result);
+    if (json.length > 8_000) {
+      return `${json.slice(0, 8_000)}${opts.truncationNote}`;
+    }
+    return json;
+  } catch (err) {
+    return opts.mapError(err as AdapterError);
+  }
+}
+
 interface GsuiteActionProps {
   serviceId: string;
   method: string;
@@ -183,38 +223,28 @@ function GsuiteMethodAction({
         required: p.required,
       }),
     ),
-    handler: async (args: Record<string, unknown>) => {
-      try {
-        const result = await invokeAdapterMethod({
+    handler: (args: Record<string, unknown>) =>
+      runToolHandler(name, () =>
+        invokeMapped({
           integrationId: "gsuite",
           serviceId,
           method,
           args: args ?? {},
-        });
-        // Trim large payloads so the LLM's context isn't blown out by a giant
-        // list of messages / files. 8 KB is enough to preserve small responses
-        // but avoids dumping raw bodies verbatim. Binary downloads (Drive)
-        // already enforce their own maxBytes cap and return base64 that we
-        // never truncate below its own limit.
-        const json = JSON.stringify(result);
-        if (json.length > 8_000) {
-          return `${json.slice(0, 8_000)}\n\n… response truncated at 8 KB. Use a smaller pageSize / maxResults or fetch specific ids to see more.`;
-        }
-        return json;
-      } catch (err) {
-        const e = err as Error & { code?: string; scope?: string };
-        if (e.code === "scope_disabled") {
-          return `Error: scope '${e.scope}' is not enabled for gsuite. Ask the user to enable it in Settings → Integrations → GSuite, or to reconnect if it isn't granted.`;
-        }
-        if (e.code === "auth_failed") {
-          return `Error: GSuite is not connected (auth_failed). Ask the user to connect it in Settings → Integrations.`;
-        }
-        if (e.code === "config_invalid") {
-          return `Error: GSuite is misconfigured (${e.message}). Ask the user to upload client_secrets.json in Settings → Integrations → GSuite.`;
-        }
-        return `Error: ${e.message ?? "call failed"}`;
-      }
-    },
+          truncationNote: "\n\n… response truncated at 8 KB. Use a smaller pageSize / maxResults or fetch specific ids to see more.",
+          mapError: (e) => {
+            if (e.code === "scope_disabled") {
+              return `Error: scope '${e.scope}' is not enabled for gsuite. Ask the user to enable it in Settings → Integrations → GSuite, or to reconnect if it isn't granted.`;
+            }
+            if (e.code === "auth_failed") {
+              return `Error: GSuite is not connected (auth_failed). Ask the user to connect it in Settings → Integrations.`;
+            }
+            if (e.code === "config_invalid") {
+              return `Error: GSuite is misconfigured (${e.message}). Ask the user to upload client_secrets.json in Settings → Integrations → GSuite.`;
+            }
+            return `Error: ${e.message ?? "call failed"}`;
+          },
+        }),
+      ),
   });
   return null;
 }
@@ -259,36 +289,31 @@ function TelegramMethodAction({
         required: p.required,
       }),
     ),
-    handler: async (args: Record<string, unknown>) => {
-      try {
-        const result = await invokeAdapterMethod({
+    handler: (args: Record<string, unknown>) =>
+      runToolHandler(name, () =>
+        invokeMapped({
           integrationId: "telegram",
           serviceId,
           method,
           args: args ?? {},
-        });
-        const json = JSON.stringify(result);
-        if (json.length > 8_000) {
-          return `${json.slice(0, 8_000)}\n\n… response truncated at 8 KB.`;
-        }
-        return json;
-      } catch (err) {
-        const e = err as Error & { code?: string; scope?: string };
-        if (e.code === "scope_disabled") {
-          return `Error: scope '${e.scope}' is not enabled for telegram. Ask the user to enable it in Settings → Integrations → Telegram, or to reconnect if it isn't granted.`;
-        }
-        if (e.code === "auth_failed") {
-          return `Error: Telegram bot token is missing or revoked. Ask the user to reconnect in Settings → Integrations → Telegram.`;
-        }
-        if (e.code === "config_invalid") {
-          return `Error: Telegram is not configured (${e.message}). Ask the user to add a bot token in Settings → Integrations → Telegram.`;
-        }
-        if (e.code === "not_implemented") {
-          return `Error: ${e.message}`;
-        }
-        return `Error: ${e.message ?? "call failed"}`;
-      }
-    },
+          truncationNote: "\n\n… response truncated at 8 KB.",
+          mapError: (e) => {
+            if (e.code === "scope_disabled") {
+              return `Error: scope '${e.scope}' is not enabled for telegram. Ask the user to enable it in Settings → Integrations → Telegram, or to reconnect if it isn't granted.`;
+            }
+            if (e.code === "auth_failed") {
+              return `Error: Telegram bot token is missing or revoked. Ask the user to reconnect in Settings → Integrations → Telegram.`;
+            }
+            if (e.code === "config_invalid") {
+              return `Error: Telegram is not configured (${e.message}). Ask the user to add a bot token in Settings → Integrations → Telegram.`;
+            }
+            if (e.code === "not_implemented") {
+              return `Error: ${e.message}`;
+            }
+            return `Error: ${e.message ?? "call failed"}`;
+          },
+        }),
+      ),
   });
   return null;
 }

@@ -2,6 +2,7 @@
 
 import { useCopilotAction } from "@copilotkit/react-core";
 import { getSessionId } from "@/lib/logging/client/session";
+import { fetchToolJson, runToolHandler } from "@/lib/agent/tool-kernel";
 
 // Sandboxed command execution for the main chat. Keys the sandbox on the browser
 // session id (+ "main"); sub-agents call the executor server-side with their own
@@ -21,14 +22,18 @@ export function RunCommandActions() {
       { name: "skill", type: "string", description: "Optional skill id: stage that skill's files into the working dir so its SKILL.md relative paths resolve.", required: false },
       { name: "timeoutMs", type: "number", description: "Optional per-call max timeout in ms (capped by Settings).", required: false },
     ],
-    handler: async ({ command, language, skill, timeoutMs }) => {
-      const res = await fetch("/api/system/run-command", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ command, language, skill, timeoutMs, sessionId: getSessionId(), agentId: "main" }),
-      }).then((r) => r.json());
-      return res.error ? `Error: ${res.error}` : JSON.stringify(res);
-    },
+    handler: ({ command, language, skill, timeoutMs }) =>
+      runToolHandler("run_command", async ({ signal }) => {
+        const out = await fetchToolJson("run_command", "/api/system/run-command", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ command, language, skill, timeoutMs, sessionId: getSessionId(), agentId: "main" }),
+          signal,
+        });
+        if (!out.ok) return out.error;
+        const res = out.data as { error?: string };
+        return res.error ? `Error: ${res.error}` : JSON.stringify(out.data);
+      }),
   });
 
   return null;

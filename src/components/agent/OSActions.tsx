@@ -5,9 +5,15 @@ import { useCopilotReadable, useCopilotAction } from "@copilotkit/react-core";
 import { useOSStore, useOSStoreApi } from "@/store/os-provider";
 import { fsClient, settingsClient } from "@/lib/os-client";
 import { WALLPAPERS } from "@/os/wallpapers";
+import { runToolHandler } from "@/lib/agent/tool-kernel";
 
 // Registers the OS capabilities the agent can invoke. Rendered inside both the
 // OSProvider (store access) and the CopilotKit provider (action registration).
+//
+// Every handler — even local/synchronous store calls — runs inside
+// runToolHandler (the tool kernel) for a uniform always-settles contract; the
+// kernel timeout also bounds the fsClient/settingsClient calls (which have no
+// AbortSignal support of their own).
 export function OSActions() {
   const store = useOSStoreApi();
   const apps = useOSStore((s) => s.apps);
@@ -31,22 +37,25 @@ export function OSActions() {
     parameters: [
       { name: "appId", type: "string", description: "The app id, e.g. files, browser, settings, chat", required: true },
     ],
-    handler: async ({ appId }) => {
-      const id = store.getState().launch(appId as string);
-      return id ? `Launched ${appId} (window ${id}).` : `No app with id "${appId}".`;
-    },
+    handler: ({ appId }) =>
+      runToolHandler("bos_app_launch", async () => {
+        const id = store.getState().launch(appId as string);
+        return id ? `Launched ${appId} (window ${id}).` : `No app with id "${appId}".`;
+      }),
   });
 
   useCopilotAction({
     name: "bos_app_list",
     description: "List installed applications and their ids.",
     parameters: [],
-    handler: async () =>
-      JSON.stringify(
-        store
-          .getState()
-          .apps.filter((a) => !a.hidden)
-          .map((a) => ({ id: a.id, name: a.name })),
+    handler: () =>
+      runToolHandler("bos_app_list", async () =>
+        JSON.stringify(
+          store
+            .getState()
+            .apps.filter((a) => !a.hidden)
+            .map((a) => ({ id: a.id, name: a.name })),
+        ),
       ),
   });
 
@@ -54,10 +63,11 @@ export function OSActions() {
     name: "bos_window_close",
     description: "Close an open window by its id.",
     parameters: [{ name: "windowId", type: "string", description: "The window id", required: true }],
-    handler: async ({ windowId }) => {
-      store.getState().close(windowId as string);
-      return `Closed window ${windowId}.`;
-    },
+    handler: ({ windowId }) =>
+      runToolHandler("bos_window_close", async () => {
+        store.getState().close(windowId as string);
+        return `Closed window ${windowId}.`;
+      }),
   });
 
   useCopilotAction({
@@ -65,21 +75,23 @@ export function OSActions() {
     description:
       "Change the desktop wallpaper. Accepts a preset id (aurora, dusk, sunset, ocean, forest, graphite, mono), an image URL, or a VFS image path like /Pictures/bg.png.",
     parameters: [{ name: "wallpaper", type: "string", description: "Preset id, URL, or VFS path", required: true }],
-    handler: async ({ wallpaper }) => {
-      store.getState().applySettings({ wallpaper: wallpaper as string });
-      await settingsClient.patch({ wallpaper: wallpaper as string });
-      return `Wallpaper set to ${wallpaper}.`;
-    },
+    handler: ({ wallpaper }) =>
+      runToolHandler("bos_wallpaper_set", async () => {
+        store.getState().applySettings({ wallpaper: wallpaper as string });
+        await settingsClient.patch({ wallpaper: wallpaper as string });
+        return `Wallpaper set to ${wallpaper}.`;
+      }),
   });
 
   useCopilotAction({
     name: "bos_browser_open",
     description: "Open a URL in the BrowserOS web browser.",
     parameters: [{ name: "url", type: "string", description: "The URL or search query", required: true }],
-    handler: async ({ url }) => {
-      const id = store.getState().launch("browser", { url });
-      return id ? `Opened ${url} in the browser.` : "Could not open the browser.";
-    },
+    handler: ({ url }) =>
+      runToolHandler("bos_browser_open", async () => {
+        const id = store.getState().launch("browser", { url });
+        return id ? `Opened ${url} in the browser.` : "Could not open the browser.";
+      }),
   });
 
   useCopilotAction({
@@ -109,30 +121,31 @@ export function OSActions() {
         required: false,
       },
     ],
-    handler: async ({ html, url, filePath, title, update }) => {
-      const toRawUrl = (p: string) => `/api/fs/raw?path=${encodeURIComponent(p)}`;
-      const resolve = (value: string): string => {
-        if (value.startsWith("/") && !value.startsWith("/api/")) return toRawUrl(value);
-        return value;
-      };
-      const params: Record<string, unknown> = {};
-      if (typeof html === "string" && html) params.html = html;
-      else if (typeof filePath === "string" && filePath) {
-        params.url = filePath.startsWith("/") ? toRawUrl(filePath) : filePath;
-      } else if (typeof url === "string" && url) {
-        params.url = resolve(url);
-      }
-      if (typeof title === "string" && title) params.title = title;
-      if (!params.html && !params.url) return "Provide either html, filePath, or url.";
-      // When update=true, close the previous html-viewer window if it is still open.
-      if (update && htmlViewerIdRef.current) {
-        const stillOpen = store.getState().windows.some((w) => w.id === htmlViewerIdRef.current);
-        if (stillOpen) store.getState().close(htmlViewerIdRef.current);
-      }
-      const id = store.getState().launch("html-viewer", params);
-      if (id) htmlViewerIdRef.current = id;
-      return id ? `Opened HTML preview (window ${id}).` : "Could not open the preview.";
-    },
+    handler: ({ html, url, filePath, title, update }) =>
+      runToolHandler("web_view", async () => {
+        const toRawUrl = (p: string) => `/api/fs/raw?path=${encodeURIComponent(p)}`;
+        const resolve = (value: string): string => {
+          if (value.startsWith("/") && !value.startsWith("/api/")) return toRawUrl(value);
+          return value;
+        };
+        const params: Record<string, unknown> = {};
+        if (typeof html === "string" && html) params.html = html;
+        else if (typeof filePath === "string" && filePath) {
+          params.url = filePath.startsWith("/") ? toRawUrl(filePath) : filePath;
+        } else if (typeof url === "string" && url) {
+          params.url = resolve(url);
+        }
+        if (typeof title === "string" && title) params.title = title;
+        if (!params.html && !params.url) return "Provide either html, filePath, or url.";
+        // When update=true, close the previous html-viewer window if it is still open.
+        if (update && htmlViewerIdRef.current) {
+          const stillOpen = store.getState().windows.some((w) => w.id === htmlViewerIdRef.current);
+          if (stillOpen) store.getState().close(htmlViewerIdRef.current);
+        }
+        const id = store.getState().launch("html-viewer", params);
+        if (id) htmlViewerIdRef.current = id;
+        return id ? `Opened HTML preview (window ${id}).` : "Could not open the preview.";
+      }),
   });
 
   useCopilotAction({
@@ -140,27 +153,18 @@ export function OSActions() {
     description:
       "List entries in the USER'S virtual file system (their Documents, Pictures, Desktop, etc.). This is sandboxed user data — it does NOT contain BrowserOS's own source code, apps, or Settings pages. To change BrowserOS itself, delegate to the developer sub-agent (see the 'Modify BrowserOS' skill); do not hunt for source here.",
     parameters: [{ name: "path", type: "string", description: 'Directory path, defaults to "/"', required: false }],
-    handler: async ({ path }) => {
-      try {
+    handler: ({ path }) =>
+      runToolHandler("file_list", async () => {
         const entries = await fsClient.list((path as string) || "/");
         return JSON.stringify(entries.map((e) => ({ name: e.name, path: e.path, type: e.type, size: e.size })));
-      } catch (e) {
-        return `Error: ${(e as Error).message}`;
-      }
-    },
+      }),
   });
 
   useCopilotAction({
     name: "file_read",
     description: "Read a text file from the user's virtual file system (sandboxed user data, NOT BrowserOS source code).",
     parameters: [{ name: "path", type: "string", description: "File path", required: true }],
-    handler: async ({ path }) => {
-      try {
-        return await fsClient.read(path as string);
-      } catch (e) {
-        return `Error: ${(e as Error).message}`;
-      }
-    },
+    handler: ({ path }) => runToolHandler("file_read", () => fsClient.read(path as string)),
   });
 
   useCopilotAction({
@@ -171,42 +175,33 @@ export function OSActions() {
       { name: "path", type: "string", description: "File path", required: true },
       { name: "content", type: "string", description: "File contents", required: true },
     ],
-    handler: async ({ path, content }) => {
-      try {
+    handler: ({ path, content }) =>
+      runToolHandler("file_write", async () => {
         await fsClient.write(path as string, (content as string) ?? "");
         return `Wrote ${path}.`;
-      } catch (e) {
-        return `Error: ${(e as Error).message}`;
-      }
-    },
+      }),
   });
 
   useCopilotAction({
     name: "file_mkdir",
     description: "Create a directory in the virtual file system.",
     parameters: [{ name: "path", type: "string", description: "Directory path", required: true }],
-    handler: async ({ path }) => {
-      try {
+    handler: ({ path }) =>
+      runToolHandler("file_mkdir", async () => {
         await fsClient.mkdir(path as string);
         return `Created folder ${path}.`;
-      } catch (e) {
-        return `Error: ${(e as Error).message}`;
-      }
-    },
+      }),
   });
 
   useCopilotAction({
     name: "file_delete",
     description: "Delete a file or folder from the virtual file system.",
     parameters: [{ name: "path", type: "string", description: "Path to delete", required: true }],
-    handler: async ({ path }) => {
-      try {
+    handler: ({ path }) =>
+      runToolHandler("file_delete", async () => {
         await fsClient.remove(path as string);
         return `Deleted ${path}.`;
-      } catch (e) {
-        return `Error: ${(e as Error).message}`;
-      }
-    },
+      }),
   });
 
   return null;

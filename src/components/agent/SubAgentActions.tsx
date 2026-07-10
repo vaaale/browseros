@@ -8,6 +8,7 @@ import { useActiveConversationId, useActiveConversation, setConversationActiveFe
 import { DEFAULT_AGENT_ID } from "@/lib/agent/agent-ids";
 import { suggestFeatureBranchName, normalizeFeatureBranch } from "@/lib/agent/feature-branch";
 import { sessionHeader } from "@/lib/logging/client/session";
+import { fetchToolJson, getToolTimeoutMs, readNdjsonStream, runToolHandler } from "@/lib/agent/tool-kernel";
 
 type Choice = "once" | "session" | "local";
 
@@ -173,16 +174,13 @@ export function SubAgentActions({ agentId = DEFAULT_AGENT_ID }: { agentId?: stri
     name: "agent_list",
     description: "List available sub-agents (id, name, type local|claude, description) you can delegate to.",
     parameters: [],
-    handler: async () => {
-      const res = await fetch("/api/subagents").then((r) => r.json());
-      return JSON.stringify(
-        (res.subAgents ?? []).map((a: { id: string; name: string; type: string; description: string }) => ({
-          id: a.id,
-          type: a.type,
-          description: a.description,
-        })),
-      );
-    },
+    handler: () =>
+      runToolHandler("agent_list", async ({ signal }) => {
+        const out = await fetchToolJson("agent_list", "/api/subagents", { signal });
+        if (!out.ok) return out.error;
+        const subAgents = (out.data.subAgents ?? []) as { id: string; name: string; type: string; description: string }[];
+        return JSON.stringify(subAgents.map((a) => ({ id: a.id, type: a.type, description: a.description })));
+      }),
   });
 
   useCopilotAction({
@@ -196,14 +194,19 @@ export function SubAgentActions({ agentId = DEFAULT_AGENT_ID }: { agentId?: stri
       { name: "systemPrompt", type: "string", description: "Instructions defining the sub-agent", required: true },
       { name: "subagentType", type: "string", description: "For 'claude' agents: the harness Agent subagent_type to use (a registered agent type on the harness). Defaults to the agent id.", required: false },
     ],
-    handler: async ({ name, description, type, systemPrompt, subagentType }) => {
-      const res = await fetch("/api/subagents", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, description, type, systemPrompt, subagentType }),
-      }).then((r) => r.json());
-      return res.error ? `Error: ${res.error}` : `Created ${res.subAgent.type} sub-agent "${res.subAgent.name}" (${res.subAgent.id}).`;
-    },
+    handler: ({ name, description, type, systemPrompt, subagentType }) =>
+      runToolHandler("agent_create", async ({ signal }) => {
+        const out = await fetchToolJson("agent_create", "/api/subagents", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, description, type, systemPrompt, subagentType }),
+          signal,
+        });
+        if (!out.ok) return out.error;
+        if (out.data.error) return `Error: ${out.data.error}`;
+        const sa = out.data.subAgent as { type: string; name: string; id: string };
+        return `Created ${sa.type} sub-agent "${sa.name}" (${sa.id}).`;
+      }),
   });
 
   useCopilotAction({
@@ -219,58 +222,74 @@ export function SubAgentActions({ agentId = DEFAULT_AGENT_ID }: { agentId?: stri
       { name: "ephemeralSubagentType", type: "string", description: "For a one-off 'claude' agent: harness subagent_type (defaults to the name)", required: false },
       { name: "contentOnly", type: "boolean", description: "Set true ONLY for standalone app content generation, such as producing a self-contained index.html or writing an iframe app project into a staging directory for app_build. Never set this for BrowserOS source analysis or implementation; source work must use the Supervisor preview worktree.", required: false },
     ],
-    handler: async ({ agent, task, ephemeralName, ephemeralType, ephemeralSystemPrompt, ephemeralSubagentType, contentOnly }) => {
-      const ephemeral = ephemeralName && ephemeralSystemPrompt
-        ? { name: ephemeralName, type: ephemeralType === "claude" ? "claude" : "local", systemPrompt: ephemeralSystemPrompt, subagentType: ephemeralSubagentType }
-        : undefined;
-      const key = String(task ?? "");
-      startDelegation(key);
-      // Read the NDJSON stream so sub-agent tool events render live.
-      let result: DelegateResult | null = null;
-      try {
-        const res = await fetch("/api/subagents/delegate", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", ...sessionHeader() },
-          body: JSON.stringify({ agent, task, ephemeral, contentOnly: contentOnly === true, conversationId: threadIdRef.current, interactive: true }),
-        });
-        if (!res.ok) {
-          finishDelegation(key, "");
-          const j = await res.json().catch(() => ({}));
-          return `Error: ${j.error ?? res.statusText}`;
-        }
-        if (!res.body) throw new Error("No response stream");
-        const reader = res.body.getReader();
-        const dec = new TextDecoder();
-        let buf = "";
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buf += dec.decode(value, { stream: true });
-          const lines = buf.split("\n");
-          buf = lines.pop() ?? "";
-          for (const line of lines) {
-            const s = line.trim();
-            if (!s) continue;
-            let ev: { type: string; tool?: string; input?: unknown; result?: DelegateResult; error?: string };
-            try { ev = JSON.parse(s); } catch { continue; }
-            if (ev.type === "tool") pushDelegationEvent(key, { tool: ev.tool ?? "tool", input: ev.input });
-            else if (ev.type === "done") result = ev.result ?? null;
-            else if (ev.type === "error") return `Error: ${ev.error}`;
+    handler: ({ agent, task, ephemeralName, ephemeralType, ephemeralSystemPrompt, ephemeralSubagentType, contentOnly }) =>
+      runToolHandler(
+        "agent_delegate",
+        async ({ signal }) => {
+          const ephemeral = ephemeralName && ephemeralSystemPrompt
+            ? { name: ephemeralName, type: ephemeralType === "claude" ? "claude" : "local", systemPrompt: ephemeralSystemPrompt, subagentType: ephemeralSubagentType }
+            : undefined;
+          const key = String(task ?? "");
+          startDelegation(key);
+          // finishDelegation must run on EVERY exit path (success, HTTP error,
+          // idle abort, throw/external abort) or the UI shows a stuck
+          // delegation card forever — hence the try/finally around everything
+          // after startDelegation.
+          let finalOutput = "";
+          try {
+            const res = await fetch("/api/subagents/delegate", {
+              method: "POST",
+              headers: { "Content-Type": "application/json", ...sessionHeader() },
+              body: JSON.stringify({ agent, task, ephemeral, contentOnly: contentOnly === true, conversationId: threadIdRef.current, interactive: true }),
+              signal,
+            });
+            if (!res.ok) {
+              const j = await res.json().catch(() => ({}));
+              return `Error: ${j.error ?? res.statusText}`;
+            }
+            // Read the NDJSON stream so sub-agent tool events render live. The
+            // idle timeout aborts only after the configured timeout of SILENCE
+            // (resets on every chunk), so chatty long delegations are safe.
+            let result: DelegateResult | null = null;
+            let streamError = "";
+            const stream = await readNdjsonStream(
+              "agent_delegate",
+              res,
+              (s) => {
+                let ev: { type: string; tool?: string; input?: unknown; result?: DelegateResult; error?: string };
+                try { ev = JSON.parse(s); } catch { return; }
+                if (ev.type === "tool") pushDelegationEvent(key, { tool: ev.tool ?? "tool", input: ev.input });
+                else if (ev.type === "done") result = ev.result ?? null;
+                else if (ev.type === "error") streamError = `Error: ${ev.error}`;
+              },
+              getToolTimeoutMs(),
+              "the delegation stream went silent and was abandoned client-side; the sub-agent may still be running — check its status before re-delegating",
+            );
+            if (streamError) return streamError;
+            // Idle abort: prefer a final result that arrived before the
+            // silence; otherwise return the truthful abandonment error.
+            if (!stream.ok && !result) return stream.error;
+            // Explicit annotation: TS narrows `result` to null here (it is
+            // only assigned inside the onLine closure, which CFA ignores).
+            const r: DelegateResult = result ?? { agent: String(agent ?? ephemeral?.name ?? ""), type: "local", steps: 0, toolCalls: [], output: "" };
+            const output = r.output || r.error || "";
+            finalOutput = output;
+            const summary = `[${r.agent} · ${r.type}] ${r.steps} step(s)\n\n${output}`;
+            return summary + encodeNested({
+              events: (r.toolCalls ?? []).map((t) => ({ tool: t.tool, input: t.input })),
+              output,
+            });
+          } finally {
+            finishDelegation(key, finalOutput);
           }
-        }
-      } catch (err) {
-        finishDelegation(key, "");
-        return `Error: ${(err as Error).message}`;
-      }
-      const r = result ?? { agent: String(agent ?? ephemeral?.name ?? ""), type: "local", steps: 0, toolCalls: [], output: "" };
-      const output = r.output || r.error || "";
-      finishDelegation(key, output);
-      const summary = `[${r.agent} · ${r.type}] ${r.steps} step(s)\n\n${output}`;
-      return summary + encodeNested({
-        events: (r.toolCalls ?? []).map((t) => ({ tool: t.tool, input: t.input })),
-        output,
-      });
-    },
+        },
+        {
+          // Last-resort backstop: a healthy delegation may run far beyond one
+          // idle window, so the outer budget is 6× the configured timeout.
+          timeoutMs: getToolTimeoutMs() * 6,
+          timeoutHint: "the delegation was abandoned client-side; the sub-agent may still be running — check its status before re-delegating",
+        },
+      ),
   });
 
   // Elicitation card: ask the user before using a Claude agent for a NON-dev task.
