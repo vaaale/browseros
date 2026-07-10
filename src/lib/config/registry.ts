@@ -22,6 +22,13 @@ function clampMaxFindResults(n: number): number {
   return Math.max(5, Math.min(25, Math.round(n)));
 }
 
+// Clamps tools.toolCallTimeoutSec into 10..3600 seconds (default 600).
+const TOOL_TIMEOUT_DEFAULT = 600;
+function clampToolTimeout(n: number): number {
+  if (!Number.isFinite(n)) return TOOL_TIMEOUT_DEFAULT;
+  return Math.min(3600, Math.max(10, Math.round(n)));
+}
+
 const REGISTRATIONS: ConfigRegistration[] = [
   {
     schema: {
@@ -79,18 +86,33 @@ const REGISTRATIONS: ConfigRegistration[] = [
           type: "number",
           description: "Max results returned by find_tools / find_agent. 5–25, default 10.",
         },
+        {
+          key: "toolCallTimeoutSec",
+          label: "Tool call timeout (seconds)",
+          type: "number",
+          description:
+            "Max time a single assistant tool call may run before it is aborted and reported to the agent as an error. Streaming tools (agent_delegate, workflow_run) treat this as an idle timeout instead. 10–3600, default 600.",
+        },
       ],
     },
     load: async () => {
       const s = await readNamespace("tools");
       const raw = typeof s.maxFindResults === "number" ? s.maxFindResults : 10;
-      return { maxFindResults: clampMaxFindResults(raw) };
+      const rawTimeout = typeof s.toolCallTimeoutSec === "number" ? s.toolCallTimeoutSec : TOOL_TIMEOUT_DEFAULT;
+      return {
+        maxFindResults: clampMaxFindResults(raw),
+        toolCallTimeoutSec: clampToolTimeout(rawTimeout),
+      };
     },
     save: async (patch) => {
       const next: Record<string, unknown> = { ...patch };
       if (next.maxFindResults !== undefined) {
         const n = typeof next.maxFindResults === "number" ? next.maxFindResults : Number(next.maxFindResults);
         next.maxFindResults = clampMaxFindResults(Number.isFinite(n) ? n : 10);
+      }
+      if (next.toolCallTimeoutSec !== undefined) {
+        const n = typeof next.toolCallTimeoutSec === "number" ? next.toolCallTimeoutSec : Number(next.toolCallTimeoutSec);
+        next.toolCallTimeoutSec = clampToolTimeout(Number.isFinite(n) ? n : TOOL_TIMEOUT_DEFAULT);
       }
       await patchNamespace("tools", next);
     },

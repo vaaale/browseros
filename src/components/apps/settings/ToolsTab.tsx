@@ -27,9 +27,15 @@ const MAX_FIND_RESULTS_MIN = 5;
 const MAX_FIND_RESULTS_MAX = 25;
 const MAX_FIND_RESULTS_DEFAULT = 10;
 
-function clampMaxFindResults(n: number): number {
-  if (!Number.isFinite(n)) return MAX_FIND_RESULTS_DEFAULT;
-  return Math.max(MAX_FIND_RESULTS_MIN, Math.min(MAX_FIND_RESULTS_MAX, Math.round(n)));
+const TOOL_TIMEOUT_MIN = 10;
+const TOOL_TIMEOUT_MAX = 3600;
+const TOOL_TIMEOUT_DEFAULT = 600;
+
+// Mirrors the server-side clamping in src/lib/config/registry.ts so the UI
+// never shows a value the server would reject or rewrite.
+function clampInt(n: number, min: number, max: number, fallback: number): number {
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, Math.round(n)));
 }
 
 // Settings → Tools: global per-tool metadata overrides. Editing a description
@@ -44,6 +50,7 @@ export function ToolsTab() {
   // is saved so other panels (e.g. ToolManifest) can refresh.
   const [overrides, setOverrides] = useState<Record<string, string>>({});
   const [maxFindResults, setMaxFindResults] = useState<number>(MAX_FIND_RESULTS_DEFAULT);
+  const [toolCallTimeoutSec, setToolCallTimeoutSec] = useState<number>(TOOL_TIMEOUT_DEFAULT);
 
   const load = useCallback(async () => {
     try {
@@ -57,7 +64,13 @@ export function ToolsTab() {
       };
       const tools = (res.schemas ?? []).find((s) => s.namespace === "tools");
       const v = tools?.values?.maxFindResults;
-      if (typeof v === "number" && Number.isFinite(v)) setMaxFindResults(clampMaxFindResults(v));
+      if (typeof v === "number" && Number.isFinite(v)) {
+        setMaxFindResults(clampInt(v, MAX_FIND_RESULTS_MIN, MAX_FIND_RESULTS_MAX, MAX_FIND_RESULTS_DEFAULT));
+      }
+      const t = tools?.values?.toolCallTimeoutSec;
+      if (typeof t === "number" && Number.isFinite(t)) {
+        setToolCallTimeoutSec(clampInt(t, TOOL_TIMEOUT_MIN, TOOL_TIMEOUT_MAX, TOOL_TIMEOUT_DEFAULT));
+      }
     } catch { /* keep previous value */ }
   }, []);
 
@@ -66,17 +79,32 @@ export function ToolsTab() {
     return () => clearTimeout(id);
   }, [load]);
 
-  const saveMaxFindResults = useCallback(async (value: number) => {
-    const clamped = clampMaxFindResults(value);
-    setMaxFindResults(clamped);
+  // Persists tools-namespace values and notifies listeners (e.g. the tool
+  // kernel's timeout cache) that a tools config value changed.
+  const saveToolsValue = useCallback(async (values: Record<string, number>) => {
     try {
       await fetch("/api/config", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ namespace: "tools", values: { maxFindResults: clamped } }),
+        body: JSON.stringify({ namespace: "tools", values }),
       });
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("bos:tools-config-updated"));
+      }
     } catch { /* silently keep local state */ }
   }, []);
+
+  const saveMaxFindResults = useCallback(async (value: number) => {
+    const clamped = clampInt(value, MAX_FIND_RESULTS_MIN, MAX_FIND_RESULTS_MAX, MAX_FIND_RESULTS_DEFAULT);
+    setMaxFindResults(clamped);
+    await saveToolsValue({ maxFindResults: clamped });
+  }, [saveToolsValue]);
+
+  const saveToolCallTimeout = useCallback(async (value: number) => {
+    const clamped = clampInt(value, TOOL_TIMEOUT_MIN, TOOL_TIMEOUT_MAX, TOOL_TIMEOUT_DEFAULT);
+    setToolCallTimeoutSec(clamped);
+    await saveToolsValue({ toolCallTimeoutSec: clamped });
+  }, [saveToolsValue]);
 
   const patchServer = useCallback(async (patch: { id: string; description: string }) => {
     const res = await fetch("/api/tool-descriptions", {
@@ -116,7 +144,7 @@ export function ToolsTab() {
         <AutoSaveStatus status={save.status} />
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
-        <div className="mb-3 rounded-md border border-white/10 bg-white/[0.03] p-2.5">
+        <div className="mb-3 flex flex-col gap-2 rounded-md border border-white/10 bg-white/[0.03] p-2.5">
           <label className="flex items-center gap-2 text-[11px] text-white/80">
             <span className="min-w-0 flex-1">
               <span className="font-semibold text-white/90">Max discovery results</span>
@@ -132,6 +160,26 @@ export function ToolsTab() {
               value={maxFindResults}
               onChange={(e) => setMaxFindResults(Number(e.target.value))}
               onBlur={(e) => void saveMaxFindResults(Number(e.target.value))}
+              className="w-20 rounded border border-white/10 bg-black/30 px-2 py-1 text-right text-[11px] text-white outline-none focus:border-white/30"
+            />
+          </label>
+          <label className="flex items-center gap-2 text-[11px] text-white/80">
+            <span className="min-w-0 flex-1">
+              <span className="font-semibold text-white/90">Tool call timeout (s)</span>
+              <span className="block text-[10px] text-white/50">
+                Max time a single tool call may run before it is aborted and reported to the agent as an error.
+                Streaming tools (<span className="font-mono">agent_delegate</span>,{" "}
+                <span className="font-mono">workflow_run</span>) treat this as an idle timeout.
+                Range {TOOL_TIMEOUT_MIN}–{TOOL_TIMEOUT_MAX}, default {TOOL_TIMEOUT_DEFAULT}.
+              </span>
+            </span>
+            <input
+              type="number"
+              min={TOOL_TIMEOUT_MIN}
+              max={TOOL_TIMEOUT_MAX}
+              value={toolCallTimeoutSec}
+              onChange={(e) => setToolCallTimeoutSec(Number(e.target.value))}
+              onBlur={(e) => void saveToolCallTimeout(Number(e.target.value))}
               className="w-20 rounded border border-white/10 bg-black/30 px-2 py-1 text-right text-[11px] text-white outline-none focus:border-white/30"
             />
           </label>
