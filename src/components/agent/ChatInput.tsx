@@ -47,6 +47,9 @@ export function ChatInput({ inProgress, onSend, onStop, onUpload, hideStopButton
     if (!value) return;
     setText("");
     requestAnimationFrame(autoResize);
+    // Clears the stop latch (RunStopGuard) BEFORE the run starts: a fresh user
+    // message is an explicit command, so follow-up suppression must end.
+    window.dispatchEvent(new CustomEvent("bos:agent-send"));
     void onSend(value);
   }, [text, onSend, autoResize]);
 

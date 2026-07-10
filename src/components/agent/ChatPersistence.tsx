@@ -63,17 +63,23 @@ export function useChatPersistence(agentId: string = DEFAULT_AGENT_ID): { isLoad
     const a = agent as unknown as { isRunning?: boolean; abortRun?: () => void };
     return () => {
       try {
-        if (a.isRunning && typeof a.abortRun === "function") a.abortRun();
+        // Unconditional: `isRunning` is FALSE while a client tool call is
+        // executing (CopilotKit quirk), which is exactly the case that must be
+        // aborted; abortRun on an idle agent is a harmless no-op.
+        if (typeof a.abortRun === "function") a.abortRun();
       } catch {
         /* best-effort; teardown must never throw */
       }
       // abortRun only cancels the model stream — CopilotKit keeps awaiting any
       // in-flight client tool handler, which would then stream its result into
       // the NEXT conversation's reseeded agent. Settle them now with an
-      // in-band error so the run closes out before the switch completes.
-      abortActiveToolRuns(
+      // in-band error so the run closes out before the switch completes, and
+      // latch the stop guard so the recorded results can't spawn an
+      // uncommanded follow-up run.
+      const aborted = abortActiveToolRuns(
         "the conversation was switched — the tool call was abandoned client-side; its work may still complete server-side",
       );
+      if (aborted > 0) window.dispatchEvent(new CustomEvent("bos:agent-stop"));
     };
   }, [agent, threadId]);
 

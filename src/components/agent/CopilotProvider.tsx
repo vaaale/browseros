@@ -131,6 +131,7 @@ export function CopilotProvider({
       {ready && (
         <>
           <RunErrorRecovery threadId={threadId} onRecover={recover} />
+          <RunStopGuard />
           <DiscoveryActions agentId={agentId} />
           <OSActions />
           <McpActions agentId={agentId} />
@@ -154,6 +155,49 @@ export function CopilotProvider({
       )}
     </CopilotKit>
   );
+}
+
+// Makes Stop actually STOP. Aborting an in-flight tool handler settles it with
+// an in-band error — but CopilotKit then records that result and starts a
+// legitimate follow-up run, so the agent "continues in the background" after
+// the user said stop (or switched away mid tool call). This guard latches on
+// "bos:agent-stop" (dispatched by ChatInput's stop and by ChatPersistence's
+// switch-abort) and immediately aborts any run that initializes while latched.
+// The latch clears when the user sends a new message ("bos:agent-send") or
+// after a quiet period, so regenerate/normal runs are unaffected.
+const STOP_LATCH_MS = 15_000;
+let stopLatchUntil = 0;
+if (typeof window !== "undefined" && !("_bosStopLatch" in window)) {
+  (window as unknown as Record<string, unknown>)._bosStopLatch = true;
+  window.addEventListener("bos:agent-stop", () => {
+    stopLatchUntil = Date.now() + STOP_LATCH_MS;
+  });
+  window.addEventListener("bos:agent-send", () => {
+    stopLatchUntil = 0;
+  });
+}
+
+function RunStopGuard() {
+  const { agent } = useCopilotChatInternal();
+  useEffect(() => {
+    const a = agent as unknown as {
+      abortRun?: () => void;
+      subscribe?: (s: { onRunInitialized?: () => void }) => { unsubscribe: () => void };
+    } | undefined;
+    if (!a || typeof a.subscribe !== "function") return;
+    const sub = a.subscribe({
+      onRunInitialized: () => {
+        if (Date.now() >= stopLatchUntil) return;
+        try {
+          a.abortRun?.();
+        } catch {
+          /* best-effort; a failed abort just lets the run proceed */
+        }
+      },
+    });
+    return () => sub.unsubscribe();
+  }, [agent]);
+  return null;
 }
 
 // Watches the active agent for a failed/errored run and triggers a recovery
