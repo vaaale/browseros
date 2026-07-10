@@ -82,7 +82,7 @@ export const CAPABILITIES: Capability[] = [
   { id: "skill_load", group: "Skills", context: "both", description: "Load a skill's full instructions." },
   { id: "skill_read_file", group: "Skills", context: "both", description: "Read a bundled reference/script file from a skill." },
   { id: "skill_save", group: "Skills", context: "action", description: "Save a reusable skill." },
-  { id: "skill_reflect", group: "Skills", context: "action", description: "Run the self-improvement review after a task." },
+  { id: "self_improve", group: "Skills", context: "action", description: "Background self-improvement from an honest reflection on approach criticism." },
   { id: "skill_improve", group: "Skills", context: "action", description: "Improve a skill from feedback (GEPA)." },
   { id: "skill_curate", group: "Skills", context: "action", description: "Archive stale agent-created skills (recoverable)." },
 
