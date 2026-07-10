@@ -9,6 +9,7 @@ import { sendFeedback } from "@/lib/assistant/client/run-client";
 import { registerCard, toggleCard, useCardOpen, useCardScope } from "@/lib/agent/card-collapse";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { ToolCallCard, type ToolCardData } from "./ToolCallCard";
+import { ElicitationCards } from "./ElicitationCards";
 
 const THINK_OPEN = "<think>";
 const THINK_CLOSE = "</think>";
@@ -118,7 +119,15 @@ function AssistantTurn({
   );
 }
 
-export function MessageListV2({ conversationId, initialLabel }: { conversationId: string; initialLabel?: string }) {
+export function MessageListV2({
+  conversationId,
+  agentId,
+  initialLabel,
+}: {
+  conversationId: string;
+  agentId: string;
+  initialLabel?: string;
+}) {
   const state = useChatState(conversationId);
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
@@ -200,6 +209,7 @@ export function MessageListV2({ conversationId, initialLabel }: { conversationId
       {state.finishReason === "cancelled" && (
         <div className="text-center text-[11px] text-white/35">Stopped.</div>
       )}
+      <ElicitationCards conversationId={conversationId} agentId={agentId} />
       <div ref={bottomRef} />
     </div>
   );

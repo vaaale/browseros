@@ -15,6 +15,7 @@ import { useChatState } from "@/lib/assistant/client/chat-store";
 import type { ToolDeclaration } from "@/lib/assistant/tools";
 import { MessageListV2 } from "./MessageListV2";
 import { ChatInputV2 } from "./ChatInputV2";
+import { FrontendToolsV2 } from "./FrontendToolsV2";
 
 // The embeddable Assistant, v2 — server-owned runs. Same surface API as the
 // CopilotKit-era AssistantChat (agentId / showConversations / allGroups /
@@ -90,6 +91,7 @@ export function AssistantChatV2(props: AssistantChatV2Props) {
   return (
     <CardScopeProvider scope={`${resolvedAgentId}:${conversationId}`}>
       <div className="flex h-full bg-[#0f1117] text-white/90" data-bos-chat data-testid="assistant-v2" style={chatStyle}>
+        <FrontendToolsV2 conversationId={conversationId} />
         {props.children}
         {showLeftPanel &&
           (props.allGroups ? (
@@ -121,7 +123,7 @@ export function AssistantChatV2(props: AssistantChatV2Props) {
             <div className="pointer-events-none absolute right-3 top-2 z-10 flex flex-col items-end gap-1">
               <SelfImproveIndicator key={conversationId} conversationId={conversationId} />
             </div>
-            <MessageListV2 conversationId={conversationId} initialLabel={props.initialLabel} />
+            <MessageListV2 conversationId={conversationId} agentId={resolvedAgentId} initialLabel={props.initialLabel} />
           </div>
           <ChatInputV2
             conversationId={conversationId}
