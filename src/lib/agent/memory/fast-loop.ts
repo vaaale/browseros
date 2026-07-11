@@ -5,7 +5,7 @@ import { hostPath } from "@/os/vfs";
 import { logger } from "@/lib/logging";
 import { runToolLoop, type LlmTool } from "@/lib/agent/llm";
 import { hasCredentials } from "@/lib/agent/provider";
-import { patchSkill, getSkill } from "@/lib/agent/skills/store";
+import { patchSkill, getSkill, listSkills } from "@/lib/agent/skills/store";
 import { touchSkill } from "@/lib/agent/skills/usage";
 import { ensureSystemJob, type HandlerRunResult } from "@/lib/scheduler/engine";
 import type { JobDefinition } from "@/lib/scheduler/types";
@@ -322,7 +322,7 @@ function buildFastLoopTools(state: FastLoopTools): Record<string, LlmTool> {
     },
     skill_patch: {
       description:
-        "Patch an EXISTING skill that was explicitly corrected during the session. Replaces the first occurrence of `find` in the skill body with `replace`. Do NOT patch for minor stylistic preferences.",
+        "Patch an EXISTING skill that was explicitly corrected during the session. `id` MUST be one of the ids in the provided existing-skills list — never invent one. Replaces the first occurrence of `find` in the skill body with `replace`. Do NOT patch for minor stylistic preferences.",
       parameters: {
         type: "object",
         properties: {
@@ -571,10 +571,23 @@ async function reviewSlice(
   const skillsMechanical = extractSkillsUsed(slice);
   const transcript = renderSlice(slice);
 
+  // The existing-skill index: skill_patch may ONLY target one of these ids, so
+  // the model can't hallucinate/patch a skill that doesn't exist (which produced
+  // the "skill not found" warning). Empty ⇒ skill_patch is unavailable.
+  const skills = await listSkills().catch(() => []);
+  const skillIndex = skills.length
+    ? [
+        "Existing skills you may patch (skill_patch `id` MUST be exactly one of these — never invent or guess an id):",
+        ...skills.map((s) => `- ${s.id}: ${s.name}`),
+      ].join("\n")
+    : "No skills exist yet — do NOT call skill_patch.";
+
   const prompt = [
     `Conversation: ${conv.title || conv.id}`,
     `Existing episode body (context — do not re-review earlier content):`,
     existingBody ? existingBody : "_(new episode; no prior body)_",
+    "",
+    skillIndex,
     "",
     "New turns since last review:",
     transcript,
