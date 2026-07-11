@@ -1,6 +1,7 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import path from "path";
 import { listEpisodes, type Episode, type EpisodeMeta } from "@/lib/agent/memory/episodes";
+import { DEFAULT_AGENT_ID } from "@/lib/agent/agent-ids";
 
 export const dynamic = "force-dynamic";
 
@@ -17,9 +18,10 @@ function toView(ep: Episode): EpisodeMetaView {
 
 // GET /api/memory/episodes  →  { pending: EpisodeMetaView[], consolidated: EpisodeMetaView[] }
 //   Includes consolidated episodes (listEpisodes filters them out by default).
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const agentId = new URL(req.url).searchParams.get("agent")?.trim() || DEFAULT_AGENT_ID;
   try {
-    const all = await listEpisodes({ includeConsolidated: true });
+    const all = await listEpisodes(agentId, { includeConsolidated: true });
     const pending: EpisodeMetaView[] = [];
     const consolidated: EpisodeMetaView[] = [];
     for (const ep of all) {

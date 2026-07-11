@@ -15,10 +15,9 @@ export interface Agent {
   /** MCP server names/endpoints this agent may use. Unset/empty = all. */
   mcp?: string[];
   /** Tool ids this agent should treat as deferred (hidden from its initial
-   *  context, discoverable via find_tools). Additive to the registry default:
-   *  the effective deferred set for a run is `registryDefaults ∪ deferredTools`.
-   *  A tool listed here cannot be re-exposed by omission — the registry's own
-   *  `deferred: true` still applies. Unset/empty ⇒ use registry defaults only. */
+   *  context, discoverable via find_tools). This is the ONLY source of
+   *  deferred-ness — there is no registry-wide default. Unset/empty ⇒ nothing
+   *  is deferred for this agent (every allowed tool is visible from the start). */
   deferredTools?: string[];
   /** When true (default), prepend the shared default prompt (edited in Settings
    *  → Agents → Default Agent) to the agent's own system prompt. When false, only

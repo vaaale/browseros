@@ -96,7 +96,11 @@ async function loadClientTranscript(convId: string): Promise<ClientMessage[] | n
 // ── Client-side boundary walking (mirrors view.findTailStart's rules) ──────
 
 function safeJson(v: unknown): string {
-  try { return JSON.stringify(v); } catch { return String(v); }
+  if (v == null) return "";
+  // JSON.stringify(undefined) returns the value `undefined` (not a string), and
+  // it also returns undefined for functions/symbols — coalesce to "" so callers
+  // that immediately call string methods (e.g. .trim()) never crash.
+  try { return JSON.stringify(v) ?? ""; } catch { return String(v); }
 }
 
 function countsAsToolPair(m: ClientMessage): boolean {
@@ -130,7 +134,7 @@ function renderClientMessages(messages: ClientMessage[]): string {
   const lines: string[] = [];
   for (const m of messages) {
     const text = typeof m.content === "string" ? m.content : safeJson(m.content);
-    lines.push(`### ${m.role}\n${text.trim()}`);
+    lines.push(`### ${m.role}\n${(text ?? "").trim()}`);
     if (Array.isArray(m.toolCalls) && m.toolCalls.length > 0) {
       lines.push(`_tool calls_: ${safeJson(m.toolCalls)}`);
     }
@@ -182,6 +186,13 @@ export interface SummarizeSkip {
 
 export type SummarizeResult = SummarizeSuccess | SummarizeSkip;
 
+/** Log a skip outcome and return it, so a scheduled summarization always leaves
+ *  a visible trail in the log (never a dangling "summary.scheduled"). */
+function skip(convId: string, reason: string, level: "debug" | "info" | "warn" = "debug"): SummarizeSkip {
+  log(level, convId, "summary.skipped", { reason });
+  return { skipped: true, reason };
+}
+
 async function callSummarizer(userPrompt: string): Promise<string> {
   const text = await complete({
     system: SUMMARY_SYSTEM_PROMPT,
@@ -213,20 +224,20 @@ export async function summarizeConversation(
   opts: { manual?: boolean } = {},
 ): Promise<SummarizeResult> {
   if (!convId) return { skipped: true, reason: "no-conv-id" };
-  if (!(await hasCredentials())) return { skipped: true, reason: "no-credentials" };
+  if (!(await hasCredentials())) return skip(convId, "no-credentials");
 
   const config = await readCompactionConfig();
-  if (!config.enabled && !opts.manual) return { skipped: true, reason: "disabled" };
+  if (!config.enabled && !opts.manual) return skip(convId, "disabled");
 
   const locked = await acquireLock(convId, { stalenessMs: config.lockStalenessMs });
-  if (!locked) return { skipped: true, reason: "locked" };
+  if (!locked) return skip(convId, "locked", "info");
 
   try {
     const client = await loadClientTranscript(convId);
-    if (!client || client.length === 0) return { skipped: true, reason: "no-transcript" };
+    if (!client || client.length === 0) return skip(convId, "no-transcript", "warn");
 
     const cut = chooseClientBoundary(client, config.keepTailMessages);
-    if (cut <= 0) return { skipped: true, reason: "nothing-to-summarize" };
+    if (cut <= 0) return skip(convId, "nothing-to-summarize");
 
     const span = client.slice(0, cut);
     const canonicalSpan = canonicalizeClientMessages(span);
@@ -235,7 +246,7 @@ export async function summarizeConversation(
     // Already-summarized short-circuit (US-5.2 anchored update).
     const currentSidecar = (await readSidecar(convId)) ?? emptySidecar();
     if (currentSidecar.boundary && currentSidecar.boundary.spanHash === spanHash && currentSidecar.summary) {
-      return { skipped: true, reason: "already-summarized" };
+      return skip(convId, "already-summarized");
     }
 
     // FR-014: fast-loop hook FIRST (soft dependency).
@@ -281,6 +292,30 @@ export async function summarizeConversation(
       log("warn", convId, "lock.release failed", undefined, err);
     }
   }
+}
+
+// ── Compacted transcript (for self-improvement analysis) ──────────────────
+
+/** Build a size-bounded transcript for a conversation suitable for feeding to an
+ *  analysis LLM (self-improve). Uses the compaction sidecar's summary + verbatim
+ *  tail when available, so a very large conversation doesn't blow the context. */
+export async function buildCompactedTranscript(convId: string): Promise<string> {
+  const client = await loadClientTranscript(convId);
+  if (!client || client.length === 0) return "";
+  const sidecar = await readSidecar(convId);
+  if (sidecar?.summary && sidecar.boundary && sidecar.boundary.count > 0 && sidecar.boundary.count <= client.length) {
+    const tail = client.slice(sidecar.boundary.count);
+    return `## Conversation summary (earlier turns, compacted)\n${sidecar.summary}\n\n## Recent turns (verbatim)\n${renderClientMessages(tail)}`;
+  }
+  // No summary yet — render in full, but cap a very long unsummarized transcript
+  // to its most recent turns so the analysis prompt stays bounded.
+  const full = renderClientMessages(client);
+  const CAP = 24_000;
+  if (full.length <= CAP) return full;
+  const config = await readCompactionConfig();
+  const keep = Math.max(config.keepTailMessages, 20);
+  const tail = client.slice(Math.max(0, client.length - keep));
+  return `## Recent turns (older turns omitted — no summary available)\n${renderClientMessages(tail)}`;
 }
 
 // ── Helpers exported for the middleware / API route ────────────────────────

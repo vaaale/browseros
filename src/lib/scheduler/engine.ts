@@ -443,14 +443,21 @@ interface DaemonState {
   runningJobIds: Set<string>;
 }
 
-const state: DaemonState = {
+// The daemon state lives on globalThis so every module instance shares ONE
+// daemon: Next dev (Turbopack) compiles instrumentation.ts and route handlers
+// into separate module graphs, and without this each would get its own `state`
+// — the daemon would tick in the instrumentation copy while routes reported
+// `running: false`. A single shared object keeps status accurate and guarantees
+// exactly one ticking daemon per process (same pattern as run-command/run-manager).
+const g = globalThis as unknown as { __bosSchedulerState?: DaemonState };
+const state: DaemonState = (g.__bosSchedulerState ??= {
   running: false,
   timer: null,
   lastCheck: null,
   tickMs: DEFAULT_TICK_MS,
   ticking: false,
   runningJobIds: new Set(),
-};
+});
 
 export interface DaemonStatus {
   running: boolean;

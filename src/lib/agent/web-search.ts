@@ -3,6 +3,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { getProviderConfig, DEFAULT_MAX_TOKENS, type ProviderConfig } from "@/lib/agent/provider";
 import { familyOf, normalizeApiBase } from "@/lib/agent/provider-meta";
+import { getConfigValue } from "@/lib/config/registry";
 
 export interface WebSearchInput {
   query: string;
@@ -27,6 +28,20 @@ export interface WebSearchOutput {
   hits: WebSearchHit[];
   text: string;
   blocks: WebSearchResultBlock[];
+}
+
+// Cap the upstream provider call so a stuck web-search request can't hang the
+// route (and, transitively, CopilotKit's sequential tool loop) for the SDK's
+// ~10-minute default. Derived from the configured Settings → Tools timeout,
+// kept 20 s under the client handler's budget (floor 30 s) so the server gives
+// up first and the client usually receives a structured error rather than
+// aborting the fetch.
+async function providerTimeoutMs(): Promise<number> {
+  // tools.toolCallTimeoutSec is clamped/defaulted (10..3600, default 600) by
+  // the registry's load; the fallback here only guards a broken registry read.
+  const sec = await getConfigValue("tools", "toolCallTimeoutSec");
+  const configuredMs = (typeof sec === "number" && Number.isFinite(sec) ? sec : 600) * 1000;
+  return Math.max(30_000, configuredMs - 20_000);
 }
 
 const MIN_QUERY_LENGTH = 2;
@@ -99,7 +114,7 @@ async function anthropicWebSearch(valid: WebSearchInput, config: ProviderConfig)
         ...(valid.blocked_domains ? { blocked_domains: valid.blocked_domains } : {}),
       },
     ],
-  } as Parameters<typeof client.beta.messages.create>[0]) as { content: unknown[] };
+  } as Parameters<typeof client.beta.messages.create>[0], { timeout: await providerTimeoutMs() }) as { content: unknown[] };
 
   const blocks: WebSearchResultBlock[] = [];
   const hits: WebSearchHit[] = [];
@@ -128,11 +143,14 @@ async function anthropicWebSearch(valid: WebSearchInput, config: ProviderConfig)
 async function openaiWebSearch(valid: WebSearchInput, config: ProviderConfig): Promise<WebSearchOutput> {
   const baseURL = config.baseUrl ? normalizeApiBase(config.baseUrl) : undefined;
   const client = new OpenAI({ apiKey: config.apiKey, baseURL });
-  const res = await client.responses.create({
-    model: config.model,
-    input: valid.query,
-    tools: [{ type: "web_search_preview" }],
-  });
+  const res = await client.responses.create(
+    {
+      model: config.model,
+      input: valid.query,
+      tools: [{ type: "web_search_preview" }],
+    },
+    { timeout: await providerTimeoutMs() },
+  );
 
   const hits: WebSearchHit[] = [];
   const text: string[] = [];

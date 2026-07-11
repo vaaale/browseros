@@ -52,6 +52,20 @@ function log(level: "debug" | "info" | "warn" | "error", convId: string, msg: st
   });
 }
 
+/** Provider-timing log. Uses the "assistant" component (not "compaction") so it
+ *  groups with the conversation turn logs, and keeps `conversation` at top level
+ *  so the Settings→Log conversation filter picks it up. */
+function providerLog(level: "info" | "warn", convId: string, msg: string, data?: Record<string, unknown>, err?: unknown): void {
+  logger().log({
+    level,
+    component: "assistant",
+    conversation: convId,
+    msg,
+    ...(data ? { data } : {}),
+    ...(err ? { err: err instanceof Error ? { message: err.message, ...(err.stack ? { stack: err.stack } : {}) } : { message: String(err) } } : {}),
+  });
+}
+
 function extractPromptMessages(prompt: unknown): CompactionPrompt | null {
   if (!Array.isArray(prompt)) return null;
   return prompt as CompactionPrompt;
@@ -213,6 +227,17 @@ async function transformCall(convId: string, params: { prompt: unknown; maxOutpu
 
   if (finalRest === rest) return {};
   const nextPrompt = [...system, ...finalRest];
+  log("info", convId, "compaction.applied", {
+    estBefore: initialEst,
+    estAfter: estimateTokens(finalRest),
+    budget,
+    clearedResults: applied.stats.clearedResults,
+    summarySpliced: applied.stats.summarySpliced,
+    droppedByBoundary: applied.stats.droppedByBoundary,
+    hardLimitFallback: layerOneEst >= hardLimitTokens,
+    messagesBefore: rest.length,
+    messagesAfter: finalRest.length,
+  });
   return { prompt: nextPrompt };
 }
 
@@ -240,9 +265,67 @@ export function withCompaction(model: LanguageModel, convId: string): LanguageMo
         return params;
       }
     },
+    // Provider-call timing. Every model call (the first user turn AND each
+    // intra-turn tool-loop continuation) passes through here, so this is where a
+    // "the tool finished but nothing happens for minutes" stall is measurable:
+    // it records time-to-first-chunk and total duration of the actual provider
+    // request. A large TTFB after a tool result means the provider is slow on
+    // the grown context, not a client-side hang.
+    wrapStream: async ({ doStream }) => {
+      const t0 = Date.now();
+      providerLog("info", convId, "provider.request", { mode: "stream" });
+      const { stream, ...rest } = await doStream();
+      let first = true;
+      let chunks = 0;
+      const monitor = new TransformStream({
+        transform(chunk, controller) {
+          if (first) {
+            first = false;
+            providerLog("info", convId, "provider.first-chunk", { ttfbMs: Date.now() - t0 });
+          }
+          chunks++;
+          controller.enqueue(chunk);
+        },
+        flush() {
+          providerLog("info", convId, "provider.done", { totalMs: Date.now() - t0, chunks });
+        },
+      });
+      return { stream: stream.pipeThrough(monitor), ...rest };
+    },
+    wrapGenerate: async ({ doGenerate }) => {
+      const t0 = Date.now();
+      providerLog("info", convId, "provider.request", { mode: "generate" });
+      try {
+        const r = await doGenerate();
+        providerLog("info", convId, "provider.done", { totalMs: Date.now() - t0, mode: "generate" });
+        return r;
+      } catch (err) {
+        providerLog("warn", convId, "provider.failed", { totalMs: Date.now() - t0 }, err);
+        throw err;
+      }
+    },
   };
   return wrapLanguageModel({ model, middleware });
 }
 
 // Exposed for the API route + tests.
 export { findTailStart };
+
+/** v2 entry point: run the SAME compaction transform used by the middleware,
+ *  directly on a v3 prompt array (server-owned runs don't go through the ai-sdk
+ *  model, so they call this instead of wrapping a LanguageModel). Returns the
+ *  compacted prompt, or the input unchanged when no compaction applies. Never
+ *  throws. */
+export async function compactPrompt(
+  convId: string,
+  prompt: CompactionPrompt,
+  maxOutputTokens?: number,
+): Promise<CompactionPrompt> {
+  try {
+    const patch = await transformCall(convId, { prompt, maxOutputTokens });
+    return (patch.prompt as CompactionPrompt | undefined) ?? prompt;
+  } catch (err) {
+    log("error", convId, "compactPrompt.error", undefined, err);
+    return prompt;
+  }
+}

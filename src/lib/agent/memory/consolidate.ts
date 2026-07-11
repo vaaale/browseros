@@ -6,9 +6,8 @@ import { hostPath } from "@/os/vfs";
 import { logger } from "@/lib/logging";
 import { runToolLoop, type LlmTool } from "@/lib/agent/llm";
 import { hasCredentials } from "@/lib/agent/provider";
-import { listSkills, getSkill, saveSkill, patchSkill } from "@/lib/agent/skills/store";
+import { listSkills, saveSkill, patchSkill } from "@/lib/agent/skills/store";
 import { touchSkill } from "@/lib/agent/skills/usage";
-import { addEntry as memoryAdd, replaceEntry as memoryReplace, removeEntry as memoryRemove } from "./curated";
 import { ensureSystemJob, type HandlerRunResult } from "@/lib/scheduler/engine";
 import type { JobDefinition } from "@/lib/scheduler/types";
 import { registerInternalRef } from "./internal-handler";
@@ -20,83 +19,67 @@ import {
   tagSkillCandidate,
   type Episode,
 } from "./episodes";
-import {
-  addTopicEntry,
-  createTopic,
-  removeTopicEntry,
-  replaceTopicEntry,
-} from "./topics";
+import { addTopicEntry, createTopic, removeTopicEntry, replaceTopicEntry } from "./topics";
+import { readMemoryDoc, setUserPreferences } from "./agent-memory";
+import { agentLockFile, MEMORIES_ROOT, safeAgentId } from "./paths";
 import { getMemoryLoopsConfig } from "./config";
 
-// Slow loop (spec 021 §Slow loop). Overlap-locked, hourly by default, and
-// exits with zero LLM cost when nothing is pending. Registered as a System
-// JobDefinition in the unified store via ensureSystemJob.
+// Slow loop (023-per-agent-memory, spec 021 §Slow loop). Overlap-locked (per
+// agent), hourly by default, exits with zero LLM cost when nothing is pending.
+// It consolidates each agent's pending episodes into that agent's own memory:
+// the user-preferences summary (MEMORY.md) and topic shards.
 
 const LOG = "memory.slow-loop";
 
 export const SLOW_LOOP_JOB_ID = "system:memory.slow-loop";
 export const SLOW_LOOP_HANDLER_REF = "memory.slow-loop";
 
-const LOCK_PATH = "/Documents/Memory/.consolidate.lock";
 const LOCK_STALE_MS = 30 * 60 * 1000; // 30 minutes
 
 // ── Embedded system prompt (FR-021) ───────────────────────────────────────
-// Bundled at specs/bos-system-specs/021-memory-loops/prompts/slow-loop-system.md
-// and inlined here per FR-021. Any wording change is a spec change.
 export const SLOW_LOOP_SYSTEM_PROMPT = [
-  "You are the consolidation engine, merging episodic memories into long-term knowledge. Your job is to review pending episodes and extract durable lessons, patching or creating skills as appropriate.",
+  "You are the consolidation engine for ONE agent's memory, merging that agent's episodic memories into its long-term knowledge. Review the pending episode and extract durable lessons, patching or creating skills as appropriate.",
   "",
   "## Input",
-  "You receive one or more pending episodes, each containing task/outcome, what worked/failed, corrections, durable lesson candidates, profile suggestions, skillsUsed (mechanical), and any skill-candidate tags.",
+  "You receive the agent's CURRENT user-preferences summary and topic index, followed by one pending episode (task/outcome, what worked/failed, corrections, durable lesson candidates, profile suggestions, skillsUsed, skill-candidate tags).",
   "",
   "## Output — Incremental Operations ONLY",
-  "You NEVER rewrite whole files. Each op modifies a single entry.",
+  "You NEVER rewrite whole topic files. Each op modifies a single entry.",
   "",
-  "Memory (topics + MEMORY.md observations):",
-  "- memory_add_entry(topic, content) — add an entry to a topic; use topic='memory' for the global MEMORY.md.",
-  "- memory_replace_entry(topic, entryIdOrText, newContent) — supersede a stale or contradicted entry.",
-  "- memory_remove_entry(topic, entryIdOrText) — remove an entry.",
-  "- topic_create(slug, digest) — create a new topic shard when none fits.",
+  "User preferences (a short prose summary of who the user is and what they prefer):",
+  "- memory_set_preferences(text) — replace the WHOLE user-preferences summary. To add an observation, pass the current summary MERGED with the new insight (keep it short and high-signal). Profile suggestions are OBSERVATIONS — fold them in cautiously.",
+  "",
+  "Topics (durable knowledge shards):",
+  "- topic_create(slug, digest) — create a new topic shard when none fits (lower-kebab slug; one-line digest).",
+  "- topic_add_entry(topic, content) — add an entry to a topic (creates it if missing).",
+  "- topic_replace_entry(topic, entryIdOrText, newContent) — supersede a stale/contradicted entry.",
+  "- topic_remove_entry(topic, entryIdOrText) — remove an entry.",
   "",
   "Episodes:",
-  "- episode_tag_candidate(episodePath, taskClass) — record a skill-candidate tag for recurrence tracking.",
-  "- episode_mark_consolidated(episodePath) — finalize an episode after all its ops succeed.",
+  "- episode_tag_candidate(taskClass) — record a skill-candidate tag on the current episode for recurrence tracking.",
+  "- episode_mark_consolidated() — finalize the current episode after all its ops succeed.",
   "",
-  "Skills:",
+  "Skills (shared across all agents):",
   "- skill_list() — always call before creating; prefer skill_patch on an existing skill.",
   "- skill_patch(id, find, replace) — patch an existing skill; used for corrections observed on skillsUsed.",
   "- skill_create(spec) — create a NEW skill ONLY if ALL gate conditions hold (see below).",
   "",
   "## Skill Creation Gate (FR-014)",
-  "A skill may be created ONLY if:",
-  "  (a) No existing skill covers the task class (skill_list first; prefer skill_patch).",
-  "  (b) The task is genuinely complex — multi-step, non-obvious ordering, discovered pitfalls.",
-  "  (c) The same task class appears in ≥ 2 episodes (checked via skill-candidate tags across history).",
-  "First occurrence: use episode_tag_candidate; do NOT create. Second occurrence: create if (a) and (b) still hold.",
+  "A skill may be created ONLY if: (a) no existing skill covers the task class (skill_list first); (b) the task is genuinely complex (multi-step, non-obvious ordering, discovered pitfalls); (c) the same task class appears in ≥ 2 episodes. First occurrence: episode_tag_candidate; do NOT create. Second occurrence: create if (a) and (b) still hold.",
   "",
   "## Anti-Patterns (Do NOT Harden These)",
   "- Transient failures, negative tool claims, resolved errors, one-off narratives.",
   "",
-  "## Deduplication & Supersession",
-  "- Duplicates: skip.",
-  "- Contradictions: memory_replace_entry to supersede, do not append alongside.",
-  "- Over budget: reject and either shorten or create a new shard (e.g., gmail-workflows-2).",
-  "",
-  "## Profile Suggestions",
-  "Profile suggestions are OBSERVATIONS, not confirmed identity. Never write to USER.md. Record in MEMORY.md as an 'Observed pattern:' entry so the live agent can confirm and promote if appropriate.",
-  "",
   "## Processing Order",
-  "For each pending episode (oldest-first):",
-  "  1. Review task/outcome/lessons.",
+  "  1. Review the episode against current preferences + topics.",
   "  2. For each skillsUsed id: skill_patch when corrected, else no-change.",
   "  3. For each skill-candidate tag: check recurrence; create only if gate met.",
-  "  4. Extract durable lessons → memory_add_entry to the right topic.",
-  "  5. Handle profile suggestions → memory_add_entry(topic='memory') as observation.",
-  "  6. episode_mark_consolidated(episodePath).",
-  "Log summary at the end (episodes processed, ops applied, refusals).",
+  "  4. Extract durable lessons → topic_add_entry to the right topic (topic_create if none fits).",
+  "  5. Fold profile suggestions into memory_set_preferences.",
+  "  6. episode_mark_consolidated().",
 ].join("\n");
 
-// ── Overlap lock (FR-011) ────────────────────────────────────────────────
+// ── Overlap lock (FR-011), per agent ──────────────────────────────────────
 
 interface LockContent {
   pid: number;
@@ -104,62 +87,41 @@ interface LockContent {
   batchId: string;
 }
 
-async function readLock(): Promise<LockContent | null> {
+async function readLock(agentId: string): Promise<LockContent | null> {
   try {
-    const raw = await vfs.readText(LOCK_PATH);
-    return JSON.parse(raw) as LockContent;
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+    return JSON.parse(await vfs.readText(agentLockFile(agentId))) as LockContent;
+  } catch {
     return null;
   }
 }
 
-async function writeLock(content: LockContent): Promise<void> {
-  await vfs.writeText(LOCK_PATH, JSON.stringify(content));
-}
-
-async function removeLock(): Promise<void> {
-  try {
-    await vfs.remove(LOCK_PATH);
-  } catch {
-    /* best-effort */
-  }
-}
-
-/** Try to acquire the overlap lock. Returns the lock content on success, or
- *  null when another run holds it and it isn't stale yet. Stale (older than
- *  LOCK_STALE_MS) locks are overwritten. */
-export async function acquireLock(): Promise<LockContent | null> {
-  const existing = await readLock();
+export async function acquireLock(agentId: string): Promise<LockContent | null> {
+  const existing = await readLock(agentId);
   if (existing) {
     const age = Date.now() - existing.startedAt;
     if (age < LOCK_STALE_MS) {
-      logger().info(LOG, "slow-loop lock held; skipping run", { holderPid: existing.pid, ageMs: age });
+      logger().info(LOG, "slow-loop lock held; skipping", { agentId, holderPid: existing.pid, ageMs: age });
       return null;
     }
-    logger().warn(LOG, "expiring stale slow-loop lock", { holderPid: existing.pid, ageMs: age });
+    logger().warn(LOG, "expiring stale slow-loop lock", { agentId, holderPid: existing.pid, ageMs: age });
   }
   const content: LockContent = { pid: process.pid, startedAt: Date.now(), batchId: randomUUID() };
-  await writeLock(content);
-  // Verify we own it (best-effort race check — VFS writes go through atomic
-  // temp+rename so this is defensive rather than corrective).
-  const check = await readLock();
+  await vfs.writeText(agentLockFile(agentId), JSON.stringify(content));
+  const check = await readLock(agentId);
   if (!check || check.batchId !== content.batchId) return null;
   return content;
 }
 
-export async function releaseLock(lock: LockContent): Promise<void> {
-  const current = await readLock();
+export async function releaseLock(agentId: string, lock: LockContent): Promise<void> {
+  const current = await readLock(agentId);
   if (current && current.batchId === lock.batchId) {
-    await removeLock();
+    await vfs.remove(agentLockFile(agentId)).catch(() => undefined);
   }
 }
 
-// ── Restricted LLM toolset ───────────────────────────────────────────────
+// ── Restricted LLM toolset (bound to one agent) ───────────────────────────
 
 interface SlowLoopState {
-  // The specific episode currently being consolidated. Some tools (e.g.
-  // episode_mark_consolidated) accept an explicit path but default to this.
   currentEpisode: Episode | null;
   createdSkills: string[];
   patchedSkills: string[];
@@ -169,19 +131,14 @@ interface SlowLoopState {
   markedConsolidated: string[];
 }
 
-/** Run all three skill-creation gate checks (FR-014). Returns null when it's
- *  allowed to create, or a reason string when the gate blocks it. */
-export async function evaluateSkillCreationGate(input: {
-  taskClass: string;
-  name: string;
-  description?: string;
-  content: string;
-  currentEpisode?: Episode | null;
-}): Promise<string | null> {
+/** Run all three skill-creation gate checks (FR-014) for an agent. */
+export async function evaluateSkillCreationGate(
+  agentId: string,
+  input: { taskClass: string; name: string; description?: string; content: string },
+): Promise<string | null> {
   const taskClass = input.taskClass.trim();
   if (!taskClass) return "task class is required for the skill-creation gate";
 
-  // (a) No existing skill covers this class.
   const skills = await listSkills();
   const needle = taskClass.toLowerCase();
   const overlap = skills.find((s) => {
@@ -190,105 +147,35 @@ export async function evaluateSkillCreationGate(input: {
   });
   if (overlap) return `existing skill "${overlap.name}" (${overlap.id}) already covers "${taskClass}" — use skill_patch instead`;
 
-  // (b) Complexity threshold — heuristic proxy. The prompt already reinforces
-  // this; here we require some minimum body length AND multi-step evidence.
   const body = input.content.trim();
   const stepCount = (body.match(/^\s*(?:-|\d+\.)\s+/gm) ?? []).length;
   if (body.length < 200 || stepCount < 3) {
     return `task does not meet complexity threshold — need multi-step body (≥3 steps, ≥200 chars); got ${stepCount} step(s), ${body.length} chars`;
   }
 
-  // (c) Recurrence evidence — count skill-candidate tags across all episodes.
   const occurrences = await countSkillCandidateOccurrences(taskClass);
   if (occurrences < 2) return `first occurrence of task class "${taskClass}" — tag as skill-candidate and wait for recurrence`;
 
   return null;
 }
 
-function buildSlowLoopTools(state: SlowLoopState): Record<string, LlmTool> {
+function buildSlowLoopTools(agentId: string, state: SlowLoopState): Record<string, LlmTool> {
   return {
-    memory_add_entry: {
+    memory_set_preferences: {
       description:
-        "Add an entry to a topic or the global MEMORY.md. Pass topic='memory' for MEMORY.md; any other string is a topic slug (lower-kebab). Duplicates are dropped silently.",
+        "Replace the WHOLE user-preferences summary for this agent. Pass the current summary merged with any new high-signal observation. Keep it short prose (a few sentences).",
       parameters: {
         type: "object",
-        properties: {
-          topic: { type: "string" },
-          content: { type: "string" },
-        },
-        required: ["topic", "content"],
+        properties: { text: { type: "string" } },
+        required: ["text"],
       },
       execute: async (input) => {
-        const topic = String(input.topic ?? "").trim();
-        const content = String(input.content ?? "").trim();
-        if (!topic || !content) return "Error: topic and content are required.";
-        if (topic === "memory" || topic === "user") {
-          if (topic === "user") return "Refused: the slow loop MUST NOT write USER.md (per spec).";
-          const r = await memoryAdd("memory", content);
-          if (!r.success) return `Error: ${r.error}`;
-          state.memoryOps += 1;
-          return `Added to MEMORY.md (${r.usage}).`;
-        }
-        const r = await addTopicEntry(topic, content);
-        if (!r.success) return `Error: ${r.error}`;
-        state.topicOps += 1;
-        return `Added to topics/${topic} (${r.usage}).`;
-      },
-    },
-    memory_replace_entry: {
-      description:
-        "Supersede an entry. Provide an entry id OR a unique substring of the old entry text. Use for contradictions — never for stylistic edits.",
-      parameters: {
-        type: "object",
-        properties: {
-          topic: { type: "string" },
-          entryIdOrText: { type: "string" },
-          newContent: { type: "string" },
-        },
-        required: ["topic", "entryIdOrText", "newContent"],
-      },
-      execute: async (input) => {
-        const topic = String(input.topic ?? "").trim();
-        const key = String(input.entryIdOrText ?? "").trim();
-        const newContent = String(input.newContent ?? "").trim();
-        if (!topic || !key || !newContent) return "Error: topic, entryIdOrText, and newContent are required.";
-        if (topic === "memory") {
-          const r = await memoryReplace("memory", key, newContent);
-          if (!r.success) return `Error: ${r.error}`;
-          state.memoryOps += 1;
-          return `Replaced in MEMORY.md.`;
-        }
-        if (topic === "user") return "Refused: the slow loop MUST NOT write USER.md.";
-        const r = await replaceTopicEntry(topic, key, newContent);
-        if (!r.success) return `Error: ${r.error}`;
-        state.topicOps += 1;
-        return `Replaced in topics/${topic}.`;
-      },
-    },
-    memory_remove_entry: {
-      description: "Remove an entry from a topic or MEMORY.md. Prefer replace over remove for supersessions.",
-      parameters: {
-        type: "object",
-        properties: {
-          topic: { type: "string" },
-          entryIdOrText: { type: "string" },
-        },
-        required: ["topic", "entryIdOrText"],
-      },
-      execute: async (input) => {
-        const topic = String(input.topic ?? "").trim();
-        const key = String(input.entryIdOrText ?? "").trim();
-        if (topic === "user") return "Refused: the slow loop MUST NOT write USER.md.";
-        if (topic === "memory") {
-          const r = await memoryRemove("memory", key);
-          if (!r.success) return `Error: ${r.error}`;
-          state.memoryOps += 1;
-          return "Removed from MEMORY.md.";
-        }
-        const r = await removeTopicEntry(topic, key);
-        if (!r.success) return `Error: ${r.error}`;
-        state.topicOps += 1;
-        return `Removed from topics/${topic}.`;
+        const text = String(input.text ?? "").trim();
+        if (!text) return "Error: text is required.";
+        await setUserPreferences(agentId, text);
+        state.memoryOps += 1;
+        logger().info(LOG, "op: memory_set_preferences", { agentId, chars: text.length });
+        return "User preferences updated.";
       },
     },
     topic_create: {
@@ -296,8 +183,8 @@ function buildSlowLoopTools(state: SlowLoopState): Record<string, LlmTool> {
       parameters: {
         type: "object",
         properties: {
-          slug: { type: "string", description: "Lower-kebab, e.g. 'gmail-workflows' or 'gmail-workflows-2'." },
-          digest: { type: "string", description: "One-line summary shown in MEMORY.md's index." },
+          slug: { type: "string", description: "Lower-kebab, e.g. 'gmail-workflows'." },
+          digest: { type: "string", description: "One-line description shown in the memory index." },
         },
         required: ["slug", "digest"],
       },
@@ -305,12 +192,86 @@ function buildSlowLoopTools(state: SlowLoopState): Record<string, LlmTool> {
         const slug = String(input.slug ?? "").trim();
         const digest = String(input.digest ?? "").trim();
         if (!slug || !digest) return "Error: slug and digest are required.";
-        const r = await createTopic(slug, digest);
-        if (!r.success) return `Error: ${r.error}`;
-        // Add the index line to MEMORY.md so live sessions see it.
-        await memoryAdd("memory", `- ${slug}: ${digest}`).catch(() => undefined);
+        const r = await createTopic(agentId, slug, digest);
+        if (!r.success) {
+          // An already-existing topic is not a failure: the model's intent is
+          // just for the topic to exist so it can add entries. Treat it as a
+          // soft, in-band nudge toward topic_add_entry — don't log an ERROR or
+          // return "Error:" (which the model would otherwise try to "fix").
+          if (/already exists/i.test(r.error ?? "")) {
+            logger().info(LOG, "op: topic_create (already exists)", { agentId, slug });
+            return `Topic "${slug}" already exists — use topic_add_entry to add to it.`;
+          }
+          logger().error(LOG, "topic_create failed", undefined, { agentId, slug, error: r.error });
+          return `Error: ${r.error}`;
+        }
         state.topicOps += 1;
+        logger().info(LOG, "op: topic_create", { agentId, slug, digest });
         return `Topic "${slug}" created.`;
+      },
+    },
+    topic_add_entry: {
+      description: "Add an entry to a topic (creates the topic if missing). Duplicates are dropped silently.",
+      parameters: {
+        type: "object",
+        properties: { topic: { type: "string" }, content: { type: "string" } },
+        required: ["topic", "content"],
+      },
+      execute: async (input) => {
+        const topic = String(input.topic ?? "").trim();
+        const content = String(input.content ?? "").trim();
+        if (!topic || !content) return "Error: topic and content are required.";
+        const r = await addTopicEntry(agentId, topic, content);
+        if (!r.success) {
+          logger().error(LOG, "topic_add_entry failed", undefined, { agentId, topic, error: r.error });
+          return `Error: ${r.error}`;
+        }
+        state.topicOps += 1;
+        logger().info(LOG, "op: topic_add_entry", { agentId, topic, preview: content.slice(0, 100) });
+        return `Added to topics/${topic} (${r.usage}).`;
+      },
+    },
+    topic_replace_entry: {
+      description: "Supersede a topic entry. Provide an entry id OR a unique substring of the old entry text.",
+      parameters: {
+        type: "object",
+        properties: { topic: { type: "string" }, entryIdOrText: { type: "string" }, newContent: { type: "string" } },
+        required: ["topic", "entryIdOrText", "newContent"],
+      },
+      execute: async (input) => {
+        const topic = String(input.topic ?? "").trim();
+        const key = String(input.entryIdOrText ?? "").trim();
+        const newContent = String(input.newContent ?? "").trim();
+        if (!topic || !key || !newContent) return "Error: topic, entryIdOrText, and newContent are required.";
+        const r = await replaceTopicEntry(agentId, topic, key, newContent);
+        if (!r.success) {
+          logger().error(LOG, "topic_replace_entry failed", undefined, { agentId, topic, error: r.error });
+          return `Error: ${r.error}`;
+        }
+        state.topicOps += 1;
+        logger().info(LOG, "op: topic_replace_entry", { agentId, topic, key: key.slice(0, 60) });
+        return `Replaced in topics/${topic}.`;
+      },
+    },
+    topic_remove_entry: {
+      description: "Remove an entry from a topic. Prefer replace over remove for supersessions.",
+      parameters: {
+        type: "object",
+        properties: { topic: { type: "string" }, entryIdOrText: { type: "string" } },
+        required: ["topic", "entryIdOrText"],
+      },
+      execute: async (input) => {
+        const topic = String(input.topic ?? "").trim();
+        const key = String(input.entryIdOrText ?? "").trim();
+        if (!topic || !key) return "Error: topic and entryIdOrText are required.";
+        const r = await removeTopicEntry(agentId, topic, key);
+        if (!r.success) {
+          logger().error(LOG, "topic_remove_entry failed", undefined, { agentId, topic, error: r.error });
+          return `Error: ${r.error}`;
+        }
+        state.topicOps += 1;
+        logger().info(LOG, "op: topic_remove_entry", { agentId, topic, key: key.slice(0, 60) });
+        return `Removed from topics/${topic}.`;
       },
     },
     skill_list: {
@@ -322,28 +283,27 @@ function buildSlowLoopTools(state: SlowLoopState): Record<string, LlmTool> {
         ),
     },
     skill_patch: {
-      description:
-        "Improve an existing skill: replace a unique snippet of its instructions with new text. Prefer over skill_create.",
+      description: "Improve an existing skill: replace a unique snippet of its instructions with new text. Prefer over skill_create.",
       parameters: {
         type: "object",
-        properties: {
-          id: { type: "string" },
-          find: { type: "string" },
-          replace: { type: "string" },
-        },
+        properties: { id: { type: "string" }, find: { type: "string" }, replace: { type: "string" } },
         required: ["id", "find", "replace"],
       },
       execute: async (input) => {
         const r = await patchSkill(String(input.id), String(input.find), String(input.replace));
-        if ("error" in r) return `Error: ${r.error}`;
+        if ("error" in r) {
+          logger().error(LOG, "skill_patch failed", undefined, { id: input.id, error: r.error });
+          return `Error: ${r.error}`;
+        }
         await touchSkill(r.id, "patch");
         state.patchedSkills.push(r.id);
+        logger().info(LOG, "op: skill_patch", { id: r.id, name: r.name });
         return `Patched "${r.name}".`;
       },
     },
     skill_create: {
       description:
-        "Create a new CLASS-LEVEL skill. Subject to the FR-014 skill-creation gate: no existing skill covers the class AND complexity threshold AND recurrence evidence (≥ 2 episodes with matching skill-candidate tag). Include the task class in `taskClass` for the recurrence check.",
+        "Create a new CLASS-LEVEL skill. Subject to the FR-014 gate: no existing skill covers the class AND complexity threshold AND recurrence evidence (≥ 2 episodes with matching skill-candidate tag). Include the task class in `taskClass`.",
       parameters: {
         type: "object",
         properties: {
@@ -360,16 +320,15 @@ function buildSlowLoopTools(state: SlowLoopState): Record<string, LlmTool> {
         const name = String(input.name ?? "").trim();
         const content = String(input.content ?? "").trim();
         if (!taskClass || !name || !content) return "Error: name, content, and taskClass are required.";
-        const gate = await evaluateSkillCreationGate({
+        const gate = await evaluateSkillCreationGate(agentId, {
           taskClass,
           name,
           description: String(input.description ?? ""),
           content,
-          currentEpisode: state.currentEpisode,
         });
         if (gate) {
           state.refusedSkillCreates.push({ taskClass, reason: gate });
-          logger().info(LOG, "skill_create refused", { taskClass, reason: gate });
+          logger().info(LOG, "skill_create refused", { agentId, taskClass, reason: gate });
           if (state.currentEpisode) {
             await tagSkillCandidate(state.currentEpisode.path, taskClass).catch(() => undefined);
           }
@@ -385,18 +344,15 @@ function buildSlowLoopTools(state: SlowLoopState): Record<string, LlmTool> {
         });
         await touchSkill(skill.id, "patch");
         state.createdSkills.push(skill.id);
+        logger().info(LOG, "op: skill_create", { agentId, id: skill.id, name: skill.name, taskClass });
         return `Created skill "${skill.name}".`;
       },
     },
     episode_tag_candidate: {
-      description:
-        "Record a skill-candidate tag on an episode for the recurrence gate. Defaults to the current episode when episodePath is omitted.",
+      description: "Record a skill-candidate tag on the current episode for the recurrence gate.",
       parameters: {
         type: "object",
-        properties: {
-          taskClass: { type: "string" },
-          episodePath: { type: "string" },
-        },
+        properties: { taskClass: { type: "string" }, episodePath: { type: "string" } },
         required: ["taskClass"],
       },
       execute: async (input) => {
@@ -405,21 +361,19 @@ function buildSlowLoopTools(state: SlowLoopState): Record<string, LlmTool> {
         const path = String(input.episodePath ?? state.currentEpisode?.path ?? "").trim();
         if (!path) return "Error: no episode path.";
         await tagSkillCandidate(path, taskClass);
-        return `Tagged "${taskClass}" on ${path}.`;
+        logger().info(LOG, "op: episode_tag_candidate", { agentId, taskClass, path });
+        return `Tagged "${taskClass}".`;
       },
     },
     episode_mark_consolidated: {
-      description:
-        "Finalize an episode after its operations have applied. Defaults to the current episode when episodePath is omitted.",
-      parameters: {
-        type: "object",
-        properties: { episodePath: { type: "string" } },
-      },
+      description: "Finalize the current episode after its operations have applied.",
+      parameters: { type: "object", properties: { episodePath: { type: "string" } } },
       execute: async (input) => {
         const path = String(input.episodePath ?? state.currentEpisode?.path ?? "").trim();
         if (!path) return "Error: no episode path.";
         await markEpisodePathConsolidated(path);
         state.markedConsolidated.push(path);
+        logger().info(LOG, "op: episode_mark_consolidated", { agentId, path });
         return `Marked ${path} as consolidated.`;
       },
     },
@@ -431,6 +385,8 @@ function buildSlowLoopTools(state: SlowLoopState): Record<string, LlmTool> {
 export interface SlowLoopRunSummary {
   ran: boolean;
   reason?: string;
+  /** Agent ids that had episodes consolidated this run. */
+  agents: string[];
   processed: number;
   memoryOps: number;
   topicOps: number;
@@ -439,12 +395,13 @@ export interface SlowLoopRunSummary {
   skillsRefused: { taskClass: string; reason: string }[];
   markedConsolidated: string[];
   archived: number;
-  errors: { episodePath: string; error: string }[];
+  errors: { agentId: string; episodePath: string; error: string }[];
 }
 
-export async function runSlowLoop(opts: { force?: boolean } = {}): Promise<SlowLoopRunSummary> {
-  const summary: SlowLoopRunSummary = {
+function emptySummary(): SlowLoopRunSummary {
+  return {
     ran: false,
+    agents: [],
     processed: 0,
     memoryOps: 0,
     topicOps: 0,
@@ -455,32 +412,79 @@ export async function runSlowLoop(opts: { force?: boolean } = {}): Promise<SlowL
     archived: 0,
     errors: [],
   };
+}
+
+/** List agent ids that have a memory directory under /Memories. */
+async function listAgentsWithMemory(): Promise<string[]> {
+  try {
+    const entries = await vfs.list(MEMORIES_ROOT);
+    return entries.filter((e) => e.type === "dir").map((e) => e.name);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw err;
+  }
+}
+
+export async function runSlowLoop(opts: { force?: boolean; onlyAgentId?: string } = {}): Promise<SlowLoopRunSummary> {
+  const summary = emptySummary();
 
   const cfg = await getMemoryLoopsConfig();
   if (!cfg.slowLoop.enabled && !opts.force) {
+    logger().info(LOG, "slow loop disabled; skipping");
     summary.reason = "slow loop disabled";
     return summary;
   }
 
-  const pending = await listPendingEpisodes(cfg.slowLoop.batchSize);
-  if (pending.length === 0) {
-    // FR-010 zero-cost exit: never call the LLM when nothing is pending. Still
-    // do archive maintenance — that's file movement, not an LLM call.
-    summary.archived = await archiveOldEpisodes(cfg.episodeArchiveAgeDays).catch(() => 0);
-    summary.reason = "no pending episodes";
+  const agentIds = opts.onlyAgentId ? [safeAgentId(opts.onlyAgentId)] : await listAgentsWithMemory();
+  if (agentIds.length === 0) {
+    summary.reason = "no agent memory found";
     return summary;
   }
 
-  if (!(await hasCredentials())) {
-    summary.reason = "no AI provider configured";
-    return summary;
+  let anyPending = false;
+  let hasCreds: boolean | null = null;
+
+  for (const agentId of agentIds) {
+    const pending = await listPendingEpisodes(agentId, cfg.slowLoop.batchSize);
+    if (pending.length === 0) {
+      summary.archived += await archiveOldEpisodes(agentId, cfg.episodeArchiveAgeDays).catch(() => 0);
+      continue;
+    }
+    anyPending = true;
+    if (hasCreds === null) hasCreds = await hasCredentials();
+    if (!hasCreds) {
+      logger().warn(LOG, "slow loop: no AI credentials configured — cannot run", { agentId, pending: pending.length });
+      summary.reason = "no AI provider configured";
+      continue;
+    }
+    await consolidateAgent(agentId, pending, cfg, summary);
   }
 
-  const lock = await acquireLock();
-  if (!lock) {
-    summary.reason = "slow-loop lock held by another run";
-    return summary;
-  }
+  summary.ran = true;
+  if (!anyPending && !summary.reason) summary.reason = "no pending episodes";
+  logger().info(LOG, "slow loop run", {
+    agents: summary.agents.length,
+    processed: summary.processed,
+    memoryOps: summary.memoryOps,
+    topicOps: summary.topicOps,
+    skillsPatched: summary.skillsPatched.length,
+    skillsCreated: summary.skillsCreated.length,
+    skillsRefused: summary.skillsRefused.length,
+    archived: summary.archived,
+    errors: summary.errors.length,
+  });
+  return summary;
+}
+
+async function consolidateAgent(
+  agentId: string,
+  pending: Episode[],
+  cfg: Awaited<ReturnType<typeof getMemoryLoopsConfig>>,
+  summary: SlowLoopRunSummary,
+): Promise<void> {
+  const lock = await acquireLock(agentId);
+  if (!lock) return; // held by another run — try again next tick
+  summary.agents.push(agentId);
 
   const state: SlowLoopState = {
     currentEpisode: null,
@@ -491,51 +495,70 @@ export async function runSlowLoop(opts: { force?: boolean } = {}): Promise<SlowL
     refusedSkillCreates: [],
     markedConsolidated: [],
   };
-  const tools = buildSlowLoopTools(state);
+  const tools = buildSlowLoopTools(agentId, state);
+  const preamble = await renderAgentPreamble(agentId);
+
+  logger().info(LOG, "slow loop starting", { agentId, pending: pending.length, batchSize: cfg.slowLoop.batchSize, batchId: lock.batchId });
 
   try {
-    for (const ep of pending) {
+    for (let i = 0; i < pending.length; i++) {
+      const ep = pending[i];
       state.currentEpisode = ep;
+      const convId = ep.meta.conversationId;
+      logger().log({
+        level: "info",
+        component: LOG,
+        conversation: convId,
+        msg: "consolidating episode",
+        data: { agentId, path: ep.path, index: i + 1, total: pending.length },
+      });
       try {
-        await consolidateEpisode(ep, tools);
+        await consolidateEpisode(ep, tools, preamble);
+        if (!state.markedConsolidated.includes(ep.path)) {
+          logger().log({
+            level: "warn",
+            component: LOG,
+            conversation: convId,
+            msg: "LLM did not call episode_mark_consolidated — auto-marking",
+            data: { agentId, path: ep.path },
+          });
+          await markEpisodePathConsolidated(ep.path).catch((e) => {
+            const err = e instanceof Error ? { message: e.message, stack: e.stack } : { message: String(e) };
+            logger().log({ level: "error", component: LOG, conversation: convId, msg: "auto-mark consolidated failed", err, data: { agentId, path: ep.path } });
+          });
+          state.markedConsolidated.push(ep.path);
+        }
         summary.processed += 1;
       } catch (err) {
-        summary.errors.push({ episodePath: ep.path, error: (err as Error).message });
-        logger().error(LOG, "episode consolidation failed", err, { path: ep.path });
+        summary.errors.push({ agentId, episodePath: ep.path, error: (err as Error).message });
+        const e = err instanceof Error ? { message: err.message, stack: err.stack } : { message: String(err) };
+        logger().log({ level: "error", component: LOG, conversation: convId, msg: "episode consolidation failed", err: e, data: { agentId, path: ep.path } });
       }
     }
-    summary.memoryOps = state.memoryOps;
-    summary.topicOps = state.topicOps;
-    summary.skillsPatched = state.patchedSkills;
-    summary.skillsCreated = state.createdSkills;
-    summary.skillsRefused = state.refusedSkillCreates;
-    summary.markedConsolidated = state.markedConsolidated;
-    summary.archived = await archiveOldEpisodes(cfg.episodeArchiveAgeDays).catch(() => 0);
-    summary.ran = true;
-    logger().info(LOG, "slow loop run", {
-      processed: summary.processed,
-      memoryOps: summary.memoryOps,
-      topicOps: summary.topicOps,
-      skillsPatched: summary.skillsPatched.length,
-      skillsCreated: summary.skillsCreated.length,
-      skillsRefused: summary.skillsRefused.length,
-      archived: summary.archived,
-      errors: summary.errors.length,
-    });
-    return summary;
+    summary.memoryOps += state.memoryOps;
+    summary.topicOps += state.topicOps;
+    summary.skillsPatched.push(...state.patchedSkills);
+    summary.skillsCreated.push(...state.createdSkills);
+    summary.skillsRefused.push(...state.refusedSkillCreates);
+    summary.markedConsolidated.push(...state.markedConsolidated);
+    summary.archived += await archiveOldEpisodes(agentId, cfg.episodeArchiveAgeDays).catch(() => 0);
   } finally {
-    await releaseLock(lock);
+    await releaseLock(agentId, lock);
   }
 }
 
-async function consolidateEpisode(ep: Episode, tools: Record<string, LlmTool>): Promise<void> {
-  const summary = renderEpisodeForPrompt(ep);
-  await runToolLoop({
-    system: SLOW_LOOP_SYSTEM_PROMPT,
-    prompt: summary,
-    tools,
-    maxSteps: 12,
-  });
+async function renderAgentPreamble(agentId: string): Promise<string> {
+  const doc = await readMemoryDoc(agentId);
+  const prefs = doc.preferences ? doc.preferences : "_(none recorded yet)_";
+  const topics = doc.index.length
+    ? doc.index.map((r) => `- ${r.file.replace(/^Topics\//, "").replace(/\.md$/, "")}: ${r.description}`).join("\n")
+    : "_(no topics yet)_";
+  return [`This agent's CURRENT user preferences:`, prefs, "", `This agent's EXISTING topics (slug — digest):`, topics].join("\n");
+}
+
+async function consolidateEpisode(ep: Episode, tools: Record<string, LlmTool>, preamble: string): Promise<void> {
+  const prompt = `${preamble}\n\n---\n\nPending episode to consolidate:\n\n${renderEpisodeForPrompt(ep)}`;
+  await runToolLoop({ system: SLOW_LOOP_SYSTEM_PROMPT, prompt, tools, maxSteps: 12 });
 }
 
 function renderEpisodeForPrompt(ep: Episode): string {
@@ -585,7 +608,7 @@ async function runAsHandler(): Promise<HandlerRunResult> {
   if (summary.errors.length > 0) {
     return {
       status: "error",
-      error: summary.errors.map((e) => `${e.episodePath}: ${e.error}`).join("; "),
+      error: summary.errors.map((e) => `${e.agentId}/${e.episodePath}: ${e.error}`).join("; "),
       output: `${summary.processed} processed; ${summary.errors.length} error(s)`,
     };
   }
@@ -593,14 +616,14 @@ async function runAsHandler(): Promise<HandlerRunResult> {
     status: "success",
     output:
       summary.reason ??
-      `processed=${summary.processed} memoryOps=${summary.memoryOps} topicOps=${summary.topicOps} skillsCreated=${summary.skillsCreated.length} skillsPatched=${summary.skillsPatched.length}`,
+      `agents=${summary.agents.length} processed=${summary.processed} memoryOps=${summary.memoryOps} topicOps=${summary.topicOps} skillsCreated=${summary.skillsCreated.length} skillsPatched=${summary.skillsPatched.length}`,
   };
 }
 
-/** Host-side existence probe on the lock file (for observability endpoints). */
-export async function isLockStale(): Promise<boolean> {
+/** Host-side existence probe on an agent's lock file (for observability). */
+export async function isLockStale(agentId: string): Promise<boolean> {
   try {
-    const st = await fs.stat(hostPath(LOCK_PATH));
+    const st = await fs.stat(hostPath(agentLockFile(agentId)));
     return Date.now() - st.mtimeMs >= LOCK_STALE_MS;
   } catch {
     return true;

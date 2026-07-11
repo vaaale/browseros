@@ -1,89 +1,225 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
-  Brain,
   UserCircle,
-  Plus,
-  Trash2,
   Check,
   X,
   Info,
   Loader2,
   AlertTriangle,
+  BookOpen,
 } from "lucide-react";
-import type { LucideIcon } from "lucide-react";
 
-type Target = "user" | "memory";
-
-// Matches server-side budget accounting in src/lib/agent/memory/curated.ts.
-const DELIM = "\n§\n";
-const LIMITS: Record<Target, number> = { user: 1200, memory: 2000 };
-
-interface EntriesResponse {
-  target: Target;
-  entries: string[];
+interface IndexEntry {
+  file: string;
+  description: string;
 }
 
-interface MemoryResult {
+interface MemoryResponse {
+  agentId: string;
+  preferences: string;
+  index: IndexEntry[];
+  topics: string[];
+}
+
+interface SetResult {
   success: boolean;
   error?: string;
-  usage?: string;
 }
 
-interface PaneState {
-  entries: string[];
+interface LoadState {
+  preferences: string;
+  index: IndexEntry[];
   loading: boolean;
   error: string | null;
 }
 
-const INITIAL_PANE: PaneState = { entries: [], loading: true, error: null };
+const INITIAL: LoadState = { preferences: "", index: [], loading: true, error: null };
 
-export default function ProfileTab() {
-  const [userPane, setUserPane] = useState<PaneState>(INITIAL_PANE);
-  const [memoryPane, setMemoryPane] = useState<PaneState>(INITIAL_PANE);
+export default function ProfileTab({ agentId }: { agentId: string }) {
+  const [state, setState] = useState<LoadState>(INITIAL);
+  const [draft, setDraft] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [opError, setOpError] = useState<string | null>(null);
 
-  const loadTarget = useCallback(async (target: Target) => {
-    const setter = target === "user" ? setUserPane : setMemoryPane;
-    setter((prev) => ({ ...prev, loading: true, error: null }));
+  const load = useCallback(async () => {
+    setState((prev) => ({ ...prev, loading: true, error: null }));
     try {
-      const res = await fetch(`/api/memory?target=${target}`);
+      const res = await fetch(`/api/memory?agent=${encodeURIComponent(agentId)}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = (await res.json()) as EntriesResponse;
-      setter({ entries: Array.isArray(data.entries) ? data.entries : [], loading: false, error: null });
+      const data = (await res.json()) as MemoryResponse;
+      const prefs = typeof data.preferences === "string" ? data.preferences : "";
+      setState({
+        preferences: prefs,
+        index: Array.isArray(data.index) ? data.index : [],
+        loading: false,
+        error: null,
+      });
+      setDraft(prefs);
     } catch (err) {
-      setter({ entries: [], loading: false, error: (err as Error).message || "Failed to load entries" });
+      setState({ preferences: "", index: [], loading: false, error: (err as Error).message || "Failed to load memory" });
     }
-  }, []);
+  }, [agentId]);
 
   useEffect(() => {
-    const id = setTimeout(() => {
-      void loadTarget("user");
-      void loadTarget("memory");
-    }, 0);
+    const id = setTimeout(() => void load(), 0);
     return () => clearTimeout(id);
-  }, [loadTarget]);
+  }, [load]);
+
+  const dirty = draft !== state.preferences;
+
+  const save = async () => {
+    setSaving(true);
+    setOpError(null);
+    setSaved(false);
+    try {
+      const res = await fetch(`/api/memory?agent=${encodeURIComponent(agentId)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "setPreferences", content: draft }),
+      });
+      const data = (await res.json().catch(() => ({}))) as SetResult;
+      if (!res.ok || !data.success) {
+        setOpError(data.error || `Failed (HTTP ${res.status})`);
+        return;
+      }
+      setState((prev) => ({ ...prev, preferences: draft }));
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+    } catch (err) {
+      setOpError((err as Error).message || "Failed to save preferences");
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <div className="flex h-full flex-col gap-3 text-xs">
       <InfoBanner />
+
+      {opError && (
+        <div className="flex shrink-0 items-start gap-2 rounded-md border border-red-400/30 bg-red-400/10 px-2.5 py-1.5 text-[11px] text-red-200">
+          <AlertTriangle className="mt-[1px] h-3 w-3 shrink-0" />
+          <span className="flex-1 break-words">{opError}</span>
+          <button
+            type="button"
+            onClick={() => setOpError(null)}
+            className="rounded p-0.5 hover:bg-white/10"
+            aria-label="Dismiss error"
+          >
+            <X className="h-3 w-3" />
+          </button>
+        </div>
+      )}
+
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 md:grid-cols-2">
-        <Pane
-          target="user"
-          title="User Profile"
-          icon={UserCircle}
-          iconClass="text-sky-300"
-          state={userPane}
-          onReload={() => loadTarget("user")}
-        />
-        <Pane
-          target="memory"
-          title="Agent Notes"
-          icon={Brain}
-          iconClass="text-violet-300"
-          state={memoryPane}
-          onReload={() => loadTarget("memory")}
-        />
+        {/* User preferences (editable) */}
+        <section className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-white/10 bg-white/[0.02]">
+          <header className="flex shrink-0 items-center justify-between border-b border-white/10 bg-white/[0.02] px-3 py-2">
+            <div className="flex items-center gap-2">
+              <UserCircle className="h-3.5 w-3.5 text-sky-300" />
+              <h2 className="text-[11px] font-semibold uppercase tracking-wider text-white/80">
+                User preferences
+              </h2>
+            </div>
+            <div className="flex items-center gap-2">
+              {saved && (
+                <span className="inline-flex items-center gap-1 text-[10px] font-medium text-emerald-300">
+                  <Check className="h-3 w-3" />
+                  Saved
+                </span>
+              )}
+              <button
+                type="button"
+                onClick={save}
+                disabled={saving || state.loading || !dirty}
+                className="flex items-center gap-1 rounded-md bg-white/10 px-2 py-1 text-[11px] font-medium text-white transition-colors hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
+                Save
+              </button>
+            </div>
+          </header>
+
+          <div className="min-h-0 flex-1 overflow-y-auto p-3">
+            {state.loading ? (
+              <LoadingState />
+            ) : state.error ? (
+              <ErrorState message={state.error} onRetry={load} />
+            ) : (
+              <textarea
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                    e.preventDefault();
+                    if (dirty && !saving) void save();
+                  }
+                }}
+                placeholder="Prose summary of the user's stable preferences…"
+                className="h-full min-h-[200px] w-full resize-none rounded border border-white/10 bg-black/30 px-2.5 py-2 text-xs leading-relaxed text-white placeholder-white/30 outline-none focus:border-white/30"
+                aria-label="User preferences"
+              />
+            )}
+          </div>
+
+          {!state.loading && !state.error && (
+            <footer className="shrink-0 border-t border-white/10 bg-white/[0.02] px-3 py-1.5 text-[10px] text-white/50">
+              {draft.length.toLocaleString()} chars
+            </footer>
+          )}
+        </section>
+
+        {/* Memory index (read-only) */}
+        <section className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-white/10 bg-white/[0.02]">
+          <header className="flex shrink-0 items-center justify-between border-b border-white/10 bg-white/[0.02] px-3 py-2">
+            <div className="flex items-center gap-2">
+              <BookOpen className="h-3.5 w-3.5 text-violet-300" />
+              <h2 className="text-[11px] font-semibold uppercase tracking-wider text-white/80">
+                Memory index
+              </h2>
+              <span className="text-[11px] text-white/40">({state.index.length})</span>
+            </div>
+            <span className="text-[10px] italic text-white/40">Auto-generated</span>
+          </header>
+
+          <div className="min-h-0 flex-1 overflow-y-auto p-3">
+            {state.loading ? (
+              <LoadingState />
+            ) : state.error ? (
+              <ErrorState message={state.error} onRetry={load} />
+            ) : state.index.length === 0 ? (
+              <EmptyState label="No topics indexed yet." />
+            ) : (
+              <table className="w-full border-collapse text-[11px]">
+                <thead>
+                  <tr className="border-b border-white/10 text-left text-[10px] uppercase tracking-wider text-white/50">
+                    <th className="px-2 py-1.5 font-semibold">Topic file</th>
+                    <th className="px-2 py-1.5 font-semibold">Description</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {state.index.map((row, i) => (
+                    <tr
+                      key={`${i}-${row.file}`}
+                      className="border-b border-white/5 align-top hover:bg-white/[0.03]"
+                    >
+                      <td className="px-2 py-1.5 font-mono text-[10.5px] text-white/85">{row.file}</td>
+                      <td className="px-2 py-1.5 break-words text-white/75">{row.description}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+
+          <footer className="flex shrink-0 items-start gap-2 border-t border-white/10 bg-white/[0.02] px-3 py-1.5 text-[10px] text-white/50">
+            <Info className="mt-[1px] h-3 w-3 shrink-0 text-white/40" />
+            <span>Derived from topic files — manage topics in the Topics tab.</span>
+          </footer>
+        </section>
       </div>
     </div>
   );
@@ -98,274 +234,6 @@ function InfoBanner() {
         uses a frozen snapshot.
       </span>
     </div>
-  );
-}
-
-interface PaneProps {
-  target: Target;
-  title: string;
-  icon: LucideIcon;
-  iconClass: string;
-  state: PaneState;
-  onReload: () => void;
-}
-
-function Pane({ target, title, icon: Icon, iconClass, state, onReload }: PaneProps) {
-  const limit = LIMITS[target];
-  const [drafting, setDrafting] = useState(false);
-  const [draft, setDraft] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
-  const [opError, setOpError] = useState<string | null>(null);
-
-  const usage = useMemo(() => charCount(state.entries), [state.entries]);
-  const pct = limit > 0 ? Math.min(100, (usage / limit) * 100) : 0;
-  const budgetTone = pct > 80 ? "danger" : pct >= 50 ? "warning" : "ok";
-
-  const cancelDraft = () => {
-    setDrafting(false);
-    setDraft("");
-    setOpError(null);
-  };
-
-  const submitDraft = async () => {
-    const content = draft.trim();
-    if (!content) return;
-    setSubmitting(true);
-    setOpError(null);
-    try {
-      const res = await fetch("/api/memory", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ target, action: "add", content }),
-      });
-      const data = (await res.json().catch(() => ({}))) as MemoryResult;
-      if (!res.ok || !data.success) {
-        setOpError(data.error || `Failed (HTTP ${res.status})`);
-        return;
-      }
-      setDraft("");
-      setDrafting(false);
-      onReload();
-    } catch (err) {
-      setOpError((err as Error).message || "Failed to add entry");
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const confirmDelete = async (entry: string) => {
-    setSubmitting(true);
-    setOpError(null);
-    try {
-      const res = await fetch("/api/memory", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ target, action: "remove", oldText: entry }),
-      });
-      const data = (await res.json().catch(() => ({}))) as MemoryResult;
-      if (!res.ok || !data.success) {
-        setOpError(data.error || `Failed (HTTP ${res.status})`);
-        return;
-      }
-      setPendingDelete(null);
-      onReload();
-    } catch (err) {
-      setOpError((err as Error).message || "Failed to delete entry");
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  return (
-    <section className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-white/10 bg-white/[0.02]">
-      <header className="flex shrink-0 items-center justify-between border-b border-white/10 bg-white/[0.02] px-3 py-2">
-        <div className="flex items-center gap-2">
-          <Icon className={`h-3.5 w-3.5 ${iconClass}`} />
-          <h2 className="text-[11px] font-semibold uppercase tracking-wider text-white/80">{title}</h2>
-          <span className="text-[11px] text-white/40">({state.entries.length})</span>
-        </div>
-        <button
-          type="button"
-          onClick={() => setDrafting((v) => !v)}
-          disabled={state.loading}
-          className="flex items-center gap-1 rounded-md bg-white/10 px-2 py-1 text-[11px] font-medium text-white transition-colors hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-50"
-          aria-label={`Add entry to ${title}`}
-        >
-          <Plus className="h-3 w-3" />
-          Add
-        </button>
-      </header>
-
-      <div className="min-h-0 flex-1 overflow-y-auto p-3">
-        {drafting && (
-          <div className="mb-3 rounded-md border border-violet-400/30 bg-violet-400/5 p-2">
-            <textarea
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-                  e.preventDefault();
-                  void submitDraft();
-                }
-                if (e.key === "Escape") {
-                  e.preventDefault();
-                  cancelDraft();
-                }
-              }}
-              placeholder={`New ${target === "user" ? "profile" : "note"} entry…`}
-              rows={3}
-              autoFocus
-              className="w-full resize-none rounded border border-white/10 bg-black/30 px-2 py-1.5 text-xs text-white placeholder-white/30 outline-none focus:border-white/30"
-              aria-label={`New ${target === "user" ? "profile" : "notes"} entry`}
-            />
-            <div className="mt-2 flex items-center justify-between gap-2">
-              <span className="text-[10px] text-white/40">{draft.trim().length} chars</span>
-              <div className="flex items-center gap-1">
-                <button
-                  type="button"
-                  onClick={cancelDraft}
-                  disabled={submitting}
-                  className="rounded-md border border-white/10 bg-white/[0.05] px-2 py-1 text-[11px] text-white/80 hover:bg-white/10 disabled:opacity-50"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={submitDraft}
-                  disabled={submitting || !draft.trim()}
-                  className="flex items-center gap-1 rounded-md bg-white/10 px-2 py-1 text-[11px] font-medium text-white hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {submitting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
-                  Save
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {opError && (
-          <div className="mb-3 flex items-start gap-2 rounded-md border border-red-400/30 bg-red-400/10 px-2.5 py-1.5 text-[11px] text-red-200">
-            <AlertTriangle className="mt-[1px] h-3 w-3 shrink-0" />
-            <span className="flex-1 break-words">{opError}</span>
-            <button
-              type="button"
-              onClick={() => setOpError(null)}
-              className="rounded p-0.5 hover:bg-white/10"
-              aria-label="Dismiss error"
-            >
-              <X className="h-3 w-3" />
-            </button>
-          </div>
-        )}
-
-        {state.loading ? (
-          <LoadingState />
-        ) : state.error ? (
-          <ErrorState message={state.error} onRetry={onReload} />
-        ) : state.entries.length === 0 ? (
-          <EmptyState label={target === "user" ? "No profile entries yet." : "No agent notes yet."} />
-        ) : (
-          <ul className="space-y-1.5">
-            {state.entries.map((entry, i) => (
-              <EntryItem
-                key={`${i}-${entry.slice(0, 32)}`}
-                entry={entry}
-                pending={pendingDelete === entry}
-                busy={submitting}
-                onRequestDelete={() => {
-                  setPendingDelete(entry);
-                  setOpError(null);
-                }}
-                onCancelDelete={() => setPendingDelete(null)}
-                onConfirmDelete={() => confirmDelete(entry)}
-              />
-            ))}
-          </ul>
-        )}
-      </div>
-
-      <footer className="shrink-0 border-t border-white/10 bg-white/[0.02] px-3 py-2">
-        <div className="mb-1 flex items-center justify-between text-[10px] text-white/60">
-          <span>Budget</span>
-          <span>
-            {usage.toLocaleString()} / {limit.toLocaleString()} chars
-          </span>
-        </div>
-        <div className="h-1 w-full overflow-hidden rounded-full bg-white/10">
-          <div
-            className={`h-full transition-all ${
-              budgetTone === "danger"
-                ? "bg-red-400"
-                : budgetTone === "warning"
-                  ? "bg-amber-400"
-                  : "bg-emerald-400"
-            }`}
-            style={{ width: `${pct}%` }}
-          />
-        </div>
-      </footer>
-    </section>
-  );
-}
-
-function EntryItem({
-  entry,
-  pending,
-  busy,
-  onRequestDelete,
-  onCancelDelete,
-  onConfirmDelete,
-}: {
-  entry: string;
-  pending: boolean;
-  busy: boolean;
-  onRequestDelete: () => void;
-  onCancelDelete: () => void;
-  onConfirmDelete: () => void;
-}) {
-  return (
-    <li className="group rounded-md border border-white/10 bg-white/[0.03] px-2.5 py-2 transition-colors hover:border-white/15 hover:bg-white/[0.06]">
-      <div className="flex items-start gap-2">
-        <p className="flex-1 whitespace-pre-wrap break-words text-[11px] leading-relaxed text-white/85">{entry}</p>
-        {pending ? (
-          <div className="flex shrink-0 items-center gap-1">
-            <span className="hidden text-[10px] text-white/60 sm:inline">Delete?</span>
-            <button
-              type="button"
-              onClick={onConfirmDelete}
-              disabled={busy}
-              className="rounded border border-red-400/30 bg-red-400/15 p-1 text-red-200 hover:bg-red-400/25 disabled:opacity-50"
-              aria-label="Confirm delete"
-              title="Confirm delete"
-            >
-              <Check className="h-3 w-3" />
-            </button>
-            <button
-              type="button"
-              onClick={onCancelDelete}
-              disabled={busy}
-              className="rounded border border-white/10 bg-white/[0.05] p-1 text-white/70 hover:bg-white/10 disabled:opacity-50"
-              aria-label="Cancel delete"
-              title="Cancel"
-            >
-              <X className="h-3 w-3" />
-            </button>
-          </div>
-        ) : (
-          <button
-            type="button"
-            onClick={onRequestDelete}
-            disabled={busy}
-            className="rounded p-1 text-white/40 opacity-0 transition-opacity hover:bg-white/10 hover:text-white group-hover:opacity-100 focus:opacity-100 disabled:cursor-not-allowed disabled:opacity-40"
-            aria-label="Delete entry"
-            title="Delete"
-          >
-            <Trash2 className="h-3 w-3" />
-          </button>
-        )}
-      </div>
-    </li>
   );
 }
 
@@ -398,8 +266,4 @@ function EmptyState({ label }: { label: string }) {
   return (
     <div className="flex h-32 items-center justify-center text-[11px] text-white/35">{label}</div>
   );
-}
-
-function charCount(entries: string[]): number {
-  return entries.length ? entries.join(DELIM).length : 0;
 }

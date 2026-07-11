@@ -24,7 +24,7 @@ export class LoggingService {
         ts: input.ts ?? Date.now(),
         level: input.level,
         stream: input.stream ?? "backend",
-        component: input.component || ctx.component || "",
+        component: input.component || "",
         ...(input.conversation ? { conversation: input.conversation } : {}),
         msg: input.msg,
         ...(input.data !== undefined ? { data: input.data } : {}),

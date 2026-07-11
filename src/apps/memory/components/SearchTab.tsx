@@ -76,7 +76,7 @@ function sourceIcon(kind: FilterId): ReactNode {
   return <Notebook className="h-3 w-3" />;
 }
 
-export default function SearchTab() {
+export default function SearchTab({ agentId }: { agentId: string }) {
   const [input, setInput] = useState("");
   const [activeQuery, setActiveQuery] = useState("");
   const [results, setResults] = useState<RawResult[]>([]);
@@ -102,7 +102,7 @@ export default function SearchTab() {
     else setLoading(true);
     setError(null);
     try {
-      const url = `/api/memory/search?q=${encodeURIComponent(trimmed)}&maxResults=${limit}`;
+      const url = `/api/memory/search?agent=${encodeURIComponent(agentId)}&q=${encodeURIComponent(trimmed)}&maxResults=${limit}`;
       const res = await fetch(url);
       if (!res.ok) {
         const data = (await res.json().catch(() => ({}))) as { error?: string };
@@ -122,7 +122,16 @@ export default function SearchTab() {
         setLoadingMore(false);
       }
     }
-  }, []);
+  }, [agentId]);
+
+  // Re-run the active search against the newly-selected agent. Deferred to avoid
+  // cascading renders within the effect body.
+  useEffect(() => {
+    if (!activeQuery) return;
+    const handle = setTimeout(() => void runSearch(activeQuery, maxResults, false), 0);
+    return () => clearTimeout(handle);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agentId]);
 
   // Debounced auto-search on input change.
   useEffect(() => {

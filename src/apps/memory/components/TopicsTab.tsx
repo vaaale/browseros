@@ -18,6 +18,7 @@ import {
 
 interface TopicMetaView {
   slug: string;
+  digest?: string;
   entryCount: number;
   charUsage: number;
   budget: number;
@@ -65,7 +66,8 @@ function estimateEntryCharCost(text: string): number {
   return `- [YYYY-MM-DD] ${text}`.length + 1;
 }
 
-export default function TopicsTab() {
+export default function TopicsTab({ agentId }: { agentId: string }) {
+  const agentQ = `agent=${encodeURIComponent(agentId)}`;
   const [list, setList] = useState<ListState>(INITIAL_LIST);
   const [selected, setSelected] = useState<string | null>(null);
   const [detail, setDetail] = useState<DetailState>(INITIAL_DETAIL);
@@ -78,7 +80,7 @@ export default function TopicsTab() {
   const loadList = useCallback(async () => {
     setList((prev) => ({ ...prev, loading: true, error: null }));
     try {
-      const res = await fetch("/api/memory/topics");
+      const res = await fetch(`/api/memory/topics?${agentQ}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as { topics?: TopicMetaView[] };
       setList({
@@ -89,13 +91,13 @@ export default function TopicsTab() {
     } catch (err) {
       setList({ topics: [], loading: false, error: (err as Error).message || "Failed to load topics" });
     }
-  }, []);
+  }, [agentQ]);
 
   const loadDetail = useCallback(
     async (slug: string, budget: number) => {
       setDetail({ data: null, budget, loading: true, error: null });
       try {
-        const res = await fetch(`/api/memory?topic=${encodeURIComponent(slug)}`);
+        const res = await fetch(`/api/memory?${agentQ}&topic=${encodeURIComponent(slug)}`);
         if (!res.ok) {
           const errJson = (await res.json().catch(() => ({}))) as { error?: string };
           throw new Error(errJson.error || `HTTP ${res.status}`);
@@ -115,11 +117,18 @@ export default function TopicsTab() {
         setDetail({ data: null, budget, loading: false, error: (err as Error).message || "Failed to load topic" });
       }
     },
-    [],
+    [agentQ],
   );
 
+  // Reset selection and reload the list whenever the list loader changes
+  // (which happens when the selected agent changes). All state updates are
+  // deferred to avoid cascading renders within the effect body.
   useEffect(() => {
-    const id = setTimeout(() => void loadList(), 0);
+    const id = setTimeout(() => {
+      setSelected(null);
+      setDetail(INITIAL_DETAIL);
+      void loadList();
+    }, 0);
     return () => clearTimeout(id);
   }, [loadList]);
 
@@ -150,7 +159,7 @@ export default function TopicsTab() {
     // both directly here so we can hand the new budget to loadDetail without
     // relying on stale React state from `list`.
     try {
-      const listRes = await fetch("/api/memory/topics");
+      const listRes = await fetch(`/api/memory/topics?${agentQ}`);
       const listData = (await listRes.json().catch(() => ({}))) as { topics?: TopicMetaView[] };
       const topics = Array.isArray(listData.topics) ? listData.topics : [];
       setList({ topics, loading: false, error: null });
@@ -161,7 +170,7 @@ export default function TopicsTab() {
     } catch (err) {
       setList({ topics: [], loading: false, error: (err as Error).message || "Failed to reload" });
     }
-  }, [detail.budget, loadDetail, selected]);
+  }, [agentQ, detail.budget, loadDetail, selected]);
 
   const addEntry = useCallback(
     async (content: string): Promise<boolean> => {
@@ -169,7 +178,7 @@ export default function TopicsTab() {
       setBusy("add");
       setOpError(null);
       try {
-        const res = await fetch("/api/memory", {
+        const res = await fetch(`/api/memory?${agentQ}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ target: "topic", action: "add", topic: selected, content }),
@@ -188,7 +197,7 @@ export default function TopicsTab() {
         setBusy(null);
       }
     },
-    [refreshAfterMutation, selected],
+    [agentQ, refreshAfterMutation, selected],
   );
 
   const deleteEntry = useCallback(
@@ -198,7 +207,7 @@ export default function TopicsTab() {
       setOpError(null);
       try {
         const res = await fetch(
-          `/api/memory?target=topic&topic=${encodeURIComponent(selected)}&id=${encodeURIComponent(entryId)}`,
+          `/api/memory?${agentQ}&target=topic&topic=${encodeURIComponent(selected)}&id=${encodeURIComponent(entryId)}`,
           { method: "DELETE" },
         );
         const data = (await res.json().catch(() => ({}))) as TopicOpResult;
@@ -214,7 +223,7 @@ export default function TopicsTab() {
         setBusy(null);
       }
     },
-    [refreshAfterMutation, selected],
+    [agentQ, refreshAfterMutation, selected],
   );
 
   const deleteTopic = useCallback(async () => {
@@ -222,7 +231,7 @@ export default function TopicsTab() {
     setBusy("delete-topic");
     setOpError(null);
     try {
-      const res = await fetch(`/api/memory?target=topic&topic=${encodeURIComponent(selected)}`, {
+      const res = await fetch(`/api/memory?${agentQ}&target=topic&topic=${encodeURIComponent(selected)}`, {
         method: "DELETE",
       });
       const data = (await res.json().catch(() => ({}))) as TopicOpResult;
@@ -239,14 +248,14 @@ export default function TopicsTab() {
     } finally {
       setBusy(null);
     }
-  }, [loadList, selected]);
+  }, [agentQ, loadList, selected]);
 
   const createTopic = useCallback(
     async (slug: string) => {
       setBusy("create");
       setOpError(null);
       try {
-        const res = await fetch("/api/memory", {
+        const res = await fetch(`/api/memory?${agentQ}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ target: "topic", action: "create", topic: slug }),
@@ -257,7 +266,7 @@ export default function TopicsTab() {
           return false;
         }
         // Fetch fresh list, then select the new topic using the meta's own budget.
-        const listRes = await fetch("/api/memory/topics");
+        const listRes = await fetch(`/api/memory/topics?${agentQ}`);
         const listData = (await listRes.json().catch(() => ({}))) as { topics?: TopicMetaView[] };
         const topics = Array.isArray(listData.topics) ? listData.topics : [];
         setList({ topics, loading: false, error: null });
@@ -275,7 +284,7 @@ export default function TopicsTab() {
         setBusy(null);
       }
     },
-    [loadDetail],
+    [agentQ, loadDetail],
   );
 
   return (

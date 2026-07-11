@@ -1,8 +1,7 @@
 import "server-only";
-import { CORE_POLICY, DEFAULT_PERSONALITY } from "./config";
 import { getAgent, getDefaultPromptAgent } from "./subagents/store";
 import { listSkills } from "./skills/store";
-import { memorySnapshot } from "./memory/curated";
+import { memorySnapshotForAgent } from "./memory/agent-memory";
 import { listMcpServers } from "@/lib/mcp/store";
 import { filterAllowed, isAllowed } from "./capabilities";
 import type { McpServerConfig } from "@/lib/mcp/types";
@@ -29,13 +28,17 @@ export async function composeInstructions(agentId: string): Promise<string> {
     getAgent(id),
     getDefaultPromptAgent(),
     listSkills(),
-    memorySnapshot(),
+    memorySnapshotForAgent(id),
     listMcpServers(),
   ]);
-  const personality = agent?.systemPrompt?.trim() || DEFAULT_PERSONALITY;
+  const personality = agent?.systemPrompt?.trim() || "";
   const includeDefault = agent?.useDefaultPrompt ?? true;
-  const defaultBody = includeDefault ? (defaultAgent?.systemPrompt?.trim() || CORE_POLICY) : "";
-  let out = defaultBody ? `${defaultBody}\n\n## Personality\n${personality}` : personality;
+  const defaultBody = includeDefault ? (defaultAgent?.systemPrompt?.trim() || "") : "";
+  let out = defaultBody
+    ? personality
+      ? `${defaultBody}\n\n## Personality\n${personality}`
+      : defaultBody
+    : personality;
   if (memory) out += `\n\n${memory}`;
   const allowed = filterAllowed(agent?.skills, skills, (s) => s.id);
   if (allowed.length > 0) {

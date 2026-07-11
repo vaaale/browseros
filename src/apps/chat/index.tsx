@@ -4,11 +4,11 @@ import { useEffect, useState } from "react";
 import { AlertTriangle } from "lucide-react";
 import { useOSStore } from "@/store/os-provider";
 import { PROVIDERS, type ProviderType } from "@/lib/agent/provider-meta";
-import { AssistantChat } from "@/components/agent/AssistantChat";
+import { AssistantChatV2 } from "@/components/agent/v2/AssistantChatV2";
 
-// The Assistant app is now a consumer of the embeddable <AssistantChat> in
-// "all groups" mode: it shows every conversation group nested and switches the
-// active agent/conversation as you pick one (012-embeddable-assistant).
+// The Assistant app is a consumer of the embeddable <AssistantChatV2> (server-
+// owned runs) in "all groups" mode: it shows every conversation group nested and
+// switches the active agent/conversation as you pick one.
 export default function ChatApp() {
   const launch = useOSStore((s) => s.launch);
   const [needsKey, setNeedsKey] = useState<{ provider: ProviderType } | null>(null);
@@ -37,7 +37,7 @@ export default function ChatApp() {
         </div>
       )}
       <div className="min-h-0 flex-1">
-        <AssistantChat allGroups showConversations showInfo />
+        <AssistantChatV2 allGroups showConversations showInfo />
       </div>
     </div>
   );

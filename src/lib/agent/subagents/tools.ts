@@ -258,8 +258,8 @@ const ALL_TOOLS: Record<string, LlmTool> = { ...SUBAGENT_TOOLS, ...DEV_TOOLS, ..
  * Tool descriptions are overlaid from data/tool-metadata-overrides.json
  * (Settings → Tools) so a user can rewrite the LLM-facing description without
  * editing source. Per-agent deferred visibility is not read here — the runner
- * unions the registry defaults with the agent's own `deferredTools` list to
- * decide what to hide.
+ * reads the agent's own `deferredTools` list to decide what to hide (there is
+ * no registry-wide default).
  */
 export async function toolsFor(allowed?: string[]): Promise<Record<string, LlmTool>> {
   const overrides = await readMetadataOverrides();
@@ -328,9 +328,9 @@ export function makeDiscoveryTools(args: {
   allow: string[];
   /** The runner's live tool map. Only ids present here are discoverable. */
   tools: Record<string, LlmTool>;
-  /** The effective deferred set for THIS agent: registry defaults unioned with
-   *  the agent's own `deferredTools`. A tool is discoverable iff it appears in
-   *  this set. */
+  /** The effective deferred set for THIS agent: its own `deferredTools` (no
+   *  registry-wide default). A tool is discoverable iff it appears in this
+   *  set. */
   effectiveDeferred: Set<string>;
   /** Register discovered ids as revealed so the loop exposes them next step. */
   reveal: (ids: string[]) => void;

@@ -18,7 +18,14 @@ import {
   type EpisodeUpdate,
 } from "./episodes";
 import { getWatermarkEntry, setWatermark } from "./watermarks";
+import { getFeedbackScanAt, setFeedbackScanAt } from "./feedback-scan";
 import { getMemoryLoopsConfig } from "./config";
+import { nudgeSkillScore } from "@/lib/agent/skills/improve";
+import { startSelfImprove } from "@/lib/agent/self-improve";
+import { DEFAULT_AGENT_ID } from "@/lib/agent/agent-ids";
+
+// Thumbs-up score reinforcement per skill used in a well-rated turn.
+const THUMBS_UP_NUDGE = 0.5;
 
 // Fast loop (spec 021 §Fast loop). Runs as a System JobDefinition every ~2 min
 // through the Unified Job Engine, scans idle conversations, and writes/updates
@@ -91,12 +98,15 @@ interface AnyMessage {
   toolCalls?: unknown[];
   createdAt?: number | string;
   timestamp?: number | string;
+  /** Thumbs up/down feedback stamped onto the message by the chat UI. */
+  feedback?: { rating?: string; at?: number };
 }
 
 interface ConversationFileShape {
   id?: string;
   title?: string;
   createdAt?: number;
+  agentId?: string;
   messages?: AnyMessage[];
 }
 
@@ -104,6 +114,8 @@ export interface ConversationRef {
   id: string;
   title: string;
   path: string;
+  /** The agent this conversation belongs to — memory is written to its store. */
+  agentId: string;
   messages: AnyMessage[];
   /** Last-mtime as ms since epoch — used as the idle timer. */
   mtimeMs: number;
@@ -137,10 +149,12 @@ async function readConversation(id: string, path: string, mtimeMs: number): Prom
     const raw = await vfs.readText(path);
     const parsed = JSON.parse(raw) as ConversationFileShape;
     const messages = Array.isArray(parsed.messages) ? parsed.messages : [];
+    const agentId = typeof parsed.agentId === "string" && parsed.agentId.trim() ? parsed.agentId.trim() : DEFAULT_AGENT_ID;
     return {
       id: parsed.id ?? id,
       title: typeof parsed.title === "string" ? parsed.title : "Conversation",
       path,
+      agentId,
       messages,
       mtimeMs,
     };
@@ -245,9 +259,13 @@ function extractSkillsUsed(messages: AnyMessage[]): string[] {
       if (!c || typeof c !== "object") continue;
       const call = c as { name?: unknown; toolName?: unknown; input?: unknown; arguments?: unknown };
       const name = String(call.name ?? call.toolName ?? "");
-      if (name === "skill_use" || name === "skill_read" || name === "skill_view" || name === "skill_run") {
-        const input = (call.input ?? call.arguments ?? {}) as Record<string, unknown>;
-        const id = String(input.id ?? input.skillId ?? input.name ?? "").trim();
+      if (name === "skill_load" || name === "skill_read_file" || name === "skill_use" || name === "skill_read" || name === "skill_view" || name === "skill_run") {
+        let input = (call.input ?? call.arguments ?? {}) as Record<string, unknown>;
+        // Tool-call arguments are often a JSON string on the transcript.
+        if (typeof input === "string") {
+          try { input = JSON.parse(input) as Record<string, unknown>; } catch { input = {}; }
+        }
+        const id = String(input.skill ?? input.id ?? input.skillId ?? input.name ?? "").trim();
         if (id) ids.add(id);
       }
     }
@@ -291,19 +309,24 @@ function buildFastLoopTools(state: FastLoopTools): Record<string, LlmTool> {
         }
         if (Object.keys(nextSections).length > 0) {
           state.episodeUpdates.sections = { ...(state.episodeUpdates.sections ?? {}), ...nextSections };
+          logger().info(LOG, "op: episode_write", { sections: Object.keys(nextSections) });
         }
         if (Array.isArray(input.skillCandidates)) {
+          const candidates = input.skillCandidates.filter((s): s is string => typeof s === "string");
           state.episodeUpdates.skillCandidates = [
             ...(state.episodeUpdates.skillCandidates ?? []),
-            ...input.skillCandidates.filter((s): s is string => typeof s === "string"),
+            ...candidates,
           ];
+          if (candidates.length > 0) {
+            logger().info(LOG, "op: episode_write skillCandidates", { candidates });
+          }
         }
         return "ok";
       },
     },
     skill_patch: {
       description:
-        "Patch an EXISTING skill that was explicitly corrected during the session. Replaces the first occurrence of `find` in the skill body with `replace`. Do NOT patch for minor stylistic preferences.",
+        "Patch an EXISTING skill that was explicitly corrected during the session. `id` MUST be one of the ids in the provided existing-skills list — never invent one. Replaces the first occurrence of `find` in the skill body with `replace`. Do NOT patch for minor stylistic preferences.",
       parameters: {
         type: "object",
         properties: {
@@ -318,11 +341,18 @@ function buildFastLoopTools(state: FastLoopTools): Record<string, LlmTool> {
         const find = String(input.find ?? "");
         const replace = String(input.replace ?? "");
         const skill = await getSkill(id);
-        if (!skill) return `No skill "${id}".`;
+        if (!skill) {
+          logger().warn(LOG, "op: skill_patch — skill not found", { id });
+          return `No skill "${id}".`;
+        }
         const r = await patchSkill(skill.id, find, replace);
-        if ("error" in r) return `Error: ${r.error}`;
+        if ("error" in r) {
+          logger().error(LOG, "op: skill_patch failed", undefined, { id, error: r.error });
+          return `Error: ${r.error}`;
+        }
         await touchSkill(r.id, "patch");
         state.patchedSkills.push(r.id);
+        logger().info(LOG, "op: skill_patch", { id: r.id, name: r.name });
         return `Patched "${r.name}".`;
       },
     },
@@ -361,16 +391,21 @@ export async function runFastLoop(opts: {
 
   const cfg = await getMemoryLoopsConfig();
   if (!cfg.fastLoop.enabled) {
+    logger().info(LOG, "fast loop disabled; skipping");
     summary.reason = "fast loop disabled";
     return summary;
   }
   if (!(await hasCredentials())) {
+    logger().warn(LOG, "fast loop: no AI credentials configured — cannot run");
     summary.reason = "no AI provider configured";
     return summary;
   }
 
   const files = await listChatFiles();
   const now = Date.now();
+  // Per-agent thumbs feedback processing (independent of review eligibility).
+  const scanCache = new Map<string, number>(); // agentId -> lastFeedbackScanAt (loaded once)
+  const advancedScan = new Map<string, number>(); // agentId -> max feedback.at processed this run
   for (const f of files) {
     if (opts.onlyConversationId && f.id !== opts.onlyConversationId) continue;
     summary.scanned += 1;
@@ -378,7 +413,13 @@ export async function runFastLoop(opts: {
     const conv = await readConversation(f.id, f.path, f.mtimeMs);
     if (!conv || conv.messages.length === 0) continue;
 
-    const wm = await getWatermarkEntry(conv.id);
+    // Process new thumbs up/down BEFORE the eligibility gate — a fresh rating on
+    // an otherwise-ineligible conversation must still be handled.
+    await processConversationFeedback(conv, scanCache, advancedScan).catch((err) =>
+      logger().log({ level: "error", component: LOG, conversation: conv.id, msg: "feedback processing failed", err: { message: (err as Error).message } }),
+    );
+
+    const wm = await getWatermarkEntry(conv.agentId, conv.id);
     const elig = evaluateEligibility(
       conv,
       wm?.messageId ?? null,
@@ -389,16 +430,38 @@ export async function runFastLoop(opts: {
         minNewTurns: cfg.fastLoop.minNewTurns,
       },
     );
-    if (!elig.eligible) continue;
+    if (!elig.eligible) {
+      logger().debug(LOG, "conversation ineligible", {
+        conversationId: conv.id,
+        reason: elig.reason,
+        newTurns: elig.newSlice.length,
+      });
+      continue;
+    }
     summary.eligible += 1;
+    logger().log({
+      level: "info",
+      component: LOG,
+      conversation: conv.id,
+      msg: "reviewing conversation",
+      data: { agentId: conv.agentId, reason: elig.reason, newTurns: elig.newSlice.length },
+    });
 
     try {
       await reviewSlice(conv, elig.newSlice, elig.fromIndex, summary);
       summary.reviewed += 1;
+      logger().log({ level: "info", component: LOG, conversation: conv.id, msg: "conversation reviewed" });
     } catch (err) {
       summary.errors.push({ conversationId: conv.id, error: (err as Error).message });
-      logger().error(LOG, "review failed", err, { conversationId: conv.id });
+      const e = err instanceof Error ? { message: err.message, stack: err.stack } : { message: String(err) };
+      logger().log({ level: "error", component: LOG, conversation: conv.id, msg: "review failed", err: e });
     }
+  }
+
+  // Advance each agent's feedback watermark to the newest rating processed.
+  for (const [agentId, at] of advancedScan) {
+    const prev = scanCache.get(agentId) ?? 0;
+    if (at > prev) await setFeedbackScanAt(agentId, at).catch(() => undefined);
   }
 
   summary.ran = true;
@@ -412,13 +475,88 @@ export async function runFastLoop(opts: {
   return summary;
 }
 
+// ── Thumbs feedback processing (spec 023 §Feedback) ────────────────────────
+
+function messageSnippet(m: AnyMessage): string {
+  const raw = typeof m.content === "string" ? m.content : safeStringify(m.content);
+  const t = raw.trim();
+  return t.length > 800 ? `${t.slice(0, 800)}…` : t;
+}
+
+/** Skill ids used in the turn that produced message at `idx` (from the preceding
+ *  user message up to and including it). */
+function skillsUsedInTurn(messages: AnyMessage[], idx: number): string[] {
+  let start = idx;
+  while (start > 0 && messages[start - 1]?.role !== "user") start--;
+  return extractSkillsUsed(messages.slice(start, idx + 1));
+}
+
+/** Turn new thumbs-down into a batched self_improve pass and thumbs-up into a
+ *  score nudge for the skills used in that turn. Ratings older than the agent's
+ *  feedback watermark are skipped; the newest processed `at` is recorded so the
+ *  caller can advance the watermark. */
+async function processConversationFeedback(
+  conv: ConversationRef,
+  scanCache: Map<string, number>,
+  advancedScan: Map<string, number>,
+): Promise<void> {
+  let lastScan = scanCache.get(conv.agentId);
+  if (lastScan === undefined) {
+    lastScan = await getFeedbackScanAt(conv.agentId);
+    scanCache.set(conv.agentId, lastScan);
+  }
+
+  const downItems: { text: string }[] = [];
+  const upSkillIds = new Set<string>();
+  let localMax = advancedScan.get(conv.agentId) ?? 0;
+
+  conv.messages.forEach((m, idx) => {
+    const fb = m.feedback;
+    const at = typeof fb?.at === "number" ? fb.at : 0;
+    if (!fb || at <= lastScan!) return;
+    if (at > localMax) localMax = at;
+    if (fb.rating === "down") {
+      downItems.push({ text: messageSnippet(m) });
+    } else if (fb.rating === "up") {
+      for (const id of skillsUsedInTurn(conv.messages, idx)) upSkillIds.add(id);
+    }
+  });
+
+  if (downItems.length > 0) {
+    logger().log({
+      level: "info",
+      component: LOG,
+      conversation: conv.id,
+      msg: "thumbs-down → self_improve",
+      data: { agentId: conv.agentId, count: downItems.length },
+    });
+    startSelfImprove({ agentId: conv.agentId, conversationId: conv.id, trigger: { kind: "thumbs_down", items: downItems } });
+  }
+
+  for (const id of upSkillIds) {
+    const r = await nudgeSkillScore(id, THUMBS_UP_NUDGE).catch(() => null);
+    if (r) {
+      await touchSkill(id, "use").catch(() => undefined);
+      logger().log({
+        level: "info",
+        component: LOG,
+        conversation: conv.id,
+        msg: "thumbs-up → skill score nudged",
+        data: { agentId: conv.agentId, skill: id, score: r.score },
+      });
+    }
+  }
+
+  if (localMax > (advancedScan.get(conv.agentId) ?? 0)) advancedScan.set(conv.agentId, localMax);
+}
+
 async function reviewSlice(
   conv: ConversationRef,
   slice: AnyMessage[],
   fromIndex: number,
   summary: FastLoopRunSummary,
 ): Promise<void> {
-  await createEpisode(conv.id);
+  await createEpisode(conv.agentId, conv.id);
 
   const state: FastLoopTools = {
     episodeUpdates: {},
@@ -426,7 +564,7 @@ async function reviewSlice(
     patchedSkills: [],
   };
   const tools = buildFastLoopTools(state);
-  const existing = await getEpisode(conv.id);
+  const existing = await getEpisode(conv.agentId, conv.id);
   const existingBody = existing
     ? Object.entries(existing.sections)
         .filter(([, v]) => v && v.trim())
@@ -437,10 +575,26 @@ async function reviewSlice(
   const skillsMechanical = extractSkillsUsed(slice);
   const transcript = renderSlice(slice);
 
+  // Patchable skills = the skills actually loaded in this conversation, shown
+  // WITH their full body. This fixes both skill_patch failure modes: the model
+  // can only reference a real, in-session id (no "skill not found"), and it can
+  // copy an EXACT `find` substring from the body (no "search text not found").
+  const usedSkills = (await Promise.all(skillsMechanical.map((id) => getSkill(id).catch(() => null)))).filter(
+    (s): s is NonNullable<typeof s> => s != null,
+  );
+  const skillIndex = usedSkills.length
+    ? [
+        "Skills loaded in this conversation — the ONLY skills you may patch. `skill_patch` `id` MUST be one of these, and `find` MUST be an EXACT substring copied verbatim from the body shown below:",
+        ...usedSkills.map((s) => `\n### ${s.id}: ${s.name}\n${s.content}`),
+      ].join("\n")
+    : "No skills were loaded in this conversation — do NOT call skill_patch.";
+
   const prompt = [
     `Conversation: ${conv.title || conv.id}`,
     `Existing episode body (context — do not re-review earlier content):`,
     existingBody ? existingBody : "_(new episode; no prior body)_",
+    "",
+    skillIndex,
     "",
     "New turns since last review:",
     transcript,
@@ -460,8 +614,8 @@ async function reviewSlice(
   const updates: EpisodeUpdate = { ...state.episodeUpdates, watermark: lastId };
   if (skillsMechanical.length > 0) updates.skillsUsed = skillsMechanical;
 
-  await updateEpisode(conv.id, updates);
-  await setWatermark(conv.id, lastId);
+  await updateEpisode(conv.agentId, conv.id, updates);
+  await setWatermark(conv.agentId, conv.id, lastId);
 
   summary.episodesUpdated.push(conv.id);
   for (const id of state.patchedSkills) summary.skillsPatched.push(id);

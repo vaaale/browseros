@@ -70,14 +70,17 @@ export default function SettingsApp() {
         ))}
       </nav>
 
-      <div className="flex-1 overflow-auto p-5">
-        {current && (
+      <div className="flex flex-1 flex-col overflow-hidden p-5">
+        {current ? (
           <>
-            <h3 className="mb-3 text-base font-semibold">{current.title}</h3>
-            {Custom ? <Custom /> : <ConfigForm key={current.namespace} schema={current} onSaved={load} />}
+            <h3 className="mb-3 shrink-0 text-base font-semibold">{current.title}</h3>
+            <div className="min-h-0 flex-1 overflow-auto">
+              {Custom ? <Custom /> : <ConfigForm key={current.namespace} schema={current} onSaved={load} />}
+            </div>
           </>
+        ) : (
+          schemas.length === 0 && <p className="text-xs text-white/40">Loading…</p>
         )}
-        {schemas.length === 0 && <p className="text-xs text-white/40">Loading…</p>}
       </div>
     </div>
   );

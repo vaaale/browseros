@@ -1,4 +1,11 @@
 {
   "version": "0.0.1",
-  "configurations": []
+  "configurations": [
+    {
+      "name": "voice-assistant",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["C:/Users/alex/PycharmProjects/ClaudeVoiceAssistant/server.js"],
+      "port": 3000
+    }
+  ]
 }

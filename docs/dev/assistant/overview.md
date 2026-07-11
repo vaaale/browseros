@@ -1,36 +1,42 @@
 # Assistant subsystem: overview
 
-The assistant is built on **CopilotKit**. This page covers the request flow, how
-the system instructions are composed, and the provider‑agnostic LLM layer. See also
+The assistant runs on **server‑owned runs** (v2): a conversation's agent loop lives
+on the server, and browsers are viewers that also execute frontend (client‑bound)
+tools. CopilotKit is no longer on the chat path (it survives only as a markdown
+renderer). Full design: `docs/plans/2026-07-11-assistant-v2-server-runs.md`. See also
 [Actions & tools](actions-and-tools.md), [Sub‑agents](sub-agents-and-delegation.md),
 and the [Assistant API](api/assistant-api.md).
 
 ---
 
-## Request flow
+## Request flow (server‑owned runs)
 
-1. **`src/components/agent/CopilotProvider.tsx`** wraps the desktop in
-   `<CopilotKit runtimeUrl="/api/copilotkit" threadId={activeConversationId}>` and
-   mounts all `*Actions` components (which register tools). Switching conversation
-   switches `threadId`.
-2. **`src/apps/chat/index.tsx`** renders `<CopilotChat>` with composed
-   `instructions` (fetched from `/api/assistant/agent`), the
-   `ReasoningAssistantMessage` renderer, and `markdownRenderers`. It also mounts
-   `<ChatToolRenderer>`, the conversation panel, the info panel, and the agent
-   selector, and uses `useChatPersistence` to load/save messages per conversation.
-3. **`src/app/api/copilotkit/route.ts`** builds the runtime + adapter **per request**
-   (so Settings changes apply with no restart):
-   - **Anthropic family** → `AnthropicAdapter` (prompt caching on; `maxInputTokens`
-     from config).
-   - **OpenAI family** → `OpenAIChatAdapter` pointed at the in‑app proxy
-     `${origin}/api/llm/openai` (keeps the real key server‑side).
-4. **`src/lib/agent/runtime.ts`** (`buildRuntimeOptions`) wires configured MCP
-   servers (+ the managed browser‑automation server when enabled) so their tools
-   are auto‑exposed.
-5. **`src/app/api/llm/openai/[...path]/route.ts`** normalizes OpenAI‑compatible
-   calls: forces **Chat Completions** (not Responses), injects `max_tokens`, and
-   surfaces `reasoning_content` as `<think>…</think>` so reasoning models stream
-   content.
+1. **`src/components/agent/v2/AssistantChatV2.tsx`** is the embeddable chat. It
+   mounts `FrontendToolsV2` (binds client tool handlers), renders `MessageListV2`
+   from a per‑conversation store, and `ChatInputV2`. The Assistant app
+   (`src/apps/chat`) and Build Studio embed it; surface‑scoped tools are passed via
+   the `tools` prop.
+2. **Start a run** — `POST /api/assistant/runs { conversationId, agentId, message,
+   editOfMessageId?, surfaceTools? }` → `src/lib/assistant/start-run.ts`. The
+   **RunManager** (`run-manager.ts`, a `globalThis` singleton) owns one active run
+   per conversation, an append‑only event log, and an `AbortController`.
+3. **The loop** (`agent-loop.ts`) composes instructions, then per step: streams a
+   model turn (`model-turn.ts`, raw Anthropic/OpenAI SDK, compaction applied via
+   `compaction/v2.ts`), gates tools (`gate.ts` + `tools.ts` `visibleTools`), and
+   executes tool calls — **server** tools inline (`tools/server/*` + the registry in
+   `registry.ts`), **frontend** tools dispatched to an attached browser. Every tool
+   failure/timeout/cancel returns to the model as an in‑band `Error: …` result.
+4. **The browser** attaches to `GET /api/assistant/runs/[id]/events?since=` (NDJSON;
+   replay + live tail), renders events, and for `tool_call{execution:"frontend"}`
+   runs the bound handler through the existing tool kernel and POSTs the result to
+   `.../tool-results` (first claim wins). **Stop** = `POST .../cancel` (a server‑side
+   fact). The loop is the single writer of the transcript (`conversation-store.ts`).
+5. **`src/app/api/llm/openai/[...path]/route.ts`** still normalizes OpenAI‑compatible
+   calls (forces Chat Completions, surfaces `reasoning_content` as `<think>…</think>`).
+6. **Run hooks** (`hooks.ts`) are the interception seam: `extendSystemPrompt` /
+   `beforeToolCall` / `afterToolCall` / `onRunFinished`, registered globally or
+   per‑run. Built‑ins: the active‑feature‑branch prompt note and background
+   conversation titling (`title-hook.ts`).
 
 ---
 
@@ -49,19 +55,20 @@ and the [Assistant API](api/assistant-api.md).
 4. **A skills index** (name + when‑to‑use; full bodies loaded on demand via
    `skill_load`, and bundled files via `skill_read_file`).
 
-Delivery (CopilotKit 1.61 caveat): the `<CopilotChat instructions>` prop is NOT
-forwarded to the model on the v2 `BuiltInAgent` path. Instead `/api/copilotkit`
-reads the conversation's agent from `?agent=<id>`, calls `composeInstructions`,
-and constructs the default `BuiltInAgent({ model, prompt })` with it — that
-`prompt` is what actually reaches the LLM. `CopilotProvider` keys `<CopilotKit>`
-on the agent id so a fresh runtime client binds the correct `?agent=` on switch.
+Delivery: the run loop calls `composeInstructions(agentId)` once per run (plus any
+`extendSystemPrompt` hooks) and passes the result as the system prompt to every
+model turn. Tool gating (016 allowlist + 025 deferred + Settings description
+overrides) is applied per step inside the loop from the tool registry — the old
+`withToolGate` model middleware is gone.
 
 ---
 
 ## The LLM layer (`src/lib/agent/llm.ts`)
 
-Provider‑agnostic helpers used by the **review pass**, **local sub‑agents**, and
-other server features (the *chat* itself goes through CopilotKit's adapters):
+Provider‑agnostic helpers used by **local sub‑agents**, the **memory loops**, and
+other server features. (The main chat uses `src/lib/assistant/model-turn.ts`
+instead — a streaming, abortable per‑provider turn function — but shares the same
+provider config.)
 
 - `complete({ system?, prompt, maxTokens? })` — one non‑tool completion.
 - `runToolLoop({ system, prompt, tools, maxSteps?, onEvent? })` — a bounded

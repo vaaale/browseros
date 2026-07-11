@@ -8,7 +8,7 @@ import {
 
 export const dynamic = "force-dynamic";
 
-// GET  -> { catalog: (Capability with EFFECTIVE description + registry-default deferred)[], overrides: metadata-override map }
+// GET  -> { catalog: (Capability with EFFECTIVE description)[], overrides: metadata-override map }
 // PATCH { id, description?: string } -> ok
 //   - description: string sets/overwrites; empty string clears.
 //   - Omitted fields preserve the existing stored value.

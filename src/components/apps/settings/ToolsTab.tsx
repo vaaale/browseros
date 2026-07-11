@@ -9,7 +9,6 @@ interface Capability {
   group: string;
   description: string;
   context: "action" | "tool" | "both";
-  deferred?: boolean;
 }
 
 interface MetadataOverride {
@@ -27,16 +26,21 @@ const MAX_FIND_RESULTS_MIN = 5;
 const MAX_FIND_RESULTS_MAX = 25;
 const MAX_FIND_RESULTS_DEFAULT = 10;
 
-function clampMaxFindResults(n: number): number {
-  if (!Number.isFinite(n)) return MAX_FIND_RESULTS_DEFAULT;
-  return Math.max(MAX_FIND_RESULTS_MIN, Math.min(MAX_FIND_RESULTS_MAX, Math.round(n)));
+const TOOL_TIMEOUT_MIN = 10;
+const TOOL_TIMEOUT_MAX = 3600;
+const TOOL_TIMEOUT_DEFAULT = 600;
+
+// Mirrors the server-side clamping in src/lib/config/registry.ts so the UI
+// never shows a value the server would reject or rewrite.
+function clampInt(n: number, min: number, max: number, fallback: number): number {
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, Math.round(n)));
 }
 
 // Settings → Tools: global per-tool metadata overrides. Editing a description
-// here rewrites what the LLM sees for that tool across every agent. The
-// "deferred" badge is read-only and reflects the registry default — per-agent
-// deferred visibility is edited in Settings → Agents → [agent] → Tools, since
-// it is per-agent state.
+// here rewrites what the LLM sees for that tool across every agent. Deferred
+// visibility has no registry-wide concept — it's edited per agent in
+// Settings → Agents → [agent] → Tools.
 export function ToolsTab() {
   const [catalog, setCatalog] = useState<Capability[]>([]);
   // Description-only view (id → override description). The
@@ -44,6 +48,7 @@ export function ToolsTab() {
   // is saved so other panels (e.g. ToolManifest) can refresh.
   const [overrides, setOverrides] = useState<Record<string, string>>({});
   const [maxFindResults, setMaxFindResults] = useState<number>(MAX_FIND_RESULTS_DEFAULT);
+  const [toolCallTimeoutSec, setToolCallTimeoutSec] = useState<number>(TOOL_TIMEOUT_DEFAULT);
 
   const load = useCallback(async () => {
     try {
@@ -57,7 +62,13 @@ export function ToolsTab() {
       };
       const tools = (res.schemas ?? []).find((s) => s.namespace === "tools");
       const v = tools?.values?.maxFindResults;
-      if (typeof v === "number" && Number.isFinite(v)) setMaxFindResults(clampMaxFindResults(v));
+      if (typeof v === "number" && Number.isFinite(v)) {
+        setMaxFindResults(clampInt(v, MAX_FIND_RESULTS_MIN, MAX_FIND_RESULTS_MAX, MAX_FIND_RESULTS_DEFAULT));
+      }
+      const t = tools?.values?.toolCallTimeoutSec;
+      if (typeof t === "number" && Number.isFinite(t)) {
+        setToolCallTimeoutSec(clampInt(t, TOOL_TIMEOUT_MIN, TOOL_TIMEOUT_MAX, TOOL_TIMEOUT_DEFAULT));
+      }
     } catch { /* keep previous value */ }
   }, []);
 
@@ -66,17 +77,32 @@ export function ToolsTab() {
     return () => clearTimeout(id);
   }, [load]);
 
-  const saveMaxFindResults = useCallback(async (value: number) => {
-    const clamped = clampMaxFindResults(value);
-    setMaxFindResults(clamped);
+  // Persists tools-namespace values and notifies listeners (e.g. the tool
+  // kernel's timeout cache) that a tools config value changed.
+  const saveToolsValue = useCallback(async (values: Record<string, number>) => {
     try {
       await fetch("/api/config", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ namespace: "tools", values: { maxFindResults: clamped } }),
+        body: JSON.stringify({ namespace: "tools", values }),
       });
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("bos:tools-config-updated"));
+      }
     } catch { /* silently keep local state */ }
   }, []);
+
+  const saveMaxFindResults = useCallback(async (value: number) => {
+    const clamped = clampInt(value, MAX_FIND_RESULTS_MIN, MAX_FIND_RESULTS_MAX, MAX_FIND_RESULTS_DEFAULT);
+    setMaxFindResults(clamped);
+    await saveToolsValue({ maxFindResults: clamped });
+  }, [saveToolsValue]);
+
+  const saveToolCallTimeout = useCallback(async (value: number) => {
+    const clamped = clampInt(value, TOOL_TIMEOUT_MIN, TOOL_TIMEOUT_MAX, TOOL_TIMEOUT_DEFAULT);
+    setToolCallTimeoutSec(clamped);
+    await saveToolsValue({ toolCallTimeoutSec: clamped });
+  }, [saveToolsValue]);
 
   const patchServer = useCallback(async (patch: { id: string; description: string }) => {
     const res = await fetch("/api/tool-descriptions", {
@@ -116,7 +142,7 @@ export function ToolsTab() {
         <AutoSaveStatus status={save.status} />
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
-        <div className="mb-3 rounded-md border border-white/10 bg-white/[0.03] p-2.5">
+        <div className="mb-3 flex flex-col gap-2 rounded-md border border-white/10 bg-white/[0.03] p-2.5">
           <label className="flex items-center gap-2 text-[11px] text-white/80">
             <span className="min-w-0 flex-1">
               <span className="font-semibold text-white/90">Max discovery results</span>
@@ -132,6 +158,26 @@ export function ToolsTab() {
               value={maxFindResults}
               onChange={(e) => setMaxFindResults(Number(e.target.value))}
               onBlur={(e) => void saveMaxFindResults(Number(e.target.value))}
+              className="w-20 rounded border border-white/10 bg-black/30 px-2 py-1 text-right text-[11px] text-white outline-none focus:border-white/30"
+            />
+          </label>
+          <label className="flex items-center gap-2 text-[11px] text-white/80">
+            <span className="min-w-0 flex-1">
+              <span className="font-semibold text-white/90">Tool call timeout (s)</span>
+              <span className="block text-[10px] text-white/50">
+                Max time a single tool call may run before it is aborted and reported to the agent as an error.
+                Streaming tools (<span className="font-mono">agent_delegate</span>,{" "}
+                <span className="font-mono">workflow_run</span>) treat this as an idle timeout.
+                Range {TOOL_TIMEOUT_MIN}–{TOOL_TIMEOUT_MAX}, default {TOOL_TIMEOUT_DEFAULT}.
+              </span>
+            </span>
+            <input
+              type="number"
+              min={TOOL_TIMEOUT_MIN}
+              max={TOOL_TIMEOUT_MAX}
+              value={toolCallTimeoutSec}
+              onChange={(e) => setToolCallTimeoutSec(Number(e.target.value))}
+              onBlur={(e) => void saveToolCallTimeout(Number(e.target.value))}
               className="w-20 rounded border border-white/10 bg-black/30 px-2 py-1 text-right text-[11px] text-white outline-none focus:border-white/30"
             />
           </label>
@@ -152,7 +198,6 @@ export function ToolsTab() {
                     id={tool.id}
                     sourceDescription={tool.description}
                     override={overrides[tool.id]}
-                    deferred={tool.deferred === true}
                     onSave={(description) => save.save({ id: tool.id, description })}
                   />
                 ))}
@@ -178,13 +223,11 @@ function ToolRow({
   id,
   sourceDescription,
   override,
-  deferred,
   onSave,
 }: {
   id: string;
   sourceDescription: string;
   override: string | undefined;
-  deferred: boolean;
   onSave: (description: string) => void;
 }) {
   // Draft = current effective value shown to the user. Blur commits. The
@@ -210,15 +253,7 @@ function ToolRow({
     <div className="rounded border border-white/10 bg-white/[0.02] p-2">
       <div className="mb-1 flex items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-1.5">
-          <span className="min-w-0 truncate font-mono text-[11px] text-white">{id}</span>
-          {deferred && (
-            <span
-              className="shrink-0 rounded border border-amber-500/40 bg-amber-500/10 px-1 py-[1px] text-[9px] font-medium uppercase tracking-wide text-amber-300"
-              title="Hidden from every agent's initial context by default — discovered at runtime via find_tools. Per-agent overrides live in Settings → Agents."
-            >
-              deferred
-            </span>
-          )}
+          <span className="min-w-0 break-words font-mono text-[11px] text-white">{id}</span>
         </div>
         {isOverridden && (
           <button
@@ -234,11 +269,11 @@ function ToolRow({
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
         onBlur={() => commit(draft)}
-        className="w-full resize-y rounded border border-white/10 bg-black/30 px-2 py-1.5 text-[11px] leading-relaxed text-white outline-none transition-colors focus:border-white/30"
+        className="w-full resize-y rounded border border-white/10 bg-black/30 px-2 py-1.5 text-[13px] leading-relaxed text-white outline-none transition-colors focus:border-white/30"
         style={{ minHeight: "56px" }}
       />
       {isOverridden && (
-        <div className="mt-1 text-[10px] leading-snug text-white/40">
+        <div className="mt-1 text-[11px] leading-snug text-white/40">
           Source: <span className="text-white/50">{sourceDescription}</span>
         </div>
       )}

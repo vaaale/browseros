@@ -8,8 +8,8 @@ export interface AgentMeta {
   tools: string[];
   skills: string[];
   mcp: string[];
-  /** Tool ids this agent hides from its initial context. Additive over the
-   *  registry defaults. */
+  /** Tool ids this agent hides from its initial context. The sole source of
+   *  deferred-ness — there is no registry-wide default. */
   deferredTools: string[];
   systemPrompt: string;
   /** Whether the shared default prompt is prepended to this agent's personality.

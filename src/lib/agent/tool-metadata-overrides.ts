@@ -140,11 +140,11 @@ export async function setMetadataOverride(
 }
 
 /** Merged (registry + override) view of a capability. Description is always
- *  a non-empty string (falls back to registry). Deferred is always a boolean,
- *  sourced directly from the registry (no per-tool override any more). */
+ *  a non-empty string (falls back to registry). There is no "deferred" field
+ *  here — deferred visibility is purely per-agent (`agent.deferredTools`,
+ *  edited in Settings → Agents → [agent] → Tools), not a registry property. */
 export interface EffectiveTool extends Capability {
   description: string;
-  deferred: boolean;
 }
 
 /** Return the effective capability (registry default + persisted overrides). */
@@ -157,7 +157,7 @@ export async function getEffectiveTool(id: string): Promise<EffectiveTool | unde
 
 function mergeEffective(base: Capability, override: ToolMetadataOverride | undefined): EffectiveTool {
   const desc = override?.description ?? base.description;
-  return { ...base, description: desc, deferred: base.deferred === true };
+  return { ...base, description: desc };
 }
 
 /** Effective view of every capability in the registry (sorted by registry order). */

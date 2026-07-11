@@ -1,13 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Plus, Trash2, MessageSquare } from "lucide-react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { Plus, Trash2, MessageSquare, Pencil } from "lucide-react";
 import {
   useConversations,
   useAllConversations,
   newConversation,
   selectConversation,
   deleteConversation,
+  renameConversation,
   type Conversation,
 } from "@/lib/agent/conversations";
 import { DEFAULT_AGENT_ID } from "@/lib/agent/agent-ids";
@@ -15,6 +16,68 @@ import { DEFAULT_AGENT_ID } from "@/lib/agent/agent-ids";
 interface AgentMeta {
   id: string;
   name: string;
+}
+
+// ── Resizable shell ────────────────────────────────────────────────────────
+const PANEL_MIN_W = 180;
+const PANEL_MAX_W = 480;
+const PANEL_DEFAULT_W = 240; // a little wider than the old fixed w-48 (192px)
+const PANEL_WIDTH_KEY = "bos.convPanel.width";
+
+/** Left panel shell with a draggable right edge. Width persists across sessions
+ *  in localStorage and is clamped to [PANEL_MIN_W, PANEL_MAX_W]. */
+function ResizablePanel({ children }: { children: ReactNode }) {
+  const [width, setWidth] = useState(PANEL_DEFAULT_W);
+
+  useEffect(() => {
+    try {
+      const saved = Number(localStorage.getItem(PANEL_WIDTH_KEY));
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      if (Number.isFinite(saved) && saved >= PANEL_MIN_W && saved <= PANEL_MAX_W) setWidth(saved);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const startDrag = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = width; // fresh closure per render — current width at drag start
+    let lastWidth = startW;
+    const onMove = (ev: MouseEvent) => {
+      lastWidth = Math.min(PANEL_MAX_W, Math.max(PANEL_MIN_W, startW + (ev.clientX - startX)));
+      setWidth(lastWidth);
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      try {
+        localStorage.setItem(PANEL_WIDTH_KEY, String(lastWidth));
+      } catch {
+        /* ignore */
+      }
+    };
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
+
+  return (
+    <div
+      className="relative flex h-full shrink-0 flex-col border-r border-white/10 bg-white/[0.02]"
+      style={{ width }}
+    >
+      {children}
+      <div
+        onMouseDown={startDrag}
+        title="Drag to resize"
+        className="absolute right-0 top-0 z-10 h-full w-1.5 cursor-col-resize hover:bg-sky-400/40"
+      />
+    </div>
+  );
 }
 
 function humanize(id: string): string {
@@ -26,6 +89,21 @@ function humanize(id: string): string {
 }
 
 function ConvRow({ c, active, onPick }: { c: Conversation; active: boolean; onPick?: () => void }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(c.title);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  const startEditing = () => {
+    setDraft(c.title);
+    setEditing(true);
+    requestAnimationFrame(() => inputRef.current?.select());
+  };
+  const commit = () => {
+    setEditing(false);
+    const title = draft.trim();
+    if (title && title !== c.title) void renameConversation(c.id, title);
+  };
+
   return (
     <div
       className={`group flex items-center gap-1.5 rounded px-2 py-1.5 text-xs ${
@@ -33,15 +111,41 @@ function ConvRow({ c, active, onPick }: { c: Conversation; active: boolean; onPi
       }`}
     >
       <MessageSquare size={12} className="shrink-0 text-white/40" />
-      <button
-        onClick={() => {
-          selectConversation(c.id);
-          onPick?.();
-        }}
-        className="flex-1 truncate text-left"
-      >
-        {c.title}
-      </button>
+      {editing ? (
+        <input
+          ref={inputRef}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") commit();
+            else if (e.key === "Escape") setEditing(false);
+          }}
+          aria-label="Conversation title"
+          className="min-w-0 flex-1 rounded border border-white/20 bg-black/40 px-1 py-0.5 text-xs text-white outline-none focus:border-white/40"
+        />
+      ) : (
+        <button
+          onClick={() => {
+            selectConversation(c.id);
+            onPick?.();
+          }}
+          onDoubleClick={startEditing}
+          title={`${c.title} (double-click to rename)`}
+          className="flex-1 truncate text-left"
+        >
+          {c.title}
+        </button>
+      )}
+      {!editing && (
+        <button
+          onClick={startEditing}
+          title="Rename"
+          className="rounded p-0.5 text-white/30 opacity-0 hover:bg-white/10 hover:text-white group-hover:opacity-100"
+        >
+          <Pencil size={11} />
+        </button>
+      )}
       <button
         onClick={() => void deleteConversation(c.id)}
         title="Delete"
@@ -88,7 +192,7 @@ export function ConversationPanel({
 
   if (agentId) {
     return (
-      <div className="flex h-full w-48 shrink-0 flex-col border-r border-white/10 bg-white/[0.02]">
+      <ResizablePanel>
         <div className="flex items-center justify-between px-2 py-2">
           <span className="text-xs font-semibold uppercase tracking-wide text-white/40">Chats</span>
           <button
@@ -104,7 +208,7 @@ export function ConversationPanel({
             <ConvRow key={c.id} c={c} active={single.activeId === c.id} />
           ))}
         </div>
-      </div>
+      </ResizablePanel>
     );
   }
 
@@ -124,7 +228,7 @@ export function ConversationPanel({
   for (const k of Array.from(buckets.keys()).sort()) if (!ordered.includes(k)) ordered.push(k);
 
   return (
-    <div className="flex h-full w-48 shrink-0 flex-col border-r border-white/10 bg-white/[0.02]">
+    <ResizablePanel>
       <div className="px-2 py-2 text-xs font-semibold uppercase tracking-wide text-white/40">Chats</div>
       <div className="min-h-0 flex-1 space-y-2 overflow-auto px-1.5 pb-2">
         {ordered.map((aid) => (
@@ -154,6 +258,6 @@ export function ConversationPanel({
           </div>
         ))}
       </div>
-    </div>
+    </ResizablePanel>
   );
 }

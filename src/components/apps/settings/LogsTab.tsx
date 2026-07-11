@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Loader2, RefreshCw, Save } from "lucide-react";
 
 // Logs viewer (specs/017-central-logging). Reads the central timeline via /api/logs
@@ -53,6 +53,121 @@ function fmtTime(ts: number): string {
   return `${z(d.getHours())}:${z(d.getMinutes())}:${z(d.getSeconds())}.${String(d.getMilliseconds()).padStart(3, "0")}`;
 }
 
+// ── Autocomplete input ────────────────────────────────────────────────────
+// A text input that shows a filtered dropdown of known values while typing.
+// Commits the value to the parent on Enter, blur, or suggestion click.
+// Clicking a suggestion uses onMouseDown + e.preventDefault() to avoid
+// triggering the input's blur before the selection is registered.
+
+interface AutocompleteInputProps {
+  value: string;
+  allSuggestions: string[];
+  onCommit: (val: string) => void;
+  placeholder?: string;
+  className?: string;
+  title?: string;
+}
+
+function AutocompleteInput({ value, allSuggestions, onCommit, placeholder, className, title }: AutocompleteInputProps) {
+  const [draft, setDraft] = useState(value);
+  const [open, setOpen] = useState(false);
+
+  // draftRef mirrors draft state synchronously so onBlur always reads the
+  // current value even when React hasn't flushed the re-render yet.
+  const draftRef = useRef(draft);
+
+  // Set when the user mouses down on a suggestion so onBlur knows not to
+  // override the commit that onMouseDown already performed.
+  const pickingRef = useRef(false);
+
+  // Keep draft in sync when the committed value changes from outside.
+  useEffect(() => {
+    draftRef.current = value;
+    setDraft(value);
+  }, [value]);
+
+  const filtered = useMemo(() => {
+    if (!draft.trim()) return allSuggestions;
+    const lower = draft.toLowerCase();
+    return allSuggestions.filter((s) => s.toLowerCase().includes(lower));
+  }, [draft, allSuggestions]);
+
+  const commit = useCallback(
+    (val: string) => {
+      const trimmed = val.trim();
+      draftRef.current = trimmed;
+      setDraft(trimmed);
+      setOpen(false);
+      onCommit(trimmed);
+    },
+    [onCommit],
+  );
+
+  return (
+    <div className="relative">
+      <input
+        value={draft}
+        onChange={(e) => {
+          draftRef.current = e.target.value;
+          setDraft(e.target.value);
+          setOpen(true);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            commit(draftRef.current);
+          }
+          if (e.key === "Escape") {
+            draftRef.current = value;
+            setDraft(value);
+            setOpen(false);
+          }
+        }}
+        onFocus={() => {
+          if (allSuggestions.length > 0) setOpen(true);
+        }}
+        onBlur={() => {
+          // If the user clicked a suggestion, onMouseDown already committed.
+          // Skip here to avoid overwriting with a stale draft value.
+          if (pickingRef.current) {
+            pickingRef.current = false;
+            setOpen(false);
+            return;
+          }
+          setOpen(false);
+          onCommit(draftRef.current.trim());
+        }}
+        placeholder={placeholder}
+        className={className}
+        title={title}
+        autoComplete="off"
+        spellCheck={false}
+      />
+      {open && filtered.length > 0 && (
+        <div className="absolute left-0 top-full z-50 mt-0.5 max-h-52 min-w-full overflow-auto rounded border border-white/15 bg-[#0e0e1c] shadow-xl">
+          {filtered.map((s) => (
+            <div
+              key={s}
+              onMouseDown={(e) => {
+                e.preventDefault(); // keep input focused
+                pickingRef.current = true;
+                commit(s);
+              }}
+              className={`cursor-pointer truncate px-2 py-1 text-xs hover:bg-white/10 ${
+                s === value ? "text-sky-300" : "text-white/75"
+              }`}
+            >
+              {s}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Main tab ──────────────────────────────────────────────────────────────
+
 export function LogsTab() {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [session, setSession] = useState<string>(""); // "" = whole-system timeline
@@ -60,11 +175,16 @@ export function LogsTab() {
   const [level, setLevel] = useState<string>("");
   const [component, setComponent] = useState<string>("");
   const [conversation, setConversation] = useState<string>("");
-  const [records, setRecords] = useState<LogRec[]>([]);
+  const [allRecords, setAllRecords] = useState<LogRec[]>([]);
   const [loading, setLoading] = useState(false);
   const [auto, setAuto] = useState(true);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [savedAt, setSavedAt] = useState(false);
+
+  // Accumulated sets of known values — grow as records load, never shrink.
+  // Stored as sorted arrays for stable rendering.
+  const [knownComponents, setKnownComponents] = useState<string[]>([]);
+  const [knownConversations, setKnownConversations] = useState<string[]>([]);
 
   const loadSessions = useCallback(async () => {
     try {
@@ -82,17 +202,45 @@ export function LogsTab() {
       if (session) qs.set("session", session);
       if (stream) qs.set("stream", stream);
       if (level) qs.set("level", level);
-      if (component.trim()) qs.set("component", component.trim());
-      if (conversation.trim()) qs.set("conversation", conversation.trim());
+      // component + conversation are filtered client-side for instant response
       qs.set("limit", "500");
       const r = await fetch(`/api/logs?${qs.toString()}`).then((res) => res.json());
-      setRecords(Array.isArray(r.records) ? r.records : []);
+      setAllRecords(Array.isArray(r.records) ? r.records : []);
     } catch {
-      setRecords([]);
+      setAllRecords([]);
     } finally {
       setLoading(false);
     }
-  }, [session, stream, level, component, conversation]);
+  }, [session, stream, level]);
+
+  // Client-side component/conversation filter — instant, no round-trip.
+  const records = useMemo(() => {
+    let out = allRecords;
+    if (component.trim()) {
+      const lc = component.trim().toLowerCase();
+      out = out.filter((r) => r.component?.toLowerCase().includes(lc));
+    }
+    if (conversation.trim()) {
+      const lc = conversation.trim().toLowerCase();
+      out = out.filter((r) => r.conversation?.toLowerCase().includes(lc));
+    }
+    return out;
+  }, [allRecords, component, conversation]);
+
+  // Accumulate unique component/conversation values from each load result.
+  useEffect(() => {
+    if (allRecords.length === 0) return;
+    setKnownComponents((prev) => {
+      const s = new Set(prev);
+      for (const r of allRecords) if (r.component) s.add(r.component);
+      return Array.from(s).sort();
+    });
+    setKnownConversations((prev) => {
+      const s = new Set(prev);
+      for (const r of allRecords) if (r.conversation) s.add(r.conversation);
+      return Array.from(s).sort();
+    });
+  }, [allRecords]);
 
   useEffect(() => {
     fetch("/api/config")
@@ -172,19 +320,21 @@ export function LogsTab() {
             </option>
           ))}
         </select>
-        <input
+        <AutocompleteInput
           value={component}
-          onChange={(e) => setComponent(e.target.value)}
-          placeholder="component contains…"
+          allSuggestions={knownComponents}
+          onCommit={setComponent}
+          placeholder="component…"
           className={`${selectClass} w-36`}
-          title="Component filter"
+          title="Filter by component (type to search, Enter or click to apply)"
         />
-        <input
+        <AutocompleteInput
           value={conversation}
-          onChange={(e) => setConversation(e.target.value)}
-          placeholder="conversation contains…"
+          allSuggestions={knownConversations}
+          onCommit={setConversation}
+          placeholder="conversation…"
           className={`${selectClass} w-40`}
-          title="Conversation filter"
+          title="Filter by conversation ID (type to search, Enter or click to apply)"
         />
         <button onClick={() => void load()} className="flex items-center gap-1 rounded bg-white/10 px-2 py-1 hover:bg-white/20">
           {loading ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />} Refresh
@@ -192,7 +342,11 @@ export function LogsTab() {
         <label className="flex items-center gap-1 text-white/60">
           <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} /> auto
         </label>
-        <span className="text-white/30">{records.length} record(s)</span>
+        <span className="text-white/30">
+          {records.length !== allRecords.length
+            ? `${records.length} / ${allRecords.length} record(s)`
+            : `${records.length} record(s)`}
+        </span>
       </div>
 
       {/* Timeline */}

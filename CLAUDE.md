@@ -14,7 +14,7 @@ BrowserOS (BOS) is a single‑page, server‑side‑rendered "operating system i
 - **The VFS (`data/vfs`, via `src/os/vfs.ts`) is the user's sandbox — NOT BOS source.** Edit `src/` to change BOS.
 - OS state: `src/store/os-store.ts` (+ `os-provider.tsx`), seeded SSR in `src/app/page.tsx`.
 - Apps: built‑in = a self‑describing folder `src/apps/<id>/` (`manifest.ts` + `index.tsx`), auto‑discovered by `tools/gen-apps.mjs` — no central registry (`src/os/apps.ts` + `src/components/apps/registry.tsx` are thin shims over the generated lists); installed = iframe served from GitFS by `src/app/apps/[...slug]/route.ts`.
-- Assistant: CopilotKit wiring in `src/components/agent/` (`*Actions.tsx` register tools; mirror new tools in `src/lib/agent/tool-manifest.ts`). Instructions = `src/lib/agent/config.ts` (CORE_POLICY) + active agent + memory + skills.
+- Assistant: **server-owned runs (v2)** — the agent loop lives on the server (`src/lib/assistant/`: `run-manager.ts`, `agent-loop.ts`, `model-turn.ts`, `start-run.ts`), browsers attach to an NDJSON event stream and execute frontend tools. Tools live in one registry (`src/lib/assistant/registry.ts` + `tools/server/*` server tools; `tools/frontend-declarations.ts` + `components/agent/v2/FrontendToolsV2.tsx` client tools). Interception via `hooks.ts`. UI = `src/components/agent/v2/`. Instructions = active agent + memory + skills (`instructions.ts`). Design/plan: `docs/plans/2026-07-11-assistant-v2-server-runs.md`. (CopilotKit is retired from the chat path; it remains only as a markdown renderer.)
 - Settings tabs are pluggable config namespaces (`src/lib/config/registry.ts`) — adding one also exposes it to the assistant.
 - All runtime state persists as files under `./data` (gitignored).
 
