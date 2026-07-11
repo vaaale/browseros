@@ -5,8 +5,9 @@
 //   - "frontend": declared here (or contributed per-run by a surface via
 //     `surfaceTools`), dispatched to an attached browser which executes the
 //     bound handler through the client tool kernel and posts the result back.
-// Tool gating (016 allowlist + 025 deferred + description overrides) is applied
-// by the loop from this shape — see agent-loop.ts.
+// Tool gating (016 allowlist + 025 deferred (per-agent, see gate.ts) +
+// description overrides) is applied by the loop from this shape — see
+// agent-loop.ts.
 
 export interface ToolDeclaration {
   name: string;
@@ -26,8 +27,6 @@ export interface ToolContext {
 
 export interface AssistantTool extends ToolDeclaration {
   execution: "server" | "frontend";
-  /** Deferred (025): hidden until revealed by a prior find_tools call. */
-  deferred?: boolean;
   /** Server tools only. Must return the string handed to the model. */
   execute?: (input: Record<string, unknown>, ctx: ToolContext) => Promise<string>;
 }
@@ -36,7 +35,8 @@ export interface AssistantTool extends ToolDeclaration {
 export interface ToolGateConfig {
   /** Agent allowlist (016). Empty ⇒ zero registry tools. */
   allow: Set<string>;
-  /** Effective deferred set (registry defaults ∪ agent.deferredTools). */
+  /** Deferred set (025) — purely per-agent (`agent.deferredTools`); there is no
+   *  registry-wide default. */
   deferred: Set<string>;
   /** Capability-registry ids — non-registry tools (surface tools, elicitations)
    *  always pass the allowlist, like today's gate. */
@@ -59,7 +59,7 @@ export function visibleTools(
   for (const [name, t] of Object.entries(tools)) {
     if (!DISCOVERY_TOOLS.has(name) && gate.registryIds.has(name)) {
       if (!gate.allow.has(name)) continue;
-      if ((gate.deferred.has(name) || t.deferred) && !revealed.has(name)) continue;
+      if (gate.deferred.has(name) && !revealed.has(name)) continue;
     }
     out.push({
       name,

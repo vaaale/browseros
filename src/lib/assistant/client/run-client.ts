@@ -19,14 +19,58 @@ import type { ChatMessage, Attachment } from "../messages";
 import type { RunEvent } from "../run-events";
 import type { ToolDeclaration } from "../tools";
 import { applyRunEvent, getChatState, markRunStarting, setHistory, stampFeedbackLocal } from "./chat-store";
+import {
+  findSurfaceToolHandler,
+  getActiveSurfaceToolDeclarations,
+  onSurfaceToolsChanged,
+  type FrontendToolHandler,
+} from "./surface-tools";
 
-export type FrontendToolHandler = (
-  input: Record<string, unknown>,
-  ctx: { signal: AbortSignal },
-) => Promise<unknown>;
+export type { FrontendToolHandler };
 
 const handlers = new Map<string, FrontendToolHandler>();
 const attached = new Set<string>(); // runIds with a live reader in THIS page
+
+async function pushSurfaceTools(runId: string, declarations: ToolDeclaration[]): Promise<void> {
+  await fetch(`/api/assistant/runs/${encodeURIComponent(runId)}/surface-tools`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ declarations }),
+  }).catch(() => undefined);
+}
+
+// A window can open (and register its Tier 2 surface tools) DURING an active
+// run — e.g. the agent calls ui_preview_open then wants ui_preview_render in
+// the same turn. surfaceTools is otherwise only read once, when a run starts,
+// so without this the new tools wouldn't be callable until the conversation's
+// NEXT run. Skip the push if the name set is unchanged (Build Studio
+// re-registers on most content changes, not just window open/close).
+// Window mount/unmount effects can fire several notifyChanged() calls back to
+// back (e.g. React dev-mode double-invoke, or two windows registering within
+// the same tick), racing the dispatch chain's own flush call below. A caller
+// whose key matches one already "claimed" must await THAT push's promise, not
+// return immediately — otherwise dispatchFrontendCall could post a tool's
+// result (unblocking the server loop) before the matching push has actually
+// reached the server, which is the one guarantee this function exists to give.
+let lastPushedSurfaceToolsKey = "";
+let lastPushPromise: Promise<void> = Promise.resolve();
+async function flushSurfaceTools(runId: string): Promise<void> {
+  const declarations = getActiveSurfaceToolDeclarations();
+  const key = declarations.map((d) => d.name).sort().join(",");
+  if (key === lastPushedSurfaceToolsKey) {
+    await lastPushPromise;
+    return;
+  }
+  lastPushedSurfaceToolsKey = key;
+  lastPushPromise = pushSurfaceTools(runId, declarations);
+  await lastPushPromise;
+}
+
+// Background path: something registers/unregisters surface tools with no
+// tool call in flight (e.g. the user closes a window by hand mid-run).
+onSurfaceToolsChanged(() => {
+  for (const runId of attached) void flushSurfaceTools(runId);
+});
 
 export function registerFrontendTool(name: string, handler: FrontendToolHandler): () => void {
   handlers.set(name, handler);
@@ -44,7 +88,7 @@ async function postToolResult(runId: string, callId: string, result: string): Pr
 }
 
 function dispatchFrontendCall(runId: string, e: Extract<RunEvent, { type: "tool_call" }>) {
-  const handler = handlers.get(e.name);
+  const handler = handlers.get(e.name) ?? findSurfaceToolHandler(e.name);
   if (!handler) return; // another surface may claim it; server times out in-band
   let input: Record<string, unknown> = {};
   try {
@@ -52,9 +96,18 @@ function dispatchFrontendCall(runId: string, e: Extract<RunEvent, { type: "tool_
   } catch {
     /* tool reports its own validation error */
   }
-  void runToolHandler(e.name, ({ signal }) => handler(input, { signal })).then((result) =>
-    postToolResult(runId, e.callId, result),
-  );
+  void runToolHandler(e.name, ({ signal }) => handler(input, { signal })).then(async (result) => {
+    // Give a window this call may have just opened a couple of paints to
+    // mount and register its surface tools, THEN sync — and post the tool's
+    // own result only after that sync lands. Otherwise a tool that opens a
+    // window (e.g. ui_preview_open) reports its result — unblocking the loop
+    // for the next step — before the server ever learns the new window's
+    // tools exist, and the very next step can't call them.
+    await new Promise((r) => requestAnimationFrame(r));
+    await new Promise((r) => requestAnimationFrame(r));
+    await flushSurfaceTools(runId);
+    await postToolResult(runId, e.callId, result);
+  });
 }
 
 /** Attach to a run's event stream and pump events into the store. Reconnects
@@ -159,6 +212,13 @@ export async function sendMessage(
   message: string,
   opts?: SendOptions,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
+  // Every currently-open app window contributes its surface tools automatically
+  // (013-build-studio-agentic V2); `opts.surfaceTools` remains for a caller that
+  // wants to add ad-hoc declarations without registering a window.
+  const byName = new Map(getActiveSurfaceToolDeclarations().map((d) => [d.name, d]));
+  for (const d of opts?.surfaceTools ?? []) byName.set(d.name, d);
+  const surfaceTools = [...byName.values()];
+
   const res = await fetch("/api/assistant/runs", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -167,7 +227,7 @@ export async function sendMessage(
       agentId,
       message,
       editOfMessageId: opts?.editOfMessageId,
-      surfaceTools: opts?.surfaceTools,
+      surfaceTools: surfaceTools.length ? surfaceTools : undefined,
       attachments: opts?.attachments,
     }),
   }).catch((e) => ({ ok: false, status: 0, json: async () => ({ error: (e as Error).message }) }) as unknown as Response);

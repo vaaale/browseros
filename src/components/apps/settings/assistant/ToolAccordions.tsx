@@ -11,8 +11,8 @@ export interface ToolAccordionsProps {
    *  by the migration so this is only empty when the user has explicitly
    *  cleared it. */
   allowed: string[];
-  /** Tool ids the agent hides from its initial context (additive over the
-   *  registry defaults). */
+  /** Tool ids the agent hides from its initial context. This is the only
+   *  source of deferred-ness for the agent — there is no registry default. */
   deferred: string[];
   onChange: (nextAllowed: string[]) => void;
   onChangeDeferred: (nextDeferred: string[]) => void;
@@ -26,9 +26,9 @@ export interface ToolAccordionsProps {
  *
  * The deferred column lets the user hide an allowed tool from THIS agent's
  * initial context; the agent will still be able to discover it via
- * `find_tools(query=…)`. Per-agent deferred lists are additive over the
- * registry defaults — a tool that is deferred in the registry stays deferred
- * regardless of this toggle.
+ * `find_tools(query=…)`. Deferred is purely per-agent — there is no
+ * registry-wide default, so leaving this unchecked means the tool is visible
+ * from the start.
  *
  * Empty vs implicit-all (Phase B strict allowlist): the migration in the
  * subagents store guarantees every existing agent has an explicit tools list,
@@ -113,7 +113,7 @@ export function ToolAccordions({ all, allowed, deferred, onChange, onChangeDefer
                 </button>
               </div>
             </div>
-            <div className="grid gap-1" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))" }}>
+            <div className="grid gap-1" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))" }}>
               {items.map((tool) => {
                 const checked = isChecked(tool.id);
                 const deferredChecked = isDeferred(tool.id);
@@ -131,7 +131,7 @@ export function ToolAccordions({ all, allowed, deferred, onChange, onChangeDefer
                         className="h-3.5 w-3.5 shrink-0 cursor-pointer accent-violet-500"
                         title="Allow this agent to use this tool"
                       />
-                      <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-white">
+                      <span className="min-w-0 flex-1 break-words font-mono text-[11px] text-white">
                         {tool.id}
                       </span>
                       <label
@@ -148,7 +148,7 @@ export function ToolAccordions({ all, allowed, deferred, onChange, onChangeDefer
                       </label>
                     </div>
                     <span
-                      className={`mt-0.5 block text-[10px] leading-snug ${
+                      className={`mt-0.5 block text-[12px] leading-snug ${
                         isDangerous ? "text-red-300" : "text-white/50"
                       }`}
                     >

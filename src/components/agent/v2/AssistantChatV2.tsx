@@ -10,9 +10,8 @@ import { chatFontCss } from "@/os/chat-fonts";
 import { ConversationPanel } from "@/components/apps/assistant/ConversationPanel";
 import { AgentSelector, ConversationSelector, FeatureBranchSelector } from "@/components/apps/assistant/AgentSelector";
 import { SelfImproveIndicator } from "@/components/agent/SelfImproveIndicator";
-import { openConversation, registerFrontendTool, type FrontendToolHandler } from "@/lib/assistant/client/run-client";
+import { openConversation } from "@/lib/assistant/client/run-client";
 import { useChatState } from "@/lib/assistant/client/chat-store";
-import type { ToolDeclaration } from "@/lib/assistant/tools";
 import { MessageListV2 } from "./MessageListV2";
 import { ChatInputV2 } from "./ChatInputV2";
 import { FrontendToolsV2 } from "./FrontendToolsV2";
@@ -20,16 +19,13 @@ import { InfoPanelV2 } from "./InfoPanelV2";
 
 // The embeddable Assistant, v2 — server-owned runs. Same surface API as the
 // CopilotKit-era AssistantChat (agentId / showConversations / allGroups /
-// conversationsInToolbar / initialLabel), plus the explicit embed contract:
-//   tools: surface-scoped frontend tools (declaration + handler) that exist
-//   only while this surface is mounted and are dispatched back to it by the
-//   server loop (Build Studio's artifact_open / tree_refresh pattern).
+// conversationsInToolbar / initialLabel).
+// Surface-scoped (Tier 2) tools are no longer a prop here — a mounted app
+// window registers them directly via
+// `registerAppSurfaceTools` (src/lib/assistant/client/surface-tools.ts), which
+// every AssistantChatV2 embed's sends pick up automatically regardless of
+// which window's chat is active (013-build-studio-agentic V2).
 // The info panel returns when session state moves server-side (Milestone D).
-
-export interface SurfaceTool {
-  declaration: ToolDeclaration;
-  handler: FrontendToolHandler;
-}
 
 export interface AssistantChatV2Props {
   agentId?: string;
@@ -41,8 +37,6 @@ export interface AssistantChatV2Props {
   allGroups?: boolean;
   /** Compact conversation dropdown in the toolbar instead of the left panel. */
   conversationsInToolbar?: boolean;
-  /** Surface-scoped frontend tools for THIS embed. */
-  tools?: SurfaceTool[];
   children?: ReactNode;
 }
 
@@ -53,14 +47,6 @@ export function AssistantChatV2(props: AssistantChatV2Props) {
   const conv = useConversations(resolvedAgentId);
   const conversationId = conv.activeId ?? "";
   const state = useChatState(conversationId);
-
-  // Surface tools: bind handlers while mounted; declarations ride on each send.
-  const tools = props.tools;
-  useEffect(() => {
-    if (!tools?.length) return;
-    const unbind = tools.map((t) => registerFrontendTool(t.declaration.name, t.handler));
-    return () => unbind.forEach((u) => u());
-  }, [tools]);
 
   // Opening a conversation loads its (server-sanitized) history and re-attaches
   // to a still-running run — a reloaded tab is just a viewer catching up.
@@ -140,7 +126,6 @@ export function AssistantChatV2(props: AssistantChatV2Props) {
           <ChatInputV2
             conversationId={conversationId}
             agentId={resolvedAgentId}
-            surfaceTools={tools?.map((t) => t.declaration)}
             ensureConversation={ensureConversation}
           />
         </div>

@@ -112,7 +112,7 @@ apps/                           Installed apps — standalone git repo (GitFS), 
 A **standalone git repo** (GitFS), independent of the BOS source repo. Each app is
 `<appsDir>/<id>/` with its files + an `app.json` manifest. No central registry —
 apps are discovered by listing the directory. See
-[Installed apps](apps/installed-apps.md).
+[Installed apps](./apps/installed-apps.md).
 
 ---
 

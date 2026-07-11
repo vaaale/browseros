@@ -5,10 +5,11 @@
 // declaration+handler pairs: declarations ride on each run start; handlers are
 // bound while the app is mounted and dispatched back here by the server loop.
 
-import type { SurfaceTool } from "@/components/agent/v2/AssistantChatV2";
+import type { SurfaceTool } from "@/lib/assistant/client/surface-tools";
 
 export function buildStudioSurfaceTools(opts: {
   onOpen: (path: string) => void;
+  onHighlight: (anchor: string) => string | Promise<string>;
   onRefresh: () => void;
 }): SurfaceTool[] {
   return [
@@ -16,7 +17,7 @@ export function buildStudioSurfaceTools(opts: {
       declaration: {
         name: "buildstudio_artifact_open",
         description:
-          "Open a specification artifact in the Build Studio viewer (the center pane) so the user can see it. Call this after you create or edit a spec, or when you reference one in the conversation. The path is STORE-PREFIXED, e.g. 'bos-system-specs/013-build-studio-agentic/spec.md'.",
+          "Open a specification artifact in the Build Studio viewer (the center pane) so the user can see it. Call this after you create or edit a spec, or when you reference one in the conversation. The path is STORE-PREFIXED, e.g. 'bos-system-specs/013-build-studio-agentic/spec.md'. This tool only opens — to scroll to and highlight a specific section, call buildstudio_artifact_highlight afterward.",
         parameters: {
           type: "object",
           properties: {
@@ -32,6 +33,25 @@ export function buildStudioSurfaceTools(opts: {
         if (!p) return "No path provided.";
         opts.onOpen(p);
         return `Opened ${p} in the Build Studio viewer.`;
+      },
+    },
+    {
+      declaration: {
+        name: "buildstudio_artifact_highlight",
+        description:
+          "Scroll the currently-open Build Studio artifact viewer to a heading/section anchor, centering it in the viewport, and highlight the WHOLE section (the heading and its content, not just the heading line) so the user notices it. The highlight has no timeout — it stays until the user clicks on it. Call this right after writing a section (e.g. a new requirement) so the user sees what changed. The anchor is a heading slug — lowercase, spaces to hyphens, punctuation stripped, e.g. 'user-story-1-work-with-the-build-studio-agent'. Requires an artifact to already be open (call buildstudio_artifact_open first) and the anchor to match a real heading in it.",
+        parameters: {
+          type: "object",
+          properties: {
+            anchor: { type: "string", description: "Heading slug to scroll to and highlight, e.g. 'user-story-1-work-with-the-build-studio-agent'." },
+          },
+          required: ["anchor"],
+        },
+      },
+      handler: async ({ anchor }) => {
+        const a = String(anchor ?? "").trim();
+        if (!a) return "No anchor provided.";
+        return opts.onHighlight(a);
       },
     },
     {

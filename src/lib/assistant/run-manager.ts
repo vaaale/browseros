@@ -12,6 +12,7 @@
 // run-command.ts) so Next.js dev recompiles don't orphan active runs.
 
 import type { RunEvent, RunEventInput, RunStatus, RunFinishReason } from "./run-events";
+import type { AssistantTool, ToolDeclaration } from "./tools";
 
 /** How long a finished run's event log stays attachable (late viewers, e2e). */
 const RETENTION_MS = 5 * 60_000;
@@ -42,6 +43,12 @@ export interface Run {
   /** Settles when the loop has fully exited (set by the run starter). Lets an
    *  edit-resubmit cancel the active run and WAIT before truncating. */
   done?: Promise<void>;
+  /** The SAME tools object the running loop reads each step (start-run.ts
+   *  builds directly into this, never a separate copy) — so addSurfaceTools
+   *  can extend an ACTIVE run's tool set mid-run, e.g. when the agent opens an
+   *  app window and its Tier 2 surface tools become available, instead of
+   *  only taking effect on the conversation's NEXT run. */
+  tools: Record<string, AssistantTool>;
 }
 
 export class RunManager {
@@ -65,6 +72,7 @@ export class RunManager {
       listeners: new Set(),
       abort: new AbortController(),
       pendingFrontend: new Map(),
+      tools: {},
     };
     this.runs.set(run.id, run);
     this.byConversation.set(conversationId, run.id);
@@ -162,6 +170,17 @@ export class RunManager {
     if (!pending) return false;
     pending.settle({ kind: "result", result });
     return true;
+  }
+
+  /** Merge newly-available surface tool declarations into a LIVE run (additive
+   *  only — mirrors the initial merge in start-run.ts). The agent loop reads
+   *  `run.tools` fresh every step, so a tool added here is callable starting
+   *  on the run's next step, without waiting for the conversation's next run.
+   *  Existing entries are never overwritten. */
+  addSurfaceTools(run: Run, declarations: ToolDeclaration[]): void {
+    for (const d of declarations) {
+      if (d?.name && !run.tools[d.name]) run.tools[d.name] = { ...d, execution: "frontend" };
+    }
   }
 }
 

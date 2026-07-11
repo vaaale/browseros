@@ -6,7 +6,7 @@ agent-built screen is indistinguishable from a hand-built one. When in doubt,
 open a neighbouring component and copy its patterns rather than inventing new ones.
 
 Related reading: [Design heuristics & gotchas](../design-heuristics.md) (hard
-rules on SSR/hydration, the VFS, atomic writes), [Built-in apps](../apps/built-in-apps.md).
+rules on SSR/hydration, the VFS, atomic writes), [Apps guide](./apps.md).
 
 ---
 

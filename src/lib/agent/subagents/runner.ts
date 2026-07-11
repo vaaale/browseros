@@ -6,7 +6,6 @@ import { getAgent } from "./store";
 import { stageAll } from "@/lib/system/git";
 import { runCommand, type RunLanguage } from "@/lib/system/run-command";
 import { getLogContext } from "@/lib/logging/context";
-import { deferredCapabilityIds } from "@/lib/agent/capabilities-registry";
 import { getMaxFindResults } from "@/lib/config/registry";
 import type { Agent, AgentRunResult } from "./types";
 
@@ -110,13 +109,11 @@ async function runLocal(
     for (const id of specIds) tools[id] = boundSpec[id];
   }
 
-  // Deferred-tool discovery (025). Compute the per-agent effective deferred set
-  // (registry defaults ∪ this agent's own `deferredTools`) and wire the two
+  // Deferred-tool discovery (025). The effective deferred set is purely this
+  // agent's own `deferredTools` (no registry-wide default) — wire the two
   // discovery tools + the loop's hidden/revealed sets so an agent can find and
   // then call deferred tools mid-loop.
-  const registryDeferred = deferredCapabilityIds();
-  const agentDeferred = new Set(agent.deferredTools ?? []);
-  const effectiveDeferred = new Set<string>([...registryDeferred, ...agentDeferred]);
+  const effectiveDeferred = new Set<string>(agent.deferredTools ?? []);
   const hiddenIds = pickDeferredIds(tools, effectiveDeferred);
   const revealed = new Set<string>();
   const maxResults = await getMaxFindResults();

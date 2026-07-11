@@ -20,12 +20,6 @@ export interface Capability {
   group: string;
   description: string;
   context: CapabilityContext;
-  /**
-   * Deferred tools are excluded from an agent's initial tool schema (025-deferred-
-   * tool-discovery). Agents discover them at runtime via `find_tools(query)` and
-   * they become callable in subsequent steps of the same tool loop. Default false.
-   */
-  deferred?: boolean;
 }
 
 const TELEGRAM_BOT_CAPABILITIES: Capability[] = TELEGRAM_BOT_METHOD_DESCRIPTORS.map((m) => ({
@@ -33,7 +27,6 @@ const TELEGRAM_BOT_CAPABILITIES: Capability[] = TELEGRAM_BOT_METHOD_DESCRIPTORS.
   group: "Telegram",
   context: "action",
   description: m.description,
-  deferred: true,
 }));
 
 // Tool naming standard: `subsystem_object_verb`, snake_case, one id per logical
@@ -50,15 +43,15 @@ export const CAPABILITIES: Capability[] = [
 
   // Web
   { id: "web_search", group: "Web", context: "both", description: "Search the web with Anthropic native web search." },
-  { id: "web_fetch", group: "Web", context: "both", description: "Fetch a URL's readable text content.", deferred: true },
+  { id: "web_fetch", group: "Web", context: "both", description: "Fetch a URL's readable text content." },
   { id: "web_view", group: "Web", context: "action", description: "Open an HTML document or URL in a sandboxed preview window." },
 
   // Files (VFS) — one id per op, used by the main chat and delegated sub-agents.
   { id: "file_list", group: "Files", context: "both", description: "List a virtual file system directory." },
   { id: "file_read", group: "Files", context: "both", description: "Read a text file." },
   { id: "file_write", group: "Files", context: "both", description: "Create or overwrite a text file." },
-  { id: "file_mkdir", group: "Files", context: "both", description: "Create a directory.", deferred: true },
-  { id: "file_delete", group: "Files", context: "action", description: "Delete a file or folder.", deferred: true },
+  { id: "file_mkdir", group: "Files", context: "both", description: "Create a directory." },
+  { id: "file_delete", group: "Files", context: "action", description: "Delete a file or folder." },
 
   // Config
   { id: "config_list", group: "Config", context: "action", description: "List configurable settings." },
@@ -73,9 +66,9 @@ export const CAPABILITIES: Capability[] = [
   { id: "agent_prompt_set", group: "Agents", context: "action", description: "Rewrite the active agent's personality." },
 
   // Memory
-  { id: "memory_save", group: "Memory", context: "action", description: "Save to persistent memory.", deferred: true },
+  { id: "memory_save", group: "Memory", context: "action", description: "Save to persistent memory." },
   { id: "memory_recall", group: "Memory", context: "action", description: "Read live persistent memory entries or a topic shard." },
-  { id: "memory_search", group: "Memory", context: "action", description: "Search topic shards + recent episodes for matching entries.", deferred: true },
+  { id: "memory_search", group: "Memory", context: "action", description: "Search topic shards + recent episodes for matching entries." },
 
   // Skills
   { id: "skill_list", group: "Skills", context: "both", description: "List available skills." },
@@ -87,19 +80,19 @@ export const CAPABILITIES: Capability[] = [
   { id: "skill_curate", group: "Skills", context: "action", description: "Archive stale agent-created skills (recoverable)." },
 
   // Scratchpad (conversation-scoped notes; state derived from tool-call history)
-  { id: "scratchpad_write", group: "Scratchpad", context: "action", description: "Create a note in the conversation-scoped scratchpad.", deferred: true },
-  { id: "scratchpad_read", group: "Scratchpad", context: "action", description: "Read scratchpad notes (list metadata or fetch one by title).", deferred: true },
-  { id: "scratchpad_edit", group: "Scratchpad", context: "action", description: "Replace the content of an existing scratchpad note.", deferred: true },
-  { id: "scratchpad_delete", group: "Scratchpad", context: "action", description: "Delete a scratchpad note by title.", deferred: true },
+  { id: "scratchpad_write", group: "Scratchpad", context: "action", description: "Create a note in the conversation-scoped scratchpad." },
+  { id: "scratchpad_read", group: "Scratchpad", context: "action", description: "Read scratchpad notes (list metadata or fetch one by title)." },
+  { id: "scratchpad_edit", group: "Scratchpad", context: "action", description: "Replace the content of an existing scratchpad note." },
+  { id: "scratchpad_delete", group: "Scratchpad", context: "action", description: "Delete a scratchpad note by title." },
 
   // MCP
-  { id: "mcp_server_list", group: "MCP", context: "action", description: "List connected MCP servers (with descriptions).", deferred: true },
-  { id: "mcp_tool_search", group: "MCP", context: "action", description: "Search MCP tools across all servers or on a specific server.", deferred: true },
-  { id: "mcp_server_tools", group: "MCP", context: "action", description: "List a server's tools with their input schemas.", deferred: true },
-  { id: "mcp_tool_schema", group: "MCP", context: "action", description: "Get the input JSON schema for a single MCP tool.", deferred: true },
-  { id: "mcp_tool_call", group: "MCP", context: "action", description: "Call a tool on an MCP server with schema-validated arguments.", deferred: true },
-  { id: "mcp_server_add", group: "MCP", context: "action", description: "Connect an MCP server.", deferred: true },
-  { id: "mcp_server_remove", group: "MCP", context: "action", description: "Disconnect an MCP server.", deferred: true },
+  { id: "mcp_server_list", group: "MCP", context: "action", description: "List connected MCP servers (with descriptions)." },
+  { id: "mcp_tool_search", group: "MCP", context: "action", description: "Search MCP tools across all servers or on a specific server." },
+  { id: "mcp_server_tools", group: "MCP", context: "action", description: "List a server's tools with their input schemas." },
+  { id: "mcp_tool_schema", group: "MCP", context: "action", description: "Get the input JSON schema for a single MCP tool." },
+  { id: "mcp_tool_call", group: "MCP", context: "action", description: "Call a tool on an MCP server with schema-validated arguments." },
+  { id: "mcp_server_add", group: "MCP", context: "action", description: "Connect an MCP server." },
+  { id: "mcp_server_remove", group: "MCP", context: "action", description: "Disconnect an MCP server." },
 
   // Apps (runtime-installed apps)
   { id: "app_install", group: "Apps", context: "action", description: "Install an app from generated HTML." },
@@ -108,39 +101,48 @@ export const CAPABILITIES: Capability[] = [
   { id: "app_uninstall", group: "Apps", context: "action", description: "Uninstall an app." },
 
   // Dev (repo + harness)
-  { id: "dev_git_status", group: "Dev", context: "both", description: "Show git branch and changes (read-only).", deferred: true },
-  { id: "dev_branch_request", group: "Dev", context: "action", description: "Set up the active feature branch needed to modify BOS source.", deferred: true },
-  { id: "dev_delegate", group: "Dev", context: "tool", description: "Delegate implementation to the Developer (from a delegated agent).", deferred: true },
-  { id: "bos_source_list", group: "Dev", context: "both", description: "List BOS source (read-only, sub-agent).", deferred: true },
-  { id: "bos_source_read", group: "Dev", context: "both", description: "Read a BOS source file (read-only, sub-agent).", deferred: true },
-  { id: "bos_source_search", group: "Dev", context: "both", description: "Search BOS source (read-only, sub-agent).", deferred: true },
-  { id: "run_command", group: "Dev", context: "both", description: "Run a command in a sandboxed environment (bash/python/node).", deferred: true },
+  { id: "dev_git_status", group: "Dev", context: "both", description: "Show git branch and changes (read-only)." },
+  { id: "dev_branch_request", group: "Dev", context: "action", description: "Set up the active feature branch needed to modify BOS source." },
+  { id: "dev_delegate", group: "Dev", context: "tool", description: "Delegate implementation to the Developer (from a delegated agent)." },
+  { id: "bos_source_list", group: "Dev", context: "both", description: "List BOS source (read-only, sub-agent)." },
+  { id: "bos_source_read", group: "Dev", context: "both", description: "Read a BOS source file (read-only, sub-agent)." },
+  { id: "bos_source_search", group: "Dev", context: "both", description: "Search BOS source (read-only, sub-agent)." },
+  { id: "run_command", group: "Dev", context: "both", description: "Run a command in a sandboxed environment (bash/python/node)." },
 
   // Docs
   { id: "docs_list", group: "Docs", context: "action", description: "List documentation pages." },
   { id: "docs_read", group: "Docs", context: "action", description: "Read a documentation page by ref." },
 
   // Workflows
-  { id: "workflow_create", group: "Workflows", context: "action", description: "Generate a workflow from a description.", deferred: true },
-  { id: "workflow_modify", group: "Workflows", context: "action", description: "Apply a JSON-merge patch to a workflow.", deferred: true },
-  { id: "workflow_run", group: "Workflows", context: "action", description: "Execute a workflow and stream step events.", deferred: true },
-  { id: "workflow_status", group: "Workflows", context: "action", description: "Read a workflow's execution state.", deferred: true },
-  { id: "workflow_cancel", group: "Workflows", context: "action", description: "Cancel a running workflow.", deferred: true },
-  { id: "workflow_export", group: "Workflows", context: "action", description: "Return a workflow's full JSON.", deferred: true },
-  { id: "workflow_validate", group: "Workflows", context: "action", description: "Validate a workflow's DAG.", deferred: true },
+  { id: "workflow_create", group: "Workflows", context: "action", description: "Generate a workflow from a description." },
+  { id: "workflow_modify", group: "Workflows", context: "action", description: "Apply a JSON-merge patch to a workflow." },
+  { id: "workflow_run", group: "Workflows", context: "action", description: "Execute a workflow and stream step events." },
+  { id: "workflow_status", group: "Workflows", context: "action", description: "Read a workflow's execution state." },
+  { id: "workflow_cancel", group: "Workflows", context: "action", description: "Cancel a running workflow." },
+  { id: "workflow_export", group: "Workflows", context: "action", description: "Return a workflow's full JSON." },
+  { id: "workflow_validate", group: "Workflows", context: "action", description: "Validate a workflow's DAG." },
 
   // Specs (one id per op, used by the main chat and delegated sub-agents).
-  { id: "spec_list", group: "Specs", context: "both", description: "List spec artifacts under a store.", deferred: true },
-  { id: "spec_read", group: "Specs", context: "both", description: "Read a spec artifact.", deferred: true },
-  { id: "spec_write", group: "Specs", context: "both", description: "Create/overwrite a spec artifact.", deferred: true },
-  { id: "spec_edit", group: "Specs", context: "both", description: "Find/replace within a spec artifact.", deferred: true },
-  { id: "spec_search", group: "Specs", context: "both", description: "Search spec artifacts.", deferred: true },
-  { id: "spec_template_read", group: "Specs", context: "both", description: "Read a spec-kit template/command prompt.", deferred: true },
-  { id: "spec_template_list", group: "Specs", context: "both", description: "List spec-kit templates.", deferred: true },
+  { id: "spec_list", group: "Specs", context: "both", description: "List spec artifacts under a store." },
+  { id: "spec_read", group: "Specs", context: "both", description: "Read a spec artifact." },
+  { id: "spec_write", group: "Specs", context: "both", description: "Create/overwrite a spec artifact." },
+  { id: "spec_edit", group: "Specs", context: "both", description: "Find/replace within a spec artifact." },
+  { id: "spec_search", group: "Specs", context: "both", description: "Search spec artifacts." },
+  { id: "spec_template_read", group: "Specs", context: "both", description: "Read a spec-kit template/command prompt." },
+  { id: "spec_template_list", group: "Specs", context: "both", description: "List spec-kit templates." },
 
   // Build Studio app control (registered in the BS app's embedded chat).
-  { id: "buildstudio_artifact_open", group: "Build Studio", context: "action", description: "Open a spec artifact in the Build Studio viewer.", deferred: true },
-  { id: "buildstudio_tree_refresh", group: "Build Studio", context: "action", description: "Reload the Build Studio spec tree.", deferred: true },
+  { id: "buildstudio_artifact_open", group: "Build Studio", context: "action", description: "Open a spec artifact in the Build Studio viewer." },
+  { id: "buildstudio_artifact_highlight", group: "Build Studio", context: "action", description: "Scroll (centered) to a heading/section anchor in the open Build Studio artifact and highlight the whole section until the user clicks it." },
+  { id: "buildstudio_tree_refresh", group: "Build Studio", context: "action", description: "Reload the Build Studio spec tree." },
+
+  // UI Preview (013-build-studio-agentic V2). Tier 1 (ui_preview_open) is a
+  // global frontend tool declared in frontend-declarations.ts; Tier 2 tools
+  // are registered by the UI Preview window itself while it is open.
+  { id: "ui_preview_open", group: "UI Preview", context: "action", description: "Open or focus the UI Preview window." },
+  { id: "ui_preview_render", group: "UI Preview", context: "action", description: "Push A2UI operations to the open UI Preview surface." },
+  { id: "ui_preview_show_requirement", group: "UI Preview", context: "action", description: "Scroll the paired spec viewer to a requirement from the UI Preview." },
+  { id: "a2ui_render", group: "UI Preview", context: "action", description: "Generate a validated A2UI operations envelope from a natural-language UI description." },
 
   // Integrations — one capability id per adapter method, following the pattern
   // `<serviceId>_<object>_<verb>` in snake_case (see actions/dispatcher.ts).
@@ -150,37 +152,37 @@ export const CAPABILITIES: Capability[] = [
   // under a single "Integrations" bucket) so the Settings capability picker
   // stays scannable as more providers are added. Non-Google providers should
   // use their own service-name group.
-  { id: "gmail_messages_list", group: "Gmail", context: "action", description: "List Gmail messages.", deferred: true },
-  { id: "gmail_messages_get", group: "Gmail", context: "action", description: "Fetch a Gmail message by id.", deferred: true },
-  { id: "gmail_messages_send", group: "Gmail", context: "action", description: "Send a Gmail message.", deferred: true },
-  { id: "gmail_messages_reply", group: "Gmail", context: "action", description: "Reply in-thread to a Gmail message.", deferred: true },
-  { id: "gmail_messages_modify", group: "Gmail", context: "action", description: "Add or remove labels on a Gmail message.", deferred: true },
-  { id: "gmail_messages_trash", group: "Gmail", context: "action", description: "Move a Gmail message to Trash.", deferred: true },
-  { id: "gmail_messages_untrash", group: "Gmail", context: "action", description: "Restore a Gmail message from Trash.", deferred: true },
-  { id: "gmail_messages_search", group: "Gmail", context: "action", description: "Search Gmail with Google's operator syntax.", deferred: true },
-  { id: "gmail_messages_download_attachment", group: "Gmail", context: "action", description: "Download a Gmail attachment into /Documents/Emails in the VFS.", deferred: true },
-  { id: "gmail_labels_list", group: "Gmail", context: "action", description: "List Gmail labels.", deferred: true },
-  { id: "gmail_labels_get", group: "Gmail", context: "action", description: "Fetch a Gmail label by id.", deferred: true },
-  { id: "gmail_profile_get", group: "Gmail", context: "action", description: "Fetch the authenticated Gmail profile.", deferred: true },
-  { id: "drive_files_list", group: "Google Drive", context: "action", description: "List files in Google Drive.", deferred: true },
-  { id: "drive_files_get", group: "Google Drive", context: "action", description: "Fetch a Drive file's metadata by id.", deferred: true },
-  { id: "drive_files_search", group: "Google Drive", context: "action", description: "Search Drive with Google's query syntax.", deferred: true },
-  { id: "drive_files_download", group: "Google Drive", context: "action", description: "Download a Drive file's binary content (base64, size-capped).", deferred: true },
-  { id: "drive_files_export", group: "Google Drive", context: "action", description: "Export a Google-native doc (Docs/Sheets/Slides) as PDF/CSV/text/etc.", deferred: true },
-  { id: "drive_folders_list", group: "Google Drive", context: "action", description: "List folders in Drive, optionally under a parent.", deferred: true },
-  { id: "drive_about_get", group: "Google Drive", context: "action", description: "Fetch the authenticated Drive profile + storage quota.", deferred: true },
-  { id: "calendar_calendars_list", group: "Google Calendar", context: "action", description: "List the user's calendars (primary + subscribed).", deferred: true },
-  { id: "calendar_events_list", group: "Google Calendar", context: "action", description: "List events on a calendar within a time window.", deferred: true },
-  { id: "calendar_events_get", group: "Google Calendar", context: "action", description: "Fetch a single calendar event by id.", deferred: true },
-  { id: "calendar_events_create", group: "Google Calendar", context: "action", description: "Create a new calendar event.", deferred: true },
-  { id: "calendar_events_update", group: "Google Calendar", context: "action", description: "Patch fields on an existing calendar event.", deferred: true },
-  { id: "calendar_events_delete", group: "Google Calendar", context: "action", description: "Delete a calendar event.", deferred: true },
-  { id: "calendar_events_respond", group: "Google Calendar", context: "action", description: "RSVP to a calendar event (accept / decline / tentative).", deferred: true },
-  { id: "calendar_events_move", group: "Google Calendar", context: "action", description: "Move an event from one calendar to another.", deferred: true },
-  { id: "calendar_freebusy_query", group: "Google Calendar", context: "action", description: "Query free/busy time ranges across calendars.", deferred: true },
-  { id: "contacts_contacts_list", group: "Google Contacts", context: "action", description: "List the user's contacts (People API connections).", deferred: true },
-  { id: "contacts_contacts_get", group: "Google Contacts", context: "action", description: "Fetch a single contact by resourceName.", deferred: true },
-  { id: "contacts_contacts_search", group: "Google Contacts", context: "action", description: "Search contacts by free-text query.", deferred: true },
+  { id: "gmail_messages_list", group: "Gmail", context: "action", description: "List Gmail messages." },
+  { id: "gmail_messages_get", group: "Gmail", context: "action", description: "Fetch a Gmail message by id." },
+  { id: "gmail_messages_send", group: "Gmail", context: "action", description: "Send a Gmail message." },
+  { id: "gmail_messages_reply", group: "Gmail", context: "action", description: "Reply in-thread to a Gmail message." },
+  { id: "gmail_messages_modify", group: "Gmail", context: "action", description: "Add or remove labels on a Gmail message." },
+  { id: "gmail_messages_trash", group: "Gmail", context: "action", description: "Move a Gmail message to Trash." },
+  { id: "gmail_messages_untrash", group: "Gmail", context: "action", description: "Restore a Gmail message from Trash." },
+  { id: "gmail_messages_search", group: "Gmail", context: "action", description: "Search Gmail with Google's operator syntax." },
+  { id: "gmail_messages_download_attachment", group: "Gmail", context: "action", description: "Download a Gmail attachment into /Documents/Emails in the VFS." },
+  { id: "gmail_labels_list", group: "Gmail", context: "action", description: "List Gmail labels." },
+  { id: "gmail_labels_get", group: "Gmail", context: "action", description: "Fetch a Gmail label by id." },
+  { id: "gmail_profile_get", group: "Gmail", context: "action", description: "Fetch the authenticated Gmail profile." },
+  { id: "drive_files_list", group: "Google Drive", context: "action", description: "List files in Google Drive." },
+  { id: "drive_files_get", group: "Google Drive", context: "action", description: "Fetch a Drive file's metadata by id." },
+  { id: "drive_files_search", group: "Google Drive", context: "action", description: "Search Drive with Google's query syntax." },
+  { id: "drive_files_download", group: "Google Drive", context: "action", description: "Download a Drive file's binary content (base64, size-capped)." },
+  { id: "drive_files_export", group: "Google Drive", context: "action", description: "Export a Google-native doc (Docs/Sheets/Slides) as PDF/CSV/text/etc." },
+  { id: "drive_folders_list", group: "Google Drive", context: "action", description: "List folders in Drive, optionally under a parent." },
+  { id: "drive_about_get", group: "Google Drive", context: "action", description: "Fetch the authenticated Drive profile + storage quota." },
+  { id: "calendar_calendars_list", group: "Google Calendar", context: "action", description: "List the user's calendars (primary + subscribed)." },
+  { id: "calendar_events_list", group: "Google Calendar", context: "action", description: "List events on a calendar within a time window." },
+  { id: "calendar_events_get", group: "Google Calendar", context: "action", description: "Fetch a single calendar event by id." },
+  { id: "calendar_events_create", group: "Google Calendar", context: "action", description: "Create a new calendar event." },
+  { id: "calendar_events_update", group: "Google Calendar", context: "action", description: "Patch fields on an existing calendar event." },
+  { id: "calendar_events_delete", group: "Google Calendar", context: "action", description: "Delete a calendar event." },
+  { id: "calendar_events_respond", group: "Google Calendar", context: "action", description: "RSVP to a calendar event (accept / decline / tentative)." },
+  { id: "calendar_events_move", group: "Google Calendar", context: "action", description: "Move an event from one calendar to another." },
+  { id: "calendar_freebusy_query", group: "Google Calendar", context: "action", description: "Query free/busy time ranges across calendars." },
+  { id: "contacts_contacts_list", group: "Google Contacts", context: "action", description: "List the user's contacts (People API connections)." },
+  { id: "contacts_contacts_get", group: "Google Contacts", context: "action", description: "Fetch a single contact by resourceName." },
+  { id: "contacts_contacts_search", group: "Google Contacts", context: "action", description: "Search contacts by free-text query." },
   ...TELEGRAM_BOT_CAPABILITIES,
 ];
 
@@ -204,6 +206,7 @@ export const GROUP_DEFINITIONS: Record<string, { description: string }> = {
   "Workflows": { description: "Multi-step workflow authoring and execution: creating, modifying, running, cancelling, validating, and exporting workflows." },
   "Specs": { description: "Specification artifact management for the spec-kit pipeline: listing, reading, writing, editing, and searching specs across stores." },
   "Build Studio": { description: "Build Studio app control: opening spec artifacts in the viewer and refreshing the spec tree." },
+  "UI Preview": { description: "Live A2UI mockup design surface: opening the UI Preview window, generating and pushing A2UI operations, and scrolling the paired spec viewer to a requirement." },
   "Gmail": { description: "Gmail integration: listing, reading, sending, replying, modifying, labeling, searching, and downloading attachments from messages." },
   "Google Drive": { description: "Google Drive integration: listing, searching, downloading, and exporting files and folders." },
   "Google Calendar": { description: "Google Calendar integration: listing calendars, reading events, creating, updating, deleting, moving, RSVPing to events, and querying free/busy times." },
@@ -235,26 +238,10 @@ export function getDangerousToolNames(): readonly string[] {
 }
 
 const ACTION_IDS = new Set(CAPABILITIES.filter((c) => c.context !== "tool").map((c) => c.id));
-const DEFERRED_IDS = new Set(CAPABILITIES.filter((c) => c.deferred === true).map((c) => c.id));
 
 /** Is this id a main-chat action? */
 export function isActionId(id: string): boolean {
   return ACTION_IDS.has(id);
-}
-
-/** Is this capability deferred BY REGISTRY DEFAULT (hidden from initial context,
- *  discovered via find_tools)? Per-agent deferred lists live in each agent's
- *  AGENT.md (`deferredTools`) and are combined with this default at request
- *  boundaries in the sub-agent runner. */
-export function isDeferred(id: string): boolean {
-  return DEFERRED_IDS.has(id);
-}
-
-/** All capability ids marked deferred by registry default. Runners union this
- *  set with the calling agent's `deferredTools` to obtain the effective
- *  deferred set for a delegated run. */
-export function deferredCapabilityIds(): Set<string> {
-  return new Set(DEFERRED_IDS);
 }
 
 // The per-agent action gate (016 + Phase B strict allowlist). Contract:

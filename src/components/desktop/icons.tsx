@@ -28,6 +28,8 @@ import {
   Newspaper,
   Workflow,
   GitBranch,
+  Hammer,
+  Palette,
   HelpCircle,
   type LucideProps,
 } from "lucide-react";
@@ -61,6 +63,8 @@ const ICONS: Record<string, ComponentType<LucideProps>> = {
   Newspaper,
   Workflow,
   GitBranch,
+  Hammer,
+  Palette,
 };
 
 export function AppIcon({ name, ...props }: { name: string } & LucideProps) {

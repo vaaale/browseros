@@ -243,7 +243,7 @@ export async function setAgentSystemPrompt(id: string, systemPrompt: string): Pr
 /** Update an agent's capability allowlists (tools/skills/mcp/deferredTools).
  *  Only provided classes are changed. Tools use the strict allowlist migrated
  *  above; skills/MCP keep their unset/empty-means-all behavior; deferredTools
- *  are additive over registry defaults. */
+ *  is the agent's sole (no registry-wide default) deferred-tool list. */
 export async function setAgentCapabilities(
   id: string,
   caps: { tools?: string[]; skills?: string[]; mcp?: string[]; deferredTools?: string[] },

@@ -4,7 +4,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowUp, Square, X, Paperclip, FileText } from "lucide-react";
 import { useChatState, setEditing } from "@/lib/assistant/client/chat-store";
 import { sendMessage, stopRun } from "@/lib/assistant/client/run-client";
-import type { ToolDeclaration } from "@/lib/assistant/tools";
 import type { Attachment } from "@/lib/assistant/messages";
 
 const MAX_ROWS = 5;
@@ -28,13 +27,11 @@ async function fileToBase64(file: File): Promise<string> {
 export function ChatInputV2({
   conversationId,
   agentId,
-  surfaceTools,
   placeholder = "Type a message…",
   ensureConversation,
 }: {
   conversationId: string;
   agentId: string;
-  surfaceTools?: ToolDeclaration[];
   placeholder?: string;
   /** Called before sending when there is no conversation yet; returns the id. */
   ensureConversation?: () => Promise<string>;
@@ -113,7 +110,6 @@ export function ChatInputV2({
     if (!convId) return;
     const res = await sendMessage(convId, agentId, value, {
       editOfMessageId: editingMessage?.id,
-      surfaceTools,
       attachments: sentAttachments.length ? sentAttachments : undefined,
     });
     if (!res.ok) {
@@ -121,7 +117,7 @@ export function ChatInputV2({
       setText(value); // give the user their message back
       setAttachments(sentAttachments);
     }
-  }, [text, busy, uploading, attachments, conversationId, agentId, editingMessage, surfaceTools, ensureConversation, autoResize]);
+  }, [text, busy, uploading, attachments, conversationId, agentId, editingMessage, ensureConversation, autoResize]);
 
   const cancelEdit = useCallback(() => setEditing(conversationId, undefined), [conversationId]);
 

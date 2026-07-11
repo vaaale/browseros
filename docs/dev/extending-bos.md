@@ -16,7 +16,7 @@ Always `npx tsc --noEmit` + `npm run lint` after, and update the relevant
 4. Persistence? Add a `server-only` store under `src/lib/...` (atomic writes under
    `data/…`) + an `/api/...` route; call via `fetch`.
 
-→ [Built‑in apps](apps/built-in-apps.md)
+→ [Apps guide](./guides/apps.md)
 
 ---
 
@@ -98,4 +98,4 @@ previews then promotes or stops.
 - **Project:** delegate (`contentOnly:true`) to write a project dir → `app_build`
   (`/api/apps/build`) → esbuild bundle → `app_install({ files, entry }, {draft})`.
 
-→ [Installed apps](apps/installed-apps.md)
+→ [Installed apps](./apps/installed-apps.md)

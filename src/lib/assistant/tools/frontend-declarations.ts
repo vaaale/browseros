@@ -98,6 +98,10 @@ export const FRONTEND_TOOL_DECLARATIONS: ToolDeclaration[] = [
     ["task"],
   ),
   decl(
+    "ui_preview_open",
+    "Open (or focus, if already open) the UI Preview window, where you render live A2UI mockups during a bos-app design session. Open it at the start of the UI-design phase and keep it open for the rest of the session; then use a2ui_render + ui_preview_render to push mockups to it.",
+  ),
+  decl(
     "dev_branch_request",
     "Set up the active feature branch required to modify BrowserOS itself (its source under src/). Call this BEFORE delegating a BOS source change to the developer when no active feature branch is set; it proposes a name from the task (or from suggestedBranch when provided), lets the user confirm/edit, then creates and activates the bos/<kebab-name> branch on this conversation. Returns a message; only delegate to the developer once a branch is active.",
     {

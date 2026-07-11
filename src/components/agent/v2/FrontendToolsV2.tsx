@@ -46,6 +46,10 @@ export function FrontendToolsV2({ conversationId }: { conversationId: string }) 
         const id = store.getState().launch("browser", { url });
         return id ? `Opened ${url} in the browser.` : "Could not open the browser.";
       },
+      ui_preview_open: async () => {
+        const id = store.getState().launch("ui-preview");
+        return id ? `Opened UI Preview (window ${id}).` : "Could not open UI Preview.";
+      },
       web_view: async ({ html, url, filePath, title, update }) => {
         const toRawUrl = (p: string) => `/api/fs/raw?path=${encodeURIComponent(p)}`;
         const resolve = (value: string): string =>

@@ -1,0 +1,1 @@
+Step: constitution. Read .specify/templates/commands/constitution.md and .specify/templates/constitution-template.md. Create or update .specify/memory/constitution.md with the project's governing principles, and bump the version + amended date line. This is global, not per-feature.

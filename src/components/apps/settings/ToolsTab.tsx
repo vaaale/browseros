@@ -9,7 +9,6 @@ interface Capability {
   group: string;
   description: string;
   context: "action" | "tool" | "both";
-  deferred?: boolean;
 }
 
 interface MetadataOverride {
@@ -39,10 +38,9 @@ function clampInt(n: number, min: number, max: number, fallback: number): number
 }
 
 // Settings → Tools: global per-tool metadata overrides. Editing a description
-// here rewrites what the LLM sees for that tool across every agent. The
-// "deferred" badge is read-only and reflects the registry default — per-agent
-// deferred visibility is edited in Settings → Agents → [agent] → Tools, since
-// it is per-agent state.
+// here rewrites what the LLM sees for that tool across every agent. Deferred
+// visibility has no registry-wide concept — it's edited per agent in
+// Settings → Agents → [agent] → Tools.
 export function ToolsTab() {
   const [catalog, setCatalog] = useState<Capability[]>([]);
   // Description-only view (id → override description). The
@@ -200,7 +198,6 @@ export function ToolsTab() {
                     id={tool.id}
                     sourceDescription={tool.description}
                     override={overrides[tool.id]}
-                    deferred={tool.deferred === true}
                     onSave={(description) => save.save({ id: tool.id, description })}
                   />
                 ))}
@@ -226,13 +223,11 @@ function ToolRow({
   id,
   sourceDescription,
   override,
-  deferred,
   onSave,
 }: {
   id: string;
   sourceDescription: string;
   override: string | undefined;
-  deferred: boolean;
   onSave: (description: string) => void;
 }) {
   // Draft = current effective value shown to the user. Blur commits. The
@@ -258,15 +253,7 @@ function ToolRow({
     <div className="rounded border border-white/10 bg-white/[0.02] p-2">
       <div className="mb-1 flex items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-1.5">
-          <span className="min-w-0 truncate font-mono text-[11px] text-white">{id}</span>
-          {deferred && (
-            <span
-              className="shrink-0 rounded border border-amber-500/40 bg-amber-500/10 px-1 py-[1px] text-[9px] font-medium uppercase tracking-wide text-amber-300"
-              title="Hidden from every agent's initial context by default — discovered at runtime via find_tools. Per-agent overrides live in Settings → Agents."
-            >
-              deferred
-            </span>
-          )}
+          <span className="min-w-0 break-words font-mono text-[11px] text-white">{id}</span>
         </div>
         {isOverridden && (
           <button
@@ -282,11 +269,11 @@ function ToolRow({
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
         onBlur={() => commit(draft)}
-        className="w-full resize-y rounded border border-white/10 bg-black/30 px-2 py-1.5 text-[11px] leading-relaxed text-white outline-none transition-colors focus:border-white/30"
+        className="w-full resize-y rounded border border-white/10 bg-black/30 px-2 py-1.5 text-[13px] leading-relaxed text-white outline-none transition-colors focus:border-white/30"
         style={{ minHeight: "56px" }}
       />
       {isOverridden && (
-        <div className="mt-1 text-[10px] leading-snug text-white/40">
+        <div className="mt-1 text-[11px] leading-snug text-white/40">
           Source: <span className="text-white/50">{sourceDescription}</span>
         </div>
       )}

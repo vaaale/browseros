@@ -7,7 +7,7 @@ import { conversationIO, loadConversationMessages } from "./conversation-store";
 import { lastUserIndex } from "./messages";
 import { assistantTools } from "./registry";
 import { gateFor } from "./gate";
-import type { AssistantTool, ToolDeclaration } from "./tools";
+import type { ToolDeclaration } from "./tools";
 import type { Attachment } from "./messages";
 import { composeHooks, globalRunHooks, type RunHooks } from "./hooks";
 import { composeInstructions } from "@/lib/agent/instructions";
@@ -81,10 +81,12 @@ export async function startAssistantRun(opts: StartRunOptions): Promise<Run> {
     ...(opts.editOfMessageId ? { truncatedFromMessageId: opts.editOfMessageId } : {}),
   });
 
-  const tools: Record<string, AssistantTool> = { ...assistantTools() };
-  for (const t of opts.surfaceTools ?? []) {
-    if (t?.name && !tools[t.name]) tools[t.name] = { ...t, execution: "frontend" };
-  }
+  // Build directly into run.tools (not a separate local object) so it's the
+  // SAME reference the loop reads every step below — later, addSurfaceTools
+  // can extend this run's tool set mid-run (e.g. a window opened during this
+  // very run) and the next step picks it up immediately.
+  Object.assign(run.tools, assistantTools());
+  manager.addSurfaceTools(run, opts.surfaceTools ?? []);
 
   const [gate, timeoutMs] = await Promise.all([gateFor(opts.agentId), toolTimeoutMs()]);
 
@@ -114,7 +116,7 @@ export async function startAssistantRun(opts: StartRunOptions): Promise<Run> {
           // provider for determinism; everything else uses the real model.
           streamTurn: e2eScriptedTurn(opts.message) ?? streamModelTurn,
           composeSystem: () => composeInstructions(opts.agentId),
-          tools,
+          tools: run.tools,
           gate,
           hooks,
           io: conversationIO(opts.conversationId, opts.agentId),
