@@ -14,7 +14,7 @@
 // surface tools per mounted embed (register/unregister with the component).
 
 import { runToolHandler } from "@/lib/agent/tool-kernel";
-import type { ChatMessage } from "../messages";
+import type { ChatMessage, Attachment } from "../messages";
 import type { RunEvent } from "../run-events";
 import type { ToolDeclaration } from "../tools";
 import { applyRunEvent, getChatState, markRunStarting, setHistory, stampFeedbackLocal } from "./chat-store";
@@ -138,6 +138,7 @@ export async function openConversation(conversationId: string): Promise<void> {
 export interface SendOptions {
   editOfMessageId?: string;
   surfaceTools?: ToolDeclaration[];
+  attachments?: Attachment[];
 }
 
 /** Start a run for a user message (or an edit-resubmit). Resolves once the
@@ -157,6 +158,7 @@ export async function sendMessage(
       message,
       editOfMessageId: opts?.editOfMessageId,
       surfaceTools: opts?.surfaceTools,
+      attachments: opts?.attachments,
     }),
   }).catch((e) => ({ ok: false, status: 0, json: async () => ({ error: (e as Error).message }) }) as unknown as Response);
   const data = (await res.json().catch(() => ({}))) as { runId?: string; error?: string };

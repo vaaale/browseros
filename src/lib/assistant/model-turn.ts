@@ -46,6 +46,27 @@ function parseArgs(raw: string): Record<string, unknown> {
 
 // ── Anthropic ────────────────────────────────────────────────────────────────
 
+// Convert user attachments to Anthropic content blocks. Images → image blocks;
+// PDFs → document blocks; other types are skipped (kept in the transcript for
+// reference but not sent to the model).
+function anthropicAttachmentBlocks(msg: ChatMessage): Anthropic.ContentBlockParam[] {
+  const blocks: Anthropic.ContentBlockParam[] = [];
+  for (const a of msg.attachments ?? []) {
+    if (a.type === "image" && a.mimeType.startsWith("image/")) {
+      blocks.push({
+        type: "image",
+        source: { type: "base64", media_type: a.mimeType as "image/png", data: a.data },
+      });
+    } else if (a.mimeType === "application/pdf") {
+      blocks.push({
+        type: "document",
+        source: { type: "base64", media_type: "application/pdf", data: a.data },
+      } as Anthropic.ContentBlockParam);
+    }
+  }
+  return blocks;
+}
+
 function toAnthropicMessages(messages: ChatMessage[]): Anthropic.MessageParam[] {
   const out: Anthropic.MessageParam[] = [];
   const pushUser = (blocks: Anthropic.ContentBlockParam[]) => {
@@ -58,7 +79,7 @@ function toAnthropicMessages(messages: ChatMessage[]): Anthropic.MessageParam[] 
   };
   for (const m of messages) {
     if (m.role === "user") {
-      pushUser([{ type: "text", text: m.content ?? "" }]);
+      pushUser([{ type: "text", text: m.content ?? "" }, ...anthropicAttachmentBlocks(m)]);
     } else if (m.role === "assistant") {
       const content: Anthropic.ContentBlockParam[] = [];
       if (m.content?.trim()) content.push({ type: "text", text: m.content });
@@ -130,7 +151,19 @@ function toOpenAiMessages(system: string, messages: ChatMessage[]): OpenAI.Chat.
   const out: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [{ role: "system", content: system }];
   for (const m of messages) {
     if (m.role === "user") {
-      out.push({ role: "user", content: m.content ?? "" });
+      const images = (m.attachments ?? []).filter((a) => a.type === "image" && a.mimeType.startsWith("image/"));
+      if (images.length) {
+        // OpenAI chat multimodal: content is an array of text + image_url parts.
+        out.push({
+          role: "user",
+          content: [
+            { type: "text", text: m.content ?? "" },
+            ...images.map((a) => ({ type: "image_url" as const, image_url: { url: `data:${a.mimeType};base64,${a.data}` } })),
+          ],
+        });
+      } else {
+        out.push({ role: "user", content: m.content ?? "" });
+      }
     } else if (m.role === "assistant") {
       out.push({
         role: "assistant",
@@ -215,7 +248,18 @@ function toResponsesInput(messages: ChatMessage[]): unknown[] {
   const input: unknown[] = [];
   for (const m of messages) {
     if (m.role === "user") {
-      input.push({ role: "user", content: m.content ?? "" });
+      const images = (m.attachments ?? []).filter((a) => a.type === "image" && a.mimeType.startsWith("image/"));
+      if (images.length) {
+        input.push({
+          role: "user",
+          content: [
+            { type: "input_text", text: m.content ?? "" },
+            ...images.map((a) => ({ type: "input_image", image_url: `data:${a.mimeType};base64,${a.data}` })),
+          ],
+        });
+      } else {
+        input.push({ role: "user", content: m.content ?? "" });
+      }
     } else if (m.role === "assistant") {
       if (m.content?.trim()) input.push({ role: "assistant", content: m.content });
       for (const tc of m.toolCalls ?? []) {

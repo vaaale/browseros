@@ -9,6 +9,21 @@ export interface ToolCallRef {
   function: { name: string; arguments: string };
 }
 
+// A multimodal attachment on a user message. `data` is raw base64 (no data: URI
+// prefix). `image` renders inline and is sent to the model as an image block;
+// `file` (e.g. application/pdf) is sent as a document block where the provider
+// supports it. Non-model-supported types (audio/video) are still uploaded to the
+// VFS and kept for reference but are not sent to the model.
+export interface Attachment {
+  type: "image" | "file";
+  mimeType: string;
+  /** Raw base64 (no `data:<mime>;base64,` prefix). */
+  data: string;
+  name?: string;
+  /** VFS path where the file was persisted (best-effort), for reference. */
+  vfsPath?: string;
+}
+
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant" | "tool";
@@ -16,6 +31,8 @@ export interface ChatMessage {
   toolCalls?: ToolCallRef[];
   /** role:"tool" only — the assistant toolCall this message answers. */
   toolCallId?: string;
+  /** role:"user" only — multimodal attachments sent with the message. */
+  attachments?: Attachment[];
   /** Thumbs feedback stamped by the UI; consumed by the memory fast loop. */
   feedback?: { rating: "up" | "down"; at: number };
 }

@@ -13,7 +13,7 @@
 //   - a turn whose TEXT contains leaked tool-call markup is retried (bounded)
 //     instead of being persisted (replaces the client-side ToolCallRetry).
 
-import type { ChatMessage, ToolCallRef } from "./messages";
+import type { ChatMessage, ToolCallRef, Attachment } from "./messages";
 import { newMessageId, truncateForEdit, deriveRevealedIds } from "./messages";
 import type { RunEventInput } from "./run-events";
 import type { AssistantTool, ToolDeclaration, ToolGateConfig, ToolContext } from "./tools";
@@ -74,7 +74,7 @@ export interface AgentLoopDeps {
 }
 
 export interface AgentLoopInput {
-  userMessage: { content: string; id?: string };
+  userMessage: { content: string; id?: string; attachments?: Attachment[] };
   /** Edit-resubmit: must identify the LAST user message; the transcript is
    *  truncated from it (inclusive) before the new message is appended. */
   editOfMessageId?: string;
@@ -163,6 +163,7 @@ export async function runAgentLoop(deps: AgentLoopDeps, input: AgentLoopInput): 
       id: input.userMessage.id ?? newMessageId(),
       role: "user",
       content: input.userMessage.content,
+      ...(input.userMessage.attachments?.length ? { attachments: input.userMessage.attachments } : {}),
     };
     messages = [...messages, userMessage];
     await io.saveMessages(messages);

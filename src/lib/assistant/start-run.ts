@@ -2,11 +2,13 @@ import "server-only";
 import { runManager, ActiveRunError, type Run } from "./run-manager";
 import { runAgentLoop } from "./agent-loop";
 import { streamModelTurn } from "./model-turn";
+import { e2eScriptedTurn } from "./e2e-provider";
 import { conversationIO, loadConversationMessages } from "./conversation-store";
 import { lastUserIndex } from "./messages";
 import { assistantTools } from "./registry";
 import { gateFor } from "./gate";
 import type { AssistantTool, ToolDeclaration } from "./tools";
+import type { Attachment } from "./messages";
 import { composeHooks, globalRunHooks, type RunHooks } from "./hooks";
 import { titleHook } from "./title-hook";
 import { composeInstructions } from "@/lib/agent/instructions";
@@ -26,6 +28,8 @@ export interface StartRunOptions {
   agentId: string;
   message: string;
   editOfMessageId?: string;
+  /** Multimodal attachments on the user message. */
+  attachments?: Attachment[];
   /** Frontend tools contributed by the starting surface for THIS run. */
   surfaceTools?: ToolDeclaration[];
   /** Per-run interception hooks (in-process starters only; composed with the
@@ -107,7 +111,9 @@ export async function startAssistantRun(opts: StartRunOptions): Promise<Run> {
           agentId: opts.agentId,
           signal: run.abort.signal,
           emit: (e) => manager.emit(run, e),
-          streamTurn: streamModelTurn,
+          // e2e runs (BOS_E2E_SCRIPTED=1 + an "@@e2e {…}" message) use a scripted
+          // provider for determinism; everything else uses the real model.
+          streamTurn: e2eScriptedTurn(opts.message) ?? streamModelTurn,
           composeSystem: () => composeInstructions(opts.agentId),
           tools,
           gate,
@@ -117,7 +123,7 @@ export async function startAssistantRun(opts: StartRunOptions): Promise<Run> {
           maxSteps: DEFAULT_MAX_STEPS,
           toolTimeoutMs: timeoutMs,
         },
-        { userMessage: { content: opts.message }, editOfMessageId: opts.editOfMessageId },
+        { userMessage: { content: opts.message, attachments: opts.attachments }, editOfMessageId: opts.editOfMessageId },
       );
       manager.finish(run, result.reason, result.error);
       logger().log({

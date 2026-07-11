@@ -30,7 +30,18 @@ function toPrompt(system: string, messages: ChatMessage[]): CompactionPrompt {
   const out: CompactionPrompt = [{ role: "system", content: system }];
   for (const m of messages) {
     if (m.role === "user") {
-      out.push({ role: "user", content: [{ type: "text", text: m.content ?? "" }] });
+      // Attachments ride along as v3 `file` parts so compaction estimates and
+      // preserves them (the estimator has a dedicated `file` case).
+      const fileParts = (m.attachments ?? []).map((a) => ({
+        type: "file",
+        data: a.data,
+        mediaType: a.mimeType,
+        filename: a.name,
+        // carry v2 attachment fields so fromPrompt can rebuild the Attachment
+        _bosType: a.type,
+        _bosVfsPath: a.vfsPath,
+      }));
+      out.push({ role: "user", content: [{ type: "text", text: m.content ?? "" }, ...fileParts] as never });
     } else if (m.role === "assistant") {
       const parts: unknown[] = [];
       if (m.content?.trim()) parts.push({ type: "text", text: m.content });
@@ -75,7 +86,26 @@ function fromPrompt(prompt: CompactionPrompt): ChatMessage[] {
   for (const m of prompt) {
     if (m.role === "system") continue;
     if (m.role === "user") {
-      out.push({ id: synthId(), role: "user", content: partsText(m.content) });
+      const parts = Array.isArray(m.content) ? m.content : [];
+      const attachments = parts
+        .filter((p) => (p as { type?: string }).type === "file")
+        .map((p) => {
+          const f = p as { data?: unknown; mediaType?: string; filename?: string; _bosType?: string; _bosVfsPath?: string };
+          return {
+            type: (f._bosType === "image" ? "image" : "file") as "image" | "file",
+            mimeType: f.mediaType ?? "application/octet-stream",
+            data: typeof f.data === "string" ? f.data : "",
+            name: f.filename,
+            vfsPath: f._bosVfsPath,
+          };
+        })
+        .filter((a) => a.data);
+      out.push({
+        id: synthId(),
+        role: "user",
+        content: partsText(m.content),
+        ...(attachments.length ? { attachments } : {}),
+      });
     } else if (m.role === "assistant") {
       const parts = Array.isArray(m.content) ? m.content : [];
       const toolCalls = parts

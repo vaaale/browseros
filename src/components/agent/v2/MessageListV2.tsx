@@ -176,7 +176,26 @@ export function MessageListV2({
           return (
             <div key={m.id} className="group flex justify-end" data-testid="user-message">
               <div className="relative max-w-[85%] rounded-2xl rounded-br-sm bg-[#2a3550] px-3.5 py-2 text-sm leading-relaxed text-white/90">
-                <span className="whitespace-pre-wrap break-words">{m.content}</span>
+                {(m.attachments?.length ?? 0) > 0 && (
+                  <div className="mb-1.5 flex flex-wrap justify-end gap-1.5">
+                    {m.attachments!.map((a, ai) =>
+                      a.type === "image" ? (
+                        // eslint-disable-next-line @next/next/no-img-element -- inline base64 data URI; next/image can't optimize it
+                        <img
+                          key={ai}
+                          src={`data:${a.mimeType};base64,${a.data}`}
+                          alt={a.name ?? "image"}
+                          className="max-h-40 rounded-lg border border-white/10 object-contain"
+                        />
+                      ) : (
+                        <span key={ai} className="flex items-center gap-1 rounded-md border border-white/15 bg-black/20 px-1.5 py-1 text-[11px] text-white/70">
+                          {a.name ?? a.mimeType}
+                        </span>
+                      ),
+                    )}
+                  </div>
+                )}
+                {m.content && <span className="whitespace-pre-wrap break-words">{m.content}</span>}
                 {isEditable && (
                   <button
                     type="button"

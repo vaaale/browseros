@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { startAssistantRun } from "@/lib/assistant/start-run";
 import { ActiveRunError, runManager } from "@/lib/assistant/run-manager";
 import type { ToolDeclaration } from "@/lib/assistant/tools";
+import type { Attachment } from "@/lib/assistant/messages";
 
 export const dynamic = "force-dynamic";
 
@@ -17,12 +18,15 @@ export async function POST(req: NextRequest) {
       message?: string;
       editOfMessageId?: string;
       surfaceTools?: ToolDeclaration[];
+      attachments?: Attachment[];
     };
     const conversationId = body.conversationId?.trim();
     const agentId = body.agentId?.trim();
     const message = typeof body.message === "string" ? body.message : "";
-    if (!conversationId || !agentId || !message.trim()) {
-      return NextResponse.json({ error: "conversationId, agentId and message are required" }, { status: 400 });
+    const attachments = Array.isArray(body.attachments) ? body.attachments : undefined;
+    // A message is required UNLESS attachments are present (image-only turns ok).
+    if (!conversationId || !agentId || (!message.trim() && !attachments?.length)) {
+      return NextResponse.json({ error: "conversationId, agentId and message (or attachments) are required" }, { status: 400 });
     }
     const run = await startAssistantRun({
       conversationId,
@@ -30,6 +34,7 @@ export async function POST(req: NextRequest) {
       message,
       editOfMessageId: body.editOfMessageId?.trim() || undefined,
       surfaceTools: Array.isArray(body.surfaceTools) ? body.surfaceTools : undefined,
+      attachments,
     });
     return NextResponse.json({ runId: run.id }, { status: 201 });
   } catch (e) {
