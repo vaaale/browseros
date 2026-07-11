@@ -2,7 +2,7 @@
 
 BrowserOS (BOS) is an agentic operating system that runs in the browser. It has a desktop, draggable windows, a dock, and a built-in AI assistant that can operate the OS, manage files, browse the web, install apps, and modify BOS itself — including writing and previewing its own code changes on a live branch.
 
-![Desktop](./docs/assets/BOS Intro.png)
+![Desktop](./docs/assets/BOS%20Intro.png)
 
 ---
 
