@@ -194,6 +194,14 @@ function buildSlowLoopTools(agentId: string, state: SlowLoopState): Record<strin
         if (!slug || !digest) return "Error: slug and digest are required.";
         const r = await createTopic(agentId, slug, digest);
         if (!r.success) {
+          // An already-existing topic is not a failure: the model's intent is
+          // just for the topic to exist so it can add entries. Treat it as a
+          // soft, in-band nudge toward topic_add_entry — don't log an ERROR or
+          // return "Error:" (which the model would otherwise try to "fix").
+          if (/already exists/i.test(r.error ?? "")) {
+            logger().info(LOG, "op: topic_create (already exists)", { agentId, slug });
+            return `Topic "${slug}" already exists — use topic_add_entry to add to it.`;
+          }
           logger().error(LOG, "topic_create failed", undefined, { agentId, slug, error: r.error });
           return `Error: ${r.error}`;
         }
