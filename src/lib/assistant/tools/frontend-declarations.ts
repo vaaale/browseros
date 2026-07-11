@@ -64,6 +64,34 @@ export const FRONTEND_TOOL_DECLARATIONS: ToolDeclaration[] = [
   decl("file_mkdir", "Create a directory in the virtual file system.", { path: str("Directory path") }, ["path"]),
   decl("file_delete", "Delete a file or folder from the virtual file system.", { path: str("Path to delete") }, ["path"]),
   decl(
+    "app_install",
+    "Install a BrowserOS app from a single self-contained index.html document, then add it to the dock and open it. Use this AFTER delegating the build to a Claude developer sub-agent (development tasks must not be hand-written). Pass the HTML the sub-agent produced.",
+    {
+      name: str("App name"),
+      html: str("The complete index.html document (all CSS/JS inline, no external dependencies)"),
+      icon: str("Optional lucide icon name (e.g. Clock, Calculator, Music, ListTodo); auto-chosen if omitted"),
+    },
+    ["name", "html"],
+  ),
+  decl(
+    "app_build",
+    "Install a multi-file app PROJECT (TypeScript/TSX, may import React) that a Claude developer sub-agent authored into a staging directory. First delegate to the developer (contentOnly) to WRITE the project into a fresh staging dir with a src/main.tsx (or src/main.ts) entry; then call app_build with the app name and that directory.",
+    {
+      name: str("App name"),
+      dir: str("Absolute path of the staging directory the developer wrote the project into (must contain src/main.tsx or src/main.ts)"),
+      entry: str("Build entry relative to dir; defaults to src/main.tsx or src/main.ts"),
+      icon: str("Optional lucide icon name; auto-chosen if omitted"),
+    },
+    ["name", "dir"],
+  ),
+  decl("app_list", "List apps that were installed at runtime (not built-in)."),
+  decl(
+    "app_uninstall",
+    "Uninstall a runtime-installed app by id. This hides it from the desktop but keeps its files, so the user can restore it from Settings → Apps.",
+    { id: str("App id") },
+    ["id"],
+  ),
+  decl(
     "agent_request_claude",
     "Ask the user for permission to use a Claude sub-agent for a NON-development task (analysis, research, writing, etc.). Returns 'once', 'session', or 'local'. After receiving permission, immediately call agent_delegate with ephemeralType='claude' (for once/session) or ephemeralType='local' (for local) to actually run the task. Do NOT call this tool for development/coding tasks — use dev_delegate directly instead.",
     { task: str("What you want the Claude agent to do") },

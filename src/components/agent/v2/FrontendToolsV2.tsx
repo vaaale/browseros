@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import { useOSStoreApi } from "@/store/os-provider";
 import { fsClient, settingsClient } from "@/lib/os-client";
+import type { AppManifest } from "@/os/types";
 import { registerFrontendTool, type FrontendToolHandler } from "@/lib/assistant/client/run-client";
 import { elicit } from "@/lib/assistant/client/elicitations";
 
@@ -79,6 +80,43 @@ export function FrontendToolsV2({ conversationId }: { conversationId: string }) 
       file_delete: async ({ path }) => {
         await fsClient.remove(String(path ?? ""));
         return `Deleted ${path}.`;
+      },
+      // App management: the install/build happen server-side, but the desktop
+      // store update (registerApp/launch) is a client effect → frontend tools.
+      app_install: async ({ name, html, icon }) => {
+        const res = await fetch("/api/apps", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, html, icon, draft: true }),
+        }).then((r) => r.json());
+        if (res.error) return `Error: ${res.error}`;
+        const app = res.app as AppManifest;
+        store.getState().registerApp(app);
+        store.getState().launch(app.id);
+        return `Installed "${app.name}". It is in your dock and open. If a Supervisor is running, it's a preview on the app-candidate branch — Promote or Discard it from the Topbar.`;
+      },
+      app_build: async ({ name, dir, entry, icon }) => {
+        const res = await fetch("/api/apps/build", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, dir, entry, icon }),
+        }).then((r) => r.json());
+        if (res.error) return `Error: ${res.error}`;
+        const app = res.app as AppManifest;
+        store.getState().registerApp(app);
+        store.getState().launch(app.id);
+        return `Built and installed "${app.name}". It's a preview on the app-candidate branch — Promote or Discard from the Topbar.`;
+      },
+      app_list: async () => {
+        const res = await fetch("/api/apps").then((r) => r.json());
+        const apps = (res.apps ?? []) as { id: string; name: string; status?: string }[];
+        return JSON.stringify(apps.map((a) => ({ id: a.id, name: a.name, status: a.status ?? "installed" })));
+      },
+      app_uninstall: async ({ id }) => {
+        const res = await fetch(`/api/apps?id=${encodeURIComponent(String(id ?? ""))}`, { method: "DELETE" }).then((r) => r.json());
+        if (res.error) return `Error: ${res.error}`;
+        store.getState().unregisterApp(String(id ?? ""));
+        return `Uninstalled ${id} (hidden from the desktop; files kept and restorable in Settings → Apps).`;
       },
       // Elicitations: push a blocking card into the transcript and await the
       // user's choice (the kernel's signal withdraws the card on stop).

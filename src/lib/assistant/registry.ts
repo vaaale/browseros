@@ -1,27 +1,69 @@
 import "server-only";
-import type { AssistantTool, ToolGateConfig } from "./tools";
-import { CAPABILITIES, deferredCapabilityIds } from "@/lib/agent/capabilities-registry";
-import { readMetadataOverrides } from "@/lib/agent/tool-metadata-overrides";
-import { getAgent } from "@/lib/agent/subagents/store";
+import type { AssistantTool } from "./tools";
+import { isDeferred } from "@/lib/agent/capabilities-registry";
+import { FRONTEND_TOOL_DECLARATIONS } from "./tools/frontend-declarations";
+import { webSearchTools } from "./tools/server/web-search";
+import { memoryTools } from "./tools/server/memory";
+import { skillsTools } from "./tools/server/skills";
+import { docsTools } from "./tools/server/docs";
+import { gitTools } from "./tools/server/git";
+import { runCommandTools } from "./tools/server/run-command";
+import { configTools } from "./tools/server/config";
+import { mcpTools } from "./tools/server/mcp";
+import { workflowTools } from "./tools/server/workflows";
+import { subAgentTools } from "./tools/server/subagents";
+import { agentAdminTools } from "./tools/server/agent-admin";
+import { selfImproveTools } from "./tools/server/self-improve";
+import { devSourceTools } from "./tools/server/dev-source";
+import { specTools } from "./tools/server/specs";
+import { scratchpadTools } from "./tools/server/scratchpad";
+import { integrationTools } from "./tools/server/integrations";
+import { discoveryTools } from "./tools/server/discovery";
 
-// The assistant tool registry. Milestone C ports the ~60 tools from the
-// *Actions.tsx files here (fetch-wrappers become server tools calling their lib
-// functions directly; OS-store tools and elicitations stay frontend). Until
-// then the loop runs with whatever a surface contributes per run.
+// The assistant tool registry (Milestone C). Server tools call their lib
+// functions in-process; frontend tools are declared here (single source of
+// truth the model is offered) and executed in the browser by the run client
+// (handlers in src/components/agent/v2/FrontendToolsV2.tsx). Gating (016
+// allowlist + 025 deferred + Settings overrides) is applied per step by the
+// loop from this map — see agent-loop.ts / gate.ts.
+//
+// find_tools/find_agent are always-available discovery tools and take a lookup
+// into the assembled map so they can report a deferred capability's live schema.
+
+let cache: Record<string, AssistantTool> | undefined;
+
+function frontendTools(): Record<string, AssistantTool> {
+  const out: Record<string, AssistantTool> = {};
+  for (const d of FRONTEND_TOOL_DECLARATIONS) {
+    out[d.name] = { ...d, execution: "frontend", deferred: isDeferred(d.name) };
+  }
+  return out;
+}
 
 export function assistantTools(): Record<string, AssistantTool> {
-  return {};
+  if (cache) return cache;
+  const combined: Record<string, AssistantTool> = {
+    ...frontendTools(),
+    ...webSearchTools(),
+    ...memoryTools(),
+    ...skillsTools(),
+    ...docsTools(),
+    ...gitTools(),
+    ...runCommandTools(),
+    ...configTools(),
+    ...mcpTools(),
+    ...workflowTools(),
+    ...subAgentTools(),
+    ...agentAdminTools(),
+    ...selfImproveTools(),
+    ...devSourceTools(),
+    ...specTools(),
+    ...scratchpadTools(),
+    ...integrationTools(),
+  };
+  cache = { ...combined, ...discoveryTools((id) => combined[id]) };
+  return cache;
 }
 
-/** Build the per-run gate config from the agent's allowlists + overrides,
- *  mirroring today's withToolGate options. */
-export async function gateFor(agentId: string): Promise<ToolGateConfig> {
-  const agent = await getAgent(agentId).catch(() => undefined);
-  const overrides = await readMetadataOverrides().catch(() => ({}) as Record<string, { description?: string }>);
-  return {
-    allow: new Set(agent?.tools ?? []),
-    deferred: new Set([...deferredCapabilityIds(), ...(agent?.deferredTools ?? [])]),
-    registryIds: new Set(CAPABILITIES.map((c) => c.id)),
-    descriptions: Object.fromEntries(Object.entries(overrides).map(([id, o]) => [id, o?.description])),
-  };
-}
+// gateFor lives in ./gate to avoid a cycle (discovery imports it).
+export { gateFor } from "./gate";

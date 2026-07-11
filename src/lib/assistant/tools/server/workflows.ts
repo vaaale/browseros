@@ -4,7 +4,7 @@ import { serverTool, schema, p } from "./util";
 import { getWorkflow, saveWorkflow, getStatus } from "@/lib/workflows/store";
 import { generateWorkflowFromTask } from "@/lib/workflows/generate";
 import { validateWorkflow } from "@/lib/workflows/validate";
-import { runWorkflowStream, cancelWorkflow, isRunning } from "@/lib/workflows/runner";
+import { runWorkflowStream, cancelWorkflow } from "@/lib/workflows/runner";
 import { ensureWorkflowApp } from "@/lib/workflows/install";
 import { encodeNested } from "@/lib/agent/nested-events";
 import type { Workflow } from "@/lib/workflows/types";
