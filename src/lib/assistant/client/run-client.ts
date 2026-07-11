@@ -14,6 +14,7 @@
 // surface tools per mounted embed (register/unregister with the component).
 
 import { runToolHandler } from "@/lib/agent/tool-kernel";
+import { maybeGenerateTitleInBackground } from "@/lib/agent/conversations";
 import type { ChatMessage, Attachment } from "../messages";
 import type { RunEvent } from "../run-events";
 import type { ToolDeclaration } from "../tools";
@@ -94,7 +95,16 @@ export async function attachToRun(conversationId: string, runId: string): Promis
             if (event.type === "tool_call" && event.execution === "frontend") {
               dispatchFrontendCall(runId, event);
             }
-            if (event.type === "run_finished") finished = true;
+            if (event.type === "run_finished") {
+              finished = true;
+              // Client-driven auto-titling: on a completed first exchange, name a
+              // still-"New conversation" from its transcript. renameConversation
+              // updates the sidebar store live (the server is the transcript
+              // writer, so nothing else refreshes the title here).
+              if (event.reason === "completed") {
+                void maybeGenerateTitleInBackground(conversationId, getChatState(conversationId).messages);
+              }
+            }
           }
         }
       } catch {

@@ -411,7 +411,7 @@ function firstAssistantText(messages: unknown[]): string | null {
   return null;
 }
 
-async function maybeGenerateTitleInBackground(id: string, messages: unknown[]): Promise<void> {
+export async function maybeGenerateTitleInBackground(id: string, messages: unknown[]): Promise<void> {
   if (titleGenInFlight.has(id)) return;
   const meta = state?.conversations.find((c) => c.id === id);
   if (!meta || meta.title !== DEFAULT_TITLE) return;
