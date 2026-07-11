@@ -40,6 +40,8 @@ export type StreamTurn = (opts: {
   signal: AbortSignal;
   onDelta: (d: { kind: "text" | "reasoning"; messageId: string; delta: string }) => void;
   messageId: string;
+  /** For server-side compaction keyed by conversation (empty in unit tests). */
+  conversationId: string;
 }) => Promise<TurnResult>;
 
 export interface AgentLoopIO {
@@ -191,6 +193,7 @@ export async function runAgentLoop(deps: AgentLoopDeps, input: AgentLoopInput): 
           tools: declarations,
           signal,
           messageId,
+          conversationId: deps.conversationId,
           onDelta: (d) =>
             emit({
               type: d.kind === "reasoning" ? "reasoning_delta" : "text_delta",

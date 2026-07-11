@@ -148,6 +148,15 @@ export function MessageListV2({
     bottomRef.current?.scrollIntoView({ block: "end" });
   }, [state.messages.length, state.streamText, state.streamReasoning, toolCallCount]);
 
+  // No conversation selected yet (or still resolving one) — show the greeting,
+  // not a loading state that would otherwise never clear.
+  if (!conversationId) {
+    return (
+      <div className="flex h-full items-center justify-center px-6 text-center text-sm text-white/45">
+        {initialLabel ?? "How can I help?"}
+      </div>
+    );
+  }
   if (!state.historyLoaded) {
     return <div className="flex h-full items-center justify-center text-sm text-white/40">Loading conversation…</div>;
   }

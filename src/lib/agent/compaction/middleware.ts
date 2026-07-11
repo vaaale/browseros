@@ -310,3 +310,22 @@ export function withCompaction(model: LanguageModel, convId: string): LanguageMo
 
 // Exposed for the API route + tests.
 export { findTailStart };
+
+/** v2 entry point: run the SAME compaction transform used by the middleware,
+ *  directly on a v3 prompt array (server-owned runs don't go through the ai-sdk
+ *  model, so they call this instead of wrapping a LanguageModel). Returns the
+ *  compacted prompt, or the input unchanged when no compaction applies. Never
+ *  throws. */
+export async function compactPrompt(
+  convId: string,
+  prompt: CompactionPrompt,
+  maxOutputTokens?: number,
+): Promise<CompactionPrompt> {
+  try {
+    const patch = await transformCall(convId, { prompt, maxOutputTokens });
+    return (patch.prompt as CompactionPrompt | undefined) ?? prompt;
+  } catch (err) {
+    log("error", convId, "compactPrompt.error", undefined, err);
+    return prompt;
+  }
+}

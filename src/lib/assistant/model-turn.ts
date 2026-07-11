@@ -5,6 +5,7 @@ import { DEFAULT_MAX_TOKENS, getProviderConfig, type ProviderConfig } from "@/li
 import { familyOf, normalizeApiBase } from "@/lib/agent/provider-meta";
 import type { StreamTurn, TurnResult, TurnToolCall } from "./agent-loop";
 import type { ChatMessage } from "./messages";
+import { compactChatMessages } from "@/lib/agent/compaction/v2";
 
 // streamModelTurn — ONE streamed model turn over full conversation history,
 // per provider family, with AbortSignal end-to-end. Extracted from llm.ts /
@@ -20,9 +21,16 @@ import type { ChatMessage } from "./messages";
 
 export const streamModelTurn: StreamTurn = async (opts) => {
   const c = await getProviderConfig();
-  if (familyOf(c.provider) === "anthropic") return anthropicTurn(c, opts);
-  if (c.provider === "openai-responses") return responsesTurn(c, opts);
-  return openaiChatTurn(c, opts);
+  // Compaction (022) runs here — v2 feeds the provider directly, so it can't go
+  // through the ai-sdk middleware. Applied to the transcript before provider
+  // conversion; the compacted view is ephemeral (never persisted).
+  const messages = await compactChatMessages(opts.conversationId, opts.system, opts.messages, c.maxTokens).catch(
+    () => opts.messages,
+  );
+  const turnOpts = { ...opts, messages };
+  if (familyOf(c.provider) === "anthropic") return anthropicTurn(c, turnOpts);
+  if (c.provider === "openai-responses") return responsesTurn(c, turnOpts);
+  return openaiChatTurn(c, turnOpts);
 };
 
 type TurnOpts = Parameters<StreamTurn>[0];

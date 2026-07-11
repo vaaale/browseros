@@ -22,6 +22,9 @@ function scriptedProvider(turns: TurnScript[]): StreamTurn {
   };
 }
 
+// The scripted-turn callbacks in these tests take the loop's stream opts; the
+// added conversationId field is unused by them, so no test body changes.
+
 function openGate(): ToolGateConfig {
   return { allow: new Set(), deferred: new Set(), registryIds: new Set(), descriptions: {} };
 }

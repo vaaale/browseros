@@ -15,9 +15,9 @@ import {
   X,
 } from "lucide-react";
 import type { PipelinePhase, Specification, SpecTreeNode } from "@/lib/specs/types";
-import { AssistantChat } from "@/components/agent/AssistantChat";
+import { AssistantChatV2 } from "@/components/agent/v2/AssistantChatV2";
 import { ResizeHandle } from "@/components/apps/ResizeHandle";
-import { BuildStudioAgentTools } from "./AgentTools";
+import { buildStudioSurfaceTools } from "./agent-tools-v2";
 
 const LEFT_W_KEY = "bos.buildStudio.leftWidth";
 const RIGHT_W_KEY = "bos.buildStudio.rightWidth";
@@ -223,6 +223,14 @@ export default function BuildStudioApp() {
     }
   }, [activePath, draft, activeBranch, loadTree]);
 
+  // Surface tools the build-studio agent can call to drive this app. Memoized so
+  // the handler bindings are stable across renders (AssistantChatV2 (re)registers
+  // them when the array identity changes).
+  const buildStudioTools = useMemo(
+    () => buildStudioSurfaceTools({ onOpen: openFile, onRefresh: loadTree }),
+    [openFile, loadTree],
+  );
+
   const activeSpec = activeFeature ? specByPath.get(activeFeature) : undefined;
   const loading = Boolean(activePath) && loadedKey !== activeKey;
 
@@ -390,19 +398,17 @@ export default function BuildStudioApp() {
       <ResizeHandle getWidth={() => rightWidth} setWidth={setRightWidth} min={340} max={820} invert />
 
       {/* Right (resizable): the Build Studio agent chat with its own (build-studio)
-          conversation list; the info panel is hidden ("the assistant minus its info
-          panel"). The agent can drive this app via BuildStudioAgentTools (rendered
-          inside the chat's provider so it is callable by the build-studio agent). */}
+          conversation list. The agent drives this app via surface tools —
+          declarations ride on each run start; handlers are dispatched back to
+          this mounted surface by the server run loop. */}
       <aside style={{ width: rightWidth }} className="flex shrink-0 flex-col border-l border-white/10">
-        <AssistantChat
+        <AssistantChatV2
           agentId={buildStudioAgent}
           showConversations
           conversationsInToolbar
-          showInfo={false}
           initialLabel="Describe a feature to build, or ask me to refine the selected spec."
-        >
-          <BuildStudioAgentTools onOpen={openFile} onRefresh={loadTree} />
-        </AssistantChat>
+          tools={buildStudioTools}
+        />
       </aside>
     </div>
   );

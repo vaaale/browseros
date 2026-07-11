@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { CheckCircle2, Loader2 } from "lucide-react";
 import { CardScopeProvider } from "@/lib/agent/card-collapse";
-import { useConversations, useActiveConversation, newConversation } from "@/lib/agent/conversations";
+import { useConversations, useActiveConversation, newConversation, selectConversation } from "@/lib/agent/conversations";
 import { DEFAULT_AGENT_ID } from "@/lib/agent/agent-ids";
 import { useOSStore } from "@/store/os-provider";
 import { chatFontCss } from "@/os/chat-fonts";
@@ -16,6 +16,7 @@ import type { ToolDeclaration } from "@/lib/assistant/tools";
 import { MessageListV2 } from "./MessageListV2";
 import { ChatInputV2 } from "./ChatInputV2";
 import { FrontendToolsV2 } from "./FrontendToolsV2";
+import { InfoPanelV2 } from "./InfoPanelV2";
 
 // The embeddable Assistant, v2 — server-owned runs. Same surface API as the
 // CopilotKit-era AssistantChat (agentId / showConversations / allGroups /
@@ -33,6 +34,8 @@ export interface SurfaceTool {
 export interface AssistantChatV2Props {
   agentId?: string;
   showConversations?: boolean;
+  /** Show the right-hand info panel (tools / skills / MCP). */
+  showInfo?: boolean;
   initialLabel?: string;
   /** Assistant mode: all conversation groups + agent selector. */
   allGroups?: boolean;
@@ -65,13 +68,22 @@ export function AssistantChatV2(props: AssistantChatV2Props) {
     if (conversationId) void openConversation(conversationId);
   }, [conversationId]);
 
-  // A fresh embed with no conversations yet gets its first one.
+  // Ensure this agent has an active conversation: select the most recent one, or
+  // create the first if the agent has none. (activeByAgent does not auto-fall
+  // back to an existing conversation, so without this the chat would hang with
+  // no conversation selected.)
   useEffect(() => {
-    if (conv.loaded && !conv.activeId && conv.conversations.length === 0) {
-      const t = setTimeout(() => void newConversation(resolvedAgentId), 0);
-      return () => clearTimeout(t);
-    }
-  }, [conv.loaded, conv.activeId, conv.conversations.length, resolvedAgentId]);
+    if (!conv.loaded || conv.activeId) return;
+    const t = setTimeout(() => {
+      if (conv.conversations.length > 0) {
+        const newest = [...conv.conversations].sort((a, b) => b.createdAt - a.createdAt)[0];
+        void selectConversation(newest.id);
+      } else {
+        void newConversation(resolvedAgentId);
+      }
+    }, 0);
+    return () => clearTimeout(t);
+  }, [conv.loaded, conv.activeId, conv.conversations, resolvedAgentId]);
 
   const ensureConversation = useCallback(() => newConversation(resolvedAgentId), [resolvedAgentId]);
 
@@ -132,6 +144,7 @@ export function AssistantChatV2(props: AssistantChatV2Props) {
             ensureConversation={ensureConversation}
           />
         </div>
+        {props.showInfo && <InfoPanelV2 agentId={resolvedAgentId} />}
       </div>
     </CardScopeProvider>
   );

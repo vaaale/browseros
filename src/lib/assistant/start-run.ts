@@ -8,6 +8,7 @@ import { assistantTools } from "./registry";
 import { gateFor } from "./gate";
 import type { AssistantTool, ToolDeclaration } from "./tools";
 import { composeHooks, globalRunHooks, type RunHooks } from "./hooks";
+import { titleHook } from "./title-hook";
 import { composeInstructions } from "@/lib/agent/instructions";
 import { getConversationActiveFeatureBranch } from "@/lib/agent/conversations-server";
 import { getConfigValue } from "@/lib/config/registry";
@@ -85,7 +86,7 @@ export async function startAssistantRun(opts: StartRunOptions): Promise<Run> {
   const [gate, timeoutMs] = await Promise.all([gateFor(opts.agentId), toolTimeoutMs()]);
 
   const hooks = composeHooks(
-    [featureBranchHook, ...globalRunHooks(), ...(opts.hooks ?? [])],
+    [featureBranchHook, titleHook, ...globalRunHooks(), ...(opts.hooks ?? [])],
     (msg) => logger().error("assistant.hooks", msg),
   );
 
