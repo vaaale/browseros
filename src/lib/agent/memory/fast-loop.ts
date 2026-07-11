@@ -5,7 +5,7 @@ import { hostPath } from "@/os/vfs";
 import { logger } from "@/lib/logging";
 import { runToolLoop, type LlmTool } from "@/lib/agent/llm";
 import { hasCredentials } from "@/lib/agent/provider";
-import { patchSkill, getSkill, listSkills } from "@/lib/agent/skills/store";
+import { patchSkill, getSkill } from "@/lib/agent/skills/store";
 import { touchSkill } from "@/lib/agent/skills/usage";
 import { ensureSystemJob, type HandlerRunResult } from "@/lib/scheduler/engine";
 import type { JobDefinition } from "@/lib/scheduler/types";
@@ -259,9 +259,13 @@ function extractSkillsUsed(messages: AnyMessage[]): string[] {
       if (!c || typeof c !== "object") continue;
       const call = c as { name?: unknown; toolName?: unknown; input?: unknown; arguments?: unknown };
       const name = String(call.name ?? call.toolName ?? "");
-      if (name === "skill_use" || name === "skill_read" || name === "skill_view" || name === "skill_run") {
-        const input = (call.input ?? call.arguments ?? {}) as Record<string, unknown>;
-        const id = String(input.id ?? input.skillId ?? input.name ?? "").trim();
+      if (name === "skill_load" || name === "skill_read_file" || name === "skill_use" || name === "skill_read" || name === "skill_view" || name === "skill_run") {
+        let input = (call.input ?? call.arguments ?? {}) as Record<string, unknown>;
+        // Tool-call arguments are often a JSON string on the transcript.
+        if (typeof input === "string") {
+          try { input = JSON.parse(input) as Record<string, unknown>; } catch { input = {}; }
+        }
+        const id = String(input.skill ?? input.id ?? input.skillId ?? input.name ?? "").trim();
         if (id) ids.add(id);
       }
     }
@@ -571,16 +575,19 @@ async function reviewSlice(
   const skillsMechanical = extractSkillsUsed(slice);
   const transcript = renderSlice(slice);
 
-  // The existing-skill index: skill_patch may ONLY target one of these ids, so
-  // the model can't hallucinate/patch a skill that doesn't exist (which produced
-  // the "skill not found" warning). Empty ⇒ skill_patch is unavailable.
-  const skills = await listSkills().catch(() => []);
-  const skillIndex = skills.length
+  // Patchable skills = the skills actually loaded in this conversation, shown
+  // WITH their full body. This fixes both skill_patch failure modes: the model
+  // can only reference a real, in-session id (no "skill not found"), and it can
+  // copy an EXACT `find` substring from the body (no "search text not found").
+  const usedSkills = (await Promise.all(skillsMechanical.map((id) => getSkill(id).catch(() => null)))).filter(
+    (s): s is NonNullable<typeof s> => s != null,
+  );
+  const skillIndex = usedSkills.length
     ? [
-        "Existing skills you may patch (skill_patch `id` MUST be exactly one of these — never invent or guess an id):",
-        ...skills.map((s) => `- ${s.id}: ${s.name}`),
+        "Skills loaded in this conversation — the ONLY skills you may patch. `skill_patch` `id` MUST be one of these, and `find` MUST be an EXACT substring copied verbatim from the body shown below:",
+        ...usedSkills.map((s) => `\n### ${s.id}: ${s.name}\n${s.content}`),
       ].join("\n")
-    : "No skills exist yet — do NOT call skill_patch.";
+    : "No skills were loaded in this conversation — do NOT call skill_patch.";
 
   const prompt = [
     `Conversation: ${conv.title || conv.id}`,
