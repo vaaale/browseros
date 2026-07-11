@@ -131,10 +131,14 @@ export default function BuildStudioApp() {
 
   const loadTree = useCallback(() => {
     fetch("/api/specs")
-      .then((r) => r.json())
+      .then(async (r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return (await r.json()) as SpecsResponse;
+      })
       .then((res: SpecsResponse) => {
         setTree(res.tree ?? []);
         setSpecs(res.specs ?? []);
+        setError(""); // clear any stale load error (e.g. from a cold-start miss) on success
       })
       .catch(() => setError("Could not load specs."));
   }, []);
