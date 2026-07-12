@@ -21,6 +21,14 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ runId: stri
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
       let closed = false;
+      // subscribe() replays past events SYNCHRONOUSLY before it returns — if the
+      // run already finished, that replay includes run_finished, whose `send`
+      // calls `close`, which calls `unsubscribe` — all before the `const
+      // unsubscribe = subscribe(...)` assignment below could complete. A plain
+      // `const` there is a TDZ crash on every attach/reconnect to an
+      // already-finished run (i.e. exactly the common case for a run that
+      // failed fast). Pre-bind a no-op so `close` always has something to call.
+      let unsubscribe: () => void = () => undefined;
       const close = () => {
         if (closed) return;
         closed = true;
@@ -42,7 +50,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ runId: stri
         }
         if (e.type === "run_finished") close();
       };
-      const unsubscribe = runManager().subscribe(run, since, send);
+      unsubscribe = runManager().subscribe(run, since, send);
       // A finished run has already replayed everything subscribe() had.
       if (run.status !== "running") close();
       req.signal.addEventListener("abort", close, { once: true });
