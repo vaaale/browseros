@@ -14,6 +14,7 @@ import type { AssistantTool, ToolContext } from "../../tools";
 import { serverTool, schema, p } from "./util";
 import { getProviderConfig, DEFAULT_MAX_TOKENS } from "@/lib/agent/provider";
 import { familyOf, normalizeApiBase } from "@/lib/agent/provider-meta";
+import { describeCatalogForPrompt } from "@/apps/ui-preview/catalog-schema";
 
 // a2ui_render (013-build-studio-agentic V2): a server tool that runs a
 // constrained sub-agent to produce a validated A2UI v0.9 operations envelope,
@@ -29,21 +30,28 @@ import { familyOf, normalizeApiBase } from "@/lib/agent/provider-meta";
 const DEFAULT_SURFACE_ID = "dynamic-surface";
 const RENDER_TOOL = RENDER_A2UI_TOOL_DEF.function;
 
-// The basic catalog's component names (src/apps/ui-preview renders via
-// `@copilotkit/a2ui-renderer`'s basicCatalog — kept in sync with
-// react-renderer/a2ui-react/catalog/basic/index in that package).
-const BASIC_CATALOG_COMPONENTS =
-  "Text, Image, Icon, Video, AudioPlayer, Row, Column, List, Card, Tabs, Divider, Modal, Button, TextField, CheckBox, ChoicePicker, Slider, DateTimeInput";
+// Full per-component prop schema (name, type, required/optional, description),
+// derived at call time from the SAME zod schemas src/apps/ui-preview/catalog.tsx
+// renders with (src/apps/ui-preview/catalog-schema.ts) — not a hand-maintained
+// name list. A bare name list left the sub-agent guessing prop shapes, which
+// visibly failed on anything with real structure (Tabs' array-of-objects,
+// ChoicePicker's options/value pairing, ...); this can't drift out of sync
+// since there is nothing here to hand-edit.
+function bosDesignContext(): string {
+  return `## Available components (A2UI v0.9 basic catalog)
+Use ONLY the components below — do not invent others. Each field is shown as
+\`name: type\` (or \`name?: type\` if optional) with its real meaning. Any field
+may ALSO be bound to live data via \`{"path": "/some/pointer"}\` or a function
+call via \`{"call": "name", "args": {...}}\` instead of a literal value — but for
+a static mockup, just pass literal values as shown.
 
-const BOS_DESIGN_CONTEXT = `## Available components (A2UI v0.9 basic catalog)
-${BASIC_CATALOG_COMPONENTS}
-
-Do not invent components outside this list.
+${describeCatalogForPrompt()}
 
 ## BOS design constraints
 - Dark theme only — assume a dark host background.
 - Dense UI: prefer compact spacing over generous whitespace.
 - Keep the same surfaceId across iterations of the same design so updates replace it in place.`;
+}
 
 async function invokeSubagent(prompt: string, signal: AbortSignal): Promise<Record<string, unknown> | null> {
   const c = await getProviderConfig();
@@ -92,7 +100,7 @@ async function renderA2UI(input: Record<string, unknown>, ctx: ToolContext): Pro
   const surfaceId = String(input.surfaceId ?? "").trim() || DEFAULT_SURFACE_ID;
 
   const basePrompt = buildSubagentPrompt({
-    contextPrompt: `${BOS_DESIGN_CONTEXT}\n\n## Request\nSurface id: ${surfaceId}\nIntent: ${intent}\n${description}`,
+    contextPrompt: `${bosDesignContext()}\n\n## Request\nSurface id: ${surfaceId}\nIntent: ${intent}\n${description}`,
   });
 
   const result = await runA2UIGenerationWithRecovery({

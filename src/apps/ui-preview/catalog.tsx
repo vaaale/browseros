@@ -1,28 +1,9 @@
 "use client";
 
 import React, { useId, useState } from "react";
-import { createCatalog, type CatalogDefinitions, type CatalogRenderers } from "@copilotkit/a2ui-renderer";
+import { createCatalog, type CatalogRenderers } from "@copilotkit/a2ui-renderer";
 import { BASIC_CATALOG_ID } from "@ag-ui/a2ui-toolkit";
-import {
-  TextApi,
-  ImageApi,
-  IconApi,
-  VideoApi,
-  AudioPlayerApi,
-  RowApi,
-  ColumnApi,
-  ListApi,
-  CardApi,
-  TabsApi,
-  ModalApi,
-  DividerApi,
-  ButtonApi,
-  TextFieldApi,
-  CheckBoxApi,
-  ChoicePickerApi,
-  SliderApi,
-  DateTimeInputApi,
-} from "@a2ui/web_core/v0_9/basic_catalog";
+import { CATALOG_DEFINITIONS } from "./catalog-schema";
 
 // BOS-styled A2UI v0.9 catalog (013-build-studio-agentic V2). `@copilotkit/a2ui-renderer`'s
 // default `basicCatalog` is an unstyled reference implementation (white cards, 1px gray
@@ -190,28 +171,7 @@ interface ResolvedDateTimeInputProps {
   max?: string;
 }
 
-const definitions = {
-  Text: { props: TextApi.schema },
-  Image: { props: ImageApi.schema },
-  Icon: { props: IconApi.schema },
-  Video: { props: VideoApi.schema },
-  AudioPlayer: { props: AudioPlayerApi.schema },
-  Row: { props: RowApi.schema },
-  Column: { props: ColumnApi.schema },
-  List: { props: ListApi.schema },
-  Card: { props: CardApi.schema },
-  Tabs: { props: TabsApi.schema },
-  Modal: { props: ModalApi.schema },
-  Divider: { props: DividerApi.schema },
-  Button: { props: ButtonApi.schema },
-  TextField: { props: TextFieldApi.schema },
-  CheckBox: { props: CheckBoxApi.schema },
-  ChoicePicker: { props: ChoicePickerApi.schema },
-  Slider: { props: SliderApi.schema },
-  DateTimeInput: { props: DateTimeInputApi.schema },
-} satisfies CatalogDefinitions;
-
-const renderers: CatalogRenderers<typeof definitions> = {
+const renderers: CatalogRenderers<typeof CATALOG_DEFINITIONS> = {
   Text: ({ props }) => {
     const p = props as unknown as ResolvedTextProps;
     const text = p.text ?? "";
@@ -567,4 +527,4 @@ const renderers: CatalogRenderers<typeof definitions> = {
 };
 
 /** BOS's dark-themed A2UI v0.9 catalog — pass to `<A2UIProvider catalog={bosA2UICatalog}>`. */
-export const bosA2UICatalog = createCatalog(definitions, renderers, { catalogId: BASIC_CATALOG_ID });
+export const bosA2UICatalog = createCatalog(CATALOG_DEFINITIONS, renderers, { catalogId: BASIC_CATALOG_ID });
