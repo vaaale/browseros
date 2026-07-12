@@ -1,12 +1,12 @@
-// Adapter → CopilotKit action dispatcher.
+// Adapter → assistant-tool naming + invocation helpers, shared by the server
+// tool registry (src/lib/assistant/tools/server/integrations.ts) and the
+// capabilities registry. Framework-free (no react, no server-only) — the
+// actual adapter call happens over HTTP via
+// `/api/integrations/[id]/services/[serviceId]/invoke`, so the browser bundle
+// (client-side tool-metadata reads) stays free of Node/Google APIs.
 //
-// Framework-free (no react, no server-only) — safe to import from client code
-// that mounts CopilotKit actions. The actual adapter call happens over HTTP
-// via `/api/integrations/[id]/services/[serviceId]/invoke`, so the browser
-// bundle stays free of Node/Google APIs.
-//
-// One CopilotKit action per adapter method. Naming convention (see
-// docs/dev/integrations.md and capabilities-registry.ts):
+// One tool per adapter method. Naming convention (see docs/dev/integrations.md
+// and capabilities-registry.ts):
 //
 //   <serviceId>_<object>_<verb>   (snake_case)
 //   e.g. gmail_messages_list, drive_files_list, calendar_events_create
@@ -21,28 +21,14 @@
 // unions in each adapter's `*-methods.ts`).
 //
 // Scope gating is done in TWO places:
-//   - Client: `available` on the action reflects the effective-scope set so
-//     the LLM only sees actions it can actually invoke.
+//   - Tool visibility: the capabilities registry's allowlist/deferred gating
+//     means the LLM only sees tools it's allowed to use.
 //   - Server: the invoke route re-checks scopes via ServiceAdapter.withScope
-//     (defence-in-depth; the client flag is presentation, not authorization).
-
-import type { AdapterMethodMeta, AdapterMethodParameter } from "./types";
+//     (defence-in-depth; tool visibility is presentation, not authorization).
 
 /**
- * A CopilotKit-shaped parameter descriptor. We keep this locally-typed rather
- * than importing from @copilotkit/shared to avoid making this file client-only
- * (server code — including tests — also imports the metadata utilities here).
- */
-export interface CopilotActionParameter {
-  name: string;
-  type: "string" | "number" | "boolean" | "object" | "string[]" | "number[]" | "boolean[]" | "object[]";
-  description: string;
-  required?: boolean;
-}
-
-/**
- * Build the CopilotKit action name for an adapter method. Kept in one place so
- * the client (action registration) and server (invoke route routing) agree.
+ * Build the assistant tool name for an adapter method. Kept in one place so
+ * the tool registry, the capabilities registry, and the invoke route agree.
  *
  * The integrationId argument is accepted for callsite documentation (which
  * integration this action belongs to) but intentionally not embedded in the
@@ -54,59 +40,6 @@ export function actionNameFor(
   method: string,
 ): string {
   return `${serviceId}_${method}`;
-}
-
-/**
- * Translate a param-metadata entry into the CopilotKit action parameter shape
- * expected by `useCopilotAction`.
- */
-export function toCopilotParameter(p: AdapterMethodParameter): CopilotActionParameter {
-  return {
-    name: p.name,
-    type: p.type,
-    description: p.description,
-    required: p.required ?? false,
-  };
-}
-
-/**
- * Describes what a UI-side dispatcher will register with CopilotKit. React
- * lives on the caller side (see `IntegrationActions.tsx`) so this file
- * remains framework-free and unit-testable.
- */
-export interface AdapterActionDescriptor {
-  name: string;
-  description: string;
-  parameters: CopilotActionParameter[];
-  /** Full scope URL required for this action to be effective. */
-  scope: string;
-  /** Method id — used by the invoke route to look up the adapter method. */
-  method: string;
-  integrationId: string;
-  serviceId: string;
-}
-
-export interface BuildDescriptorsInput {
-  integrationId: string;
-  serviceId: string;
-  methods: readonly AdapterMethodMeta[];
-}
-
-/**
- * Convert a bundle of adapter method metadata into a list of CopilotKit
- * action descriptors. `IntegrationActions.tsx` walks the returned list and
- * calls `useCopilotAction` once per entry.
- */
-export function buildAdapterActionDescriptors(input: BuildDescriptorsInput): AdapterActionDescriptor[] {
-  return input.methods.map((m) => ({
-    name: actionNameFor(input.integrationId, input.serviceId, m.method),
-    description: m.description,
-    parameters: m.parameters.map(toCopilotParameter),
-    scope: m.scope,
-    method: m.method,
-    integrationId: input.integrationId,
-    serviceId: input.serviceId,
-  }));
 }
 
 /**

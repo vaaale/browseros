@@ -11,6 +11,10 @@
 // resolver, the Settings catalog, and the InfoPanel all read the same list.
 
 import { actionNameFor } from "@/lib/integrations/actions/dispatcher";
+import { GMAIL_METHOD_DESCRIPTORS } from "@/lib/integrations/services/gsuite/adapters/gmail-methods";
+import { DRIVE_METHOD_DESCRIPTORS } from "@/lib/integrations/services/gsuite/adapters/drive-methods";
+import { CALENDAR_METHOD_DESCRIPTORS } from "@/lib/integrations/services/gsuite/adapters/calendar-methods";
+import { CONTACTS_METHOD_DESCRIPTORS } from "@/lib/integrations/services/gsuite/adapters/contacts-methods";
 import { TELEGRAM_BOT_METHOD_DESCRIPTORS } from "@/lib/integrations/services/telegram/adapters/bot-methods";
 
 export type CapabilityContext = "action" | "tool" | "both";
@@ -22,12 +26,33 @@ export interface Capability {
   context: CapabilityContext;
 }
 
-const TELEGRAM_BOT_CAPABILITIES: Capability[] = TELEGRAM_BOT_METHOD_DESCRIPTORS.map((m) => ({
-  id: actionNameFor("telegram", "bot", m.method),
-  group: "Telegram",
-  context: "action",
-  description: m.description,
-}));
+// Integration capabilities are GENERATED from each service's adapter method
+// descriptors (the same descriptors that build the real tool/schema — see
+// src/lib/assistant/tools/server/integrations.ts) rather than hand-duplicated
+// here. A hand-written copy drifts: Gmail/Drive/Calendar/Contacts used to have
+// their own short, independently-written descriptions that no longer matched
+// what the tool actually sent to the model, so the description shown/editable
+// in Settings → Tools didn't reflect the real tool — and the LONG real
+// description was invisible until you'd already saved an override.
+function integrationCapabilities(
+  integrationId: string,
+  serviceId: string,
+  group: string,
+  descriptors: readonly { method: string; description: string }[],
+): Capability[] {
+  return descriptors.map((m) => ({
+    id: actionNameFor(integrationId, serviceId, m.method),
+    group,
+    context: "action",
+    description: m.description,
+  }));
+}
+
+const GMAIL_CAPABILITIES = integrationCapabilities("gsuite", "gmail", "Gmail", GMAIL_METHOD_DESCRIPTORS);
+const DRIVE_CAPABILITIES = integrationCapabilities("gsuite", "drive", "Google Drive", DRIVE_METHOD_DESCRIPTORS);
+const CALENDAR_CAPABILITIES = integrationCapabilities("gsuite", "calendar", "Google Calendar", CALENDAR_METHOD_DESCRIPTORS);
+const CONTACTS_CAPABILITIES = integrationCapabilities("gsuite", "contacts", "Google Contacts", CONTACTS_METHOD_DESCRIPTORS);
+const TELEGRAM_BOT_CAPABILITIES = integrationCapabilities("telegram", "bot", "Telegram", TELEGRAM_BOT_METHOD_DESCRIPTORS);
 
 // Tool naming standard: `subsystem_object_verb`, snake_case, one id per logical
 // operation. A "both" capability is a single id exposed on BOTH surfaces — the
@@ -146,43 +171,19 @@ export const CAPABILITIES: Capability[] = [
 
   // Integrations — one capability id per adapter method, following the pattern
   // `<serviceId>_<object>_<verb>` in snake_case (see actions/dispatcher.ts).
-  // Example: `gmail_messages_list`, `drive_files_list`.
+  // Example: `gmail_messages_list`, `drive_files_list`. GENERATED from each
+  // service's adapter method descriptors (see `integrationCapabilities` above)
+  // so the description shown/editable in Settings → Tools always matches the
+  // real tool description sent to the model — no hand-duplicated copy to drift.
   //
   // GROUPING: integration capabilities are grouped per external service (not
   // under a single "Integrations" bucket) so the Settings capability picker
   // stays scannable as more providers are added. Non-Google providers should
   // use their own service-name group.
-  { id: "gmail_messages_list", group: "Gmail", context: "action", description: "List Gmail messages." },
-  { id: "gmail_messages_get", group: "Gmail", context: "action", description: "Fetch a Gmail message by id." },
-  { id: "gmail_messages_send", group: "Gmail", context: "action", description: "Send a Gmail message." },
-  { id: "gmail_messages_reply", group: "Gmail", context: "action", description: "Reply in-thread to a Gmail message." },
-  { id: "gmail_messages_modify", group: "Gmail", context: "action", description: "Add or remove labels on a Gmail message." },
-  { id: "gmail_messages_trash", group: "Gmail", context: "action", description: "Move a Gmail message to Trash." },
-  { id: "gmail_messages_untrash", group: "Gmail", context: "action", description: "Restore a Gmail message from Trash." },
-  { id: "gmail_messages_search", group: "Gmail", context: "action", description: "Search Gmail with Google's operator syntax." },
-  { id: "gmail_messages_download_attachment", group: "Gmail", context: "action", description: "Download a Gmail attachment into /Documents/Emails in the VFS." },
-  { id: "gmail_labels_list", group: "Gmail", context: "action", description: "List Gmail labels." },
-  { id: "gmail_labels_get", group: "Gmail", context: "action", description: "Fetch a Gmail label by id." },
-  { id: "gmail_profile_get", group: "Gmail", context: "action", description: "Fetch the authenticated Gmail profile." },
-  { id: "drive_files_list", group: "Google Drive", context: "action", description: "List files in Google Drive." },
-  { id: "drive_files_get", group: "Google Drive", context: "action", description: "Fetch a Drive file's metadata by id." },
-  { id: "drive_files_search", group: "Google Drive", context: "action", description: "Search Drive with Google's query syntax." },
-  { id: "drive_files_download", group: "Google Drive", context: "action", description: "Download a Drive file's binary content (base64, size-capped)." },
-  { id: "drive_files_export", group: "Google Drive", context: "action", description: "Export a Google-native doc (Docs/Sheets/Slides) as PDF/CSV/text/etc." },
-  { id: "drive_folders_list", group: "Google Drive", context: "action", description: "List folders in Drive, optionally under a parent." },
-  { id: "drive_about_get", group: "Google Drive", context: "action", description: "Fetch the authenticated Drive profile + storage quota." },
-  { id: "calendar_calendars_list", group: "Google Calendar", context: "action", description: "List the user's calendars (primary + subscribed)." },
-  { id: "calendar_events_list", group: "Google Calendar", context: "action", description: "List events on a calendar within a time window." },
-  { id: "calendar_events_get", group: "Google Calendar", context: "action", description: "Fetch a single calendar event by id." },
-  { id: "calendar_events_create", group: "Google Calendar", context: "action", description: "Create a new calendar event." },
-  { id: "calendar_events_update", group: "Google Calendar", context: "action", description: "Patch fields on an existing calendar event." },
-  { id: "calendar_events_delete", group: "Google Calendar", context: "action", description: "Delete a calendar event." },
-  { id: "calendar_events_respond", group: "Google Calendar", context: "action", description: "RSVP to a calendar event (accept / decline / tentative)." },
-  { id: "calendar_events_move", group: "Google Calendar", context: "action", description: "Move an event from one calendar to another." },
-  { id: "calendar_freebusy_query", group: "Google Calendar", context: "action", description: "Query free/busy time ranges across calendars." },
-  { id: "contacts_contacts_list", group: "Google Contacts", context: "action", description: "List the user's contacts (People API connections)." },
-  { id: "contacts_contacts_get", group: "Google Contacts", context: "action", description: "Fetch a single contact by resourceName." },
-  { id: "contacts_contacts_search", group: "Google Contacts", context: "action", description: "Search contacts by free-text query." },
+  ...GMAIL_CAPABILITIES,
+  ...DRIVE_CAPABILITIES,
+  ...CALENDAR_CAPABILITIES,
+  ...CONTACTS_CAPABILITIES,
   ...TELEGRAM_BOT_CAPABILITIES,
 ];
 
