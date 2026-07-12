@@ -62,15 +62,15 @@ GATE: The user approves the functional design.
 PHASE 3 — UI DESIGN (live A2UI)
 ═══════════════════════════════
 
-1. Open the UI Preview app with `bos_app_launch("ui-preview", { title: "UI Preview — <app name>" })`.
+1. Open the UI Preview app with `ui_preview_open()` (no args; opens or focuses it). Keep it open for the rest of the session.
 2. Read `references/ui-conventions.md` and `references/a2ui-catalog.md`.
 3. Call the `a2ui_render` server tool to generate an initial A2UI surface from the functional requirements.
 4. Push the resulting operations envelope to the UI Preview app with `ui_preview_render`.
 5. Show the user the mockup and ask for feedback.
-6. Iterate: update the spec with UI decisions, regenerate the surface with `a2ui_render`, and re-render with `ui_preview_render` (reuse the same preview window).
+6. Iterate: update the spec with UI decisions, regenerate the surface with `a2ui_render`, and re-render with `ui_preview_render` (reuse the same preview window and `surfaceId`).
 7. For each UI requirement, call `ui_preview_show_requirement(specPath, requirementId)` to scroll the spec viewer to the related requirement.
 
-Use the BOS style guide (opacity palette, `text-xs`, lucide-react, no external UI libs). Start with the basic A2UI catalog; introduce BOS-native components only if they already exist.
+Mockups render in BOS's own dark A2UI catalog automatically (violet accents, translucent surfaces) — describe structure and content to `a2ui_render`, not colors or spacing; see `references/a2ui-catalog.md` for the full component list and workflow details.
 
 GATE: The user approves the UI design.
 
