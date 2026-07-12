@@ -46,8 +46,8 @@ export const GMAIL_METHOD_DESCRIPTORS: readonly GmailMethodDescriptor[] = [
       "List Gmail message ids for the authenticated user. Optional Gmail search `query` (e.g. 'is:unread newer_than:7d'), `labelIds`, `maxResults`, and `pageToken`.",
     parameters: [
       { name: "query", type: "string", description: "Gmail search query. Same syntax as the Gmail search box.", required: false },
-      { name: "labelIds", type: "string[]", description: "Filter by label id (e.g. INBOX, STARRED).", required: false },
-      { name: "maxResults", type: "number", description: "Max results per page (default 100, cap 500).", required: false },
+      { name: "labelIds", type: "string[]", description: "Filter by label id e.g. INBOX, STARRED.", required: false },
+      { name: "maxResults", type: "number", description: "Max results per page. default 100, cap 500.", required: false },
       { name: "pageToken", type: "string", description: "Next page token from a previous call.", required: false },
       { name: "includeSpamTrash", type: "boolean", description: "Include SPAM and TRASH.", required: false },
     ],
