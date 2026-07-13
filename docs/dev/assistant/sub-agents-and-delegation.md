@@ -38,43 +38,98 @@ Ephemeral agents run without being persisted.
 
 ---
 
-## Routing (`subagents/runner.ts`)
+## Routing: two different engines depending on who's calling (025-agent-delegation-v2)
 
-`runSubAgent(agent, task, { onEvent?, contentOnly?, featureBranch?, interactive? })`:
+There are now two distinct entry points into `runSubAgent(agent, task, opts)`
+(`subagents/runner.ts`), and only one of them still uses that function at all:
 
-- **`type:"local"`** → `runLocal` → `runToolLoop` (`llm.ts`) with the configured
-  provider and the agent's tools. A local agent holding repo‑scoped dev tools gets a
-  larger step budget (`DEV_MAX_STEPS = 40`) and its files are `git add`‑ed afterward
-  as a backstop. Errors are returned, not thrown. `featureBranch`/`interactive` are
-  forwarded to a nested `dev_delegate` so escalated dev work stays on the
-  same feature branch.
-- **`type:"claude"`** → `runClaudeAgent` (`claude-runner.ts`). **No local fallback**
-  — development is Claude‑only by design.
+- **Chat-initiated delegation** — the `agent_delegate` / `dev_delegate` tools
+  (`src/lib/assistant/tools/server/subagents.ts`, `dev-delegate.ts`) called by a
+  live assistant run — does **not** go through `runSubAgent`. It goes through
+  `src/lib/assistant/tools/server/delegate-common.ts`'s `delegateToAgent()`,
+  which branches on `agent.type`:
+  - **`type:"local"`** → `delegate-local.ts`'s `runLocalDelegation()` →
+    `src/lib/assistant/inner-loop.ts`'s `runInnerLoop()` — a **second invocation
+    of the exact same `runAgentLoop`** the primary run uses (blank in-memory
+    transcript, same tools/timeout/`awaitFrontendResult` as the parent run, see
+    `docs/dev/assistant/overview.md`). This replaced the old `runToolLoop`
+    (`llm.ts`) path entirely for chat delegation.
+  - **`type:"claude"`** → `runClaudeAgent` (`claude-runner.ts`), unchanged — see
+    below.
+  A depth guard (`checkDelegationDepth`, `MAX_DELEGATE_DEPTH = 2`) rejects a
+  delegation nested more than two inner loops deep, uniformly across every
+  delegation kind, and logs the rejection (`assistant.delegate`).
+- **Non-chat / headless callers** — the workflow runner, scheduler executor, the
+  Telegram agent router, and `/api/subagents/delegate` — have no live `Run` or
+  `ToolContext` to share, so they still call `runSubAgent()` directly.
+  `runSubAgent`'s `type:"local"` branch is `runner.ts`'s own `runLocalHeadless()`,
+  which *also* now runs a real `runAgentLoop` (not `runToolLoop`) — built with a
+  synthetic headless `runId`, an always-open `AbortController`, and
+  `awaitFrontendResult` hard-wired to `{kind:"timeout"}` (there is no browser to
+  dispatch a frontend tool call to). It imports `agent-loop.ts`/`registry.ts`/
+  `gate.ts`/`model-turn.ts` **dynamically** to avoid a real circular dependency
+  (`registry.ts → subagents.ts → delegate-common.ts → runner.ts → registry.ts`).
+  `type:"claude"` still goes to `runClaudeAgent`, same as the chat path.
 
-`onEvent` streams `{ tool, input }` events live (used by `/api/subagents/delegate`).
-`featureBranch` drives source-edit ownership — see below.
+Three delegation **kinds** share the same `runInnerLoop` primitive and only
+differ in how their gate/system-prompt are resolved
+(`src/lib/assistant/delegation-gate.ts`):
+- **named** — a persisted `data/agents/<id>/AGENT.md` agent (`agent_delegate`/
+  `dev_delegate` by id), gate = `gateFor(agentId)`.
+- **ephemeral** — a one-off agent whose name/description/systemPrompt/tools are
+  supplied inline in the `agent_delegate` call itself, never persisted.
+- **surface** — a window-scoped delegate an open app registers for its own
+  lifetime (e.g. UI Preview's "Generative UI Agent", `src/apps/ui-preview/
+  index.tsx` + `src/lib/assistant/client/surface-agents.ts`'s
+  `registerSurfaceAgent()`), discoverable via `find_agent`/`agent_list` only
+  while that window stays open, scoped to that surface's own tools
+  (`ui_preview_render`, etc.). A surface agent's derived id is checked against
+  the persisted roster at registration time (client-side, primary check) and
+  again at run-start (`start-run.ts`'s server-side backstop) — either
+  collision is logged (`assistant.surface-agents`) and the surface agent is
+  dropped, never silently merged with a same-named persisted agent.
+
+`onEvent` streams `{ tool, input }` events live in both paths (used by
+`/api/subagents/delegate` for headless callers; forwarded as nested
+tool-call/tool-result events for the chat path — see
+[Actions & tools](actions-and-tools.md)'s `nested-events.ts`/`NestedEventList`
+rendering). `featureBranch` still drives source-edit ownership for the
+`type:"claude"` path — see below.
+
+Every delegation's start/finish is logged to `assistant.delegate` (kind,
+agentId, depth, steps, reason — never the task string or tool
+arguments/results), queryable in Settings → Logs, filterable by `component` and
+`conversation`.
 
 ---
 
-## Tools a sub-agent may use (`subagents/tools.ts`)
+## Tools a sub-agent may use
 
-- **`SUBAGENT_TOOLS`** (default, safe): `file_list`, `file_read`, `file_write`,
-  `file_mkdir` (the **VFS**), `web_fetch`, `web_search`, the skill tools
-  (`skill_list` / `skill_load` / `skill_read_file`), and scheduler tools.
-- **`DEV_TOOLS`** (repo‑scoped, **opt‑in** — an agent must list these ids in its
-  `tools`):
-  - `bos_source_list` / `bos_source_read` / `bos_source_search` via
-    `src/lib/dev/repo-fs.ts` — **read‑only, jailed to the repo root** (reads deny
-    `.env*`/`.git`/`node_modules`/`.next`). Source *writes* were removed: only the
-    Claude/OpenCode dev harness edits BOS source, via its own native file tools.
-  - `dev_git_status` via `src/lib/system/git.ts`.
-- **`run_command`** (sandboxed exec) is injected **per delegated run** (not a static
-  DEV_TOOL) with a `(browser‑session, agent)` sandbox key — see
-  [Command Execution](../run-command/run-command.md). `delegate_to_developer` →
-  `dev_delegate` is likewise built per run.
+`subagents/tools.ts` (the old `SUBAGENT_TOOLS`/`DEV_TOOLS`/`toolsFor()` split)
+was retired — there is now **one** tool registry
+(`src/lib/assistant/registry.ts`) shared by the primary run and every
+delegation kind. What a given agent may call is just its resolved **gate**
+(`src/lib/assistant/gate.ts`'s `gateFor(agentId)` / `gateFromAgent(agent)`):
+the intersection of the agent's own `tools`/`deferredTools` ids against that
+registry, plus Settings description overrides. An ephemeral delegation's gate
+(`ephemeralDelegationGate`) is filtered further to **server-execution-only**
+tools (no frontend/Tier-2 tools — there's no dedicated UI surface for an
+ephemeral agent to dispatch them against).
 
-`toolsFor(allowed?)` returns `SUBAGENT_TOOLS` when no allowlist is given — **never**
-the dev tools implicitly.
+- The dev-only tools formerly in `DEV_TOOLS` still exist, just as ordinary
+  registry entries an agent opts into via its `tools` list: `bos_source_list` /
+  `bos_source_read` / `bos_source_search` (`src/lib/assistant/tools/server/
+  dev-source.ts`, via `src/lib/dev/repo-fs.ts` — read‑only, jailed to the repo
+  root) and `dev_git_status`.
+- `run_command` (sandboxed exec) and `dev_delegate` are still built **per run**
+  (not static registry entries) with a `(browser‑session, agent)` sandbox key
+  — see [Command Execution](../run-command/run-command.md).
+- An agent id that lists a tool id **not** in the registry is never silently
+  dropped: `unresolvedToolIds()` flags it, `gateFor`/`gateFromAgent` logs a
+  warning (`assistant.agents`), and Settings → Agents surfaces it per-agent
+  (`GET /api/subagents`'s `unresolvedToolIds` field) so a stale reference (e.g.
+  a tool renamed or removed since the agent's `AGENT.md` was last edited) is
+  visible instead of just quietly doing nothing.
 
 ---
 
@@ -121,11 +176,14 @@ build‑gate, and staging are harness‑agnostic.
   **Supervisor** and the caller supplied a validated active `featureBranch`
   (`bos/<kebab-name>`). There is no in-place fallback: the harness must edit an
   isolated feature-branch worktree or fail without applying changes.
-- The branch is resolved **server-side**, not exposed as an LLM tool parameter. Chat
-  delegation sends the current conversation id only so `/api/subagents/delegate` can
-  load that conversation's `activeFeatureBranch`. Automation may pass
-  `featureBranch` directly to trusted server APIs. If no branch resolves, the route
-  returns an error before Claude/OpenCode/MCP is spawned.
+- The branch is resolved **server-side**, not exposed as an LLM tool parameter.
+  Chat delegation (`delegate-common.ts`) resolves it in-process from the
+  delegating tool call's own `ctx.conversationId` via
+  `getConversationActiveFeatureBranch()` — never a parameter the model can set.
+  Headless callers going through `/api/subagents/delegate` resolve it the same
+  way from the conversation id in the request body. Automation may pass
+  `featureBranch` directly to trusted server APIs. If no branch resolves, an
+  in-band error is returned before Claude/OpenCode/MCP is spawned.
 - It calls `supervisorBegin(featureBranch)` to provision (or **resume**) the
   isolated preview worktree (+ data clone), points the dev harness's `cwd` there,
   runs, then calls `supervisorBuild(featureBranch)` to build + health-gate the

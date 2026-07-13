@@ -147,6 +147,19 @@ export const CAPABILITIES: Capability[] = [
   { id: "workflow_export", group: "Workflows", context: "action", description: "Return a workflow's full JSON." },
   { id: "workflow_validate", group: "Workflows", context: "action", description: "Validate a workflow's DAG." },
 
+  // Scheduler (025-agent-delegation-v2, Phase 4 — ported natively into v2's
+  // registry; these existed only in the legacy engine before, so no agent's
+  // allowlist could reference them from the main/primary personality).
+  { id: "list_scheduled_tasks", group: "Scheduler", context: "tool", description: "List scheduled jobs." },
+  { id: "get_scheduled_task", group: "Scheduler", context: "tool", description: "Get a scheduled job by id, including its recent execution history." },
+  { id: "create_scheduled_task", group: "Scheduler", context: "tool", description: "Create a new scheduled job." },
+  { id: "update_scheduled_task", group: "Scheduler", context: "tool", description: "Update a scheduled job's fields." },
+  { id: "update_task_schedule", group: "Scheduler", context: "tool", description: "Update just the schedule of a job, leaving other fields unchanged." },
+  { id: "pause_scheduled_task", group: "Scheduler", context: "tool", description: "Pause a scheduled job. Its nextRunAt is cleared until resumed." },
+  { id: "resume_scheduled_task", group: "Scheduler", context: "tool", description: "Resume a paused job and recalculate its next run time." },
+  { id: "delete_scheduled_task", group: "Scheduler", context: "tool", description: "Delete a scheduled job." },
+  { id: "run_task_now", group: "Scheduler", context: "tool", description: "Run a scheduled job immediately, regardless of its schedule." },
+
   // Specs (one id per op, used by the main chat and delegated sub-agents).
   { id: "spec_list", group: "Specs", context: "both", description: "List spec artifacts under a store." },
   { id: "spec_read", group: "Specs", context: "both", description: "Read a spec artifact." },
@@ -160,6 +173,7 @@ export const CAPABILITIES: Capability[] = [
   { id: "buildstudio_artifact_open", group: "Build Studio", context: "action", description: "Open a spec artifact in the Build Studio viewer." },
   { id: "buildstudio_artifact_highlight", group: "Build Studio", context: "action", description: "Scroll (centered) to a heading/section anchor in the open Build Studio artifact and highlight the whole section until the user clicks it." },
   { id: "buildstudio_tree_refresh", group: "Build Studio", context: "action", description: "Reload the Build Studio spec tree." },
+  { id: "buildstudio_run_tests", group: "Build Studio", context: "action", description: "Run the Playwright e2e tests for a feature and write test-results.md to its spec folder." },
 
   // UI Preview (013-build-studio-agentic V2). Tier 1 (ui_preview_open) is a
   // global frontend tool declared in frontend-declarations.ts; Tier 2 tools

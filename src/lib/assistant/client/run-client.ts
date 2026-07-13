@@ -25,6 +25,7 @@ import {
   onSurfaceToolsChanged,
   type FrontendToolHandler,
 } from "./surface-tools";
+import { getActiveSurfaceAgents, onSurfaceAgentsChanged, type SurfaceAgentEntry } from "./surface-agents";
 
 export type { FrontendToolHandler };
 
@@ -66,10 +67,43 @@ async function flushSurfaceTools(runId: string): Promise<void> {
   await lastPushPromise;
 }
 
+async function pushSurfaceAgents(runId: string, agents: SurfaceAgentEntry[]): Promise<void> {
+  await fetch(`/api/assistant/runs/${encodeURIComponent(runId)}/surface-agents`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ agents }),
+  }).catch(() => undefined);
+}
+
+// Mirrors flushSurfaceTools exactly (025-agent-delegation-v2, FR-010's
+// "live-pushed mid-run"): a window can register its surface agent DURING an
+// active run (e.g. ui_preview_open mounts UI Preview, which also registers
+// its "Generative UI Agent"), so without this the new agent wouldn't be
+// delegatable until the conversation's NEXT run.
+let lastPushedSurfaceAgentsKey = "";
+let lastAgentsPushPromise: Promise<void> = Promise.resolve();
+async function flushSurfaceAgents(runId: string): Promise<void> {
+  const agents = getActiveSurfaceAgents();
+  const key = agents
+    .map((a) => a.id)
+    .sort()
+    .join(",");
+  if (key === lastPushedSurfaceAgentsKey) {
+    await lastAgentsPushPromise;
+    return;
+  }
+  lastPushedSurfaceAgentsKey = key;
+  lastAgentsPushPromise = pushSurfaceAgents(runId, agents);
+  await lastAgentsPushPromise;
+}
+
 // Background path: something registers/unregisters surface tools with no
 // tool call in flight (e.g. the user closes a window by hand mid-run).
 onSurfaceToolsChanged(() => {
   for (const runId of attached) void flushSurfaceTools(runId);
+});
+onSurfaceAgentsChanged(() => {
+  for (const runId of attached) void flushSurfaceAgents(runId);
 });
 
 export function registerFrontendTool(name: string, handler: FrontendToolHandler): () => void {
@@ -106,6 +140,7 @@ function dispatchFrontendCall(runId: string, e: Extract<RunEvent, { type: "tool_
     await new Promise((r) => requestAnimationFrame(r));
     await new Promise((r) => requestAnimationFrame(r));
     await flushSurfaceTools(runId);
+    await flushSurfaceAgents(runId);
     await postToolResult(runId, e.callId, result);
   });
 }
@@ -218,6 +253,10 @@ export async function sendMessage(
   const byName = new Map(getActiveSurfaceToolDeclarations().map((d) => [d.name, d]));
   for (const d of opts?.surfaceTools ?? []) byName.set(d.name, d);
   const surfaceTools = [...byName.values()];
+  // Every currently-open app window's surface agent rides on the run start the
+  // same way (025-agent-delegation-v2); mid-run registrations are covered by
+  // flushSurfaceAgents above.
+  const surfaceAgents = getActiveSurfaceAgents();
 
   const res = await fetch("/api/assistant/runs", {
     method: "POST",
@@ -228,6 +267,7 @@ export async function sendMessage(
       message,
       editOfMessageId: opts?.editOfMessageId,
       surfaceTools: surfaceTools.length ? surfaceTools : undefined,
+      surfaceAgents: surfaceAgents.length ? surfaceAgents : undefined,
       attachments: opts?.attachments,
     }),
   }).catch((e) => ({ ok: false, status: 0, json: async () => ({ error: (e as Error).message }) }) as unknown as Response);

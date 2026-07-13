@@ -49,6 +49,25 @@ export interface Run {
    *  app window and its Tier 2 surface tools become available, instead of
    *  only taking effect on the conversation's NEXT run. */
   tools: Record<string, AssistantTool>;
+  /** 025-agent-delegation-v2: this run's resolved server-tool timeout, set
+   *  once at run start. A delegation's inner loop reuses this SAME value for
+   *  its own nested runAgentLoop invocation (no separate Settings knob). */
+  toolTimeoutMs: number;
+  /** 025-agent-delegation-v2: currently-registered surface agents for THIS
+   *  run, keyed by derived id — parallels `tools` (snapshotted at run start,
+   *  live-pushed mid-run, additive-only). */
+  agents: Map<string, SurfaceAgentEntry>;
+}
+
+/** A window-scoped surface agent as seen by a run (025-agent-delegation-v2).
+ *  `toolNames` names entries already present in `run.tools`. */
+export interface SurfaceAgentEntry {
+  id: string;
+  windowId: string;
+  name: string;
+  description: string;
+  systemPrompt: string;
+  toolNames: string[];
 }
 
 export class RunManager {
@@ -73,6 +92,8 @@ export class RunManager {
       abort: new AbortController(),
       pendingFrontend: new Map(),
       tools: {},
+      toolTimeoutMs: 0,
+      agents: new Map(),
     };
     this.runs.set(run.id, run);
     this.byConversation.set(conversationId, run.id);
@@ -180,6 +201,17 @@ export class RunManager {
   addSurfaceTools(run: Run, declarations: ToolDeclaration[]): void {
     for (const d of declarations) {
       if (d?.name && !run.tools[d.name]) run.tools[d.name] = { ...d, execution: "frontend" };
+    }
+  }
+
+  /** Merge newly-available surface agents into a LIVE run (025-agent-
+   *  delegation-v2), mirroring addSurfaceTools exactly: additive-only, never
+   *  overwrites an existing entry, so a window unregistering mid-run does not
+   *  retroactively remove its surface agent from an ALREADY-attached run —
+   *  the same accepted limitation surface tools already have. */
+  addSurfaceAgents(run: Run, agents: SurfaceAgentEntry[]): void {
+    for (const a of agents) {
+      if (a?.id && !run.agents.has(a.id)) run.agents.set(a.id, a);
     }
   }
 }

@@ -132,7 +132,9 @@ results for model consumption.
 Entry points:
 
 - `web_search` — main chat action in `src/components/agent/WebSearchActions.tsx`;
-  same id as the sub-agent tool in `src/lib/agent/subagents/tools.ts`.
+  same id as the server tool in `src/lib/assistant/tools/server/web-search.ts`
+  (the single registry shared by the primary run and every delegation kind —
+  see [Sub-agents & delegation](sub-agents-and-delegation.md)).
 - API route: `POST /api/web-search` in `src/app/api/web-search/route.ts`.
 
 Constraints:

@@ -1,5 +1,5 @@
 import "server-only";
-import { runManager, ActiveRunError, type Run } from "./run-manager";
+import { runManager, ActiveRunError, type Run, type SurfaceAgentEntry } from "./run-manager";
 import { runAgentLoop } from "./agent-loop";
 import { streamModelTurn } from "./model-turn";
 import { e2eScriptedTurn } from "./e2e-provider";
@@ -13,6 +13,7 @@ import { composeHooks, globalRunHooks, type RunHooks } from "./hooks";
 import { composeInstructions } from "@/lib/agent/instructions";
 import { getConversationActiveFeatureBranch } from "@/lib/agent/conversations-server";
 import { getConfigValue } from "@/lib/config/registry";
+import { listSubAgents } from "@/lib/agent/subagents/store";
 import { logger } from "@/lib/logging";
 
 // Glue between the HTTP routes and the framework-free run core: builds the
@@ -31,9 +32,41 @@ export interface StartRunOptions {
   attachments?: Attachment[];
   /** Frontend tools contributed by the starting surface for THIS run. */
   surfaceTools?: ToolDeclaration[];
+  /** Window-scoped surface agents active at run start (025-agent-delegation-v2). */
+  surfaceAgents?: SurfaceAgentEntry[];
   /** Per-run interception hooks (in-process starters only; composed with the
    *  global registry). */
   hooks?: RunHooks[];
+}
+
+/** Snapshot surface agents into `run.agents`, dropping (with a log — FR-023's
+ *  backstop) any whose derived id collides with a PERSISTED agent created
+ *  *after* the client's own registration-time check already passed (the one
+ *  race that check cannot see). This is a backstop, not the primary
+ *  mechanism — `client/surface-agents.ts`'s registration-time check is. */
+async function addSurfaceAgentsWithBackstop(run: Run, agents: SurfaceAgentEntry[]): Promise<void> {
+  if (agents.length === 0) return;
+  const persistedIds = new Set((await listSubAgents().catch(() => [])).map((a) => a.id));
+  const accepted: SurfaceAgentEntry[] = [];
+  for (const a of agents) {
+    if (persistedIds.has(a.id)) {
+      logger().log({
+        level: "warn",
+        component: "assistant.surface-agents",
+        conversation: run.conversationId,
+        msg: "surface agent dropped at run start: persisted-id collision",
+        data: {
+          runId: run.id,
+          conversationId: run.conversationId,
+          windowId: a.windowId,
+          id: a.id,
+        },
+      });
+      continue;
+    }
+    accepted.push(a);
+  }
+  runManager().addSurfaceAgents(run, accepted);
 }
 
 // The conversation's active feature branch is surfaced to the model as prompt
@@ -89,6 +122,8 @@ export async function startAssistantRun(opts: StartRunOptions): Promise<Run> {
   manager.addSurfaceTools(run, opts.surfaceTools ?? []);
 
   const [gate, timeoutMs] = await Promise.all([gateFor(opts.agentId), toolTimeoutMs()]);
+  run.toolTimeoutMs = timeoutMs;
+  await addSurfaceAgentsWithBackstop(run, opts.surfaceAgents ?? []);
 
   const hooks = composeHooks(
     [featureBranchHook, ...globalRunHooks(), ...(opts.hooks ?? [])],

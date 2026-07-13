@@ -135,15 +135,29 @@ This is the most complex subsystem, with multiple sub-components:
 **Capability Groups:** OS, Web, Files, Config, Agents, Memory, Skills, Scratchpad, MCP, Apps, Dev, Docs, Workflows, Specs, Build Studio, Gmail, Google Drive, Google Calendar, Google Contacts, Telegram.
 
 #### 7.3 Sub-agents (Delegation)
+
+Definitions (`subagents/store.ts`, `types.ts`, `markdown.ts`) and the Claude
+dev-harness runner (`subagents/claude-runner.ts`) still live under
+`src/lib/agent/subagents/`, but chat-initiated delegation itself
+(`agent_delegate`/`dev_delegate`) now runs through the **unified assistant
+engine** in `src/lib/assistant/` — see
+[Sub-agents & delegation](assistant/sub-agents-and-delegation.md) for the full
+model (named/ephemeral/surface delegation kinds, the shared `runInnerLoop`
+primitive, the depth guard, and the single tool gate that replaced
+`subagents/tools.ts`, which was retired).
+
 | File | Responsibility |
 |------|---------------|
 | `subagents/store.ts` | Agent definitions |
 | `subagents/types.ts` | Agent type definitions |
-| `subagents/runner.ts` | Sub-agent execution |
-| `subagents/claude-runner.ts` | Claude Code runner |
-| `subagents/tools.ts` | Sub-agent tool definitions |
+| `subagents/runner.ts` | `runSubAgent` — headless-caller entry point only (workflows, scheduler, Telegram, `/api/subagents/delegate`); its `type:"local"` branch (`runLocalHeadless`) runs a real `runAgentLoop` |
+| `subagents/claude-runner.ts` | Claude Code runner (unchanged; used by both chat and headless delegation) |
 | `subagents/markdown.ts` | Agent.md parsing |
 | `subagent-events.ts` | Event streaming |
+| `assistant/inner-loop.ts` | The shared delegation execution primitive (a second `runAgentLoop` invocation) + depth guard |
+| `assistant/delegation-gate.ts` | Resolves each delegation kind's tool gate + system prompt |
+| `assistant/tools/server/delegate-common.ts`, `delegate-local.ts`, `dev-delegate.ts` | `agent_delegate`/`dev_delegate` tool implementations |
+| `assistant/client/surface-agents.ts` | Window-scoped surface-agent registry (client-side) |
 
 #### 7.4 Memory System
 | File | Responsibility |

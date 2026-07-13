@@ -29,10 +29,16 @@ Developer.
 - **Spec model** — `src/lib/specs/types.ts` (framework-free) and
   `src/lib/specs/pipeline.ts` (iterates stores; derives per-feature pipeline status, parses
   `tasks.md` progress, and `nextFeatureId()` for `NNN-slug` numbering within a store).
-- **Tools** — `SPEC_TOOLS` (`list_specs/read_spec/write_spec/edit_spec/search_specs/read_template/list_templates`) in
-  `src/lib/agent/subagents/tools.ts`, opt-in like `DEV_TOOLS`. Plus `delegate_to_developer`,
-  built per-run in `runLocal` (`subagents/runner.ts`) so it forwards the parent event
-  stream (nested-agent UI) and guards nesting depth.
+- **Tools** — `spec_list`/`spec_read`/`spec_write`/`spec_edit`/`spec_search`/
+  `spec_template_read`/`spec_template_list`, natively implemented in
+  `src/lib/assistant/tools/server/specs.ts` (over `specfs` directly — the old
+  `SPEC_TOOLS`/`subagents/tools.ts` indirection was retired,
+  025-agent-delegation-v2), opt-in like any other registry tool. Each call
+  resolves the active feature branch per-conversation
+  (`getConversationActiveFeatureBranch(ctx.conversationId)`). Plus
+  `dev_delegate` (`src/lib/assistant/tools/server/dev-delegate.ts`), built
+  per-run so it forwards the parent event stream (nested-agent UI) and guards
+  nesting depth — see [Sub-agents & delegation](assistant/sub-agents-and-delegation.md).
 - **Agent** — seeded in `subagents/store.ts` `DEFAULTS` (local; thin prompt;
   `tools` = spec tools + `delegate_to_developer`). Back-filled additively on upgraded
   installs (only when missing).

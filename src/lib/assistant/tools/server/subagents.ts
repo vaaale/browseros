@@ -2,29 +2,40 @@ import "server-only";
 import type { AssistantTool } from "../../tools";
 import { serverTool, schema, p } from "./util";
 import { listSubAgents, getAgent, createSubAgent } from "@/lib/agent/subagents/store";
-import { runSubAgent } from "@/lib/agent/subagents/runner";
 import type { Agent } from "@/lib/agent/subagents/types";
-import { getConversationActiveFeatureBranch } from "@/lib/agent/conversations-server";
-import { encodeNested } from "@/lib/agent/nested-events";
+import { runManager } from "../../run-manager";
+import { delegateToAgent, delegateToSurfaceAgent } from "./delegate-common";
 
 // Delegation tools (ported from SubAgentActions.tsx): list/create agents and
-// delegate a task. agent_delegate runs the sub-agent IN-PROCESS via runSubAgent,
-// forwarding its live tool events to ctx.onEvent (nested-event cards + idle-
-// timeout resets) and returning the same "[agent · type] N step(s)\n\n<output>"
-// + encodeNested payload the old NDJSON handler produced, so tool cards render
-// the nested event tree. The feature branch is resolved server-side from the
-// conversation (never a model-visible parameter). Elicitations (dev_branch_request,
-// agent_request_claude) stay frontend tools.
+// delegate a task. agent_delegate's branching (type: "claude" via runSubAgent,
+// unaffected by 025-agent-delegation-v2 per FR-024(a); type: "local" — named
+// or ephemeral — via the new inner-loop path; window-scoped surface agents,
+// US-4) lives in delegate-common.ts, shared with dev_delegate
+// (delegate-common.ts / dev-delegate.ts). The feature branch is resolved
+// server-side from the conversation (never a model-visible parameter).
+// Elicitations (dev_branch_request, agent_request_claude) stay frontend tools.
 
 export function subAgentTools(): Record<string, AssistantTool> {
   return {
     agent_list: serverTool(
       "agent_list",
-      "List available sub-agents (id, name, type local|claude, description) you can delegate to.",
+      "List available agents (id, name, type local|claude, description, scope) you can delegate to, including window-scoped surface agents from currently-open app windows.",
       schema(),
-      async () => {
-        const agents = await listSubAgents();
-        return JSON.stringify(agents.map((a) => ({ id: a.id, type: a.type, description: a.description })));
+      async (_input, ctx) => {
+        const run = runManager().get(ctx.runId);
+        const persisted = (await listSubAgents()).map((a) => ({
+          id: a.id,
+          type: a.type as string,
+          description: a.description,
+          scope: "persisted" as const,
+        }));
+        const surface = [...(run?.agents.values() ?? [])].map((a) => ({
+          id: a.id,
+          type: "local",
+          description: a.description,
+          scope: "surface" as const,
+        }));
+        return JSON.stringify([...persisted, ...surface]);
       },
     ),
 
@@ -55,10 +66,10 @@ export function subAgentTools(): Record<string, AssistantTool> {
 
     agent_delegate: serverTool(
       "agent_delegate",
-      "Delegate a task to a sub-agent. Provide an existing 'agent' id/name, OR an 'ephemeral' agent spec to create-and-run a one-off agent. Use a Claude agent (type 'claude') for ALL development tasks; Local otherwise.",
+      "Delegate a task to an agent. Provide an existing 'agent' id/name (a persisted agent OR a window-scoped surface agent from an open app), OR an 'ephemeral' agent spec to create-and-run a one-off agent. Use a Claude agent (type 'claude') for ALL development tasks; Local otherwise.",
       schema(
         {
-          agent: p.str("Existing sub-agent id/name (optional if ephemeral)"),
+          agent: p.str("Existing agent id/name — persisted or a currently-registered surface agent (optional if ephemeral)"),
           task: p.str("The task to perform"),
           ephemeralName: p.str("For a one-off agent: its name"),
           ephemeralType: p.str("'local' or 'claude'"),
@@ -73,11 +84,11 @@ export function subAgentTools(): Record<string, AssistantTool> {
       async (input, ctx) => {
         const task = String(input.task ?? "");
         if (!task) return "Error: agent_delegate: task is required.";
+        const contentOnly = input.contentOnly === true;
 
-        let def: Agent | undefined;
         if (input.ephemeralName && input.ephemeralSystemPrompt) {
           const name = String(input.ephemeralName);
-          def = {
+          const def: Agent = {
             id: name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "ephemeral",
             name,
             description: "",
@@ -86,33 +97,22 @@ export function subAgentTools(): Record<string, AssistantTool> {
             subagentType: input.ephemeralSubagentType ? String(input.ephemeralSubagentType) : undefined,
             ephemeral: true,
           };
-        } else if (input.agent) {
-          def = await getAgent(String(input.agent));
-        }
-        if (!def) return `Error: agent_delegate: no sub-agent "${input.agent}" and no ephemeral spec provided.`;
-
-        const contentOnly = input.contentOnly === true;
-        const featureBranch = await getConversationActiveFeatureBranch(ctx.conversationId).catch(() => undefined);
-        if (def.type === "claude" && !contentOnly && !featureBranch) {
-          return "Error: agent_delegate: the Developer harness requires an active feature branch. Call dev_branch_request to set one up (it prompts the user for a name), then retry the delegation.";
+          return delegateToAgent(def, true, task, ctx, contentOnly, "agent_delegate");
         }
 
-        const result = await runSubAgent(def, task, {
-          onEvent: (ev) => ctx.onEvent(ev),
-          contentOnly,
-          featureBranch,
-          interactive: true,
-        });
-        if (result.error && !result.output) return `Error: agent_delegate: ${result.error}`;
-        const output = result.output || result.error || "";
-        const summary = `[${result.agent} · ${result.type}] ${result.steps} step(s)\n\n${output}`;
-        return (
-          summary +
-          encodeNested({
-            events: (result.toolCalls ?? []).map((t) => ({ tool: t.tool, input: t.input })),
-            output,
-          })
-        );
+        if (input.agent) {
+          const idOrName = String(input.agent);
+          // Resolution order (FR-022): the persisted roster ALWAYS wins over
+          // a surface agent — a surface agent may never shadow a persisted one.
+          const named = await getAgent(idOrName);
+          if (named) return delegateToAgent(named, false, task, ctx, contentOnly, "agent_delegate");
+
+          const run = runManager().get(ctx.runId);
+          const surfaceAgent = run?.agents.get(idOrName.toLowerCase());
+          if (surfaceAgent) return delegateToSurfaceAgent(surfaceAgent, task, ctx, "agent_delegate");
+        }
+
+        return `Error: agent_delegate: no agent "${input.agent}" and no ephemeral spec provided.`;
       },
     ),
   };
