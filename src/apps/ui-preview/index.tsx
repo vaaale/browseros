@@ -33,7 +33,7 @@ interface HistoryEntry {
 }
 
 function UIPreviewSurface({ windowId, pushOpsRef }: { windowId: string; pushOpsRef: React.MutableRefObject<PushOps | null> }) {
-  const { processMessages, getSurface } = useA2UI();
+  const { processMessages, getSurface, clearSurfaces } = useA2UI();
   // Bridge `processMessages` up to the provider-level onAction handler (which
   // can't call useA2UI itself).
   useEffect(() => {
@@ -46,11 +46,19 @@ function UIPreviewSurface({ windowId, pushOpsRef }: { windowId: string; pushOpsR
 
   const onRender = useCallback(
     (id: string, operations: Record<string, unknown>[]) => {
+      // A `ui_preview_generate` render carries a `createSurface` op. If a
+      // surface with that id already exists (a SECOND generate in the same
+      // session — "start over"), createSurface throws "already exists" and the
+      // whole render is silently dropped. Clear first so a regenerate actually
+      // replaces the mockup. Patches (no createSurface) must NOT clear — they
+      // upsert into the live surface and rely on its existing data model.
+      const isCreate = operations.some((op) => op && typeof op === "object" && "createSurface" in op);
+      if (isCreate) clearSurfaces();
       setSurfaceId(id);
       processMessages(operations);
       setHistory((prev) => [...prev, { at: Date.now(), summary: `${operations.length} op(s) on "${id}"` }].slice(-MAX_HISTORY));
     },
-    [processMessages],
+    [processMessages, clearSurfaces],
   );
 
   const onShowRequirement = useCallback((requirementId: string) => {
