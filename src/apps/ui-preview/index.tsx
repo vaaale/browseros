@@ -9,18 +9,17 @@ import { uiPreviewSurfaceTools } from "./agent-tools-v2";
 import { bosA2UICatalog } from "./catalog";
 
 // 025-agent-delegation-v2 (Example 2, US-4): a distinct, focused prompt for
-// the surface agent itself — NOT the full A2UI catalog description dump
-// a2ui_render's own internal sub-agent prompt uses. This one just needs to
-// know its two tools and its job.
+// the surface agent itself. Its two tools each generate AND render in one call
+// (025-ui-preview-a2ui-tools), so it never has to remember a separate push step.
 const GENERATIVE_UI_AGENT_PROMPT =
-  "You are a specialist in designing and iterating on A2UI mockups for BrowserOS apps, working inside an already-open UI Preview window. Call a2ui_render to generate a validated A2UI operations envelope from a natural-language description, then call ui_preview_render to push it to the live surface (reuse the same surfaceId across iterations unless asked to start a new one). Keep iterating based on the task's instructions until the mockup matches what was asked for, then summarize what you built in plain text.";
+  "You are a specialist in designing and iterating on UI mockups for BrowserOS apps, working inside an already-open UI Preview window. To create a new mockup (or start over), call ui_preview_generate with a natural-language description — it generates and renders it in one step. To change the mockup that is already showing, call ui_preview_patch with a description of just the change (add/replace/remove an element); it reads the current mockup itself, so don't restate the whole design. Keep iterating until the mockup matches what was asked for, then summarize what you built in plain text.";
 
 // Design-time A2UI surface host (013-build-studio-agentic V2). The Build
 // Studio agent opens this window during the UI-design phase of a bos-app
-// session, pushes A2UI v0.9 operations to it via `ui_preview_render`, and the
-// user watches the mockup evolve. This is a design surface only — the
-// Developer later implements the real app as React components; nothing here
-// is ever shipped.
+// session and iterates a mockup on it via `ui_preview_generate`/
+// `ui_preview_patch`, and the user watches it evolve. This is a design surface
+// only — the Developer later implements the real app as React components;
+// nothing here is ever shipped.
 
 const DEFAULT_SURFACE_ID = "dynamic-surface";
 const MAX_HISTORY = 20;
@@ -31,7 +30,7 @@ interface HistoryEntry {
 }
 
 function UIPreviewSurface({ windowId }: { windowId: string }) {
-  const { processMessages } = useA2UI();
+  const { processMessages, getSurface } = useA2UI();
   const [surfaceId, setSurfaceId] = useState(DEFAULT_SURFACE_ID);
   const [activeRequirement, setActiveRequirement] = useState("");
   const [history, setHistory] = useState<HistoryEntry[]>([]);
@@ -50,20 +49,38 @@ function UIPreviewSurface({ windowId }: { windowId: string }) {
     if (requirementId) setActiveRequirement(requirementId);
   }, []);
 
-  const tools = useMemo(() => uiPreviewSurfaceTools({ onRender, onShowRequirement }), [onRender, onShowRequirement]);
+  // Serialize the current live surface into the `{ id, component, ...props }`
+  // operation shape so ui_preview_patch can hand the sub-agent the real
+  // component tree (real ids) rather than a prose description of it.
+  const getCurrentSurface = useCallback(() => {
+    const surface = getSurface(surfaceId);
+    const components: Record<string, unknown>[] = [];
+    const entries = surface?.componentsModel?.entries as IterableIterator<[string, { id: string; type: string; properties?: Record<string, unknown> }]> | undefined;
+    if (entries) {
+      for (const [, cm] of entries) {
+        components.push({ id: cm.id, component: cm.type, ...(cm.properties ?? {}) });
+      }
+    }
+    return { surfaceId, components };
+  }, [getSurface, surfaceId]);
+
+  const tools = useMemo(
+    () => uiPreviewSurfaceTools({ onRender, onShowRequirement, getCurrentSurface }),
+    [onRender, onShowRequirement, getCurrentSurface],
+  );
   useEffect(() => registerAppSurfaceTools(windowId, tools), [windowId, tools]);
 
-  // 025-agent-delegation-v2: register this window's surface agent — a
-  // delegate persona scoped to a2ui_render/ui_preview_render, discoverable
-  // via find_agent/agent_list only while this window stays open.
+  // 025-agent-delegation-v2: register this window's surface agent — a delegate
+  // persona scoped to this window's own generate/patch tools, discoverable via
+  // find_agent/agent_list only while this window stays open.
   useEffect(() => {
     let cleanup: (() => void) | undefined;
     let cancelled = false;
     void registerSurfaceAgent(windowId, {
       name: "Generative UI Agent",
-      description: "Specialist in rendering and iterating on live A2UI mockups in this UI Preview window.",
+      description: "Specialist in generating and iterating on live UI mockups in this UI Preview window.",
       systemPrompt: GENERATIVE_UI_AGENT_PROMPT,
-      toolNames: ["a2ui_render", "ui_preview_render"],
+      toolNames: ["ui_preview_generate", "ui_preview_patch"],
     }).then((unregister) => {
       if (cancelled) unregister();
       else cleanup = unregister;

@@ -179,9 +179,9 @@ export const CAPABILITIES: Capability[] = [
   // global frontend tool declared in frontend-declarations.ts; Tier 2 tools
   // are registered by the UI Preview window itself while it is open.
   { id: "ui_preview_open", group: "UI Preview", context: "action", description: "Open or focus the UI Preview window." },
-  { id: "ui_preview_render", group: "UI Preview", context: "action", description: "Push A2UI operations to the open UI Preview surface." },
+  { id: "ui_preview_generate", group: "UI Preview", context: "action", description: "Generate a UI mockup from a natural-language description and render it in the open UI Preview window (one step)." },
+  { id: "ui_preview_patch", group: "UI Preview", context: "action", description: "Incrementally change the mockup showing in the UI Preview window (add/replace/remove an element) from a natural-language instruction." },
   { id: "ui_preview_show_requirement", group: "UI Preview", context: "action", description: "Scroll the paired spec viewer to a requirement from the UI Preview." },
-  { id: "a2ui_render", group: "UI Preview", context: "action", description: "Generate a validated A2UI operations envelope from a natural-language UI description." },
 
   // Integrations — one capability id per adapter method, following the pattern
   // `<serviceId>_<object>_<verb>` in snake_case (see actions/dispatcher.ts).

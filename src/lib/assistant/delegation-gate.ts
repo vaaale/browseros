@@ -37,7 +37,7 @@ export function ephemeralDelegationGate(parentGate: ToolGateConfig, tools: Recor
 
 /** Surface agent: exactly the app-declared `toolNames`, immediately visible
  *  (FR-007). `registryIds`/`descriptions` are reused from the parent's gate —
- *  a "real" registered capability (e.g. a2ui_render) needs to be in `allow` to
+ *  a "real" registered capability (e.g. ui_preview_generate) needs to be in `allow` to
  *  pass visibleTools()'s check, which it is; a Tier-2 tool never added to
  *  CAPABILITIES bypasses the allow-check entirely, same as it does today for
  *  the primary personality (FR-025). */

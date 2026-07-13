@@ -16,9 +16,9 @@ tools:
   - buildstudio_tree_refresh
   - buildstudio_run_tests
   - ui_preview_open
-  - ui_preview_render
+  - ui_preview_generate
+  - ui_preview_patch
   - ui_preview_show_requirement
-  - a2ui_render
   - dev_branch_request
   - web_view
   - bos_app_launch

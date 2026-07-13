@@ -29,7 +29,7 @@ const windowTools = new Map<string, SurfaceTool[]>();
 // Notified whenever the registered set changes, so run-client.ts can push the
 // updated declarations to any run it's currently attached to — otherwise a
 // window opened DURING a run (e.g. ui_preview_open, then wanting
-// ui_preview_render in the same turn) would only gain its tools on the
+// ui_preview_generate in the same turn) would only gain its tools on the
 // conversation's NEXT run, since surfaceTools is otherwise a send-time snapshot.
 type ChangeListener = () => void;
 const changeListeners = new Set<ChangeListener>();

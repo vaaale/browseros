@@ -1,6 +1,6 @@
 // Shared, framework-free schema definitions for BOS's A2UI catalog — the
 // single source of truth for both the client renderer (catalog.tsx, which
-// pairs these schemas with React implementations) and the a2ui_render
+// pairs these schemas with React implementations) and the A2UI
 // generation prompt (a2ui-render.ts, which derives a compact schema
 // reference from them so the sub-agent sees each component's REAL prop
 // shape instead of guessing from a bare name list). No "use client"/
@@ -136,7 +136,7 @@ function describeType(t: AnySchema, depth = 0): string {
 }
 
 /** A compact, always-in-sync textual schema reference for every catalog
- *  component, for embedding in the a2ui_render generation prompt. Derives
+ *  component, for embedding in the A2UI generation prompt. Derives
  *  directly from the same zod schemas the renderer uses — never
  *  hand-duplicated, so it can't drift the way a hardcoded name-only list
  *  (or a hand-written schema copy) would. */

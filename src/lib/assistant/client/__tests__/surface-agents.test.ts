@@ -39,13 +39,13 @@ export async function testTwoWindowsSameNameGetDisambiguatedIds(): Promise<void>
       name: "Generative UI Agent",
       description: "d1",
       systemPrompt: "p1",
-      toolNames: ["a2ui_render"],
+      toolNames: ["ui_preview_generate"],
     });
     await registerSurfaceAgent("win-b", {
       name: "Generative UI Agent",
       description: "d2",
       systemPrompt: "p2",
-      toolNames: ["a2ui_render"],
+      toolNames: ["ui_preview_generate"],
     });
 
     const agents = getActiveSurfaceAgents();
