@@ -4,15 +4,17 @@ import OpenAI from "openai";
 import {
   RENDER_A2UI_TOOL_DEF,
   BASIC_CATALOG_ID,
-  A2UI_OPERATIONS_KEY,
+  MAX_A2UI_ATTEMPTS,
   buildSubagentPrompt,
-  runA2UIGenerationWithRecovery,
+  validateA2UIComponents,
+  augmentPromptWithValidationErrors,
   assembleOps,
-  wrapAsOperationsEnvelope,
+  type A2UIValidationError,
 } from "@ag-ui/a2ui-toolkit";
 import { getProviderConfig, DEFAULT_MAX_TOKENS } from "@/lib/agent/provider";
 import { familyOf, normalizeApiBase } from "@/lib/agent/provider-meta";
 import { describeCatalogForPrompt } from "@/apps/ui-preview/catalog-schema";
+import { logger } from "@/lib/logging";
 
 // A2UI generation service (025-ui-preview-a2ui-tools). Extracted from the old
 // `a2ui_render` tool: the LLM-driven generation of a validated A2UI v0.9
@@ -204,33 +206,64 @@ async function runGeneration(params: {
     contextPrompt: `${bosDesignContext()}\n\n## Request\nSurface id: ${surfaceId}\nIntent: ${intent}\n${description}${stateBlock}`,
   });
 
-  const result = await runA2UIGenerationWithRecovery({
-    basePrompt,
-    invokeSubagent: (prompt) => invokeSubagent(prompt, signal),
-    buildEnvelope: (args) =>
-      wrapAsOperationsEnvelope(
-        assembleOps({
-          intent,
-          surfaceId: String(args.surfaceId ?? surfaceId) || surfaceId,
-          catalogId: BASIC_CATALOG_ID,
-          components: Array.isArray(args.components) ? (args.components as Record<string, unknown>[]) : [],
-          data: (args.data as Record<string, unknown>) ?? undefined,
-        }),
-      ),
-  });
+  // Own the validate→retry loop (instead of the toolkit's runA2UIGenerationWithRecovery)
+  // so validation matches how THIS tool works — see the two adjustments below.
+  // Both were causing correct designs to be rejected and retried to exhaustion:
+  //   1. A `ui_preview_patch` returns only the CHANGED components (an upsert into
+  //      the live surface). Validated alone, that delta spuriously fails `no_root`
+  //      and `unresolved_child` (its children live in the un-returned rest of the
+  //      tree). So for a patch we validate the delta OVERLAID on the current tree.
+  //   2. `validateBindings:false` — at design time the data model is empty, so
+  //      every `{path}` binding is legitimately "unresolved"; validating them
+  //      false-fails any interactive mockup.
+  let prompt = basePrompt;
+  let lastErrors: A2UIValidationError[] = [];
+  for (let attempt = 1; attempt <= MAX_A2UI_ATTEMPTS; attempt++) {
+    const args = await invokeSubagent(prompt, signal);
+    const returned = Array.isArray(args?.components) ? (args!.components as Record<string, unknown>[]) : [];
+    if (returned.length === 0) {
+      lastErrors = [{ code: "empty_components", path: "components", message: "The model returned no components." }];
+      prompt = augmentPromptWithValidationErrors(basePrompt, lastErrors);
+      continue;
+    }
+    const validationSet =
+      intent === "update" && currentComponents?.length ? mergeComponentsById(currentComponents, returned) : returned;
+    const { valid, errors } = validateA2UIComponents({ components: validationSet, validateBindings: false });
+    if (valid) {
+      const resolvedSurfaceId = String(args!.surfaceId ?? surfaceId) || surfaceId;
+      const operations = assembleOps({
+        intent,
+        surfaceId: resolvedSurfaceId,
+        catalogId: BASIC_CATALOG_ID,
+        components: returned,
+        data: (args!.data as Record<string, unknown>) ?? undefined,
+      }) as Record<string, unknown>[];
+      return { ok: true, surfaceId: resolvedSurfaceId, operations };
+    }
+    lastErrors = errors;
+    prompt = augmentPromptWithValidationErrors(basePrompt, errors);
+  }
 
-  if (!result.ok) {
-    return { ok: false, surfaceId, operations: [], error: "The UI generator could not produce a valid design for that request. Try rephrasing or simplifying it." };
-  }
-  let operations: Record<string, unknown>[] = [];
-  try {
-    const parsed = JSON.parse(result.envelope) as Record<string, unknown>;
-    const ops = parsed[A2UI_OPERATIONS_KEY];
-    operations = Array.isArray(ops) ? (ops as Record<string, unknown>[]) : [];
-  } catch {
-    return { ok: false, surfaceId, operations: [], error: "The UI generator returned a malformed result." };
-  }
-  return { ok: true, surfaceId, operations };
+  // Surface WHY it failed (was previously swallowed) — the per-attempt
+  // validation errors are the real signal for debugging a persistent failure.
+  logger().warn("assistant.a2ui", "a2ui generation failed after all attempts", {
+    intent,
+    surfaceId,
+    attempts: MAX_A2UI_ATTEMPTS,
+    errorCodes: [...new Set(lastErrors.map((e) => e.code))],
+    lastErrors: lastErrors.slice(0, 10).map((e) => ({ code: e.code, path: e.path, message: e.message })),
+  });
+  return { ok: false, surfaceId, operations: [], error: "The UI generator could not produce a valid design for that request. Try rephrasing or simplifying it." };
+}
+
+/** Overlay a patch's returned delta on the current tree (by id, delta wins) to
+ *  form a self-contained set to validate — so a partial patch's child/root
+ *  references resolve. */
+function mergeComponentsById(base: A2UIComponentSnapshot[], overlay: Record<string, unknown>[]): Record<string, unknown>[] {
+  const byId = new Map<string, Record<string, unknown>>();
+  for (const c of base) if (typeof c.id === "string") byId.set(c.id, c);
+  for (const c of overlay) if (typeof c.id === "string") byId.set(c.id, c);
+  return [...byId.values()];
 }
 
 /** Generate a fresh A2UI surface from a natural-language description. */
