@@ -45,7 +45,16 @@ export interface A2UIGenerationResult {
 // Full per-component prop schema derived at call time from the SAME zod schemas
 // src/apps/ui-preview/catalog.tsx renders with — see catalog-schema.ts.
 function bosDesignContext(): string {
-  return `## Available components (A2UI v0.9 basic catalog)
+  return `## What you are building
+You are composing an A2UI v0.9 component tree — NOT an HTML/CSS/JavaScript page.
+There is no <script>, no custom JavaScript, no CSS you control, no HTML tags.
+You may ONLY use the components listed below, and behavior ONLY works through the
+interactivity patterns in the "Interactivity" section — anything else (a
+"showStep() function", "vanilla JavaScript", "display:none", "localStorage") does
+not exist and is silently dropped. Build tabbed or multi-step UIs with the Tabs
+component, not with hidden divs.
+
+## Available components (A2UI v0.9 basic catalog)
 Use ONLY the components below — do not invent others. Each field is shown as
 \`name: type\` (or \`name?: type\` if optional) with its real meaning. Any field
 may ALSO be bound to live data via \`{"path": "/some/pointer"}\` or a function
@@ -75,8 +84,13 @@ Use these patterns whenever the request implies interaction:
   "Label: value" line, use a Row with a static label Text plus a second Text
   bound to the path.
 - **Links**: a Button action \`{"event": {"name": "openUrl", "context": {"url": "https://…"}}}\`.
-- **Tabs**: use the Tabs component for tabbed sections — clicking a tab header
-  already switches its content.
+- **Tabs / multi-step wizards**: use the Tabs component (one entry per tab, each
+  with its own \`child\`). Clicking a tab header switches it automatically. To make
+  a **"Next"/"Back" button move between tabs**, bind the Tabs' \`activeTab\` to a
+  data path and set \`activeTabPath\` to that same path, then give each button a
+  setData action pointing at it. Example:
+  \`{"id":"wizard","component":"Tabs","activeTab":{"path":"/step"},"activeTabPath":"/step","tabs":[{"title":"Register","child":"t0"},{"title":"Plan","child":"t1"},{"title":"Finish","child":"t2"}]}\`
+  and a Next button inside tab 0: \`"action":{"event":{"name":"setData","context":{"target":"/step","value":1}}}\` (Back would use value 0). Each button hardcodes the index of the tab it goes to.
 Only "setData" and "openUrl" action names are handled; do not invent other
 action names (they will do nothing).
 

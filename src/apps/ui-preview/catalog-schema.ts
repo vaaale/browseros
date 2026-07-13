@@ -1,7 +1,7 @@
 // Shared, framework-free schema definitions for BOS's A2UI catalog — the
 // single source of truth for both the client renderer (catalog.tsx, which
 // pairs these schemas with React implementations) and the A2UI
-// generation prompt (a2ui-render.ts, which derives a compact schema
+// generation prompt (src/lib/a2ui/service.ts, which derives a compact schema
 // reference from them so the sub-agent sees each component's REAL prop
 // shape instead of guessing from a bare name list). No "use client"/
 // "server-only" here so both sides can import it directly.
@@ -26,7 +26,23 @@ import {
   SliderApi,
   DateTimeInputApi,
 } from "@a2ui/web_core/v0_9/basic_catalog";
+import { DynamicNumberSchema, DynamicStringSchema } from "@a2ui/web_core/v0_9";
 import type { CatalogDefinitions } from "@copilotkit/a2ui-renderer";
+
+// 025-ui-preview-a2ui-tools: extend the stock Tabs with an OPTIONAL controlled
+// active-tab index bound to the data model, so a "Next"/"Back" Button (via a
+// setData action) can drive which tab is showing — real wizard navigation, not
+// just header clicks. Backward compatible: with neither field set, Tabs keeps
+// its internal header-click state. Uses web_core's own (zod v3) schemas so the
+// extended object stays one consistent ZodObject.
+const TabsSchema = TabsApi.schema.extend({
+  activeTab: DynamicNumberSchema.optional().describe(
+    'Optional zero-based index of the tab to show, usually bound to the data model, e.g. {"path":"/step"}. Set this to make Next/Back buttons control the tab.',
+  ),
+  activeTabPath: DynamicStringSchema.optional().describe(
+    'The data path activeTab is bound to (e.g. "/step"), so clicking a tab header also updates it. Set it to the same path as activeTab.',
+  ),
+});
 
 export const CATALOG_DEFINITIONS = {
   Text: { props: TextApi.schema },
@@ -38,7 +54,7 @@ export const CATALOG_DEFINITIONS = {
   Column: { props: ColumnApi.schema },
   List: { props: ListApi.schema },
   Card: { props: CardApi.schema },
-  Tabs: { props: TabsApi.schema },
+  Tabs: { props: TabsSchema },
   Modal: { props: ModalApi.schema },
   Divider: { props: DividerApi.schema },
   Button: { props: ButtonApi.schema },

@@ -64,13 +64,12 @@ PHASE 3 — UI DESIGN (live A2UI)
 
 1. Open the UI Preview app with `ui_preview_open()` (no args; opens or focuses it). Keep it open for the rest of the session.
 2. Read `references/ui-conventions.md` and `references/a2ui-catalog.md`.
-3. Call the `a2ui_render` server tool to generate an initial A2UI surface from the functional requirements.
-4. Push the resulting operations envelope to the UI Preview app with `ui_preview_render`.
-5. Show the user the mockup and ask for feedback.
-6. Iterate: update the spec with UI decisions, regenerate the surface with `a2ui_render`, and re-render with `ui_preview_render` (reuse the same preview window and `surfaceId`).
-7. For each UI requirement, call `ui_preview_show_requirement(specPath, requirementId)` to scroll the spec viewer to the related requirement.
+3. Call `ui_preview_generate({ description })` to generate AND render the initial mockup in one step (there is no separate render call).
+4. Show the user the mockup and ask for feedback.
+5. Iterate with `ui_preview_patch({ description })` for incremental changes (add/replace/remove an element) — it reads the current mockup itself, so describe only the change. Use `ui_preview_generate` again only to start the screen over.
+6. For each UI requirement, call `ui_preview_show_requirement(specPath, requirementId)` to scroll the spec viewer to the related requirement.
 
-Mockups render in BOS's own dark A2UI catalog automatically (violet accents, translucent surfaces) — describe structure and content to `a2ui_render`, not colors or spacing; see `references/a2ui-catalog.md` for the full component list and workflow details.
+CRITICAL: the UI Preview renders a **fixed A2UI component catalog, not an HTML/CSS/JavaScript page**. Never describe `<script>`, "vanilla JavaScript", a "showStep() function", "localStorage", or "CSS display:none" — none of that exists and it is silently dropped (this is the #1 cause of "the buttons don't work"). Build tabbed/multi-step UIs with the **Tabs** component; make interactions real via data-model bindings and `setData` actions. Describe structure, content, and behavior — not colors or spacing (the dark theme is automatic). See `references/a2ui-catalog.md` for the component list, the interactivity model, and worked examples.
 
 GATE: The user approves the UI design.
 

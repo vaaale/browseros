@@ -44,7 +44,9 @@ export function uiPreviewSurfaceTools(opts: {
       declaration: {
         name: "ui_preview_generate",
         description:
-          "Generate a UI mockup from a natural-language description and render it in the open UI Preview window in one step. Use this to create a NEW mockup (or fully replace the current one). To make an incremental change to an existing mockup instead, use ui_preview_patch.",
+          "Generate a UI mockup from a natural-language description and render it in the open UI Preview window in one step. Use this to create a NEW mockup (or fully replace the current one); use ui_preview_patch to change an existing one. " +
+          "IMPORTANT — this is NOT an HTML/CSS/JavaScript page: it renders a fixed set of A2UI components (Text, Row, Column, Card, Tabs, Button, TextField, CheckBox, ChoicePicker, Slider, DateTimeInput, Image, Icon, Divider, Modal, List). Do NOT ask for '<script>', 'vanilla JavaScript', a 'showStep() function', 'localStorage', or 'CSS display:none' — none of that exists and it will be silently ignored. Describe STRUCTURE, CONTENT, and BEHAVIOR in terms of those components. " +
+          "Interactivity is real but works a specific way: multi-tab/multi-step UIs use the Tabs component (clicking a tab header switches it; to make a 'Next'/'Back' button change tabs, bind the Tabs 'activeTab' to a data path and have the button set that path). Inputs keep their value when bound to a data path; a Text bound to that path shows it live. Don't claim behavior works unless it's expressed through these components.",
         parameters: {
           type: "object",
           properties: {
@@ -73,7 +75,8 @@ export function uiPreviewSurfaceTools(opts: {
       declaration: {
         name: "ui_preview_patch",
         description:
-          "Make an incremental change to the mockup already showing in the UI Preview window — add, replace, or remove elements — from a natural-language instruction, e.g. 'replace the dropdown with radio buttons' or 'add a Cancel button next to Submit'. Reads the current mockup itself, so just describe the change; do not restate the whole design. Use ui_preview_generate instead to start a brand-new mockup.",
+          "Make an incremental change to the mockup already showing in the UI Preview window — add, replace, or remove elements — from a natural-language instruction, e.g. 'replace the dropdown with radio buttons' or 'add a Cancel button next to Submit'. Reads the current mockup itself, so just describe the change; do not restate the whole design. Use ui_preview_generate instead to start a brand-new mockup. " +
+          "Same medium rules as ui_preview_generate: it edits A2UI components, NOT HTML/CSS/JS — never ask for scripts, JavaScript functions, or CSS toggling; express behavior through the components (Tabs for tabbed/stepped navigation, data-path-bound inputs and Text for live values).",
         parameters: {
           type: "object",
           properties: {

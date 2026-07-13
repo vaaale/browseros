@@ -118,6 +118,8 @@ interface ResolvedCardProps {
 }
 interface ResolvedTabsProps {
   tabs?: { title?: string; child: string }[];
+  activeTab?: number;
+  activeTabPath?: string;
 }
 interface ResolvedModalProps {
   trigger?: string;
@@ -282,10 +284,21 @@ const renderers: CatalogRenderers<typeof CATALOG_DEFINITIONS> = {
     );
   },
 
-  Tabs: ({ props, children }) => {
+  Tabs: ({ props, children, dispatch }) => {
     const p = props as unknown as ResolvedTabsProps;
-    const [selectedIndex, setSelectedIndex] = useState(0);
     const tabs = p.tabs ?? [];
+    const [internalIndex, setInternalIndex] = useState(0);
+    // Controlled when `activeTab` is bound (typically to a data path): a
+    // Next/Back Button's setData action drives which tab shows. Otherwise the
+    // tab is self-managed via header clicks (unchanged legacy behavior).
+    const controlled = typeof p.activeTab === "number";
+    const rawIndex = controlled ? (p.activeTab as number) : internalIndex;
+    const selectedIndex = Math.min(Math.max(rawIndex, 0), Math.max(tabs.length - 1, 0));
+    const select = (i: number) => {
+      // Keep the data model in sync so header clicks and Next/Back agree.
+      if (p.activeTabPath) dispatch?.({ event: { name: "setData", context: { target: p.activeTabPath, value: i } } });
+      if (!controlled) setInternalIndex(i);
+    };
     const active = tabs[selectedIndex];
     return (
       <div className="flex w-full flex-col">
@@ -294,7 +307,7 @@ const renderers: CatalogRenderers<typeof CATALOG_DEFINITIONS> = {
             <button
               key={i}
               type="button"
-              onClick={() => setSelectedIndex(i)}
+              onClick={() => select(i)}
               className={`border-b-2 px-3 py-1.5 text-xs font-medium transition-colors ${
                 selectedIndex === i ? "border-violet-400 text-violet-200" : "border-transparent text-white/50 hover:text-white/80"
               }`}
