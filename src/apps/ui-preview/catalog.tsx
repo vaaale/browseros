@@ -221,11 +221,12 @@ const renderers: CatalogRenderers<typeof CATALOG_DEFINITIONS> = {
   Icon: ({ props }) => {
     const p = props as unknown as ResolvedIconProps;
     const name = typeof p.name === "string" ? p.name : p.name?.path;
+    // `material-symbols-outlined` (loaded in app/layout.tsx) turns the icon
+    // NAME into a glyph via font ligatures — so this must NOT apply `uppercase`
+    // or letter-spacing, which break the ligature match (the ligature table
+    // keys on the exact lowercase name, e.g. "check").
     return (
-      <span
-        className="material-symbols-outlined inline-flex h-6 w-6 items-center justify-center rounded bg-white/5 text-[10px] uppercase tracking-wide text-white/50"
-        title={name}
-      >
+      <span className="material-symbols-outlined inline-flex h-6 w-6 items-center justify-center text-[20px] leading-none text-white/70" title={name}>
         {name}
       </span>
     );
