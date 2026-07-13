@@ -7,6 +7,17 @@ import { test, expect, type Page } from "./fixtures";
 
 const script = (turns: unknown[]) => `@@e2e ${JSON.stringify({ turns })}`;
 
+// A deterministic render pushed through ui_preview_generate/ui_preview_patch's
+// `@@e2e` bypass (src/lib/a2ui/service.ts) so these tests exercise the tools
+// without a live LLM call.
+const genDesc = (label: string) =>
+  `@@e2e ${JSON.stringify({
+    operations: [
+      { version: "v0.9", createSurface: { surfaceId: "dynamic-surface", catalogId: "https://a2ui.org/specification/v0_9/basic_catalog.json" } },
+      { version: "v0.9", updateComponents: { surfaceId: "dynamic-surface", components: [{ id: "root", component: "Text", text: label, variant: "body" }] } },
+    ],
+  })}`;
+
 /** Send a scripted message and wait for the run to FULLY finish (the stop
  *  button disappears) before returning — sequential sends in one test must
  *  not race the previous run, or the next POST /api/assistant/runs 409s. */
@@ -46,15 +57,9 @@ test.describe("surface agents", () => {
     await expect(findCard.getByText(/"generative-ui-agent"/)).toBeVisible({ timeout: 10_000 });
     await expect(findCard.getByText(/"scope":"surface"/)).toBeVisible();
 
-    // Delegate to it: the inner script calls a2ui_render + ui_preview_render.
+    // Delegate to it: the inner script calls ui_preview_generate (one step).
     const innerTask = script([
-      {
-        text: "rendering",
-        tools: [
-          { name: "a2ui_render", args: { description: "a simple form" } },
-          { name: "ui_preview_render", args: { surfaceId: "s1", operations: [] } },
-        ],
-      },
+      { text: "rendering", tools: [{ name: "ui_preview_generate", args: { description: genDesc("A simple form") } }] },
       { text: "Built a simple mockup." },
     ]);
     await sendAndWaitForFinish(
@@ -114,13 +119,7 @@ test.describe("surface agents", () => {
 
     // First delegation builds a mockup.
     const firstInner = script([
-      {
-        text: "rendering",
-        tools: [
-          { name: "a2ui_render", args: { description: "register form" } },
-          { name: "ui_preview_render", args: { surfaceId: "s1", operations: [] } },
-        ],
-      },
+      { text: "rendering", tools: [{ name: "ui_preview_generate", args: { description: genDesc("Register form") } }] },
       { text: "Built the register form." },
     ]);
     await sendAndWaitForFinish(
@@ -133,15 +132,10 @@ test.describe("surface agents", () => {
     await expect(page.locator('[data-testid="tool-card"][data-tool="agent_delegate"]').last()).toBeVisible({ timeout: 20_000 });
 
     // Second delegation: the delegating agent's OWN task string supplies
-    // continuity (Example 3's pattern) — the delegate itself never saw the first call.
+    // continuity (Example 3's pattern) — the delegate itself never saw the first
+    // call. Uses ui_preview_patch this time (an incremental change).
     const secondInner = script([
-      {
-        text: "rendering",
-        tools: [
-          { name: "a2ui_render", args: { description: "register form with a larger submit button" } },
-          { name: "ui_preview_render", args: { surfaceId: "s1", operations: [] } },
-        ],
-      },
+      { text: "rendering", tools: [{ name: "ui_preview_patch", args: { description: genDesc("Register form (larger submit)") } }] },
       { text: "Made the submit button larger." },
     ]);
     await sendAndWaitForFinish(

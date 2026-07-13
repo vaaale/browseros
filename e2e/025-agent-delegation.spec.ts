@@ -64,7 +64,7 @@ test.describe("agent delegation v2", () => {
   test("delegating to an agent whose allowlist includes a v2-only tool resolves it (US-1, SC-001)", async ({ request }) => {
     const conversationId = `e2e-025-us1-${Date.now()}`;
     const innerTask = script([
-      { text: "rendering", tools: [{ name: "ui_preview_render", args: { surfaceId: "s1", operations: [] } }] },
+      { text: "rendering", tools: [{ name: "ui_preview_generate", args: { description: "a simple form" } }] },
       { text: "done" },
     ]);
     const message = script([
@@ -81,8 +81,8 @@ test.describe("agent delegation v2", () => {
     expect(toolResult.result).not.toContain("unknown tool");
     expect(toolResult.result).not.toContain("Error:");
 
-    const progress = events.find((e) => e.type === "tool_progress" && e.event?.tool === "ui_preview_render");
-    expect(progress, "expected a live tool_progress event for ui_preview_render inside the inner loop").toBeTruthy();
+    const progress = events.find((e) => e.type === "tool_progress" && e.event?.tool === "ui_preview_generate");
+    expect(progress, "expected a live tool_progress event for ui_preview_generate inside the inner loop").toBeTruthy();
   });
 
   test("an ephemeral delegate can call a tool inherited from the parent's allowlist immediately (US-2, SC-002)", async ({ request }) => {

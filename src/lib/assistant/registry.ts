@@ -19,7 +19,6 @@ import { devSourceTools } from "./tools/server/dev-source";
 import { specTools } from "./tools/server/specs";
 import { scratchpadTools } from "./tools/server/scratchpad";
 import { integrationTools } from "./tools/server/integrations";
-import { a2uiRenderTools } from "./tools/server/a2ui-render";
 import { discoveryTools } from "./tools/server/discovery";
 
 // The assistant tool registry (Milestone C). Server tools call their lib
@@ -63,7 +62,6 @@ export function assistantTools(): Record<string, AssistantTool> {
     ...specTools(),
     ...scratchpadTools(),
     ...integrationTools(),
-    ...a2uiRenderTools(),
     ...schedulerTools(),
   };
   cache = { ...combined, ...discoveryTools((id) => combined[id]) };
