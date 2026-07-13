@@ -1,12 +1,15 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { A2UIProvider, A2UIRenderer, useA2UI } from "@copilotkit/a2ui-renderer";
 import type { AppProps } from "@/components/apps/types";
 import { registerAppSurfaceTools } from "@/lib/assistant/client/surface-tools";
 import { registerSurfaceAgent } from "@/lib/assistant/client/surface-agents";
 import { uiPreviewSurfaceTools } from "./agent-tools-v2";
 import { bosA2UICatalog } from "./catalog";
+import { applySurfaceAction, type A2UIActionMessage } from "./surface-actions";
+
+type PushOps = (operations: Record<string, unknown>[]) => void;
 
 // 025-agent-delegation-v2 (Example 2, US-4): a distinct, focused prompt for
 // the surface agent itself. Its two tools each generate AND render in one call
@@ -29,8 +32,13 @@ interface HistoryEntry {
   summary: string;
 }
 
-function UIPreviewSurface({ windowId }: { windowId: string }) {
+function UIPreviewSurface({ windowId, pushOpsRef }: { windowId: string; pushOpsRef: React.MutableRefObject<PushOps | null> }) {
   const { processMessages, getSurface } = useA2UI();
+  // Bridge `processMessages` up to the provider-level onAction handler (which
+  // can't call useA2UI itself).
+  useEffect(() => {
+    pushOpsRef.current = processMessages;
+  }, [processMessages, pushOpsRef]);
   const [surfaceId, setSurfaceId] = useState(DEFAULT_SURFACE_ID);
   const [activeRequirement, setActiveRequirement] = useState("");
   const [history, setHistory] = useState<HistoryEntry[]>([]);
@@ -136,9 +144,26 @@ function UIPreviewSurface({ windowId }: { windowId: string }) {
 }
 
 export default function UIPreviewApp({ windowId }: AppProps) {
+  const pushOpsRef = useRef<PushOps | null>(null);
+
+  // 025-ui-preview-a2ui-tools (Level A): interpret component actions locally,
+  // mutating the surface's own data model so clicks (selection, toggles,
+  // buttons that set state) work without an agent round-trip.
+  const onAction = useCallback((message: A2UIActionMessage) => {
+    const handled = applySurfaceAction(message, {
+      pushOps: (ops) => pushOpsRef.current?.(ops),
+      openUrl: (url) => window.open(url, "_blank", "noopener,noreferrer"),
+    });
+    if (!handled && message?.userAction?.name) {
+      void import("@/lib/logging/client/browser-logger").then(({ clog }) =>
+        clog("debug", "ui-preview.action", "unhandled surface action", { name: message.userAction?.name }),
+      );
+    }
+  }, []);
+
   return (
-    <A2UIProvider catalog={bosA2UICatalog}>
-      <UIPreviewSurface windowId={windowId} />
+    <A2UIProvider catalog={bosA2UICatalog} onAction={onAction}>
+      <UIPreviewSurface windowId={windowId} pushOpsRef={pushOpsRef} />
     </A2UIProvider>
   );
 }

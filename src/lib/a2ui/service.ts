@@ -54,6 +54,32 @@ a static mockup, just pass literal values as shown.
 
 ${describeCatalogForPrompt()}
 
+## Interactivity (make the mockup actually work, not just look right)
+The surface has a reactive DATA MODEL: components can WRITE values to a path and
+READ them back, so clicks and inputs have real effect with no server round-trip.
+Use these patterns whenever the request implies interaction:
+- **Inputs hold state**: give every TextField / CheckBox / Slider / ChoicePicker /
+  DateTimeInput a \`value\` bound to a data path, e.g. \`"value": {"path": "/form/email"}\`
+  (NOT a literal). Then the field remembers what the user enters and other
+  components can show it.
+- **Single choice (radio) / multi-select**: use a ChoicePicker with
+  \`"variant": "mutuallyExclusive"\` (single) and bind its \`value\` to a path
+  (e.g. \`/plan\`). It already highlights the selected option on click — prefer it
+  over hand-built clickable rows when the user is picking ONE of several options.
+- **Buttons that change state**: give the Button an
+  \`"action": {"event": {"name": "setData", "context": {"target": "/step", "value": 2}}}\`.
+  Clicking it sets \`/step\` to 2 in the data model. (The data path key MUST be
+  \`target\`, never \`path\` — \`path\` is reserved for read bindings.)
+- **Show a live value** (summaries, confirmations): bind a Text's \`text\`
+  directly to the path, e.g. \`"text": {"path": "/form/email"}\`. For a
+  "Label: value" line, use a Row with a static label Text plus a second Text
+  bound to the path.
+- **Links**: a Button action \`{"event": {"name": "openUrl", "context": {"url": "https://…"}}}\`.
+- **Tabs**: use the Tabs component for tabbed sections — clicking a tab header
+  already switches its content.
+Only "setData" and "openUrl" action names are handled; do not invent other
+action names (they will do nothing).
+
 ## BOS design constraints
 - Dark theme only — assume a dark host background.
 - Dense UI: prefer compact spacing over generous whitespace.
