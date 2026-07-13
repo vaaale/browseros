@@ -76,7 +76,13 @@ Use these patterns whenever the request implies interaction:
 - **Single choice (radio) / multi-select**: use a ChoicePicker with
   \`"variant": "mutuallyExclusive"\` (single) and bind its \`value\` to a path
   (e.g. \`/plan\`). It already highlights the selected option on click — prefer it
-  over hand-built clickable rows when the user is picking ONE of several options.
+  over hand-built clickable rows when the options are simple text.
+- **Selectable Cards (rich option panels)**: for "pick one of several PANELS"
+  (e.g. subscription tiers with a title, description and price), give each Card
+  an \`action\` that sets the choice and a \`selected\` that reflects it, so the
+  picked card highlights its border:
+  \`{"id":"pro","component":"Card","child":"pro-col","action":{"event":{"name":"setData","context":{"target":"/plan","value":"pro"}}},"selected":{"call":"equals","args":{"a":{"path":"/plan"},"b":"pro"}}}\`.
+  Lay the cards out side by side in a \`Row\`.
 - **Buttons that change state**: give the Button an
   \`"action": {"event": {"name": "setData", "context": {"target": "/step", "value": 2}}}\`.
   Clicking it sets \`/step\` to 2 in the data model. (The data path key MUST be

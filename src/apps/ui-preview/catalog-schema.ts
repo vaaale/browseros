@@ -26,7 +26,7 @@ import {
   SliderApi,
   DateTimeInputApi,
 } from "@a2ui/web_core/v0_9/basic_catalog";
-import { DynamicNumberSchema, DynamicStringSchema } from "@a2ui/web_core/v0_9";
+import { DynamicNumberSchema, DynamicStringSchema, DynamicBooleanSchema, ActionSchema } from "@a2ui/web_core/v0_9";
 import type { CatalogDefinitions } from "@copilotkit/a2ui-renderer";
 
 // 025-ui-preview-a2ui-tools: extend the stock Tabs with an OPTIONAL controlled
@@ -44,6 +44,21 @@ const TabsSchema = TabsApi.schema.extend({
   ),
 });
 
+// 025-ui-preview-a2ui-tools: make Card OPTIONALLY selectable — a clickable card
+// that highlights its border when picked (e.g. subscription plan panels).
+// `action` (usually a setData) fires when the whole card is clicked; `selected`
+// (bindable boolean, usually a {call:"equals"} against the chosen value) drives
+// the highlight. Backward compatible: a plain Card without them stays a static
+// bordered block.
+const CardSchema = CardApi.schema.extend({
+  action: ActionSchema.optional().describe(
+    'Optional: makes the WHOLE card clickable. Usually a setData action, e.g. {"event":{"name":"setData","context":{"target":"/plan","value":"pro"}}}.',
+  ),
+  selected: DynamicBooleanSchema.optional().describe(
+    'Optional: when true the card shows a highlighted (selected) border. Bind it to reflect the current choice, e.g. {"call":"equals","args":{"a":{"path":"/plan"},"b":"pro"}}.',
+  ),
+});
+
 export const CATALOG_DEFINITIONS = {
   Text: { props: TextApi.schema },
   Image: { props: ImageApi.schema },
@@ -53,7 +68,7 @@ export const CATALOG_DEFINITIONS = {
   Row: { props: RowApi.schema },
   Column: { props: ColumnApi.schema },
   List: { props: ListApi.schema },
-  Card: { props: CardApi.schema },
+  Card: { props: CardSchema },
   Tabs: { props: TabsSchema },
   Modal: { props: ModalApi.schema },
   Divider: { props: DividerApi.schema },

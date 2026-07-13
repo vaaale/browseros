@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useId, useState } from "react";
-import { createCatalog, type CatalogRenderers } from "@copilotkit/a2ui-renderer";
+import { createCatalog, Catalog, basicCatalog, type CatalogRenderers } from "@copilotkit/a2ui-renderer";
 import { BASIC_CATALOG_ID } from "@ag-ui/a2ui-toolkit";
 import { CATALOG_DEFINITIONS } from "./catalog-schema";
 
@@ -115,6 +115,8 @@ interface ResolvedListProps extends ResolvedContainerProps {
 }
 interface ResolvedCardProps {
   child?: string;
+  action?: () => void;
+  selected?: boolean;
 }
 interface ResolvedTabsProps {
   tabs?: { title?: string; child: string }[];
@@ -279,8 +281,19 @@ const renderers: CatalogRenderers<typeof CATALOG_DEFINITIONS> = {
 
   Card: ({ props, children }) => {
     const p = props as unknown as ResolvedCardProps;
+    // A Card with an `action` is clickable; `selected` highlights its border
+    // (violet accent) so it reads as picked — e.g. subscription plan panels.
+    const clickable = typeof p.action === "function";
+    const border = p.selected ? "border-violet-400/80 bg-violet-500/[0.12]" : "border-white/15 bg-white/[0.06]";
+    const interactive = clickable ? "cursor-pointer hover:border-white/30 transition-colors" : "";
     return (
-      <div className="w-full rounded-lg border border-white/15 bg-white/[0.06] p-4 shadow-sm shadow-black/20">{p.child ? children(p.child) : null}</div>
+      <div
+        role={clickable ? "button" : undefined}
+        onClick={clickable ? p.action : undefined}
+        className={`w-full rounded-lg border p-4 shadow-sm shadow-black/20 ${border} ${interactive}`}
+      >
+        {p.child ? children(p.child) : null}
+      </div>
     );
   },
 
@@ -540,5 +553,17 @@ const renderers: CatalogRenderers<typeof CATALOG_DEFINITIONS> = {
   },
 };
 
-/** BOS's dark-themed A2UI v0.9 catalog — pass to `<A2UIProvider catalog={bosA2UICatalog}>`. */
-export const bosA2UICatalog = createCatalog(CATALOG_DEFINITIONS, renderers, { catalogId: BASIC_CATALOG_ID });
+/** BOS's dark-themed A2UI v0.9 catalog — pass to `<A2UIProvider catalog={bosA2UICatalog}>`.
+ *
+ *  Rebuilt from BOS's custom components PLUS the basic catalog's FUNCTIONS
+ *  (`equals`, `and`, `formatCurrency`, …). `createCatalog` only bundles those
+ *  functions when `includeBasicCatalog` is set — but that would also pull in the
+ *  unstyled reference COMPONENTS, which we don't want. Without the functions,
+ *  every `{"call": …}` binding (which the generation prompt advertises, e.g. a
+ *  selectable Card's `selected: {call:"equals", …}`) silently fails to resolve. */
+const bosComponents = createCatalog(CATALOG_DEFINITIONS, renderers, { catalogId: BASIC_CATALOG_ID });
+export const bosA2UICatalog = new Catalog(
+  BASIC_CATALOG_ID,
+  [...bosComponents.components.values()],
+  [...basicCatalog.functions.values()],
+);

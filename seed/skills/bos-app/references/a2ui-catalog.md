@@ -65,7 +65,15 @@ Containers (`Row`/`Column`/`List`) hold other components by reference; `Card`/`M
 The surface has a reactive **data model**: components read values from a path (`{"path":"/x"}`) and write to it, so interactions have real effect with no round-trip. Patterns:
 
 - **Inputs hold state** — bind a TextField/CheckBox/Slider/ChoicePicker/DateTimeInput `value` to a path (`"value": {"path":"/form/email"}`), not a literal. The field then remembers input and other components can show it.
-- **Single-choice / multi-select** — a `ChoicePicker` with `"variant":"mutuallyExclusive"` bound to a path (e.g. `/plan`) already highlights the picked option on click. Prefer it over hand-built clickable rows for "pick one of N".
+- **Single-choice / multi-select (simple text options)** — a `ChoicePicker` with `"variant":"mutuallyExclusive"` bound to a path (e.g. `/plan`) already highlights the picked option on click. Prefer it when the options are just labels.
+- **Selectable Cards (rich option panels)** — for "pick one of several PANELS" (subscription tiers, etc.), make each `Card` clickable and self-highlighting: give it an `action` that sets the choice and a `selected` that reflects it. Lay them out side by side in a `Row`. Example:
+
+  ```json
+  { "id":"pro","component":"Card","child":"pro-col",
+    "action":{"event":{"name":"setData","context":{"target":"/plan","value":"pro"}}},
+    "selected":{"call":"equals","args":{"a":{"path":"/plan"},"b":"pro"}} }
+  ```
+  Clicking the card sets `/plan` to `"pro"`; its border highlights because `selected` becomes true (and the other cards' `selected` become false).
 - **A button that changes state** — `"action": {"event":{"name":"setData","context":{"target":"/step","value":2}}}`. Clicking sets `/step` = 2. The data-path key MUST be `target` (never `path`, which is reserved for read bindings). Only `setData` and `openUrl` action names do anything — don't invent others.
 - **Show a live value** — bind a Text's `text` to the path (`"text":{"path":"/form/email"}`); for "Label: value" use a Row of a static label Text + a bound Text.
 - **Tabs / multi-step wizards** — use the **Tabs** component (one entry per tab, each with a `child`). Clicking a header switches it automatically. To make **Next/Back buttons** move between tabs, bind the Tabs' `activeTab` to a path and set `activeTabPath` to that same path, then give each button a `setData` action on it:
