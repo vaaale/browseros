@@ -86,7 +86,7 @@ Add an entry with a clear group, description, and schema. Group names become cat
 
 ### Implement the handler
 
-- Server tools live in `src/lib/assistant/tools/server/` or `src/lib/agent/subagents/tools.ts`.
+- Server tools live in `src/lib/assistant/tools/server/` (the single registry shared by the primary run and every delegation kind — `src/lib/agent/subagents/tools.ts` was retired, see [Sub-agents & delegation](../assistant/sub-agents-and-delegation.md)).
 - Client actions live in `src/components/agent/` and are wrapped in CopilotKit action components.
 
 ### Progressive disclosure

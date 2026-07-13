@@ -23,6 +23,15 @@ export interface ToolContext {
   /** Streaming progress (nested sub-agent/workflow events). Each call also
    *  resets the tool's idle timeout — long but chatty work is never cut off. */
   onEvent: (event: unknown) => void;
+  /** Nested-delegation depth (025-agent-delegation-v2). 0 for the primary/
+   *  top-level run; incremented by one for each inner-loop delegation. Used
+   *  by agent_delegate/dev_delegate to enforce MAX_DELEGATE_DEPTH uniformly
+   *  across named/ephemeral/surface delegation. */
+  delegationDepth?: number;
+  /** The owning run's id (025-agent-delegation-v2) — lets a server tool (e.g.
+   *  agent_delegate) look up the actual `Run` via `runManager().get(runId)` to
+   *  reuse its `tools`/`toolTimeoutMs`/`awaitFrontendResult` for an inner loop. */
+  runId: string;
 }
 
 export interface AssistantTool extends ToolDeclaration {

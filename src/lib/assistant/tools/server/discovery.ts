@@ -6,6 +6,7 @@ import { scoreCapability, scoreAgent } from "@/lib/agent/discovery-score";
 import { listSubAgents } from "@/lib/agent/subagents/store";
 import { getMaxFindResults } from "@/lib/config/registry";
 import { gateFor } from "../../gate";
+import { runManager } from "../../run-manager";
 
 // Runtime tool/agent discovery (025), ported from DiscoveryActions.tsx. These
 // are ALWAYS-available (not registry-gated). find_tools returns a JSON ARRAY of
@@ -42,19 +43,46 @@ export function discoveryTools(lookup: (id: string) => AssistantTool | undefined
 
     find_agent: serverTool(
       "find_agent",
-      "Discover sub-agents you can delegate to by natural-language query. Returns each candidate agent's identity metadata (id, name, type, description) — never their internal tools list. Use before agent_delegate when you don't already know which agent should handle a task.",
+      "Discover sub-agents you can delegate to by natural-language query, including window-scoped surface agents from currently-open app windows. Returns each candidate agent's identity metadata (id, name, type, description, scope) — never their internal tools list. Use before agent_delegate when you don't already know which agent should handle a task.",
       schema({ query: p.str("Natural-language description of the task or specialization you need (min 2 chars).") }, ["query"]),
-      async (input) => {
+      async (input, ctx) => {
         const query = String(input.query ?? "").trim();
         if (query.length < 2) return JSON.stringify([]);
         const maxResults = await getMaxFindResults();
-        const agents = await listSubAgents();
-        const scored = agents
+        // 025-agent-delegation-v2: merge the persisted roster with this run's
+        // currently-registered surface agents (FR-010) — read per-call from
+        // the run, never baked into any process-wide cache.
+        const run = runManager().get(ctx.runId);
+        const persisted = (await listSubAgents()).map((a) => ({
+          id: a.id,
+          name: a.name,
+          type: a.type as string,
+          description: a.description,
+          scope: "persisted" as const,
+        }));
+        const surface = [...(run?.agents.values() ?? [])].map((a) => ({
+          id: a.id,
+          name: a.name,
+          type: "local",
+          description: a.description,
+          scope: "surface" as const,
+        }));
+        const candidates = [...persisted, ...surface];
+        const scored = candidates
           .map((a) => ({ agent: a, score: scoreAgent({ name: a.name, description: a.description, type: a.type }, query) }))
           .filter((r) => r.score > 0)
           .sort((a, b) => b.score - a.score)
           .slice(0, maxResults);
-        return JSON.stringify(scored.map(({ agent, score }) => ({ id: agent.id, name: agent.name, type: agent.type, description: agent.description, score })));
+        return JSON.stringify(
+          scored.map(({ agent, score }) => ({
+            id: agent.id,
+            name: agent.name,
+            type: agent.type,
+            description: agent.description,
+            scope: agent.scope,
+            score,
+          })),
+        );
       },
     ),
   };

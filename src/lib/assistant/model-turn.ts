@@ -20,7 +20,7 @@ import { compactChatMessages } from "@/lib/agent/compaction/v2";
 // Provider config is resolved per call so Settings changes apply immediately.
 
 export const streamModelTurn: StreamTurn = async (opts) => {
-  const c = await getProviderConfig();
+  const c = await getProviderConfig(opts.model);
   // Compaction (022) runs here — v2 feeds the provider directly, so it can't go
   // through the ai-sdk middleware. Applied to the transcript before provider
   // conversion; the compacted view is ephemeral (never persisted).
