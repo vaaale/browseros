@@ -1,19 +1,20 @@
 import { test, expect } from "./fixtures";
 import { resolveActionGate } from "../src/lib/agent/capabilities-registry";
 
-// Deterministic smoke test for the per-agent capabilities UI (011/016). Opens
-// Settings -> Assistant and asserts the unified capability editor renders. Never
-// asserts on (nondeterministic) assistant output.
+// Deterministic smoke test for the unified capability catalog UI (011/016).
+// Opens Settings -> Tools and asserts the catalog renders. Never asserts on
+// (nondeterministic) assistant output.
 test.describe("Per-agent capabilities", () => {
-  test("Settings -> Assistant shows the unified capability editor", async ({ page }) => {
+  test("Settings -> Tools shows the unified capability catalog", async ({ page }) => {
     await page.getByTestId("dock-settings").click();
     const win = page.getByTestId("window-settings");
     await expect(win).toBeVisible();
-    // The settings nav buttons are labeled by tab title; "Assistant" is the tab.
-    await win.locator("nav").getByRole("button", { name: "Assistant", exact: true }).click();
-    await expect(win.getByText("Save capabilities")).toBeVisible();
-    // The unified catalog now lists main-chat actions too (016), not only sub-agent tools.
-    await expect(win.getByText("launchApp", { exact: true })).toBeVisible();
+    // The capability catalog lives on the "Tools" tab (nav buttons are labeled by
+    // tab title). Saving is automatic — there is no explicit save button.
+    await win.locator("nav").getByRole("button", { name: "Tools", exact: true }).click();
+    // The unified catalog lists every capability id (grouped by category),
+    // main-chat actions included — e.g. bos_app_launch under the "OS" group.
+    await expect(win.getByText("bos_app_launch", { exact: true })).toBeVisible();
   });
 });
 

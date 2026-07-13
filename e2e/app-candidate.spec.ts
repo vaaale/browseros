@@ -1,5 +1,11 @@
 import { test, expect } from "./fixtures";
 
+// Only meaningful against the Supervisor's public port (:8090), which serves
+// /__supervisor/state and the promote/discard controls. In a plain `next dev`
+// run these can't pass and would hang until their timeout, so skip them unless
+// the run is explicitly pointed at the Supervisor.
+const ON_SUPERVISOR = (process.env.BOS_E2E_BASE_URL ?? "").includes(":8090");
+
 // App-candidate (GitFS) preview/promote/discard, driven through the Topbar's
 // VersionControls. Deterministic: the candidate is seeded via the apps API
 // (draft install → app-candidate branch under the Supervisor), NOT via the LLM.
@@ -13,6 +19,7 @@ test.describe.configure({ mode: "serial" });
 test.use({ video: "off" });
 
 test.describe("app candidate — Topbar promote/discard", () => {
+  test.skip(!ON_SUPERVISOR, "Requires the Supervisor — run with BOS_E2E_BASE_URL=http://localhost:8090.");
   test.afterEach(async ({ request }) => {
     // Safety net: drop any candidate this test left behind.
     await request.post("/__supervisor/app-discard").catch(() => {});
