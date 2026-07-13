@@ -253,7 +253,57 @@ async function runGeneration(params: {
     errorCodes: [...new Set(lastErrors.map((e) => e.code))],
     lastErrors: lastErrors.slice(0, 10).map((e) => ({ code: e.code, path: e.path, message: e.message })),
   });
-  return { ok: false, surfaceId, operations: [], error: "The UI generator could not produce a valid design for that request. Try rephrasing or simplifying it." };
+  return { ok: false, surfaceId, operations: [], error: explainFailure(lastErrors) };
+}
+
+// Per-code guidance phrased for the CALLING agent, which writes natural-language
+// descriptions (not raw components) — so "add an id" style advice is useless;
+// tell it what to change ABOUT THE DESCRIPTION. Only codes that can actually
+// surface here are covered (binding validation is disabled; the patch-delta
+// false-positives for no_root/unresolved_child are handled by the merge above,
+// but a GENUINE dangling reference can still occur, so they're kept).
+const FAILURE_HINTS: Partial<Record<A2UIValidationError["code"], string>> = {
+  unknown_component:
+    "The design asked for a component that doesn't exist. Use ONLY: Text, Row, Column, List, Card, Tabs, Divider, Modal, Button, TextField, CheckBox, ChoicePicker, Slider, DateTimeInput, Image, Icon, Video, AudioPlayer — approximate anything else (e.g. a table = a List of Rows, a chart = Text/'—' placeholders).",
+  unresolved_child: "Describe a complete layout — every element you reference (a card, a button, a panel) must also be described so it actually exists.",
+  no_root: "Describe a single top-level container (e.g. a Column or Card) that holds everything else.",
+  child_cycle: "Keep the layout a simple tree — containers hold elements; an element must not (directly or indirectly) contain itself.",
+  missing_required_prop: "Be specific about each element's content — e.g. give every Button a label, every Tabs its tab titles, every field its label.",
+  missing_component_type: "Name a concrete component for each element (Text, Button, Card, …) so the generator knows what to build.",
+  duplicate_id: "Avoid describing two elements with the same name/role in a way that collides — give each a distinct purpose.",
+  empty_components: "The request was too vague or too large to build. Break it into a concrete list of sections and the elements inside each.",
+};
+
+/** Turn the exhausted-retry validation errors into an actionable tool result the
+ *  calling agent can act on, instead of a dead-end generic message. */
+function explainFailure(errors: A2UIValidationError[]): string {
+  if (errors.length === 0) {
+    return "The UI generator returned nothing usable. Describe the layout more concretely — which containers, fields, and buttons — and try again.";
+  }
+  // The toolkit's own messages already name the offending component/id; surface
+  // a few, deduped, then add the BOS-level hint(s) for the codes seen.
+  const seen = new Set<string>();
+  const details: string[] = [];
+  for (const e of errors) {
+    const line = e.message.trim();
+    if (line && !seen.has(line)) {
+      seen.add(line);
+      details.push(line);
+    }
+    if (details.length >= 4) break;
+  }
+  const hints: string[] = [];
+  const seenCode = new Set<string>();
+  for (const e of errors) {
+    const hint = FAILURE_HINTS[e.code];
+    if (hint && !seenCode.has(e.code)) {
+      seenCode.add(e.code);
+      hints.push(hint);
+    }
+  }
+  const detailBlock = details.length ? ` Problems found: ${details.join("; ")}.` : "";
+  const hintBlock = hints.length ? ` ${hints.join(" ")}` : " Try rephrasing or simplifying the request.";
+  return `The UI couldn't be built after ${MAX_A2UI_ATTEMPTS} attempts.${detailBlock}${hintBlock}`;
 }
 
 /** Overlay a patch's returned delta on the current tree (by id, delta wins) to
