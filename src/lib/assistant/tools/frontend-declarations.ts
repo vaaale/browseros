@@ -99,7 +99,7 @@ export const FRONTEND_TOOL_DECLARATIONS: ToolDeclaration[] = [
   ),
   decl(
     "ui_preview_open",
-    "Open (or focus, if already open) the UI Preview window, where you render live A2UI mockups during a bos-app design session. Open it at the start of the UI-design phase and keep it open for the rest of the session; then use a2ui_render + ui_preview_render to push mockups to it.",
+    "Open (or focus, if already open) the UI Preview window, where you render live UI mockups during a bos-app design session. Open it at the start of the UI-design phase and keep it open for the rest of the session; then use ui_preview_generate to create a mockup and ui_preview_patch to iterate on it.",
   ),
   decl(
     "dev_branch_request",

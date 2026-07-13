@@ -41,7 +41,7 @@ async function pushSurfaceTools(runId: string, declarations: ToolDeclaration[]):
 }
 
 // A window can open (and register its Tier 2 surface tools) DURING an active
-// run — e.g. the agent calls ui_preview_open then wants ui_preview_render in
+// run — e.g. the agent calls ui_preview_open then wants ui_preview_generate in
 // the same turn. surfaceTools is otherwise only read once, when a run starts,
 // so without this the new tools wouldn't be callable until the conversation's
 // NEXT run. Skip the push if the name set is unchanged (Build Studio
