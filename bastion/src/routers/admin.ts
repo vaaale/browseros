@@ -170,7 +170,7 @@ export function createAdminRouter(cfg: Config, provider: AuthProvider): Router {
       res.status(409).json({ error: "A build is already in progress" });
       return;
     }
-    const { dockerfile = "Dockerfile", tag = "browseros/user:latest" } = req.body as { dockerfile?: string; tag?: string };
+    const { dockerfile = "Dockerfile", tag = "browseros:latest" } = req.body as { dockerfile?: string; tag?: string };
     const repoPath = process.env.BOS_REPO_PATH ?? "/bos-src";
 
     res.setHeader("Content-Type", "text/event-stream");

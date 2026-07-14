@@ -41,7 +41,7 @@ export default function Admin() {
 
   // Image build
   const [buildDockerfile, setBuildDockerfile] = useState("Dockerfile");
-  const [buildTag, setBuildTag] = useState("browseros/user:latest");
+  const [buildTag, setBuildTag] = useState("browseros:latest");
   const [buildLog, setBuildLog] = useState("");
   const [buildStatus, setBuildStatus] = useState<"idle" | "building" | "success" | "error">("idle");
   const [buildError, setBuildError] = useState("");

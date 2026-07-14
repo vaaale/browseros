@@ -170,6 +170,10 @@ export async function buildImage(
   const path = await import("path");
   const tarFs = await import("tar-fs");
   const tarStream = tarFs.default.pack(repoPath, {
+    // strict:false makes tar-fs SKIP unsupported file types (FIFOs, sockets,
+    // devices) instead of destroying the stream — the latter truncates the
+    // upload and the daemon reports the cryptic "Error in input stream".
+    strict: false,
     ignore: (fullPath: string) => {
       const rel = path.relative(repoPath, fullPath);
       const segments = rel.split(path.sep);
@@ -183,16 +187,31 @@ export async function buildImage(
     // A failure reading the source tree (e.g. a vanished/socket file) surfaces
     // here — reject cleanly instead of letting dockerode report a cryptic
     // "Error in input stream".
-    tarStream.on("error", (err: Error) => reject(err));
+    tarStream.on("error", (err: Error) => {
+      console.error("[bastion] build tar stream error:", err);
+      reject(err);
+    });
+
+    // Track daemon-reported build errors so a failed build rejects instead of
+    // falsely resolving (the daemon streams errors as progress events, not as
+    // a stream error).
+    let daemonError: string | null = null;
 
     docker.buildImage(tarStream, { t: tag, dockerfile })
       .then((buildStream) => {
         docker.modem.followProgress(
           buildStream,
-          (err: Error | null) => { if (err) reject(err); else resolve(); },
-          (event: { stream?: string; error?: string }) => {
-            if (event.error) {
-              onEvent({ error: event.error });
+          (err: Error | null) => {
+            if (err) { console.error("[bastion] build stream error:", err); reject(err); }
+            else if (daemonError) { reject(new Error(daemonError)); }
+            else resolve();
+          },
+          (event: { stream?: string; error?: string; errorDetail?: { message?: string } }) => {
+            if (event.error || event.errorDetail?.message) {
+              const msg = event.errorDetail?.message ?? event.error ?? "build error";
+              daemonError = msg;
+              console.error("[bastion] build error event:", msg);
+              onEvent({ error: msg });
             } else if (event.stream) {
               const line = event.stream.replace(/\n$/, "");
               if (line) onEvent({ line });
@@ -200,8 +219,20 @@ export async function buildImage(
           },
         );
       })
-      .catch(reject);
+      .catch((err: Error) => { console.error("[bastion] buildImage failed:", err); reject(err); });
   });
+}
+
+/** Fetch the recent stdout/stderr from a user's container (for diagnostics). */
+export async function getContainerLogs(username: string, tailLines = 60): Promise<string> {
+  try {
+    const c = docker.getContainer(containerName(username));
+    const buf = await c.logs({ stdout: true, stderr: true, tail: tailLines, timestamps: false });
+    // Strip Docker's 8-byte multiplexing headers and non-printable bytes.
+    return buf.toString("utf8").replace(/[^\x09\x0a\x0d\x20-\x7e]/g, "").trim();
+  } catch {
+    return "";
+  }
 }
 
 export async function waitForHealthy(username: string, timeoutMs: number): Promise<void> {
@@ -211,9 +242,27 @@ export async function waitForHealthy(username: string, timeoutMs: number): Promi
   while (Date.now() < deadline) {
     const ok = await probe(hostname);
     if (ok) return;
+
+    // Fail fast if the container has died instead of polling a dead container
+    // for the full timeout (the "provisioning… with no feedback" symptom).
+    const info = await inspectContainer(hostname).catch(() => null);
+    if (info && !info.State.Running && !info.State.Restarting &&
+        info.State.Status !== "created") {
+      const logs = await getContainerLogs(username, 60);
+      throw new Error(
+        `Container ${hostname} exited during startup ` +
+        `(status=${info.State.Status}, exitCode=${info.State.ExitCode}).\n` +
+        `Recent container logs:\n${logs || "(no logs captured)"}`,
+      );
+    }
+
     await sleep(2000);
   }
-  throw new Error(`[bastion] Container ${hostname} did not become healthy within ${timeoutMs}ms`);
+  const logs = await getContainerLogs(username, 60);
+  throw new Error(
+    `Container ${hostname} did not become healthy within ${Math.round(timeoutMs / 1000)}s.\n` +
+    `Recent container logs:\n${logs || "(no logs captured)"}`,
+  );
 }
 
 function probe(hostname: string): Promise<boolean> {
