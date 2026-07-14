@@ -27,7 +27,12 @@ export default function Login() {
       body: JSON.stringify({ username, password }),
     });
     setLoading(false);
-    if (res.ok) { window.location.href = "/"; return; }
+    if (res.ok) {
+      const data = await res.json().catch(() => ({})) as { isAdmin?: boolean };
+      // Admins land on the admin portal; regular users go straight into their BOS.
+      window.location.href = data.isAdmin ? "/app/admin" : "/";
+      return;
+    }
     setError("Invalid username or password");
   }
 
