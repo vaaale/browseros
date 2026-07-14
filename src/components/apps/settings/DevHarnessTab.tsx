@@ -218,13 +218,15 @@ export function DevHarnessTab() {
         </p>
       )}
 
-      {(v.transport === "cli" || v.transport === "opencode") && (
-        <div className="space-y-4 rounded border border-white/10 bg-white/[0.03] p-3">
+      {/* Always shown — credentials are stored independently of the selected mode,
+          so you can provision them before switching to a CLI mode. */}
+      <div className="space-y-4 rounded border border-white/10 bg-white/[0.03] p-3">
           <div>
             <div className="mb-1 font-medium text-white/70">CLI credentials</div>
             <p className="text-white/40">
-              In a container there is no interactive login. Paste each CLI&apos;s auth material here; BOS writes it into a
-              dedicated harness <code>HOME</code> (owner-only, never logged) and points the CLI at it when spawning.
+              For the <b>Claude CLI</b> / <b>OpenCode CLI</b> modes. In a container there is no interactive login, so paste
+              each CLI&apos;s auth material here; BOS writes it into a dedicated harness <code>HOME</code> (owner-only, never
+              logged) and points the CLI at it when spawning.
             </p>
           </div>
 
@@ -243,8 +245,7 @@ export function DevHarnessTab() {
             onSave={saveOpenCode}
             onClear={clearOpenCode}
           />
-        </div>
-      )}
+      </div>
 
       <div className="flex items-center gap-2 pt-1">
         <button onClick={save} disabled={saving} className="flex items-center gap-1.5 rounded bg-white/10 px-3 py-1.5 hover:bg-white/20 disabled:opacity-40">
