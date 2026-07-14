@@ -34,18 +34,34 @@ function dataDir(username: string, cfg: Config): string {
 
 // ── Full provision ─────────────────────────────────────────────────────────────
 
-/** Provision a brand-new user: create dirs, clone src, create nm volume, create+start container. */
+/** True if `dir` is a healthy git checkout (has a .git and rev-parse succeeds). */
+async function isValidGitRepo(dir: string): Promise<boolean> {
+  if (!fs.existsSync(path.join(dir, ".git"))) return false;
+  try {
+    await execFileAsync("git", ["-C", dir, "rev-parse", "--git-dir"]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Provision a brand-new user: create dirs, clone src, create nm volume, create+start container.
+ *  Idempotent and self-healing — safe to re-run after a partial/interrupted attempt. */
 export async function provisionUser(username: string, cfg: Config): Promise<string> {
   assertValidUsername(username);
 
   const src = srcDir(username, cfg);
   const data = dataDir(username, cfg);
 
-  fs.mkdirSync(src, { recursive: true });
   fs.mkdirSync(data, { recursive: true });
 
-  // Clone BOS source for this user from the host repo mounted at bosRepoPath.
-  if (!fs.existsSync(path.join(src, ".git"))) {
+  // Ensure a valid source checkout. Self-heal from a partial/interrupted prior
+  // provision: if src exists but isn't a healthy git repo (e.g. a half-finished
+  // clone left a non-empty directory), wipe it so `git clone` gets a clean
+  // destination instead of failing with "destination path already exists".
+  if (!(await isValidGitRepo(src))) {
+    fs.rmSync(src, { recursive: true, force: true });
+    fs.mkdirSync(path.dirname(src), { recursive: true }); // git clone creates `src` itself
     await execFileAsync("git", ["clone", "--depth=1", "--branch", cfg.bosBaseRef,
       cfg.bosRepoPath, src]);
   }

@@ -34,7 +34,14 @@ const STATUS_PAGE = `<!DOCTYPE html>
   .error-box{display:none;text-align:left;background:#1a0a0a;border:1px solid #5a2020;
              border-radius:6px;padding:14px;margin-bottom:16px}
   .error-title{color:#e55;font-weight:600;font-size:13px;margin-bottom:8px}
-  .error-stack{font-family:monospace;font-size:11px;color:#c77;white-space:pre-wrap;word-break:break-all;margin:0}
+  .error-stack{font-family:monospace;font-size:11px;color:#c77;white-space:pre-wrap;word-break:break-all;margin:0 0 12px}
+  .error-actions{display:flex;gap:8px;flex-wrap:wrap}
+  .btn{display:inline-block;padding:8px 16px;border-radius:6px;font-size:13px;font-weight:500;
+       text-decoration:none;cursor:pointer;border:1px solid transparent}
+  .btn-primary{background:#2563eb;color:#fff}
+  .btn-primary:hover{background:#1d4ed8}
+  .btn-secondary{background:#222;color:#ccc;border-color:#444}
+  .btn-secondary:hover{background:#2a2a2a}
   .account{margin-top:8px;font-size:12px}
   .account a{color:#555;text-decoration:none}
   .account a:hover{color:#888}
@@ -51,6 +58,10 @@ const STATUS_PAGE = `<!DOCTYPE html>
   <div class="error-box" id="error-box">
     <div class="error-title">Provisioning failed</div>
     <pre class="error-stack" id="error-stack"></pre>
+    <div class="error-actions">
+      <a class="btn btn-primary" href="/app/account">Go to my account page</a>
+      <a class="btn btn-secondary" href="/" onclick="sessionStorage.removeItem('bosProvRetries');sessionStorage.removeItem('bosProvRetryAt')">Try again</a>
+    </div>
   </div>
   <div class="account"><a href="/app/account">Account settings</a></div>
 </div>
@@ -66,24 +77,59 @@ const labels = {
   unknown:      'Something went wrong — check the error below.',
   running:      'Ready — loading BrowserOS…'
 };
+// Bounded automatic recovery: provisioning is idempotent and self-healing
+// (it cleans up partial/stale state on retry), so on a failure we re-trigger it
+// a few times before giving up. Reloading '/' hits the proxy, which re-invokes
+// provisioning. A sessionStorage counter caps attempts so we never loop forever;
+// once exhausted the error is shown persistently (never silently swallowed).
+var MAX_AUTO_RETRIES = 3;
+var RETRY_SETTLE_MS = 12000; // after a retry, ignore stale 'unknown' this long
+function retryCount() { return parseInt(sessionStorage.getItem('bosProvRetries') || '0', 10); }
+function retryAt() { return parseInt(sessionStorage.getItem('bosProvRetryAt') || '0', 10); }
 function poll() {
   fetch('/account/instance')
     .then(r => r.json())
     .then(d => {
       msgEl.textContent = labels[d.status] || labels.unknown;
       if (d.provisionLog) logEl.textContent = d.provisionLog;
-      if (d.provisionError) {
-        errorBox.style.display = 'block';
-        dotsEl.style.display = 'none';
-        errorStack.textContent = d.provisionError;
-      } else {
-        errorBox.style.display = 'none';
-      }
+
       if (d.status === 'running') {
+        sessionStorage.removeItem('bosProvRetries');
+        sessionStorage.removeItem('bosProvRetryAt');
+        errorBox.style.display = 'none';
         setTimeout(() => { window.location.replace('/'); }, 300);
-      } else {
-        setTimeout(poll, 2000);
+        return;
       }
+
+      // Failed (unknown status with a captured error): auto-recover a bounded
+      // number of times by re-triggering the self-healing provision.
+      if (d.status === 'unknown' && d.provisionError) {
+        // Right after a retry the background re-provision may not have flipped
+        // status to 'provisioning' yet — ignore the stale failure for a bit so
+        // we don't burn all retries instantly.
+        if (Date.now() - retryAt() < RETRY_SETTLE_MS) {
+          errorBox.style.display = 'none';
+          setTimeout(poll, 2000);
+          return;
+        }
+        var n = retryCount();
+        if (n < MAX_AUTO_RETRIES) {
+          sessionStorage.setItem('bosProvRetries', String(n + 1));
+          sessionStorage.setItem('bosProvRetryAt', String(Date.now()));
+          msgEl.textContent = 'Recovering and retrying (attempt ' + (n + 1) + ' of ' + MAX_AUTO_RETRIES + ')…';
+          errorBox.style.display = 'none';
+          setTimeout(() => { window.location.replace('/'); }, 1500);
+        } else {
+          // Exhausted automatic recovery — surface the error for the operator.
+          errorBox.style.display = 'block';
+          dotsEl.style.display = 'none';
+          errorStack.textContent = d.provisionError;
+        }
+        return;
+      }
+
+      errorBox.style.display = 'none';
+      setTimeout(poll, 2000);
     })
     .catch(() => setTimeout(poll, 2000));
 }
@@ -95,14 +141,22 @@ poll();
 // ── Error page ────────────────────────────────────────────────────────────────
 const ERROR_PAGE = (msg: string) => `<!DOCTYPE html>
 <html><head><title>BrowserOS</title>
-<style>body{font-family:sans-serif;display:flex;align-items:center;justify-content:center;
+<style>body{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;
 height:100vh;margin:0;background:#0f0f0f;color:#ccc}
-.box{text-align:center;max-width:400px}.box h2{color:#e55;margin-bottom:12px}
-.box a{color:#7af}</style></head>
+.box{text-align:center;max-width:420px;padding:24px}.box h2{color:#e55;margin-bottom:12px;font-size:18px}
+.box p{font-size:14px;color:#888}
+.actions{display:flex;gap:8px;justify-content:center;margin-top:20px}
+.btn{display:inline-block;padding:8px 16px;border-radius:6px;font-size:13px;font-weight:500;
+text-decoration:none;border:1px solid transparent}
+.btn-primary{background:#2563eb;color:#fff}.btn-primary:hover{background:#1d4ed8}
+.btn-secondary{background:#222;color:#ccc;border:1px solid #444}.btn-secondary:hover{background:#2a2a2a}</style></head>
 <body><div class="box">
 <h2>Could not start your BOS instance</h2>
 <p>${msg}</p>
-<p style="margin-top:16px"><a href="/app/account">Go to Account page</a></p>
+<div class="actions">
+<a class="btn btn-primary" href="/app/account">Go to my account page</a>
+<a class="btn btn-secondary" href="/">Try again</a>
+</div>
 </div></body></html>`;
 
 // ── Proxy factory ─────────────────────────────────────────────────────────────
