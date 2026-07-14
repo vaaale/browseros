@@ -6,6 +6,8 @@
 # This image doubles as the run_command local sandbox environment (FR-024):
 # it bundles the same runtimes as docker/run-command/Dockerfile so that
 # run_command works inside a user container without a separate image.
+# Package selection mirrors docker/run-command/Dockerfile exactly so both
+# backends produce identical skill behaviour.
 #
 # Approx compressed image size: ~1.5–2 GB (LibreOffice ~400 MB, Python stack
 # ~150 MB, Claude Code + OpenCode ~200 MB, BOS source + Node.js base ~300 MB).
@@ -13,31 +15,37 @@
 
 FROM node:20-alpine AS runtime
 
-# Install system packages in a single layer to keep image size down.
-# apt cache is cleaned to avoid bloating the layer.
+# System packages — all in one layer to minimise image size.
+# LibreOffice requires OpenJDK on Alpine; we include the headless JRE only.
 RUN apk add --no-cache \
     git \
     python3 \
-    py3-pip \
     py3-virtualenv \
     poppler-utils \
-    # LibreOffice for document conversion (run_command skills)
     libreoffice \
-    # Runtime deps for LibreOffice on Alpine
     openjdk17-jre-headless \
-    font-dejavu \
-    # Build tools needed for some pip packages
-    gcc \
-    musl-dev \
-    python3-dev \
-    libffi-dev
+    font-dejavu
 
-# Python packages for run_command skills
-RUN python3 -m pip install --no-cache-dir \
+# Python tooling lives in a virtualenv, NOT the system interpreter.
+# Alpine's system Python is "externally managed" (PEP 668) — bare pip installs
+# fail. A venv on PATH makes python/pip/ipython resolve to it transparently.
+ENV VIRTUAL_ENV=/opt/venv
+RUN python3 -m venv "$VIRTUAL_ENV"
+ENV PATH="$VIRTUAL_ENV/bin:$PATH"
+
+# Match the package set from docker/run-command/Dockerfile so local-backend
+# run_command behaves identically to the Docker-backend sandbox.
+RUN pip install --no-cache-dir \
+    ipython \
+    "markitdown[pptx]" \
+    Pillow \
     python-pptx \
-    pptxgenjs \
-    requests \
-    pillow
+    docx
+
+# pptxgenjs is a Node package (used by run_command skills for pptx generation).
+# Make it resolvable from /workspace scripts via NODE_PATH.
+RUN npm install -g pptxgenjs
+ENV NODE_PATH=/usr/local/lib/node_modules
 
 WORKDIR /app
 
