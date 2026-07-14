@@ -46,6 +46,10 @@ export default function Admin() {
   const [buildStatus, setBuildStatus] = useState<"idle" | "building" | "success" | "error">("idle");
   const [buildError, setBuildError] = useState("");
 
+  // Active-image selection
+  const [selectedImage, setSelectedImage] = useState("");
+  const [activeImage, setActiveImageTag] = useState("");
+
   // Logs tab
   const [logUser, setLogUser] = useState("");
   const [logContent, setLogContent] = useState("");
@@ -54,17 +58,20 @@ export default function Admin() {
   const buildAbortRef = useRef<AbortController | null>(null);
 
   async function loadAll() {
-    const [u, i, img, setup] = await Promise.all([
+    const [u, i, img, setup, cfg] = await Promise.all([
       fetch("/admin/users").then(r => r.ok ? r.json() : null),
       fetch("/admin/instances").then(r => r.ok ? r.json() : []),
       fetch("/admin/images").then(r => r.ok ? r.json() : { images: [] }),
       fetch("/setup/state").then(r => r.ok ? r.json() : null),
+      fetch("/admin/config").then(r => r.ok ? r.json() : {}),
     ]);
     if (!u) { navigate("/login"); return; }
     setUsers(u as User[]);
     setInstances(i as Instance[]);
     setImages((img as { images: ImageInfo[] }).images ?? []);
     if (setup) setIsKeycloak((setup as { authProvider: string }).authProvider === "keycloak");
+    const active = (cfg as { bosImage?: string }).bosImage ?? "";
+    setActiveImageTag(active);
   }
 
   useEffect(() => { void loadAll(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -154,6 +161,10 @@ export default function Admin() {
     { id: "containers", label: "Containers" },
     { id: "logs", label: "Logs" },
   ];
+
+  // Flatten all repo tags across images into a de-duplicated, sorted list for
+  // the "active image" dropdown.
+  const imageTags = Array.from(new Set(images.flatMap(img => img.tags))).sort();
 
   return (
     <div style={s.page}>
@@ -254,23 +265,35 @@ export default function Admin() {
             </div>
 
             <div style={s.card}>
-              <div style={s.sectionTitle}>Local images</div>
-              {images.length === 0
-                ? <p style={{ fontSize: 12, color: "#555" }}>No images found</p>
+              <div style={s.sectionTitle}>Active image for new containers</div>
+              {activeImage && (
+                <div style={{ fontSize: 12, color: "#888", marginBottom: 12 }}>
+                  Currently active: <span style={{ color: "#7af", fontFamily: "monospace" }}>{activeImage}</span>
+                </div>
+              )}
+              {imageTags.length === 0
+                ? <p style={{ fontSize: 12, color: "#555" }}>No tagged images found — build one above.</p>
                 : (
-                  <table style={s.table}>
-                    <thead><tr><th style={s.th}>Tags</th><th style={s.th}>ID</th><th style={s.th}>Size</th><th style={s.th}></th></tr></thead>
-                    <tbody>
-                      {images.map(img => (
-                        <tr key={img.id}>
-                          <td style={s.td}>{img.tags.length ? img.tags.join(", ") : <span style={{ color: "#555" }}>&lt;none&gt;</span>}</td>
-                          <td style={{ ...s.td, fontFamily: "monospace", fontSize: 11, color: "#666" }}>{img.id}</td>
-                          <td style={{ ...s.td, color: "#888" }}>{img.sizeMb} MB</td>
-                          <td style={s.td}>{img.tags[0] && <Button size="sm" variant="secondary" onClick={() => setActiveImage(img.tags[0])}>Set active</Button>}</td>
-                        </tr>
+                  <div style={s.row}>
+                    <select
+                      style={{ ...s.input, fontSize: 13, minWidth: 260 }}
+                      value={selectedImage}
+                      onChange={e => setSelectedImage(e.target.value)}
+                    >
+                      <option value="">Select an image…</option>
+                      {imageTags.map(tag => (
+                        <option key={tag} value={tag}>{tag}</option>
                       ))}
-                    </tbody>
-                  </table>
+                    </select>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      disabled={!selectedImage || selectedImage === activeImage}
+                      onClick={() => setActiveImage(selectedImage)}
+                    >
+                      Set active
+                    </Button>
+                  </div>
                 )
               }
             </div>

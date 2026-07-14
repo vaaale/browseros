@@ -201,13 +201,14 @@ export function createAdminRouter(cfg: Config, provider: AuthProvider): Router {
   // ── Config ─────────────────────────────────────────────────────────────────
   router.get("/config", (_req, res) => {
     try {
-      const fs = require("fs") as typeof import("fs");
-      const path = require("path") as typeof import("path");
       const file = path.join(cfg.dataDir, "config.json");
-      const data = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : {};
+      const data = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, unknown> : {};
+      // Fall back to the effective (env-derived) bosImage so the UI shows the
+      // active image even when it was never persisted to config.json.
+      if (!data.bosImage) data.bosImage = cfg.bosImage;
       res.json(data);
     } catch {
-      res.json({});
+      res.json({ bosImage: cfg.bosImage });
     }
   });
 

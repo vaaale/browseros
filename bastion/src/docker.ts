@@ -141,13 +141,25 @@ export async function killContainer(username: string): Promise<void> {
 
 export async function listBosImages(): Promise<Array<{ id: string; tags: string[]; sizeMb: number; created: number }>> {
   const images = await docker.listImages({ all: false });
-  return images.map((img) => ({
-    id: img.Id.slice(7, 19), // strip "sha256:" prefix, keep 12 chars
-    tags: img.RepoTags ?? [],
-    sizeMb: Math.round(img.Size / 1024 / 1024),
-    created: img.Created,
-  }));
+  return images
+    // Drop untagged / dangling images (RepoTags null or "<none>:<none>").
+    .filter((img) => (img.RepoTags ?? []).some((t) => t && t !== "<none>:<none>"))
+    .map((img) => ({
+      id: img.Id.slice(7, 19), // strip "sha256:" prefix, keep 12 chars
+      tags: (img.RepoTags ?? []).filter((t) => t && t !== "<none>:<none>"),
+      sizeMb: Math.round(img.Size / 1024 / 1024),
+      created: img.Created,
+    }));
 }
+
+// Directories/files that must never enter the build context. Mirrors
+// .dockerignore — packing data/ or user-data/ (live container state, sockets,
+// concurrently-written files) is what causes "Error in input stream".
+const BUILD_IGNORE_DIRS = new Set([
+  "node_modules", ".next", ".git", "data", "user-data",
+  "apps", "specs", "playwright-report", "test-results", "dist",
+]);
+const BUILD_IGNORE_FILES = new Set([".env", ".env.local"]);
 
 export async function buildImage(
   repoPath: string,
@@ -155,25 +167,40 @@ export async function buildImage(
   tag: string,
   onEvent: (event: { line?: string; error?: string; status?: string }) => void,
 ): Promise<void> {
+  const path = await import("path");
   const tarFs = await import("tar-fs");
   const tarStream = tarFs.default.pack(repoPath, {
-    ignore: (name: string) =>
-      name.includes("node_modules") || name.includes(".next") || name.includes(".git"),
+    ignore: (fullPath: string) => {
+      const rel = path.relative(repoPath, fullPath);
+      const segments = rel.split(path.sep);
+      if (segments.some((seg) => BUILD_IGNORE_DIRS.has(seg))) return true;
+      if (BUILD_IGNORE_FILES.has(path.basename(fullPath))) return true;
+      return false;
+    },
   });
-  const buildStream = await docker.buildImage(tarStream, { t: tag, dockerfile });
+
   await new Promise<void>((resolve, reject) => {
-    docker.modem.followProgress(
-      buildStream,
-      (err: Error | null) => { if (err) reject(err); else resolve(); },
-      (event: { stream?: string; error?: string }) => {
-        if (event.error) {
-          onEvent({ error: event.error });
-        } else if (event.stream) {
-          const line = event.stream.replace(/\n$/, "");
-          if (line) onEvent({ line });
-        }
-      },
-    );
+    // A failure reading the source tree (e.g. a vanished/socket file) surfaces
+    // here — reject cleanly instead of letting dockerode report a cryptic
+    // "Error in input stream".
+    tarStream.on("error", (err: Error) => reject(err));
+
+    docker.buildImage(tarStream, { t: tag, dockerfile })
+      .then((buildStream) => {
+        docker.modem.followProgress(
+          buildStream,
+          (err: Error | null) => { if (err) reject(err); else resolve(); },
+          (event: { stream?: string; error?: string }) => {
+            if (event.error) {
+              onEvent({ error: event.error });
+            } else if (event.stream) {
+              const line = event.stream.replace(/\n$/, "");
+              if (line) onEvent({ line });
+            }
+          },
+        );
+      })
+      .catch(reject);
   });
 }
 
