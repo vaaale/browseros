@@ -1,16 +1,19 @@
-const colors: Record<string, string> = {
-  running: "bg-green-900/60 text-green-300 border-green-700",
-  stopped: "bg-gray-800 text-gray-400 border-gray-600",
-  provisioning: "bg-yellow-900/60 text-yellow-300 border-yellow-700",
-  failed: "bg-red-900/60 text-red-300 border-red-700",
-  unknown: "bg-gray-800 text-gray-500 border-gray-700",
-  not_provisioned: "bg-gray-800 text-gray-500 border-gray-700",
+const styles: Record<string, { bg: string; color: string }> = {
+  running:        { bg: "#4ade8022", color: "#4ade80" },
+  stopped:        { bg: "#f8717122", color: "#f87171" },
+  provisioning:   { bg: "#fbbf2422", color: "#fbbf24" },
+  failed:         { bg: "#f8717122", color: "#f87171" },
+  unknown:        { bg: "#94a3b822", color: "#94a3b8" },
+  not_provisioned:{ bg: "#55555522", color: "#888" },
 };
 
 export function Badge({ status }: { status: string }) {
-  const cls = colors[status] ?? colors.unknown;
+  const s = styles[status] ?? styles.unknown;
   return (
-    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${cls}`}>
+    <span
+      style={{ background: s.bg, color: s.color }}
+      className="inline-block px-2.5 py-0.5 rounded-full text-xs font-semibold"
+    >
       {status}
     </span>
   );

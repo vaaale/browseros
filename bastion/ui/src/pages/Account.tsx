@@ -2,18 +2,32 @@ import { useState, useEffect, useRef, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "../components/Button";
 import { Badge } from "../components/Badge";
-import { Card } from "../components/Card";
 import { Dialog } from "../components/Dialog";
 import { LogView } from "../components/LogView";
 
 interface Me { username: string; isAdmin: boolean; }
 interface InstanceState { username: string; status: string; lastActive: number; error?: string; }
-interface SetupState { authProvider: string; }
+
+const s = {
+  page:    { minHeight: "100vh", background: "#0f0f0f", color: "#eee" },
+  header:  { borderBottom: "1px solid #222", padding: "12px 24px", display: "flex", alignItems: "center", justifyContent: "space-between" },
+  inner:   { maxWidth: 680, margin: "0 auto", padding: "24px 16px" },
+  card:    { background: "#1a1a1a", border: "1px solid #333", borderRadius: 8, padding: 20, marginBottom: 16 },
+  section: { fontSize: 13, fontWeight: 600, color: "#ccc", marginBottom: 12 },
+  label:   { display: "block", marginBottom: 4, fontSize: 12, color: "#aaa" },
+  input:   { width: "100%", maxWidth: 280, padding: "7px 10px", background: "#0f0f0f", border: "1px solid #444", borderRadius: 4, color: "#eee", fontSize: 13, outline: "none", boxSizing: "border-box" as const },
+  row:     { display: "flex", gap: 8, flexWrap: "wrap" as const, alignItems: "center" },
+  err:     { color: "#f87171", fontSize: 12, marginTop: 8 },
+  ok:      { color: "#4ade80", fontSize: 12, marginTop: 8 },
+  dangerTitle: { fontSize: 13, fontWeight: 600, color: "#f87171", marginBottom: 12 },
+  opDesc:  { fontSize: 12, color: "#777", marginBottom: 8 },
+  sep:     { borderTop: "1px solid #2a2a2a", margin: "14px 0" },
+};
 
 export default function Account() {
   const [me, setMe] = useState<Me | null>(null);
   const [state, setState] = useState<InstanceState | null>(null);
-  const [setupState, setSetupState] = useState<SetupState | null>(null);
+  const [isKeycloak, setIsKeycloak] = useState(false);
   const [log, setLog] = useState("");
   const [showLog, setShowLog] = useState(false);
   const [loadingOp, setLoadingOp] = useState<string | null>(null);
@@ -21,65 +35,46 @@ export default function Account() {
   const [wipeDialog, setWipeDialog] = useState(false);
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const avatarInputRef = useRef<HTMLInputElement>(null);
-
-  // Password change
-  const [pwCurrent, setPwCurrent] = useState("");
   const [pwNew, setPwNew] = useState("");
   const [pwConfirm, setPwConfirm] = useState("");
   const [pwError, setPwError] = useState("");
-  const [pwSuccess, setPwSuccess] = useState(false);
-
+  const [pwOk, setPwOk] = useState(false);
   const navigate = useNavigate();
-  const isKeycloak = setupState?.authProvider === "keycloak";
 
   useEffect(() => {
     void Promise.all([
-      fetch("/account/me").then((r) => (r.ok ? r.json() : null)).then((d) => {
+      fetch("/account/me").then(r => r.ok ? r.json() : null).then(d => {
         if (!d) { navigate("/login"); return; }
         setMe(d as Me);
-        // Build avatar URL using the username.
         setAvatarUrl(`/avatar/${encodeURIComponent((d as Me).username)}`);
       }),
-      fetch("/account/instance").then((r) => r.json()).then((d) => setState(d as InstanceState)),
-      fetch("/setup/state").then((r) => (r.ok ? r.json() : null)).then((d) => setSetupState(d as SetupState)),
+      fetch("/account/instance").then(r => r.json()).then(d => setState(d as InstanceState)),
+      fetch("/setup/state").then(r => r.ok ? r.json() : null).then(d => {
+        if (d) setIsKeycloak((d as { authProvider: string }).authProvider === "keycloak");
+      }),
     ]);
   }, [navigate]);
 
   async function doOp(op: string) {
-    setLoadingOp(op);
-    setOpError("");
+    setLoadingOp(op); setOpError("");
     const res = await fetch("/account/reprovision", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
+      method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ operation: op, confirm: true }),
     });
     setLoadingOp(null);
-    if (!res.ok) {
-      const d = await res.json() as { error: string };
-      setOpError(d.error);
-      return;
-    }
+    if (!res.ok) { const d = await res.json() as { error: string }; setOpError(d.error); return; }
     window.location.href = "/";
   }
 
   async function doWipe() {
-    setWipeDialog(false);
-    setLoadingOp("wipe");
-    setOpError("");
+    setWipeDialog(false); setLoadingOp("wipe"); setOpError("");
     const res = await fetch("/account/wipe-data", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
+      method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ confirm: true }),
     });
     setLoadingOp(null);
-    if (!res.ok) {
-      const d = await res.json() as { error: string };
-      setOpError(d.error);
-      return;
-    }
-    // Refresh instance state
-    const inst = await fetch("/account/instance").then((r) => r.json());
-    setState(inst as InstanceState);
+    if (!res.ok) { const d = await res.json() as { error: string }; setOpError(d.error); return; }
+    setState(await fetch("/account/instance").then(r => r.json()) as InstanceState);
   }
 
   async function logout() {
@@ -89,32 +84,20 @@ export default function Account() {
 
   async function loadLog() {
     const res = await fetch("/account/log");
-    if (res.ok) {
-      const d = await res.json() as { log: string };
-      setLog(d.log);
-      setShowLog(true);
-    }
+    if (res.ok) { const d = await res.json() as { log: string }; setLog(d.log); setShowLog(true); }
   }
 
   async function changePassword(e: FormEvent) {
-    e.preventDefault();
-    setPwError("");
-    setPwSuccess(false);
-    if (pwNew.length < 8) { setPwError("New password must be at least 8 characters."); return; }
+    e.preventDefault(); setPwError(""); setPwOk(false);
+    if (pwNew.length < 8) { setPwError("At least 8 characters."); return; }
     if (pwNew !== pwConfirm) { setPwError("Passwords do not match."); return; }
     const res = await fetch("/account/password", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
+      method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ newPassword: pwNew }),
     });
-    if (!res.ok) {
-      const d = await res.json() as { error: string };
-      setPwError(d.error);
-      return;
-    }
-    setPwCurrent(""); setPwNew(""); setPwConfirm("");
-    setPwSuccess(true);
-    setTimeout(() => setPwSuccess(false), 4000);
+    if (!res.ok) { const d = await res.json() as { error: string }; setPwError(d.error); return; }
+    setPwNew(""); setPwConfirm(""); setPwOk(true);
+    setTimeout(() => setPwOk(false), 4000);
   }
 
   async function uploadAvatar(e: React.ChangeEvent<HTMLInputElement>) {
@@ -125,154 +108,117 @@ export default function Account() {
     const form = new FormData();
     form.append("avatar", file);
     const res = await fetch("/account/avatar", { method: "POST", body: form });
-    if (res.ok) {
-      // Cache-bust the avatar URL after upload.
-      setAvatarUrl(`/avatar/${encodeURIComponent(me?.username ?? "")}?t=${Date.now()}`);
-    } else {
-      const d = await res.json() as { error?: string };
-      setOpError(d.error ?? "Upload failed");
-    }
-    // Reset file input so the same file can be selected again.
+    if (res.ok) setAvatarUrl(`/avatar/${encodeURIComponent(me?.username ?? "")}?t=${Date.now()}`);
+    else { const d = await res.json() as { error?: string }; setOpError(d.error ?? "Upload failed"); }
     if (avatarInputRef.current) avatarInputRef.current.value = "";
   }
 
+  const username = me?.username ?? "";
+
   return (
-    <div className="min-h-screen bg-gray-900 text-gray-100">
+    <div style={s.page}>
       {/* Header */}
-      <div className="border-b border-gray-700 bg-gray-800/50">
-        <div className="max-w-2xl mx-auto px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            {avatarUrl && (
-              <img
-                src={avatarUrl}
-                alt="avatar"
-                className="w-7 h-7 rounded-full object-cover bg-gray-700"
-                onError={() => setAvatarUrl(null)}
-              />
-            )}
-            <span className="font-semibold text-white">{me?.username ?? "…"}</span>
-          </div>
-          <div className="flex items-center gap-3">
-            {me?.isAdmin && <a href="/app/admin" className="text-sm text-blue-400 hover:text-blue-300">Admin panel</a>}
-            <Button variant="ghost" size="sm" onClick={logout}>Sign out</Button>
-          </div>
+      <div style={s.header}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          {avatarUrl && (
+            <img
+              src={avatarUrl}
+              alt={username}
+              style={{ width: 26, height: 26, borderRadius: "50%", objectFit: "cover", background: "#333" }}
+              onError={() => setAvatarUrl(null)}
+            />
+          )}
+          <span style={{ fontSize: 15, fontWeight: 600 }}>{username || "…"}</span>
+        </div>
+        <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+          {me?.isAdmin && <a href="/app/admin" style={{ color: "#7af", fontSize: 12 }}>Admin panel</a>}
+          <Button variant="ghost" size="sm" onClick={logout}>Sign out</Button>
         </div>
       </div>
 
-      <div className="max-w-2xl mx-auto px-4 py-6 space-y-4">
+      <div style={s.inner}>
 
         {/* Instance status */}
-        <Card>
-          <div className="flex items-center justify-between mb-3">
-            <span className="text-sm font-medium text-gray-300">Instance</span>
+        <div style={s.card}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+            <div style={s.section}>Instance</div>
             {state && <Badge status={state.status} />}
           </div>
           {state?.lastActive && state.lastActive > 0 && (
-            <div className="text-xs text-gray-500 mb-3">
+            <div style={{ fontSize: 12, color: "#666", marginBottom: 10 }}>
               Last active: {new Date(state.lastActive).toLocaleString()}
             </div>
           )}
           {state?.error && (
-            <div className="mb-3 px-3 py-2 bg-red-900/30 border border-red-700 rounded text-red-300 text-xs">
-              Error: {state.error}
+            <div style={{ background: "#1a0808", border: "1px solid #5a1010", borderRadius: 4, padding: "8px 12px", marginBottom: 12, color: "#f87171", fontSize: 12 }}>
+              {state.error}
             </div>
           )}
-          <div className="flex gap-2 flex-wrap">
-            <Button size="sm" onClick={() => doOp("restart")} loading={loadingOp === "restart"} disabled={loadingOp !== null}>
-              Restart
-            </Button>
-            <Button size="sm" variant="secondary" onClick={() => doOp("update-src")} loading={loadingOp === "update-src"} disabled={loadingOp !== null}>
-              Update source
-            </Button>
-            <Button size="sm" variant="secondary" onClick={() => doOp("rebuild-nm")} loading={loadingOp === "rebuild-nm"} disabled={loadingOp !== null}>
-              Rebuild deps
-            </Button>
-            <a href="/" className="inline-flex items-center px-3 py-1.5 text-sm border border-blue-600 text-blue-400 hover:bg-blue-900/30 rounded font-medium transition-colors">
-              Open BrowserOS
+          <div style={s.row}>
+            <Button size="sm" onClick={() => doOp("restart")} loading={loadingOp === "restart"} disabled={loadingOp !== null}>Restart</Button>
+            <Button size="sm" variant="secondary" onClick={() => doOp("update-src")} loading={loadingOp === "update-src"} disabled={loadingOp !== null}>Update source</Button>
+            <Button size="sm" variant="secondary" onClick={() => doOp("rebuild-nm")} loading={loadingOp === "rebuild-nm"} disabled={loadingOp !== null}>Rebuild deps</Button>
+            <a href="/" style={{ padding: "4px 10px", border: "1px solid #2563eb", borderRadius: 4, color: "#7af", fontSize: 12, textDecoration: "none" }}>
+              Open BrowserOS ↗
             </a>
           </div>
-          {opError && <div className="mt-2 text-red-400 text-xs">{opError}</div>}
-        </Card>
+          {opError && <div style={s.err}>{opError}</div>}
+        </div>
 
         {/* Profile image */}
-        <Card>
-          <div className="text-sm font-medium text-gray-300 mb-3">Profile image</div>
-          <div className="flex items-center gap-4">
+        <div style={s.card}>
+          <div style={s.section}>Profile image</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
             {avatarUrl
-              ? <img src={avatarUrl} alt="avatar" className="w-14 h-14 rounded-full object-cover bg-gray-700" onError={() => setAvatarUrl(null)} />
-              : <div className="w-14 h-14 rounded-full bg-gray-700 flex items-center justify-center text-gray-500 text-xl">{me?.username?.[0]?.toUpperCase() ?? "?"}</div>
+              ? <img src={avatarUrl} alt={username} style={{ width: 52, height: 52, borderRadius: "50%", objectFit: "cover", background: "#333" }} onError={() => setAvatarUrl(null)} />
+              : <div style={{ width: 52, height: 52, borderRadius: "50%", background: "#222", border: "1px solid #444", display: "flex", alignItems: "center", justifyContent: "center", color: "#555", fontSize: 18 }}>
+                  {username[0]?.toUpperCase() ?? "?"}
+                </div>
             }
             <div>
-              <Button size="sm" variant="secondary" onClick={() => avatarInputRef.current?.click()}>
-                Upload image
-              </Button>
-              <p className="text-xs text-gray-500 mt-1">PNG, JPG, GIF, WebP — max 2 MB</p>
+              <Button size="sm" variant="secondary" onClick={() => avatarInputRef.current?.click()}>Upload image</Button>
+              <div style={{ fontSize: 11, color: "#666", marginTop: 4 }}>PNG, JPG, GIF, WebP — max 2 MB</div>
             </div>
           </div>
-          <input ref={avatarInputRef} type="file" accept="image/*" className="hidden" onChange={uploadAvatar} />
-        </Card>
+          <input ref={avatarInputRef} type="file" accept="image/*" style={{ display: "none" }} onChange={uploadAvatar} />
+        </div>
 
-        {/* Password change (simple auth only) */}
+        {/* Password */}
         {!isKeycloak && (
-          <Card>
-            <div className="text-sm font-medium text-gray-300 mb-3">Change password</div>
-            {pwError && <div className="mb-3 text-red-400 text-xs">{pwError}</div>}
-            {pwSuccess && <div className="mb-3 text-green-400 text-xs">Password updated.</div>}
-            <form onSubmit={changePassword} className="space-y-3">
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">New password</label>
-                <input
-                  type="password"
-                  value={pwNew}
-                  onChange={(e) => setPwNew(e.target.value)}
-                  className="w-full max-w-xs px-2.5 py-1.5 bg-gray-900 border border-gray-600 rounded text-sm text-gray-100 focus:outline-none focus:border-blue-500"
-                />
-              </div>
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Confirm new password</label>
-                <input
-                  type="password"
-                  value={pwConfirm}
-                  onChange={(e) => setPwConfirm(e.target.value)}
-                  className="w-full max-w-xs px-2.5 py-1.5 bg-gray-900 border border-gray-600 rounded text-sm text-gray-100 focus:outline-none focus:border-blue-500"
-                />
-              </div>
-              <Button type="submit" size="sm">Update password</Button>
+          <div style={s.card}>
+            <div style={s.section}>Change password</div>
+            {pwError && <div style={s.err}>{pwError}</div>}
+            {pwOk && <div style={s.ok}>Password updated.</div>}
+            <form onSubmit={changePassword} style={{ display: "flex", flexDirection: "column" as const, gap: 10 }}>
+              <div><label style={s.label}>New password</label><input type="password" style={s.input} value={pwNew} onChange={e => setPwNew(e.target.value)} /></div>
+              <div><label style={s.label}>Confirm</label><input type="password" style={s.input} value={pwConfirm} onChange={e => setPwConfirm(e.target.value)} /></div>
+              <div><Button type="submit" size="sm">Update password</Button></div>
             </form>
-          </Card>
+          </div>
         )}
 
-        {/* Provisioning log */}
-        <Card>
-          <div className="flex items-center justify-between mb-3">
-            <span className="text-sm font-medium text-gray-300">Provisioning log</span>
+        {/* Log */}
+        <div style={s.card}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: showLog ? 12 : 0 }}>
+            <div style={s.section}>Provisioning log</div>
             <Button size="sm" variant="secondary" onClick={loadLog}>Load log</Button>
           </div>
           {showLog && <LogView log={log} />}
-        </Card>
+        </div>
 
         {/* Danger zone */}
-        <Card>
-          <div className="text-sm font-medium text-red-400 mb-3">Danger zone</div>
-          <div className="space-y-3">
-            <div>
-              <div className="text-xs text-gray-400 mb-1.5">
-                Full re-provision — wipes source, data, and dependencies. A clean slate.
-              </div>
-              <Button size="sm" variant="danger" loading={loadingOp === "full"} disabled={loadingOp !== null} onClick={() => doOp("full")}>
-                Full re-provision
-              </Button>
-            </div>
-            <div className="border-t border-gray-700 pt-3">
-              <div className="text-xs text-gray-400 mb-1.5">
-                Wipe my data — permanently destroys your VFS files and conversation history. Source code is preserved.
-              </div>
-              <Button size="sm" variant="danger" loading={loadingOp === "wipe"} disabled={loadingOp !== null} onClick={() => setWipeDialog(true)}>
-                Wipe my data
-              </Button>
-            </div>
-          </div>
-        </Card>
+        <div style={{ ...s.card, borderColor: "#3a1a1a" }}>
+          <div style={s.dangerTitle}>Danger zone</div>
+          <div style={s.opDesc}>Full re-provision — wipes source, data, and dependencies.</div>
+          <Button size="sm" variant="danger" loading={loadingOp === "full"} disabled={loadingOp !== null} onClick={() => doOp("full")}>
+            Full re-provision
+          </Button>
+          <div style={s.sep} />
+          <div style={s.opDesc}>Wipe my data — permanently destroys your VFS files and conversation history. Source is preserved.</div>
+          <Button size="sm" variant="danger" loading={loadingOp === "wipe"} disabled={loadingOp !== null} onClick={() => setWipeDialog(true)}>
+            Wipe my data
+          </Button>
+        </div>
       </div>
 
       <Dialog

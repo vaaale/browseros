@@ -138,7 +138,9 @@ export function createBosProxy(cfg: Config): RequestHandler & { upgrade?: (serve
     const session = verifySession(req, cfg);
     if (!session) {
       clearSession(res);
-      res.redirect("/app/login");
+      // Route through the auth /login endpoint so it can check bootstrap state
+      // and redirect to /app/setup (first run) or /app/login as appropriate.
+      res.redirect("/login");
       return;
     }
 

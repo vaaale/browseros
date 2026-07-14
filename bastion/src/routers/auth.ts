@@ -17,9 +17,16 @@ export function createAuthRouter(cfg: Config, provider: AuthProvider): Router {
   // ── Login page redirect ────────────────────────────────────────────────────
   // Authenticated users hitting /login go to / (proxy handles BOS or status).
   // Unauthenticated users get the SPA login page.
-  router.get("/login", (req, res) => {
+  router.get("/login", async (req, res) => {
     const session = verifySession(req, cfg);
     if (session) { res.redirect("/"); return; }
+    // First-run: if simple auth has no admin yet, show the bootstrap setup page
+    // instead of the normal login. This check is server-side so it works even
+    // before the SPA's BootstrapGuard has a chance to run.
+    if (cfg.authProvider === "simple" && !(await provider.adminExists())) {
+      res.redirect("/app/setup");
+      return;
+    }
     res.redirect("/app/login");
   });
   // NOTE: no GET / handler here — the proxy catch-all owns the root path.

@@ -8,7 +8,8 @@ export function LogView({ log, className = "" }: { log: string; className?: stri
   return (
     <pre
       ref={ref}
-      className={`bg-gray-950 text-green-400 text-xs font-mono p-3 rounded-md overflow-auto max-h-80 whitespace-pre-wrap break-all border border-gray-800 ${className}`}
+      className={`text-xs font-mono p-3 rounded overflow-auto max-h-80 whitespace-pre-wrap break-all ${className}`}
+      style={{ background: "#0a0a0a", color: "#4ade80", border: "1px solid #222" }}
     >
       {log || "(no log entries yet)"}
     </pre>
