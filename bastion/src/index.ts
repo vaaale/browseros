@@ -2,19 +2,23 @@ import express from "express";
 import cookieParser from "cookie-parser";
 import http from "http";
 import path from "path";
+import fs from "fs";
 import { loadConfig } from "./config";
 import { loadProvider } from "./auth/index";
 import { createAuthRouter } from "./routers/auth";
 import { createAdminRouter } from "./routers/admin";
 import { createAccountRouter } from "./routers/account";
+import { createSetupRouter } from "./routers/setup";
 import { createBosProxy } from "./proxy";
 import { initLifecycle, reconcileOnStartup, getAllInstances, stopInstance } from "./lifecycle";
+import { initLogStore } from "./log-store";
 
 async function main(): Promise<void> {
   const cfg = loadConfig();
   const provider = await loadProvider(cfg);
 
   initLifecycle(cfg);
+  initLogStore(cfg.dataDir);
 
   const app = express();
 
@@ -30,6 +34,25 @@ async function main(): Promise<void> {
   app.get("/app/*", (_req, res) => {
     res.sendFile(path.join(uiDist, "index.html"));
   });
+
+  // Avatar serving — no auth required; validates username charset to prevent
+  // path traversal before constructing the file path.
+  const DEFAULT_AVATAR_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><circle cx="20" cy="20" r="20" fill="#374151"/><circle cx="20" cy="16" r="7" fill="#6b7280"/><ellipse cx="20" cy="34" rx="12" ry="8" fill="#6b7280"/></svg>`;
+  app.get("/avatar/:username", (req, res) => {
+    const { username } = req.params;
+    if (!/^[a-z0-9_-]+$/.test(username)) { res.status(400).send("Invalid username"); return; }
+    const avatarDir = path.join(cfg.dataDir, "avatars");
+    for (const ext of ["png", "jpg", "gif", "webp"]) {
+      const f = path.join(avatarDir, `${username}.${ext}`);
+      if (fs.existsSync(f)) { res.sendFile(f); return; }
+    }
+    // Serve bundled SVG default avatar.
+    res.setHeader("Content-Type", "image/svg+xml");
+    res.send(DEFAULT_AVATAR_SVG);
+  });
+
+  // Setup router — no auth required; must be mounted before the auth router.
+  app.use("/setup", createSetupRouter(cfg, provider));
 
   app.use("/", createAuthRouter(cfg, provider));
   app.use("/admin", createAdminRouter(cfg, provider));

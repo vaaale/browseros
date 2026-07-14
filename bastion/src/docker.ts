@@ -128,6 +128,55 @@ export async function listBosContainers(): Promise<Array<{ name: string; id: str
     }));
 }
 
+export async function killContainer(username: string): Promise<void> {
+  const name = containerName(username);
+  try {
+    const c = docker.getContainer(name);
+    await c.remove({ force: true });
+  } catch (e: unknown) {
+    const code = (e as { statusCode?: number }).statusCode;
+    if (code !== 404) throw e;
+  }
+}
+
+export async function listBosImages(): Promise<Array<{ id: string; tags: string[]; sizeMb: number; created: number }>> {
+  const images = await docker.listImages({ all: false });
+  return images.map((img) => ({
+    id: img.Id.slice(7, 19), // strip "sha256:" prefix, keep 12 chars
+    tags: img.RepoTags ?? [],
+    sizeMb: Math.round(img.Size / 1024 / 1024),
+    created: img.Created,
+  }));
+}
+
+export async function buildImage(
+  repoPath: string,
+  dockerfile: string,
+  tag: string,
+  onEvent: (event: { line?: string; error?: string; status?: string }) => void,
+): Promise<void> {
+  const tarFs = await import("tar-fs");
+  const tarStream = tarFs.default.pack(repoPath, {
+    ignore: (name: string) =>
+      name.includes("node_modules") || name.includes(".next") || name.includes(".git"),
+  });
+  const buildStream = await docker.buildImage(tarStream, { t: tag, dockerfile });
+  await new Promise<void>((resolve, reject) => {
+    docker.modem.followProgress(
+      buildStream,
+      (err: Error | null) => { if (err) reject(err); else resolve(); },
+      (event: { stream?: string; error?: string }) => {
+        if (event.error) {
+          onEvent({ error: event.error });
+        } else if (event.stream) {
+          const line = event.stream.replace(/\n$/, "");
+          if (line) onEvent({ line });
+        }
+      },
+    );
+  });
+}
+
 export async function waitForHealthy(username: string, timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   const hostname = containerName(username);

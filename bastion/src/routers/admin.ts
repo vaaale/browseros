@@ -1,6 +1,8 @@
 import { Router } from "express";
 import express from "express";
 import type { Request, Response, NextFunction } from "express";
+import fs from "fs";
+import path from "path";
 import type { Config } from "../config";
 import { saveConfig } from "../config";
 import type { AuthProvider } from "../auth/index";
@@ -11,6 +13,7 @@ import {
   getOrProvision,
   clearInstanceState,
 } from "../lifecycle";
+import { killContainer, listBosImages, buildImage } from "../docker";
 import {
   reprovisionRestart,
   reprovisionResetData,
@@ -19,6 +22,7 @@ import {
   reprovisionFull,
   deprovisionUser,
 } from "../provision";
+import * as logStore from "../log-store";
 
 function requireAdmin(cfg: Config) {
   return (req: Request, res: Response, next: NextFunction): void => {
@@ -60,13 +64,20 @@ export function createAdminRouter(cfg: Config, provider: AuthProvider): Router {
     }
   });
 
-  router.delete("/users/:username", async (req, res) => {
+  router.delete("/users/:username", guard, async (req, res) => {
     const { username } = req.params;
     const { wipeData = false } = req.body as { wipeData?: boolean };
     try {
       await provider.deleteUser(username);
       if (wipeData) {
         await deprovisionUser(username, cfg, { wipeSrc: true, wipeData: true, wipeNm: true });
+        // Also wipe bastion-managed PII: provisioning log and avatar.
+        logStore.deleteLog(username);
+        const avatarDir = path.join(cfg.dataDir, "avatars");
+        for (const ext of ["png", "jpg", "jpeg", "gif", "webp", ""]) {
+          const f = path.join(avatarDir, ext ? `${username}.${ext}` : username);
+          if (fs.existsSync(f)) fs.unlinkSync(f);
+        }
       }
       res.json({ ok: true });
     } catch (err) {
@@ -121,6 +132,17 @@ export function createAdminRouter(cfg: Config, provider: AuthProvider): Router {
     }
   });
 
+  router.post("/instances/:username/kill", guard, async (req, res) => {
+    const { username } = req.params;
+    try {
+      await killContainer(username);
+      clearInstanceState(username);
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
   router.post("/instances/:username/reprovision", async (req, res) => {
     const { username } = req.params;
     const { operation } = req.body as { operation?: string };
@@ -131,6 +153,49 @@ export function createAdminRouter(cfg: Config, provider: AuthProvider): Router {
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }
+  });
+
+  // ── Images ─────────────────────────────────────────────────────────────────
+  router.get("/images", guard, async (_req, res) => {
+    try {
+      res.json({ images: await listBosImages() });
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  let buildInProgress = false;
+  router.post("/image/build", guard, async (req, res) => {
+    if (buildInProgress) {
+      res.status(409).json({ error: "A build is already in progress" });
+      return;
+    }
+    const { dockerfile = "Dockerfile", tag = "browseros/user:latest" } = req.body as { dockerfile?: string; tag?: string };
+    const repoPath = process.env.BOS_REPO_PATH ?? "/bos-src";
+
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.flushHeaders();
+
+    const send = (data: object): void => { res.write(`data: ${JSON.stringify(data)}\n\n`); };
+
+    buildInProgress = true;
+    try {
+      await buildImage(repoPath, dockerfile, tag, (event) => send(event));
+      send({ status: "success", tag });
+    } catch (err) {
+      send({ status: "error", error: String(err) });
+    } finally {
+      buildInProgress = false;
+      res.end();
+    }
+  });
+
+  // ── Instance log ───────────────────────────────────────────────────────────
+  router.get("/instances/:username/log", guard, (req, res) => {
+    const { username } = req.params;
+    res.json({ log: logStore.read(username, { tail: 500 }) });
   });
 
   // ── Config ─────────────────────────────────────────────────────────────────

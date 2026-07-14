@@ -1,54 +1,81 @@
-import { useState, FormEvent } from "react";
-import { useNavigate } from "react-router-dom";
-
-const s: Record<string, React.CSSProperties> = {
-  page: { display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh" },
-  box: { background: "#1a1a1a", border: "1px solid #333", borderRadius: 8, padding: 32, width: 320 },
-  title: { fontSize: 22, marginBottom: 24, color: "#eee", textAlign: "center" },
-  label: { display: "block", marginBottom: 4, fontSize: 13, color: "#aaa" },
-  input: { width: "100%", padding: "8px 12px", background: "#0f0f0f", border: "1px solid #444", borderRadius: 4, color: "#eee", fontSize: 14, marginBottom: 16 },
-  btn: { width: "100%", padding: "10px 0", background: "#2563eb", border: "none", borderRadius: 4, color: "#fff", fontSize: 14, cursor: "pointer", marginBottom: 8 },
-  err: { color: "#e55", fontSize: 13, marginBottom: 12 },
-  sep: { textAlign: "center", color: "#555", margin: "12px 0", fontSize: 13 },
-  kcBtn: { width: "100%", padding: "10px 0", background: "#1a3a6e", border: "1px solid #2563eb", borderRadius: 4, color: "#7af", fontSize: 14, cursor: "pointer", textDecoration: "none", display: "block", textAlign: "center" },
-};
+import { useState, type FormEvent } from "react";
 
 export default function Login() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const navigate = useNavigate();
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    setLoading(true); setError("");
+    setLoading(true);
+    setError("");
     const res = await fetch("/login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username, password }),
     });
     setLoading(false);
-    // Full page navigation so the proxy picks it up and either routes
-    // directly into BOS (running) or shows the status page (starting).
-    if (res.ok) { window.location.href = "/"; return; }
+    if (res.ok) {
+      // Full-page navigation so the proxy picks it up and routes into BOS
+      // (running) or shows the status page (starting).
+      window.location.href = "/";
+      return;
+    }
     setError("Invalid username or password");
   }
 
   return (
-    <div style={s.page}>
-      <div style={s.box}>
-        <div style={s.title}>BrowserOS</div>
-        {error && <div style={s.err}>{error}</div>}
-        <form onSubmit={handleSubmit}>
-          <label style={s.label}>Username</label>
-          <input style={s.input} value={username} onChange={e => setUsername(e.target.value)} autoFocus />
-          <label style={s.label}>Password</label>
-          <input style={s.input} type="password" value={password} onChange={e => setPassword(e.target.value)} />
-          <button style={s.btn} disabled={loading}>{loading ? "Signing in…" : "Sign in"}</button>
+    <div className="min-h-screen bg-gray-900 flex items-center justify-center p-4">
+      <div className="bg-gray-800 border border-gray-700 rounded-xl p-8 max-w-sm w-full">
+        <div className="text-xl font-semibold text-white text-center mb-6">BrowserOS</div>
+
+        {error && (
+          <div className="mb-4 px-3 py-2 bg-red-900/40 border border-red-700 rounded text-red-300 text-sm">
+            {error}
+          </div>
+        )}
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="block text-xs text-gray-400 mb-1">Username</label>
+            <input
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              className="w-full px-3 py-2 bg-gray-900 border border-gray-600 rounded-lg text-sm text-gray-100 focus:outline-none focus:border-blue-500"
+              autoFocus
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-gray-400 mb-1">Password</label>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="w-full px-3 py-2 bg-gray-900 border border-gray-600 rounded-lg text-sm text-gray-100 focus:outline-none focus:border-blue-500"
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full px-4 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition-colors"
+          >
+            {loading ? "Signing in…" : "Sign in"}
+          </button>
         </form>
-        <div style={s.sep}>or</div>
-        <a href="/auth/keycloak" style={s.kcBtn}>Sign in with Keycloak</a>
+
+        <div className="flex items-center gap-3 my-4">
+          <div className="flex-1 h-px bg-gray-700" />
+          <span className="text-xs text-gray-500">or</span>
+          <div className="flex-1 h-px bg-gray-700" />
+        </div>
+
+        <a
+          href="/auth/keycloak"
+          className="block w-full text-center px-4 py-2.5 border border-blue-700 text-blue-400 hover:bg-blue-900/30 rounded-lg text-sm font-medium transition-colors"
+        >
+          Sign in with Keycloak
+        </a>
       </div>
     </div>
   );

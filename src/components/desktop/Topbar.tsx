@@ -6,20 +6,24 @@ import { useOSStore } from "@/store/os-provider";
 import { VersionControls } from "./VersionControls";
 import { IntegrationsBadge } from "./IntegrationsBadge";
 
-function LogoutButton() {
-  const [multiUser, setMultiUser] = useState(false);
+interface SessionData { multiUser: boolean; username: string | null; }
+
+function MultiUserControls() {
+  const [session, setSession] = useState<SessionData | null>(null);
 
   useEffect(() => {
     fetch("/api/system/session")
       .then((r) => r.json())
       .then((d) => {
-        // eslint-disable-next-line react-hooks/set-state-in-effect
-        setMultiUser(!!d.multiUser);
+        setSession(d as SessionData);
       })
       .catch(() => {});
   }, []);
 
-  if (!multiUser) return null;
+  if (!session?.multiUser) return null;
+
+  const { username } = session;
+  const avatarUrl = username ? `/avatar/${encodeURIComponent(username)}` : null;
 
   const logout = async () => {
     await fetch("/logout", { method: "POST" }).catch(() => {});
@@ -27,14 +31,35 @@ function LogoutButton() {
   };
 
   return (
-    <button
-      type="button"
-      onClick={logout}
-      title="Log out"
-      className="inline-flex h-6 w-6 items-center justify-center rounded text-white/70 transition-colors hover:bg-white/10 hover:text-white"
-    >
-      <LogOut size={14} strokeWidth={1.75} />
-    </button>
+    <>
+      {username && (
+        <a
+          href="/app/account"
+          title="My profile"
+          className="inline-flex h-6 w-6 items-center justify-center rounded text-white/70 transition-colors hover:bg-white/10 hover:text-white overflow-hidden"
+        >
+          {avatarUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element -- avatar URL is dynamic/external; next/image doesn't apply here
+            <img
+              src={avatarUrl}
+              alt={username}
+              className="h-5 w-5 rounded-full object-cover"
+              onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+            />
+          ) : (
+            <span className="text-xs font-semibold">{username[0]?.toUpperCase()}</span>
+          )}
+        </a>
+      )}
+      <button
+        type="button"
+        onClick={logout}
+        title="Log out"
+        className="inline-flex h-6 w-6 items-center justify-center rounded text-white/70 transition-colors hover:bg-white/10 hover:text-white"
+      >
+        <LogOut size={14} strokeWidth={1.75} />
+      </button>
+    </>
   );
 }
 
@@ -74,7 +99,7 @@ export function Topbar() {
       <div className="flex items-center gap-2 justify-self-end">
         <IntegrationsBadge />
         <Clock />
-        <LogoutButton />
+        <MultiUserControls />
       </div>
     </div>
   );

@@ -10,6 +10,7 @@ import {
   waitForHealthy,
 } from "./docker";
 import { provisionUser } from "./provision";
+import * as logStore from "./log-store";
 
 export type InstanceStatus = "running" | "stopped" | "provisioning" | "unknown";
 
@@ -20,6 +21,8 @@ export interface InstanceState {
   lastActive: number;
   provisionLog?: string;
   provisionError?: string;
+  /** Short human-readable reason for the last failure. */
+  error?: string;
 }
 
 const instances = new Map<string, InstanceState>();
@@ -51,6 +54,7 @@ export async function getOrProvision(username: string, cfg: Config): Promise<voi
 function log(username: string, msg: string, cfg: Config): void {
   const ts = new Date().toISOString();
   console.log(`[bastion] [${username}] ${msg}`);
+  logStore.append(username, msg);
   updateState(username, { provisionLog: `[${ts}] ${msg}` }, cfg);
 }
 
@@ -83,11 +87,12 @@ async function _getOrProvision(username: string, cfg: Config): Promise<void> {
         const msg = err instanceof Error ? err.message : String(err);
         const stack = err instanceof Error ? (err.stack ?? msg) : msg;
         console.error(`[bastion] [${username}] Health check failed:`, stack);
-        updateState(username, { status: "unknown", provisionError: stack, lastActive: Date.now() }, cfg);
+        logStore.append(username, `ERROR (health check): ${stack}`);
+        updateState(username, { status: "unknown", provisionError: stack, error: msg, lastActive: Date.now() }, cfg);
         throw err;
       }
       log(username, "Instance is ready!", cfg);
-      updateState(username, { containerId: cid, status: "running", lastActive: Date.now() }, cfg);
+      updateState(username, { containerId: cid, status: "running", error: undefined, lastActive: Date.now() }, cfg);
       resetIdleTimer(username, cfg);
       return;
     }
@@ -102,11 +107,12 @@ async function _getOrProvision(username: string, cfg: Config): Promise<void> {
       const msg = err instanceof Error ? err.message : String(err);
       const stack = err instanceof Error ? (err.stack ?? msg) : msg;
       console.error(`[bastion] [${username}] Start/health failed:`, stack);
-      updateState(username, { status: "unknown", provisionError: stack, lastActive: Date.now() }, cfg);
+      logStore.append(username, `ERROR (start): ${stack}`);
+      updateState(username, { status: "unknown", provisionError: stack, error: msg, lastActive: Date.now() }, cfg);
       throw err;
     }
     log(username, "Instance is ready!", cfg);
-    updateState(username, { containerId: cid, status: "running", lastActive: Date.now() }, cfg);
+    updateState(username, { containerId: cid, status: "running", error: undefined, lastActive: Date.now() }, cfg);
     resetIdleTimer(username, cfg);
     return;
   }
@@ -125,13 +131,14 @@ async function _getOrProvision(username: string, cfg: Config): Promise<void> {
     log(username, "Container created — waiting for supervisor and Next.js to become healthy (npm install will run on first start)…", cfg);
     await waitForHealthy(username, 300_000);
     log(username, "Instance is ready!", cfg);
-    updateState(username, { containerId, status: "running", lastActive: Date.now() }, cfg);
+    updateState(username, { containerId, status: "running", error: undefined, lastActive: Date.now() }, cfg);
     resetIdleTimer(username, cfg);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     const stack = err instanceof Error ? (err.stack ?? msg) : msg;
     console.error(`[bastion] [${username}] Provision failed:`, stack);
-    updateState(username, { status: "unknown", provisionError: stack, lastActive: Date.now() }, cfg);
+    logStore.append(username, `ERROR (provision): ${stack}`);
+    updateState(username, { status: "unknown", provisionError: stack, error: msg, lastActive: Date.now() }, cfg);
     throw err;
   }
 }

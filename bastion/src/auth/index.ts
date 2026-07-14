@@ -13,6 +13,8 @@ export interface AuthProvider {
   deleteUser(username: string): Promise<void>;
   updatePassword(username: string, newPassword: string): Promise<void>;
   setAdmin(username: string, isAdmin: boolean): Promise<void>;
+  /** Returns true if at least one admin user exists. Used for first-run bootstrap gate. */
+  adminExists(): Promise<boolean>;
 }
 
 export async function loadProvider(cfg: Config): Promise<AuthProvider> {

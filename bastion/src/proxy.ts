@@ -117,6 +117,11 @@ export function createBosProxy(cfg: Config): RequestHandler & { upgrade?: (serve
         changeOrigin: true,
         ws: true,
         on: {
+          proxyReq: (proxyReq) => {
+            // Inject the authenticated username so BOS can surface it in the
+            // session endpoint (used by the toolbar "My profile" link).
+            proxyReq.setHeader("x-bos-username", username);
+          },
           error: (_err, _req, res) => {
             if (res && "writeHead" in res) {
               res.writeHead(502, { "Content-Type": "text/html" });
