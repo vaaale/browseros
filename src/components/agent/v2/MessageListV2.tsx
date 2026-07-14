@@ -1,11 +1,11 @@
 "use client";
 
 import { useEffect, useMemo, useRef } from "react";
-import { Brain, ChevronDown, ChevronRight, Pencil, ThumbsDown, ThumbsUp } from "lucide-react";
+import { Brain, ChevronDown, ChevronRight, Pencil, RotateCcw, ThumbsDown, ThumbsUp } from "lucide-react";
 import type { ChatMessage } from "@/lib/assistant/messages";
 import { lastUserIndex } from "@/lib/assistant/messages";
 import { useChatState, setEditing, type ChatState, type ToolCallView } from "@/lib/assistant/client/chat-store";
-import { sendFeedback } from "@/lib/assistant/client/run-client";
+import { sendFeedback, sendMessage } from "@/lib/assistant/client/run-client";
 import { registerCard, toggleCard, useCardOpen, useCardScope } from "@/lib/agent/card-collapse";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { ToolCallCard, type ToolCardData } from "./ToolCallCard";
@@ -79,15 +79,26 @@ function AssistantTurn({
   state,
   resultsByCall,
   conversationId,
+  agentId,
+  isLast,
 }: {
   message: ChatMessage;
   state: ChatState;
   resultsByCall: Map<string, string>;
   conversationId: string;
+  agentId: string;
+  isLast: boolean;
 }) {
   const { reasoning, answer, live } = splitReasoning(message.content ?? "");
   const cards = cardsFor(message, resultsByCall, state.toolCalls);
   const rating = message.feedback?.rating;
+
+  const handleRegenerate = () => {
+    if (state.running) return;
+    const lastUser = [...state.messages].reverse().find((m) => m.role === "user");
+    if (!lastUser) return;
+    void sendMessage(conversationId, agentId, lastUser.content ?? "", { editOfMessageId: lastUser.id });
+  };
   return (
     <div className="group" data-testid="assistant-message">
       <ReasoningBlock id={message.id} reasoning={reasoning} live={live} />
@@ -113,6 +124,16 @@ function AssistantTurn({
           >
             <ThumbsDown size={13} />
           </button>
+          {isLast && !state.running && (
+            <button
+              type="button"
+              aria-label="Regenerate response"
+              onClick={handleRegenerate}
+              className="rounded p-1 text-white/35 hover:bg-white/10 hover:text-white/70"
+            >
+              <RotateCcw size={13} />
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -140,6 +161,11 @@ export function MessageListV2({
   }, [state.messages]);
 
   const lastUserIdx = lastUserIndex(state.messages);
+  const lastAssistantIdx = useMemo(() => {
+    let last = -1;
+    state.messages.forEach((m, i) => { if (m.role === "assistant") last = i; });
+    return last;
+  }, [state.messages]);
   const liveStream = state.running && (state.streamText || state.streamReasoning);
   const liveSplit = liveStream ? splitReasoning(state.streamText) : undefined;
 
@@ -213,7 +239,7 @@ export function MessageListV2({
         }
         if (m.role === "assistant") {
           return (
-            <AssistantTurn key={m.id} message={m} state={state} resultsByCall={resultsByCall} conversationId={conversationId} />
+            <AssistantTurn key={m.id} message={m} state={state} resultsByCall={resultsByCall} conversationId={conversationId} agentId={agentId} isLast={i === lastAssistantIdx} />
           );
         }
         return null; // tool results render inside their assistant turn's cards

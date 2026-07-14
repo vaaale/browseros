@@ -8,10 +8,14 @@ import { test, expect } from "./fixtures";
 // /api/apps/build endpoint test.
 //
 // Run against the Supervisor port: BOS_E2E_BASE_URL=http://localhost:8090.
+const ON_SUPERVISOR = (process.env.BOS_E2E_BASE_URL ?? "").includes(":8090");
 test.describe.configure({ mode: "serial" });
 test.use({ video: "off" });
 
 test.describe("app project — live multi-file build via the Assistant", () => {
+  // Needs the Supervisor AND a live model; skip in a plain run (it would
+  // otherwise hang until a ~6-minute timeout).
+  test.skip(!ON_SUPERVISOR, "Requires the Supervisor + live model — run with BOS_E2E_BASE_URL=http://localhost:8090.");
   test.afterEach(async ({ request }) => {
     await request.post("/__supervisor/app-discard").catch(() => {});
   });

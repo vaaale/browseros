@@ -42,8 +42,11 @@ function envConfig(): ProviderConfig {
   };
 }
 
-/** Full config including the secret — server-only use (LLM clients, adapters). */
-export async function getProviderConfig(): Promise<ProviderConfig> {
+/** Full config including the secret — server-only use (LLM clients, adapters).
+ *  `modelOverride` (025-agent-delegation-v2): a named agent's `model` field
+ *  substitutes for the resolved model string only — provider/apiKey/baseUrl
+ *  are always the single configured provider, never switched per-agent. */
+export async function getProviderConfig(modelOverride?: string): Promise<ProviderConfig> {
   const base = envConfig();
   try {
     const saved = JSON.parse(await fs.readFile(FILE, "utf8")) as Partial<ProviderConfig>;
@@ -52,14 +55,14 @@ export async function getProviderConfig(): Promise<ProviderConfig> {
       provider,
       apiKey: saved.apiKey ?? base.apiKey,
       baseUrl: saved.baseUrl ?? base.baseUrl,
-      model: saved.model || PROVIDERS[provider]?.defaultModel || base.model,
+      model: modelOverride || saved.model || PROVIDERS[provider]?.defaultModel || base.model,
       maxTokens: "maxTokens" in saved
         ? (saved.maxTokens && saved.maxTokens > 0 ? saved.maxTokens : undefined)
         : base.maxTokens,
       maxInputTokens: saved.maxInputTokens ?? base.maxInputTokens,
     };
   } catch {
-    return base;
+    return modelOverride ? { ...base, model: modelOverride } : base;
   }
 }
 

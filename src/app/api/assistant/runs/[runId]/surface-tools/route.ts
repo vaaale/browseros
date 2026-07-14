@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 // POST { declarations: ToolDeclaration[] } — merge newly-available surface
 // tool declarations into an ACTIVE run's live tool set. Without this, a
 // window opened mid-run (e.g. the agent calls ui_preview_open, then wants
-// ui_preview_render) never gains that window's Tier 2 tools: surfaceTools is
+// ui_preview_generate) never gains that window's Tier 2 tools: surfaceTools is
 // otherwise only read once, when the run starts, so the agent would have to
 // wait for the conversation's NEXT run before it could call them. The client
 // calls this automatically whenever the surface-tools registry changes while

@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { startAssistantRun } from "@/lib/assistant/start-run";
-import { ActiveRunError, runManager } from "@/lib/assistant/run-manager";
+import { ActiveRunError, runManager, type SurfaceAgentEntry } from "@/lib/assistant/run-manager";
 import type { ToolDeclaration } from "@/lib/assistant/tools";
 import type { Attachment } from "@/lib/assistant/messages";
 
 export const dynamic = "force-dynamic";
 
 // POST — start a run (the loop runs detached from this request).
-//   { conversationId, agentId, message, editOfMessageId?, surfaceTools? }
+//   { conversationId, agentId, message, editOfMessageId?, surfaceTools?, surfaceAgents? }
 // 409 when the conversation already has an active run (edit-resubmit instead
 // auto-cancels it) or when editOfMessageId is not the last user message.
 export async function POST(req: NextRequest) {
@@ -18,6 +18,7 @@ export async function POST(req: NextRequest) {
       message?: string;
       editOfMessageId?: string;
       surfaceTools?: ToolDeclaration[];
+      surfaceAgents?: SurfaceAgentEntry[];
       attachments?: Attachment[];
     };
     const conversationId = body.conversationId?.trim();
@@ -34,6 +35,7 @@ export async function POST(req: NextRequest) {
       message,
       editOfMessageId: body.editOfMessageId?.trim() || undefined,
       surfaceTools: Array.isArray(body.surfaceTools) ? body.surfaceTools : undefined,
+      surfaceAgents: Array.isArray(body.surfaceAgents) ? body.surfaceAgents : undefined,
       attachments,
     });
     return NextResponse.json({ runId: run.id }, { status: 201 });

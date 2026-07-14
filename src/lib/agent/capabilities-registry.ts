@@ -11,6 +11,10 @@
 // resolver, the Settings catalog, and the InfoPanel all read the same list.
 
 import { actionNameFor } from "@/lib/integrations/actions/dispatcher";
+import { GMAIL_METHOD_DESCRIPTORS } from "@/lib/integrations/services/gsuite/adapters/gmail-methods";
+import { DRIVE_METHOD_DESCRIPTORS } from "@/lib/integrations/services/gsuite/adapters/drive-methods";
+import { CALENDAR_METHOD_DESCRIPTORS } from "@/lib/integrations/services/gsuite/adapters/calendar-methods";
+import { CONTACTS_METHOD_DESCRIPTORS } from "@/lib/integrations/services/gsuite/adapters/contacts-methods";
 import { TELEGRAM_BOT_METHOD_DESCRIPTORS } from "@/lib/integrations/services/telegram/adapters/bot-methods";
 
 export type CapabilityContext = "action" | "tool" | "both";
@@ -22,12 +26,33 @@ export interface Capability {
   context: CapabilityContext;
 }
 
-const TELEGRAM_BOT_CAPABILITIES: Capability[] = TELEGRAM_BOT_METHOD_DESCRIPTORS.map((m) => ({
-  id: actionNameFor("telegram", "bot", m.method),
-  group: "Telegram",
-  context: "action",
-  description: m.description,
-}));
+// Integration capabilities are GENERATED from each service's adapter method
+// descriptors (the same descriptors that build the real tool/schema — see
+// src/lib/assistant/tools/server/integrations.ts) rather than hand-duplicated
+// here. A hand-written copy drifts: Gmail/Drive/Calendar/Contacts used to have
+// their own short, independently-written descriptions that no longer matched
+// what the tool actually sent to the model, so the description shown/editable
+// in Settings → Tools didn't reflect the real tool — and the LONG real
+// description was invisible until you'd already saved an override.
+function integrationCapabilities(
+  integrationId: string,
+  serviceId: string,
+  group: string,
+  descriptors: readonly { method: string; description: string }[],
+): Capability[] {
+  return descriptors.map((m) => ({
+    id: actionNameFor(integrationId, serviceId, m.method),
+    group,
+    context: "action",
+    description: m.description,
+  }));
+}
+
+const GMAIL_CAPABILITIES = integrationCapabilities("gsuite", "gmail", "Gmail", GMAIL_METHOD_DESCRIPTORS);
+const DRIVE_CAPABILITIES = integrationCapabilities("gsuite", "drive", "Google Drive", DRIVE_METHOD_DESCRIPTORS);
+const CALENDAR_CAPABILITIES = integrationCapabilities("gsuite", "calendar", "Google Calendar", CALENDAR_METHOD_DESCRIPTORS);
+const CONTACTS_CAPABILITIES = integrationCapabilities("gsuite", "contacts", "Google Contacts", CONTACTS_METHOD_DESCRIPTORS);
+const TELEGRAM_BOT_CAPABILITIES = integrationCapabilities("telegram", "bot", "Telegram", TELEGRAM_BOT_METHOD_DESCRIPTORS);
 
 // Tool naming standard: `subsystem_object_verb`, snake_case, one id per logical
 // operation. A "both" capability is a single id exposed on BOTH surfaces — the
@@ -122,6 +147,19 @@ export const CAPABILITIES: Capability[] = [
   { id: "workflow_export", group: "Workflows", context: "action", description: "Return a workflow's full JSON." },
   { id: "workflow_validate", group: "Workflows", context: "action", description: "Validate a workflow's DAG." },
 
+  // Scheduler (025-agent-delegation-v2, Phase 4 — ported natively into v2's
+  // registry; these existed only in the legacy engine before, so no agent's
+  // allowlist could reference them from the main/primary personality).
+  { id: "list_scheduled_tasks", group: "Scheduler", context: "tool", description: "List scheduled jobs." },
+  { id: "get_scheduled_task", group: "Scheduler", context: "tool", description: "Get a scheduled job by id, including its recent execution history." },
+  { id: "create_scheduled_task", group: "Scheduler", context: "tool", description: "Create a new scheduled job." },
+  { id: "update_scheduled_task", group: "Scheduler", context: "tool", description: "Update a scheduled job's fields." },
+  { id: "update_task_schedule", group: "Scheduler", context: "tool", description: "Update just the schedule of a job, leaving other fields unchanged." },
+  { id: "pause_scheduled_task", group: "Scheduler", context: "tool", description: "Pause a scheduled job. Its nextRunAt is cleared until resumed." },
+  { id: "resume_scheduled_task", group: "Scheduler", context: "tool", description: "Resume a paused job and recalculate its next run time." },
+  { id: "delete_scheduled_task", group: "Scheduler", context: "tool", description: "Delete a scheduled job." },
+  { id: "run_task_now", group: "Scheduler", context: "tool", description: "Run a scheduled job immediately, regardless of its schedule." },
+
   // Specs (one id per op, used by the main chat and delegated sub-agents).
   { id: "spec_list", group: "Specs", context: "both", description: "List spec artifacts under a store." },
   { id: "spec_read", group: "Specs", context: "both", description: "Read a spec artifact." },
@@ -135,54 +173,31 @@ export const CAPABILITIES: Capability[] = [
   { id: "buildstudio_artifact_open", group: "Build Studio", context: "action", description: "Open a spec artifact in the Build Studio viewer." },
   { id: "buildstudio_artifact_highlight", group: "Build Studio", context: "action", description: "Scroll (centered) to a heading/section anchor in the open Build Studio artifact and highlight the whole section until the user clicks it." },
   { id: "buildstudio_tree_refresh", group: "Build Studio", context: "action", description: "Reload the Build Studio spec tree." },
+  { id: "buildstudio_run_tests", group: "Build Studio", context: "action", description: "Run the Playwright e2e tests for a feature and write test-results.md to its spec folder." },
 
   // UI Preview (013-build-studio-agentic V2). Tier 1 (ui_preview_open) is a
   // global frontend tool declared in frontend-declarations.ts; Tier 2 tools
   // are registered by the UI Preview window itself while it is open.
   { id: "ui_preview_open", group: "UI Preview", context: "action", description: "Open or focus the UI Preview window." },
-  { id: "ui_preview_render", group: "UI Preview", context: "action", description: "Push A2UI operations to the open UI Preview surface." },
+  { id: "ui_preview_generate", group: "UI Preview", context: "action", description: "Generate a UI mockup from a natural-language description and render it in the open UI Preview window (one step)." },
+  { id: "ui_preview_patch", group: "UI Preview", context: "action", description: "Incrementally change the mockup showing in the UI Preview window (add/replace/remove an element) from a natural-language instruction." },
   { id: "ui_preview_show_requirement", group: "UI Preview", context: "action", description: "Scroll the paired spec viewer to a requirement from the UI Preview." },
-  { id: "a2ui_render", group: "UI Preview", context: "action", description: "Generate a validated A2UI operations envelope from a natural-language UI description." },
 
   // Integrations — one capability id per adapter method, following the pattern
   // `<serviceId>_<object>_<verb>` in snake_case (see actions/dispatcher.ts).
-  // Example: `gmail_messages_list`, `drive_files_list`.
+  // Example: `gmail_messages_list`, `drive_files_list`. GENERATED from each
+  // service's adapter method descriptors (see `integrationCapabilities` above)
+  // so the description shown/editable in Settings → Tools always matches the
+  // real tool description sent to the model — no hand-duplicated copy to drift.
   //
   // GROUPING: integration capabilities are grouped per external service (not
   // under a single "Integrations" bucket) so the Settings capability picker
   // stays scannable as more providers are added. Non-Google providers should
   // use their own service-name group.
-  { id: "gmail_messages_list", group: "Gmail", context: "action", description: "List Gmail messages." },
-  { id: "gmail_messages_get", group: "Gmail", context: "action", description: "Fetch a Gmail message by id." },
-  { id: "gmail_messages_send", group: "Gmail", context: "action", description: "Send a Gmail message." },
-  { id: "gmail_messages_reply", group: "Gmail", context: "action", description: "Reply in-thread to a Gmail message." },
-  { id: "gmail_messages_modify", group: "Gmail", context: "action", description: "Add or remove labels on a Gmail message." },
-  { id: "gmail_messages_trash", group: "Gmail", context: "action", description: "Move a Gmail message to Trash." },
-  { id: "gmail_messages_untrash", group: "Gmail", context: "action", description: "Restore a Gmail message from Trash." },
-  { id: "gmail_messages_search", group: "Gmail", context: "action", description: "Search Gmail with Google's operator syntax." },
-  { id: "gmail_messages_download_attachment", group: "Gmail", context: "action", description: "Download a Gmail attachment into /Documents/Emails in the VFS." },
-  { id: "gmail_labels_list", group: "Gmail", context: "action", description: "List Gmail labels." },
-  { id: "gmail_labels_get", group: "Gmail", context: "action", description: "Fetch a Gmail label by id." },
-  { id: "gmail_profile_get", group: "Gmail", context: "action", description: "Fetch the authenticated Gmail profile." },
-  { id: "drive_files_list", group: "Google Drive", context: "action", description: "List files in Google Drive." },
-  { id: "drive_files_get", group: "Google Drive", context: "action", description: "Fetch a Drive file's metadata by id." },
-  { id: "drive_files_search", group: "Google Drive", context: "action", description: "Search Drive with Google's query syntax." },
-  { id: "drive_files_download", group: "Google Drive", context: "action", description: "Download a Drive file's binary content (base64, size-capped)." },
-  { id: "drive_files_export", group: "Google Drive", context: "action", description: "Export a Google-native doc (Docs/Sheets/Slides) as PDF/CSV/text/etc." },
-  { id: "drive_folders_list", group: "Google Drive", context: "action", description: "List folders in Drive, optionally under a parent." },
-  { id: "drive_about_get", group: "Google Drive", context: "action", description: "Fetch the authenticated Drive profile + storage quota." },
-  { id: "calendar_calendars_list", group: "Google Calendar", context: "action", description: "List the user's calendars (primary + subscribed)." },
-  { id: "calendar_events_list", group: "Google Calendar", context: "action", description: "List events on a calendar within a time window." },
-  { id: "calendar_events_get", group: "Google Calendar", context: "action", description: "Fetch a single calendar event by id." },
-  { id: "calendar_events_create", group: "Google Calendar", context: "action", description: "Create a new calendar event." },
-  { id: "calendar_events_update", group: "Google Calendar", context: "action", description: "Patch fields on an existing calendar event." },
-  { id: "calendar_events_delete", group: "Google Calendar", context: "action", description: "Delete a calendar event." },
-  { id: "calendar_events_respond", group: "Google Calendar", context: "action", description: "RSVP to a calendar event (accept / decline / tentative)." },
-  { id: "calendar_events_move", group: "Google Calendar", context: "action", description: "Move an event from one calendar to another." },
-  { id: "calendar_freebusy_query", group: "Google Calendar", context: "action", description: "Query free/busy time ranges across calendars." },
-  { id: "contacts_contacts_list", group: "Google Contacts", context: "action", description: "List the user's contacts (People API connections)." },
-  { id: "contacts_contacts_get", group: "Google Contacts", context: "action", description: "Fetch a single contact by resourceName." },
-  { id: "contacts_contacts_search", group: "Google Contacts", context: "action", description: "Search contacts by free-text query." },
+  ...GMAIL_CAPABILITIES,
+  ...DRIVE_CAPABILITIES,
+  ...CALENDAR_CAPABILITIES,
+  ...CONTACTS_CAPABILITIES,
   ...TELEGRAM_BOT_CAPABILITIES,
 ];
 

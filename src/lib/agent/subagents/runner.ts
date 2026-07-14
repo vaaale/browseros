@@ -1,159 +1,112 @@
 import "server-only";
-import { runToolLoop, type ToolEvent, type LlmTool } from "@/lib/agent/llm";
-import { toolsFor, DEV_TOOLS, SPEC_TOOLS, DELEGATE_TO_DEVELOPER, makeSpecTools, makeDiscoveryTools, pickDeferredIds } from "./tools";
+import type { ToolEvent } from "@/lib/agent/llm";
 import { runClaudeAgent } from "./claude-runner";
-import { getAgent } from "./store";
-import { stageAll } from "@/lib/system/git";
-import { runCommand, type RunLanguage } from "@/lib/system/run-command";
-import { getLogContext } from "@/lib/logging/context";
-import { getMaxFindResults } from "@/lib/config/registry";
+import { composeInstructions } from "@/lib/agent/instructions";
 import type { Agent, AgentRunResult } from "./types";
+import type { ChatMessage } from "@/lib/assistant/messages";
 
 export type SubAgentEvent = ToolEvent;
 
-const DEV_TOOL_IDS = Object.keys(DEV_TOOLS);
-const SPEC_TOOL_IDS = Object.keys(SPEC_TOOLS);
-// A local agent wielding repo-scoped tools is doing multi-step dev work; give it
-// a much larger step budget than the default chat tool loop. Build Studio (spec
-// tools + delegation) likewise runs multi-step pipelines.
-const DEV_MAX_STEPS = 40;
-// Build Studio -> Developer is one level of nesting; guard against more.
-const MAX_DELEGATE_DEPTH = 2;
-
-/** The delegate_to_developer tool. Built per-run so it can forward the parent's
- *  event stream (for the nested-agent UI), carry a depth guard, and inherit the
- *  active feature branch so nested dev work stays on the SAME branch as the run
- *  that spawned it. */
-function makeDelegateTool(
-  parentOnEvent: ((e: SubAgentEvent) => void) | undefined,
-  depth: number,
-  featureBranch?: string,
-  interactive?: boolean,
-): LlmTool {
-  return {
-    description:
-      "Delegate an implementation/coding task to the Developer (Claude) sub-agent, which edits BOS source on a feature branch. Use this for `implement` — never write source yourself. Provide a complete task including the relevant spec/plan/tasks context and acceptance criteria.",
-    parameters: {
-      type: "object",
-      properties: { task: { type: "string", description: "Full implementation task with context and acceptance criteria." } },
-      required: ["task"],
-    },
-    execute: async (input) => {
-      if (depth >= MAX_DELEGATE_DEPTH) return "Delegation depth limit reached; cannot nest another sub-agent.";
-      const dev = await getAgent("developer");
-      if (!dev) return "No 'developer' sub-agent is available to implement this.";
-      const res = await runSubAgent(dev, String(input.task ?? ""), { onEvent: parentOnEvent, depth: depth + 1, featureBranch, interactive });
-      if (res.error) return `Developer error: ${res.error}`;
-      return res.output || "(the developer returned no output)";
-    },
-  };
-}
-
-// run_command needs a per-run (browser-session, agent) sandbox key, so it is
-// injected per delegated run rather than living in the static tool table.
-function makeRunCommandTool(agentId: string): LlmTool {
-  const sessionId = getLogContext().sessionId || "server";
-  const sessionKey = `${sessionId}:${agentId}`;
-  return {
-    description:
-      "Run a command in a sandboxed environment (Settings → Command Execution; off by default). language: 'bash' (default), 'python' (ipython -c), or 'node' (node -e). " +
-      "WORKSPACE: /workspace IS a folder in the user's file system (visible in the Files app). Files you create under /workspace are ALREADY SAVED and visible — do NOT copy/move them elsewhere or use file_write to 'transfer' them. Only /workspace (and /tmp) exist in the sandbox; folders like /Documents are NOT mounted. " +
-      "Common tools are preinstalled (python + python-pptx/markitdown/Pillow, node + pptxgenjs, LibreOffice, poppler) — avoid npm/pip install (no network). " +
-      "To run a SKILL's bundled scripts, pass `skill` = its id — the skill's files are staged into /workspace so its SKILL.md relative paths (e.g. `python scripts/office/unpack.py`) work. Returns merged stdout/stderr, exit code, and duration.",
-    parameters: {
-      type: "object",
-      properties: {
-        command: { type: "string" },
-        language: { type: "string", enum: ["bash", "python", "node"] },
-        skill: { type: "string", description: "Optional skill id to stage into the working dir first." },
-        timeoutMs: { type: "number" },
-      },
-      required: ["command"],
-    },
-    execute: async (input) => {
-      const lang = ["bash", "python", "node"].includes(input.language as string) ? (input.language as RunLanguage) : "bash";
-      const r = await runCommand({
-        command: String(input.command ?? ""),
-        language: lang,
-        skill: typeof input.skill === "string" && input.skill ? input.skill : undefined,
-        timeoutMs: typeof input.timeoutMs === "number" ? input.timeoutMs : undefined,
-        sessionKey,
-      });
-      return JSON.stringify(r);
-    },
-  };
-}
-
-async function runLocal(
+// Headless (non-chat) local-agent execution (025-agent-delegation-v2, Phase
+// 4). `agent_delegate`/`dev_delegate` (assistant chat delegation) no longer
+// call this at all — they run through `runInnerLoop` directly, sharing the
+// live chat Run (`tools/server/delegate-common.ts`). This function remains
+// for the OTHER real callers that delegate to a `type: "local"` agent with NO
+// live Run/browser attachment: Telegram bot routing
+// (`integrations/services/telegram/agent-router.ts`), workflow steps
+// (`workflows/runner.ts`), scheduled "prompt" jobs (`scheduler/executor.ts`),
+// and the standalone `/api/subagents/delegate` route. It resolves tools from
+// the SAME v2 registry as everything else (FR-001) — filtered to
+// server-executable only, since there is no browser to ever dispatch a
+// frontend tool to.
+//
+// Uses runtime `import()` for `@/lib/assistant/*` (registry/gate/agent-loop)
+// deliberately, not a top-level import: `assistantTools()` composes
+// `agent_delegate`/`dev_delegate`, which import `runSubAgent` from THIS file
+// for the `type: "claude"` path — a top-level import here would be a real
+// circular dependency. `scheduler/executor.ts` already uses this same
+// dynamic-import pattern for `runSubAgent` itself, for the same reason.
+async function runLocalHeadless(
   agent: Agent,
   task: string,
-  opts?: { onEvent?: (e: SubAgentEvent) => void; depth?: number; featureBranch?: string; interactive?: boolean },
+  opts?: { onEvent?: (e: SubAgentEvent) => void },
 ): Promise<AgentRunResult> {
-  const depth = opts?.depth ?? 0;
-  const ids = agent.tools ?? [];
-  const isDev = ids.some((id) => DEV_TOOL_IDS.includes(id));
-  const isExtended = isDev || ids.includes(DELEGATE_TO_DEVELOPER) || ids.some((id) => SPEC_TOOL_IDS.includes(id));
+  const [{ runAgentLoop }, { assistantTools }, { gateFor, gateFromAgent }, { streamModelTurn }, { defaultMaxSteps }, { e2eScriptedTurn }] =
+    await Promise.all([
+      import("@/lib/assistant/agent-loop"),
+      import("@/lib/assistant/registry"),
+      import("@/lib/assistant/gate"),
+      import("@/lib/assistant/model-turn"),
+      import("@/lib/assistant/inner-loop"),
+      import("@/lib/assistant/e2e-provider"),
+    ]);
+  const streamTurn = e2eScriptedTurn(task) ?? streamModelTurn;
 
-  const tools = { ...(await toolsFor(agent.tools)) };
-  if (ids.includes(DELEGATE_TO_DEVELOPER)) {
-    tools[DELEGATE_TO_DEVELOPER] = makeDelegateTool(opts?.onEvent, depth, opts?.featureBranch, opts?.interactive);
-  }
-  if (ids.includes("run_command")) {
-    tools["run_command"] = makeRunCommandTool(agent.id);
-  }
-  // Bind spec tools to the run's active feature branch so reads/writes target that
-  // branch's worktree spec store (020) — specs land on the same branch as the code.
-  const specIds = ids.filter((id) => SPEC_TOOL_IDS.includes(id));
-  if (specIds.length) {
-    const boundSpec = makeSpecTools(opts?.featureBranch);
-    for (const id of specIds) tools[id] = boundSpec[id];
-  }
+  const tools = assistantTools();
+  const baseGate = agent.ephemeral ? await gateFromAgent(agent) : await gateFor(agent.id);
+  const gate = {
+    allow: new Set([...baseGate.allow].filter((id) => tools[id]?.execution === "server")),
+    deferred: new Set<string>(), // headless: always fully visible, no discovery round-trip
+    registryIds: baseGate.registryIds,
+    descriptions: baseGate.descriptions,
+  };
+  const maxSteps = defaultMaxSteps(gate);
 
-  // Deferred-tool discovery (025). The effective deferred set is purely this
-  // agent's own `deferredTools` (no registry-wide default) — wire the two
-  // discovery tools + the loop's hidden/revealed sets so an agent can find and
-  // then call deferred tools mid-loop.
-  const effectiveDeferred = new Set<string>(agent.deferredTools ?? []);
-  const hiddenIds = pickDeferredIds(tools, effectiveDeferred);
-  const revealed = new Set<string>();
-  const maxResults = await getMaxFindResults();
-  Object.assign(
-    tools,
-    makeDiscoveryTools({
-      allow: agent.tools ?? [],
+  let messages: ChatMessage[] = [];
+  const toolCalls: { tool: string; input: unknown }[] = [];
+  let steps = 0;
+
+  const result = await runAgentLoop(
+    {
+      runId: `headless-${agent.id}-${Date.now()}`,
+      conversationId: "",
+      agentId: agent.id,
+      signal: new AbortController().signal,
+      emit: (e) => {
+        if (e.type === "step_started") {
+          steps = e.step + 1;
+        } else if (e.type === "tool_call") {
+          let input: unknown;
+          try {
+            input = e.args ? JSON.parse(e.args) : {};
+          } catch {
+            input = e.args;
+          }
+          const entry = { tool: e.name, input };
+          toolCalls.push(entry);
+          opts?.onEvent?.(entry);
+        }
+      },
+      streamTurn,
+      composeSystem: async () => (agent.ephemeral ? agent.systemPrompt : await composeInstructions(agent.id)),
       tools,
-      effectiveDeferred,
-      reveal: (revealIds) => revealIds.forEach((rid) => revealed.add(rid)),
-      maxResults,
-    }),
+      gate,
+      io: {
+        loadMessages: async () => [],
+        saveMessages: async (m) => {
+          messages = m;
+        },
+      },
+      awaitFrontendResult: async () => ({ kind: "timeout" }),
+      maxSteps,
+      toolTimeoutMs: 600_000,
+    },
+    { userMessage: { content: task } },
   );
 
-  const result = await runToolLoop({
-    system: agent.systemPrompt,
-    prompt: task,
-    tools,
-    maxSteps: isExtended ? DEV_MAX_STEPS : undefined,
-    onEvent: opts?.onEvent,
-    hiddenIds,
-    revealed,
-  });
-  let output = result.text;
-  if (isDev) {
-    // Same deterministic staging backstop as the Claude harness: ensure files a
-    // dev agent created are staged, not left untracked.
-    try {
-      const r = await stageAll();
-      if (r.staged > 0) output += `\n\n[harness] Staged ${r.staged} changed file(s)${r.created ? ` (${r.created} new)` : ""}.`;
-    } catch {
-      /* ignore staging errors */
-    }
+  if (result.reason === "error") {
+    return { agent: agent.name, type: "local", task, output: "", steps, toolCalls, error: result.error };
   }
-  return { agent: agent.name, type: "local", task, output, steps: result.steps, toolCalls: result.toolCalls };
+  const last = [...messages].reverse().find((m) => m.role === "assistant");
+  return { agent: agent.name, type: "local", task, output: last?.content ?? "", steps, toolCalls };
 }
 
-/** Run a sub-agent. Claude agents run as Claude Code (headless CLI or MCP harness)
- *  so development is actually done by Claude; local agents run via the configured
- *  provider's tool loop. onEvent streams tool calls live as they happen. */
+/** Run a sub-agent. `type: "claude"` agents run as Claude Code (headless CLI
+ *  or MCP harness) so development is actually done by Claude — unaffected by
+ *  025-agent-delegation-v2's registry unification (FR-024(a)). `type: "local"`
+ *  runs headlessly (see `runLocalHeadless` above) — assistant-chat delegation
+ *  (`agent_delegate`/`dev_delegate`) never reaches this function for local
+ *  agents; it calls `runInnerLoop` directly instead. */
 export async function runSubAgent(
   agent: Agent,
   task: string,
@@ -172,7 +125,7 @@ export async function runSubAgent(
     return runClaudeAgent(agent, task, opts);
   }
   try {
-    return await runLocal(agent, task, opts);
+    return await runLocalHeadless(agent, task, opts);
   } catch (e) {
     return { agent: agent.name, type: "local", task, output: "", steps: 0, toolCalls: [], error: (e as Error).message };
   }

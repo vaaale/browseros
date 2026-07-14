@@ -1,28 +1,9 @@
 "use client";
 
 import React, { useId, useState } from "react";
-import { createCatalog, type CatalogDefinitions, type CatalogRenderers } from "@copilotkit/a2ui-renderer";
+import { createCatalog, Catalog, basicCatalog, type CatalogRenderers } from "@copilotkit/a2ui-renderer";
 import { BASIC_CATALOG_ID } from "@ag-ui/a2ui-toolkit";
-import {
-  TextApi,
-  ImageApi,
-  IconApi,
-  VideoApi,
-  AudioPlayerApi,
-  RowApi,
-  ColumnApi,
-  ListApi,
-  CardApi,
-  TabsApi,
-  ModalApi,
-  DividerApi,
-  ButtonApi,
-  TextFieldApi,
-  CheckBoxApi,
-  ChoicePickerApi,
-  SliderApi,
-  DateTimeInputApi,
-} from "@a2ui/web_core/v0_9/basic_catalog";
+import { CATALOG_DEFINITIONS } from "./catalog-schema";
 
 // BOS-styled A2UI v0.9 catalog (013-build-studio-agentic V2). `@copilotkit/a2ui-renderer`'s
 // default `basicCatalog` is an unstyled reference implementation (white cards, 1px gray
@@ -134,9 +115,13 @@ interface ResolvedListProps extends ResolvedContainerProps {
 }
 interface ResolvedCardProps {
   child?: string;
+  action?: () => void;
+  selected?: boolean;
 }
 interface ResolvedTabsProps {
   tabs?: { title?: string; child: string }[];
+  activeTab?: number;
+  activeTabPath?: string;
 }
 interface ResolvedModalProps {
   trigger?: string;
@@ -190,28 +175,7 @@ interface ResolvedDateTimeInputProps {
   max?: string;
 }
 
-const definitions = {
-  Text: { props: TextApi.schema },
-  Image: { props: ImageApi.schema },
-  Icon: { props: IconApi.schema },
-  Video: { props: VideoApi.schema },
-  AudioPlayer: { props: AudioPlayerApi.schema },
-  Row: { props: RowApi.schema },
-  Column: { props: ColumnApi.schema },
-  List: { props: ListApi.schema },
-  Card: { props: CardApi.schema },
-  Tabs: { props: TabsApi.schema },
-  Modal: { props: ModalApi.schema },
-  Divider: { props: DividerApi.schema },
-  Button: { props: ButtonApi.schema },
-  TextField: { props: TextFieldApi.schema },
-  CheckBox: { props: CheckBoxApi.schema },
-  ChoicePicker: { props: ChoicePickerApi.schema },
-  Slider: { props: SliderApi.schema },
-  DateTimeInput: { props: DateTimeInputApi.schema },
-} satisfies CatalogDefinitions;
-
-const renderers: CatalogRenderers<typeof definitions> = {
+const renderers: CatalogRenderers<typeof CATALOG_DEFINITIONS> = {
   Text: ({ props }) => {
     const p = props as unknown as ResolvedTextProps;
     const text = p.text ?? "";
@@ -261,11 +225,12 @@ const renderers: CatalogRenderers<typeof definitions> = {
   Icon: ({ props }) => {
     const p = props as unknown as ResolvedIconProps;
     const name = typeof p.name === "string" ? p.name : p.name?.path;
+    // `material-symbols-outlined` (loaded in app/layout.tsx) turns the icon
+    // NAME into a glyph via font ligatures — so this must NOT apply `uppercase`
+    // or letter-spacing, which break the ligature match (the ligature table
+    // keys on the exact lowercase name, e.g. "check").
     return (
-      <span
-        className="material-symbols-outlined inline-flex h-6 w-6 items-center justify-center rounded bg-white/5 text-[10px] uppercase tracking-wide text-white/50"
-        title={name}
-      >
+      <span className="material-symbols-outlined inline-flex h-6 w-6 items-center justify-center text-[20px] leading-none text-white/70" title={name}>
         {name}
       </span>
     );
@@ -316,15 +281,37 @@ const renderers: CatalogRenderers<typeof definitions> = {
 
   Card: ({ props, children }) => {
     const p = props as unknown as ResolvedCardProps;
+    // A Card with an `action` is clickable; `selected` highlights its border
+    // (violet accent) so it reads as picked — e.g. subscription plan panels.
+    const clickable = typeof p.action === "function";
+    const border = p.selected ? "border-violet-400/80 bg-violet-500/[0.12]" : "border-white/15 bg-white/[0.06]";
+    const interactive = clickable ? "cursor-pointer hover:border-white/30 transition-colors" : "";
     return (
-      <div className="w-full rounded-lg border border-white/15 bg-white/[0.06] p-4 shadow-sm shadow-black/20">{p.child ? children(p.child) : null}</div>
+      <div
+        role={clickable ? "button" : undefined}
+        onClick={clickable ? p.action : undefined}
+        className={`w-full rounded-lg border p-4 shadow-sm shadow-black/20 ${border} ${interactive}`}
+      >
+        {p.child ? children(p.child) : null}
+      </div>
     );
   },
 
-  Tabs: ({ props, children }) => {
+  Tabs: ({ props, children, dispatch }) => {
     const p = props as unknown as ResolvedTabsProps;
-    const [selectedIndex, setSelectedIndex] = useState(0);
     const tabs = p.tabs ?? [];
+    const [internalIndex, setInternalIndex] = useState(0);
+    // Controlled when `activeTab` is bound (typically to a data path): a
+    // Next/Back Button's setData action drives which tab shows. Otherwise the
+    // tab is self-managed via header clicks (unchanged legacy behavior).
+    const controlled = typeof p.activeTab === "number";
+    const rawIndex = controlled ? (p.activeTab as number) : internalIndex;
+    const selectedIndex = Math.min(Math.max(rawIndex, 0), Math.max(tabs.length - 1, 0));
+    const select = (i: number) => {
+      // Keep the data model in sync so header clicks and Next/Back agree.
+      if (p.activeTabPath) dispatch?.({ event: { name: "setData", context: { target: p.activeTabPath, value: i } } });
+      if (!controlled) setInternalIndex(i);
+    };
     const active = tabs[selectedIndex];
     return (
       <div className="flex w-full flex-col">
@@ -333,7 +320,7 @@ const renderers: CatalogRenderers<typeof definitions> = {
             <button
               key={i}
               type="button"
-              onClick={() => setSelectedIndex(i)}
+              onClick={() => select(i)}
               className={`border-b-2 px-3 py-1.5 text-xs font-medium transition-colors ${
                 selectedIndex === i ? "border-violet-400 text-violet-200" : "border-transparent text-white/50 hover:text-white/80"
               }`}
@@ -566,5 +553,17 @@ const renderers: CatalogRenderers<typeof definitions> = {
   },
 };
 
-/** BOS's dark-themed A2UI v0.9 catalog — pass to `<A2UIProvider catalog={bosA2UICatalog}>`. */
-export const bosA2UICatalog = createCatalog(definitions, renderers, { catalogId: BASIC_CATALOG_ID });
+/** BOS's dark-themed A2UI v0.9 catalog — pass to `<A2UIProvider catalog={bosA2UICatalog}>`.
+ *
+ *  Rebuilt from BOS's custom components PLUS the basic catalog's FUNCTIONS
+ *  (`equals`, `and`, `formatCurrency`, …). `createCatalog` only bundles those
+ *  functions when `includeBasicCatalog` is set — but that would also pull in the
+ *  unstyled reference COMPONENTS, which we don't want. Without the functions,
+ *  every `{"call": …}` binding (which the generation prompt advertises, e.g. a
+ *  selectable Card's `selected: {call:"equals", …}`) silently fails to resolve. */
+const bosComponents = createCatalog(CATALOG_DEFINITIONS, renderers, { catalogId: BASIC_CATALOG_ID });
+export const bosA2UICatalog = new Catalog(
+  BASIC_CATALOG_ID,
+  [...bosComponents.components.values()],
+  [...basicCatalog.functions.values()],
+);

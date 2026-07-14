@@ -1,18 +1,28 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { A2UIProvider, A2UIRenderer, useA2UI } from "@copilotkit/a2ui-renderer";
 import type { AppProps } from "@/components/apps/types";
 import { registerAppSurfaceTools } from "@/lib/assistant/client/surface-tools";
+import { registerSurfaceAgent } from "@/lib/assistant/client/surface-agents";
 import { uiPreviewSurfaceTools } from "./agent-tools-v2";
 import { bosA2UICatalog } from "./catalog";
+import { applySurfaceAction, type A2UIActionMessage } from "./surface-actions";
+
+type PushOps = (operations: Record<string, unknown>[]) => void;
+
+// 025-agent-delegation-v2 (Example 2, US-4): a distinct, focused prompt for
+// the surface agent itself. Its two tools each generate AND render in one call
+// (025-ui-preview-a2ui-tools), so it never has to remember a separate push step.
+const GENERATIVE_UI_AGENT_PROMPT =
+  "You are a specialist in designing and iterating on UI mockups for BrowserOS apps, working inside an already-open UI Preview window. To create a new mockup (or start over), call ui_preview_generate with a natural-language description — it generates and renders it in one step. To change the mockup that is already showing, call ui_preview_patch with a description of just the change (add/replace/remove an element); it reads the current mockup itself, so don't restate the whole design. Keep iterating until the mockup matches what was asked for, then summarize what you built in plain text.";
 
 // Design-time A2UI surface host (013-build-studio-agentic V2). The Build
 // Studio agent opens this window during the UI-design phase of a bos-app
-// session, pushes A2UI v0.9 operations to it via `ui_preview_render`, and the
-// user watches the mockup evolve. This is a design surface only — the
-// Developer later implements the real app as React components; nothing here
-// is ever shipped.
+// session and iterates a mockup on it via `ui_preview_generate`/
+// `ui_preview_patch`, and the user watches it evolve. This is a design surface
+// only — the Developer later implements the real app as React components;
+// nothing here is ever shipped.
 
 const DEFAULT_SURFACE_ID = "dynamic-surface";
 const MAX_HISTORY = 20;
@@ -22,8 +32,13 @@ interface HistoryEntry {
   summary: string;
 }
 
-function UIPreviewSurface({ windowId }: { windowId: string }) {
-  const { processMessages } = useA2UI();
+function UIPreviewSurface({ windowId, pushOpsRef }: { windowId: string; pushOpsRef: React.MutableRefObject<PushOps | null> }) {
+  const { processMessages, getSurface, clearSurfaces } = useA2UI();
+  // Bridge `processMessages` up to the provider-level onAction handler (which
+  // can't call useA2UI itself).
+  useEffect(() => {
+    pushOpsRef.current = processMessages;
+  }, [processMessages, pushOpsRef]);
   const [surfaceId, setSurfaceId] = useState(DEFAULT_SURFACE_ID);
   const [activeRequirement, setActiveRequirement] = useState("");
   const [history, setHistory] = useState<HistoryEntry[]>([]);
@@ -31,19 +46,66 @@ function UIPreviewSurface({ windowId }: { windowId: string }) {
 
   const onRender = useCallback(
     (id: string, operations: Record<string, unknown>[]) => {
+      // A `ui_preview_generate` render carries a `createSurface` op. If a
+      // surface with that id already exists (a SECOND generate in the same
+      // session — "start over"), createSurface throws "already exists" and the
+      // whole render is silently dropped. Clear first so a regenerate actually
+      // replaces the mockup. Patches (no createSurface) must NOT clear — they
+      // upsert into the live surface and rely on its existing data model.
+      const isCreate = operations.some((op) => op && typeof op === "object" && "createSurface" in op);
+      if (isCreate) clearSurfaces();
       setSurfaceId(id);
       processMessages(operations);
       setHistory((prev) => [...prev, { at: Date.now(), summary: `${operations.length} op(s) on "${id}"` }].slice(-MAX_HISTORY));
     },
-    [processMessages],
+    [processMessages, clearSurfaces],
   );
 
   const onShowRequirement = useCallback((requirementId: string) => {
     if (requirementId) setActiveRequirement(requirementId);
   }, []);
 
-  const tools = useMemo(() => uiPreviewSurfaceTools({ onRender, onShowRequirement }), [onRender, onShowRequirement]);
+  // Serialize the current live surface into the `{ id, component, ...props }`
+  // operation shape so ui_preview_patch can hand the sub-agent the real
+  // component tree (real ids) rather than a prose description of it.
+  const getCurrentSurface = useCallback(() => {
+    const surface = getSurface(surfaceId);
+    const components: Record<string, unknown>[] = [];
+    const entries = surface?.componentsModel?.entries as IterableIterator<[string, { id: string; type: string; properties?: Record<string, unknown> }]> | undefined;
+    if (entries) {
+      for (const [, cm] of entries) {
+        components.push({ id: cm.id, component: cm.type, ...(cm.properties ?? {}) });
+      }
+    }
+    return { surfaceId, components };
+  }, [getSurface, surfaceId]);
+
+  const tools = useMemo(
+    () => uiPreviewSurfaceTools({ onRender, onShowRequirement, getCurrentSurface }),
+    [onRender, onShowRequirement, getCurrentSurface],
+  );
   useEffect(() => registerAppSurfaceTools(windowId, tools), [windowId, tools]);
+
+  // 025-agent-delegation-v2: register this window's surface agent — a delegate
+  // persona scoped to this window's own generate/patch tools, discoverable via
+  // find_agent/agent_list only while this window stays open.
+  useEffect(() => {
+    let cleanup: (() => void) | undefined;
+    let cancelled = false;
+    void registerSurfaceAgent(windowId, {
+      name: "Generative UI Agent",
+      description: "Specialist in generating and iterating on live UI mockups in this UI Preview window.",
+      systemPrompt: GENERATIVE_UI_AGENT_PROMPT,
+      toolNames: ["ui_preview_generate", "ui_preview_patch"],
+    }).then((unregister) => {
+      if (cancelled) unregister();
+      else cleanup = unregister;
+    });
+    return () => {
+      cancelled = true;
+      cleanup?.();
+    };
+  }, [windowId]);
 
   return (
     <div className="flex h-full text-sm" data-theme="dark">
@@ -90,9 +152,26 @@ function UIPreviewSurface({ windowId }: { windowId: string }) {
 }
 
 export default function UIPreviewApp({ windowId }: AppProps) {
+  const pushOpsRef = useRef<PushOps | null>(null);
+
+  // 025-ui-preview-a2ui-tools (Level A): interpret component actions locally,
+  // mutating the surface's own data model so clicks (selection, toggles,
+  // buttons that set state) work without an agent round-trip.
+  const onAction = useCallback((message: A2UIActionMessage) => {
+    const handled = applySurfaceAction(message, {
+      pushOps: (ops) => pushOpsRef.current?.(ops),
+      openUrl: (url) => window.open(url, "_blank", "noopener,noreferrer"),
+    });
+    if (!handled && message?.userAction?.name) {
+      void import("@/lib/logging/client/browser-logger").then(({ clog }) =>
+        clog("debug", "ui-preview.action", "unhandled surface action", { name: message.userAction?.name }),
+      );
+    }
+  }, []);
+
   return (
-    <A2UIProvider catalog={bosA2UICatalog}>
-      <UIPreviewSurface windowId={windowId} />
+    <A2UIProvider catalog={bosA2UICatalog} onAction={onAction}>
+      <UIPreviewSurface windowId={windowId} pushOpsRef={pushOpsRef} />
     </A2UIProvider>
   );
 }

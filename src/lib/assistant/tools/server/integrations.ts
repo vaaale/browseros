@@ -2,6 +2,7 @@ import "server-only";
 import type { AssistantTool } from "../../tools";
 import { serverTool } from "./util";
 import { actionNameFor, invokeAdapterMethod } from "@/lib/integrations/actions/dispatcher";
+import { adapterParametersToJsonSchema, type AdapterMethodParameter } from "@/lib/integrations/actions/types";
 import { GMAIL_METHOD_DESCRIPTORS } from "@/lib/integrations/services/gsuite/adapters/gmail-methods";
 import { DRIVE_METHOD_DESCRIPTORS } from "@/lib/integrations/services/gsuite/adapters/drive-methods";
 import { CALENDAR_METHOD_DESCRIPTORS } from "@/lib/integrations/services/gsuite/adapters/calendar-methods";
@@ -19,20 +20,10 @@ interface MethodDescriptor {
   method: string;
   scope: string;
   description: string;
-  parameters: ReadonlyArray<{ name: string; type: string; description: string; required?: boolean }>;
+  parameters: readonly AdapterMethodParameter[];
 }
 
 type AdapterError = Error & { code?: string; scope?: string };
-
-function toSchema(parameters: MethodDescriptor["parameters"]): Record<string, unknown> {
-  const properties: Record<string, unknown> = {};
-  const required: string[] = [];
-  for (const param of parameters) {
-    properties[param.name] = { type: param.type, description: param.description };
-    if (param.required) required.push(param.name);
-  }
-  return { type: "object", properties, required };
-}
 
 function mapError(integrationId: string, label: string, e: AdapterError): string {
   if (e.code === "scope_disabled") {
@@ -54,7 +45,7 @@ function buildTools(
   const out: Record<string, AssistantTool> = {};
   for (const d of descriptors) {
     const name = actionNameFor(opts.integrationId, opts.nameServiceId, d.method);
-    out[name] = serverTool(name, d.description, toSchema(d.parameters), async (input) => {
+    out[name] = serverTool(name, d.description, adapterParametersToJsonSchema(d.parameters), async (input) => {
       try {
         const result = await invokeAdapterMethod({
           integrationId: opts.integrationId,

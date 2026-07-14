@@ -20,6 +20,7 @@ import type { AssistantTool, ToolDeclaration, ToolGateConfig, ToolContext } from
 import { visibleTools } from "./tools";
 import type { FrontendOutcome } from "./run-manager";
 import type { RunHooks, HookContext } from "./hooks";
+import { logger } from "@/lib/logging";
 
 export interface TurnToolCall {
   id: string;
@@ -42,6 +43,10 @@ export type StreamTurn = (opts: {
   messageId: string;
   /** For server-side compaction keyed by conversation (empty in unit tests). */
   conversationId: string;
+  /** 025-agent-delegation-v2: optional model-name override (e.g. a named
+   *  agent's `model` field) — same provider/apiKey/baseUrl, different model
+   *  string. Undefined for the primary run and for ephemeral/surface agents. */
+  model?: string;
 }) => Promise<TurnResult>;
 
 export interface AgentLoopIO {
@@ -71,6 +76,10 @@ export interface AgentLoopDeps {
   leakRetryLimit?: number;
   /** Pre-composed interception hooks (composeHooks). Optional. */
   hooks?: RunHooks;
+  /** Nested-delegation depth (025-agent-delegation-v2): 0 for the primary run,
+   *  threaded through to every server tool's ToolContext so agent_delegate/
+   *  dev_delegate can enforce a depth guard uniformly. */
+  delegationDepth?: number;
 }
 
 export interface AgentLoopInput {
@@ -82,7 +91,7 @@ export interface AgentLoopInput {
 
 const LEAK = /<tool_call\b|<\/tool_call>|<function\s*=|<\|tool[_ ]?call\|>/i;
 
-const STEP_LIMIT_TEXT = (maxSteps: number) =>
+export const STEP_LIMIT_TEXT = (maxSteps: number) =>
   `Reached the step limit (${maxSteps} steps) before finishing. Partial changes may already be applied — review what was done and continue with a focused follow-up rather than restarting from scratch.`;
 
 const CANCELLED_RESULT = "Cancelled by user.";
@@ -92,7 +101,14 @@ function toolError(tool: string, detail: string, hint?: string): string {
 }
 
 /** Run a server tool with kernel guarantees: always settles, in-band errors,
- *  idle-aware timeout (progress events push the deadline). */
+ *  idle-aware timeout (progress events push the deadline).
+ *
+ *  025-agent-delegation-v2: `tool.execute()` is handed a PER-CALL abort signal
+ *  (`callAbort.signal`), not the bare run signal — it aborts on either the
+ *  run's real cancellation OR this call's own idle-timeout firing. Without
+ *  this, a tool whose execute() runs a long nested operation (e.g. a
+ *  delegation's inner loop) would keep running detached after this function
+ *  already settled with an in-band timeout error to the model. */
 async function runServerTool(
   tool: AssistantTool,
   input: Record<string, unknown>,
@@ -101,6 +117,7 @@ async function runServerTool(
   onProgress: (event: unknown) => void,
 ): Promise<string> {
   if (!tool.execute) return toolError(tool.name, "tool has no server executor", "this is a BOS bug");
+  const callAbort = new AbortController();
   return await new Promise<string>((resolve) => {
     let done = false;
     let timer: ReturnType<typeof setTimeout>;
@@ -111,20 +128,34 @@ async function runServerTool(
       ctx.signal.removeEventListener("abort", onAbort);
       resolve(result);
     };
-    const onAbort = () => settle(CANCELLED_RESULT);
+    const onAbort = () => {
+      callAbort.abort();
+      settle(CANCELLED_RESULT);
+    };
     const armTimer = () => {
       clearTimeout(timer);
-      timer = setTimeout(
-        () =>
-          settle(
-            toolError(
-              tool.name,
-              `no result within ${Math.round(timeoutMs / 1000)}s`,
-              "the operation may still be running server-side; check its status before retrying",
-            ),
+      timer = setTimeout(() => {
+        logger().log({
+          level: "warn",
+          component: "assistant.tools",
+          conversation: ctx.conversationId,
+          msg: "server tool timed out",
+          data: {
+            conversationId: ctx.conversationId,
+            agentId: ctx.agentId,
+            tool: tool.name,
+            timeoutMs,
+          },
+        });
+        callAbort.abort();
+        settle(
+          toolError(
+            tool.name,
+            `no result within ${Math.round(timeoutMs / 1000)}s`,
+            "the operation may still be running server-side; check its status before retrying",
           ),
-        timeoutMs,
-      );
+        );
+      }, timeoutMs);
       timer.unref?.();
     };
     armTimer();
@@ -134,7 +165,7 @@ async function runServerTool(
       onProgress(event);
     };
     tool
-      .execute!(input, { ...ctx, onEvent })
+      .execute!(input, { ...ctx, signal: callAbort.signal, onEvent })
       .then((out) => settle(typeof out === "string" ? out : JSON.stringify(out)))
       .catch((e) => settle(toolError(tool.name, (e as Error).message)));
   });
@@ -263,7 +294,13 @@ export async function runAgentLoop(deps: AgentLoopDeps, input: AgentLoopInput): 
             result = await runServerTool(
               tool,
               parsed,
-              { signal, conversationId: deps.conversationId, agentId: deps.agentId },
+              {
+                signal,
+                conversationId: deps.conversationId,
+                agentId: deps.agentId,
+                delegationDepth: deps.delegationDepth ?? 0,
+                runId: deps.runId,
+              },
               deps.toolTimeoutMs,
               (event) => emit({ type: "tool_progress", callId: call.id, event }),
             );

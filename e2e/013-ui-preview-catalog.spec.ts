@@ -70,10 +70,14 @@ test.describe("UI Preview catalog rendering", () => {
     const textarea = page.getByTestId("chat-textarea");
     await expect(textarea).toBeVisible({ timeout: 15000 });
 
+    // Push the handcrafted envelope through ui_preview_generate's `@@e2e`
+    // deterministic bypass (see src/lib/a2ui/service.ts) so this stays an
+    // LLM-free catalog-rendering smoke test now that raw operations no longer
+    // have their own tool.
     await textarea.fill(
       script([
         { text: "opening UI Preview", tools: [{ name: "ui_preview_open", args: {} }] },
-        { text: "rendering the smoke test", tools: [{ name: "ui_preview_render", args: { surfaceId: "smoke-surface", operations } }] },
+        { text: "rendering the smoke test", tools: [{ name: "ui_preview_generate", args: { description: `@@e2e ${JSON.stringify({ operations })}` } }] },
         { text: "Done." },
       ]),
     );

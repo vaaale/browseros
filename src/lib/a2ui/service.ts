@@ -1,0 +1,352 @@
+import "server-only";
+import Anthropic from "@anthropic-ai/sdk";
+import OpenAI from "openai";
+import {
+  RENDER_A2UI_TOOL_DEF,
+  BASIC_CATALOG_ID,
+  MAX_A2UI_ATTEMPTS,
+  buildSubagentPrompt,
+  validateA2UIComponents,
+  augmentPromptWithValidationErrors,
+  assembleOps,
+  type A2UIValidationError,
+} from "@ag-ui/a2ui-toolkit";
+import { getProviderConfig, DEFAULT_MAX_TOKENS } from "@/lib/agent/provider";
+import { familyOf, normalizeApiBase } from "@/lib/agent/provider-meta";
+import { describeCatalogForPrompt } from "@/apps/ui-preview/catalog-schema";
+import { logger } from "@/lib/logging";
+
+// A2UI generation service (025-ui-preview-a2ui-tools). Extracted from the old
+// `a2ui_render` tool: the LLM-driven generation of a validated A2UI v0.9
+// operations envelope from a natural-language description, now consumed via an
+// API route by the UI Preview app's `ui_preview_generate`/`ui_preview_patch`
+// frontend tools (which generate AND render in one step) instead of being a
+// standalone agent-visible tool that the model had to remember to chain into
+// `ui_preview_render`. Uses @ag-ui/a2ui-toolkit's framework-agnostic prompt +
+// validation/recovery helpers with BOS's own configured provider/model.
+
+export const A2UI_DEFAULT_SURFACE_ID = "dynamic-surface";
+const RENDER_TOOL = RENDER_A2UI_TOOL_DEF.function;
+
+/** A component in the current surface state, shaped like an A2UI operation
+ *  component (`{ id, component, ...props }`) — the same shape the sub-agent
+ *  emits, so a patch request can reference existing ids directly. */
+export interface A2UIComponentSnapshot {
+  id: string;
+  component: string;
+  [key: string]: unknown;
+}
+
+export interface A2UIGenerationResult {
+  ok: boolean;
+  surfaceId: string;
+  operations: Record<string, unknown>[];
+  error?: string;
+}
+
+// Full per-component prop schema derived at call time from the SAME zod schemas
+// src/apps/ui-preview/catalog.tsx renders with — see catalog-schema.ts.
+function bosDesignContext(): string {
+  return `## What you are building
+You are composing an A2UI v0.9 component tree — NOT an HTML/CSS/JavaScript page.
+There is no <script>, no custom JavaScript, no CSS you control, no HTML tags.
+You may ONLY use the components listed below, and behavior ONLY works through the
+interactivity patterns in the "Interactivity" section — anything else (a
+"showStep() function", "vanilla JavaScript", "display:none", "localStorage") does
+not exist and is silently dropped. Build tabbed or multi-step UIs with the Tabs
+component, not with hidden divs.
+
+## Available components (A2UI v0.9 basic catalog)
+Use ONLY the components below — do not invent others. Each field is shown as
+\`name: type\` (or \`name?: type\` if optional) with its real meaning. Any field
+may ALSO be bound to live data via \`{"path": "/some/pointer"}\` or a function
+call via \`{"call": "name", "args": {...}}\` instead of a literal value — but for
+a static mockup, just pass literal values as shown.
+
+${describeCatalogForPrompt()}
+
+## Interactivity (make the mockup actually work, not just look right)
+The surface has a reactive DATA MODEL: components can WRITE values to a path and
+READ them back, so clicks and inputs have real effect with no server round-trip.
+Use these patterns whenever the request implies interaction:
+- **Inputs hold state**: give every TextField / CheckBox / Slider / ChoicePicker /
+  DateTimeInput a \`value\` bound to a data path, e.g. \`"value": {"path": "/form/email"}\`
+  (NOT a literal). Then the field remembers what the user enters and other
+  components can show it.
+- **Single choice (radio) / multi-select**: use a ChoicePicker with
+  \`"variant": "mutuallyExclusive"\` (single) and bind its \`value\` to a path
+  (e.g. \`/plan\`). It already highlights the selected option on click — prefer it
+  over hand-built clickable rows when the options are simple text.
+- **Selectable Cards (rich option panels)**: for "pick one of several PANELS"
+  (e.g. subscription tiers with a title, description and price), give each Card
+  an \`action\` that sets the choice and a \`selected\` that reflects it, so the
+  picked card highlights its border:
+  \`{"id":"pro","component":"Card","child":"pro-col","action":{"event":{"name":"setData","context":{"target":"/plan","value":"pro"}}},"selected":{"call":"equals","args":{"a":{"path":"/plan"},"b":"pro"}}}\`.
+  Lay the cards out side by side in a \`Row\`.
+- **Buttons that change state**: give the Button an
+  \`"action": {"event": {"name": "setData", "context": {"target": "/step", "value": 2}}}\`.
+  Clicking it sets \`/step\` to 2 in the data model. (The data path key MUST be
+  \`target\`, never \`path\` — \`path\` is reserved for read bindings.)
+- **Show a live value** (summaries, confirmations): bind a Text's \`text\`
+  directly to the path, e.g. \`"text": {"path": "/form/email"}\`. For a
+  "Label: value" line, use a Row with a static label Text plus a second Text
+  bound to the path.
+- **Links**: a Button action \`{"event": {"name": "openUrl", "context": {"url": "https://…"}}}\`.
+- **Tabs / multi-step wizards**: use the Tabs component (one entry per tab, each
+  with its own \`child\`). Clicking a tab header switches it automatically. To make
+  a **"Next"/"Back" button move between tabs**, bind the Tabs' \`activeTab\` to a
+  data path and set \`activeTabPath\` to that same path, then give each button a
+  setData action pointing at it. Example:
+  \`{"id":"wizard","component":"Tabs","activeTab":{"path":"/step"},"activeTabPath":"/step","tabs":[{"title":"Register","child":"t0"},{"title":"Plan","child":"t1"},{"title":"Finish","child":"t2"}]}\`
+  and a Next button inside tab 0: \`"action":{"event":{"name":"setData","context":{"target":"/step","value":1}}}\` (Back would use value 0). Each button hardcodes the index of the tab it goes to.
+Only "setData" and "openUrl" action names are handled; do not invent other
+action names (they will do nothing).
+
+## BOS design constraints
+- Dark theme only — assume a dark host background.
+- Dense UI: prefer compact spacing over generous whitespace.
+- Keep the same surfaceId across iterations of the same design so updates replace it in place.`;
+}
+
+async function invokeSubagent(prompt: string, signal: AbortSignal): Promise<Record<string, unknown> | null> {
+  const c = await getProviderConfig();
+  if (familyOf(c.provider) === "anthropic") {
+    const client = new Anthropic({ apiKey: c.apiKey || "MISSING", baseURL: c.baseUrl || undefined });
+    const res = await client.messages.create(
+      {
+        model: c.model,
+        max_tokens: c.maxTokens ?? DEFAULT_MAX_TOKENS,
+        system: prompt,
+        messages: [{ role: "user", content: "Generate the UI now." }],
+        tools: [{ name: RENDER_TOOL.name, description: RENDER_TOOL.description, input_schema: RENDER_TOOL.parameters as Anthropic.Tool.InputSchema }],
+        tool_choice: { type: "tool", name: RENDER_TOOL.name },
+      },
+      { signal },
+    );
+    const block = res.content.find((b): b is Anthropic.Messages.ToolUseBlock => b.type === "tool_use");
+    return (block?.input as Record<string, unknown>) ?? null;
+  }
+  const client = new OpenAI({ apiKey: c.apiKey || "local", baseURL: c.baseUrl ? normalizeApiBase(c.baseUrl) : undefined });
+  const res = await client.chat.completions.create(
+    {
+      model: c.model,
+      messages: [
+        { role: "system", content: prompt },
+        { role: "user", content: "Generate the UI now." },
+      ],
+      tools: [{ type: "function", function: { name: RENDER_TOOL.name, description: RENDER_TOOL.description, parameters: RENDER_TOOL.parameters } }],
+      tool_choice: { type: "function", function: { name: RENDER_TOOL.name } },
+    },
+    { signal },
+  );
+  const call = res.choices[0]?.message?.tool_calls?.[0];
+  if (!call || call.type !== "function") return null;
+  try {
+    return JSON.parse(call.function.arguments) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+function currentStateBlock(surfaceId: string, components: A2UIComponentSnapshot[]): string {
+  return `
+
+## Current surface state
+Surface "${surfaceId}" currently contains these components (each shown as its
+\`{ id, component, ...props }\`). Apply the requested change by returning ONLY
+the components that must change — do NOT re-send unchanged components:
+- To CHANGE a component in place, return it with its EXISTING id and the new props.
+- To ADD a component, return it with a NEW id AND return its parent with the new
+  id inserted into the parent's \`children\` array (or \`child\`).
+- To REMOVE a component, return its parent with that child's id omitted from the
+  parent's \`children\`/\`child\`. Do not return the removed component itself.
+
+${JSON.stringify(components, null, 2)}`;
+}
+
+// Deterministic e2e bypass: when BOS_E2E_SCRIPTED=1 and the description is an
+// `@@e2e {"operations":[...]}` directive, return those operations verbatim
+// without calling the LLM — the same convention e2e-provider.ts uses for model
+// turns. This is what lets Playwright tests push a handcrafted envelope through
+// ui_preview_generate deterministically (e.g. the catalog smoke test), now that
+// there is no separate raw-operations tool.
+const E2E_PREFIX = "@@e2e ";
+function scriptedOperations(description: string): Record<string, unknown>[] | null {
+  if (process.env.BOS_E2E_SCRIPTED !== "1") return null;
+  if (!description.startsWith(E2E_PREFIX)) return null;
+  try {
+    const parsed = JSON.parse(description.slice(E2E_PREFIX.length)) as { operations?: unknown };
+    return Array.isArray(parsed.operations) ? (parsed.operations as Record<string, unknown>[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** The surface id the given operations target (from any op payload carrying
+ *  one), so a scripted render resolves to the same surface the ops build. */
+function surfaceIdOf(operations: Record<string, unknown>[]): string | undefined {
+  for (const op of operations) {
+    for (const value of Object.values(op)) {
+      if (value && typeof value === "object" && typeof (value as { surfaceId?: unknown }).surfaceId === "string") {
+        return (value as { surfaceId: string }).surfaceId;
+      }
+    }
+  }
+  return undefined;
+}
+
+async function runGeneration(params: {
+  intent: "create" | "update";
+  description: string;
+  surfaceId: string;
+  currentComponents?: A2UIComponentSnapshot[];
+  signal: AbortSignal;
+}): Promise<A2UIGenerationResult> {
+  const { intent, description, surfaceId, currentComponents, signal } = params;
+
+  const scripted = scriptedOperations(description);
+  if (scripted) return { ok: true, surfaceId: surfaceIdOf(scripted) ?? surfaceId, operations: scripted };
+
+  const stateBlock = currentComponents?.length ? currentStateBlock(surfaceId, currentComponents) : "";
+  const basePrompt = buildSubagentPrompt({
+    contextPrompt: `${bosDesignContext()}\n\n## Request\nSurface id: ${surfaceId}\nIntent: ${intent}\n${description}${stateBlock}`,
+  });
+
+  // Own the validate→retry loop (instead of the toolkit's runA2UIGenerationWithRecovery)
+  // so validation matches how THIS tool works — see the two adjustments below.
+  // Both were causing correct designs to be rejected and retried to exhaustion:
+  //   1. A `ui_preview_patch` returns only the CHANGED components (an upsert into
+  //      the live surface). Validated alone, that delta spuriously fails `no_root`
+  //      and `unresolved_child` (its children live in the un-returned rest of the
+  //      tree). So for a patch we validate the delta OVERLAID on the current tree.
+  //   2. `validateBindings:false` — at design time the data model is empty, so
+  //      every `{path}` binding is legitimately "unresolved"; validating them
+  //      false-fails any interactive mockup.
+  let prompt = basePrompt;
+  let lastErrors: A2UIValidationError[] = [];
+  for (let attempt = 1; attempt <= MAX_A2UI_ATTEMPTS; attempt++) {
+    const args = await invokeSubagent(prompt, signal);
+    const returned = Array.isArray(args?.components) ? (args!.components as Record<string, unknown>[]) : [];
+    if (returned.length === 0) {
+      lastErrors = [{ code: "empty_components", path: "components", message: "The model returned no components." }];
+      prompt = augmentPromptWithValidationErrors(basePrompt, lastErrors);
+      continue;
+    }
+    const validationSet =
+      intent === "update" && currentComponents?.length ? mergeComponentsById(currentComponents, returned) : returned;
+    const { valid, errors } = validateA2UIComponents({ components: validationSet, validateBindings: false });
+    if (valid) {
+      const resolvedSurfaceId = String(args!.surfaceId ?? surfaceId) || surfaceId;
+      const operations = assembleOps({
+        intent,
+        surfaceId: resolvedSurfaceId,
+        catalogId: BASIC_CATALOG_ID,
+        components: returned,
+        data: (args!.data as Record<string, unknown>) ?? undefined,
+      }) as Record<string, unknown>[];
+      return { ok: true, surfaceId: resolvedSurfaceId, operations };
+    }
+    lastErrors = errors;
+    prompt = augmentPromptWithValidationErrors(basePrompt, errors);
+  }
+
+  // Surface WHY it failed (was previously swallowed) — the per-attempt
+  // validation errors are the real signal for debugging a persistent failure.
+  logger().warn("assistant.a2ui", "a2ui generation failed after all attempts", {
+    intent,
+    surfaceId,
+    attempts: MAX_A2UI_ATTEMPTS,
+    errorCodes: [...new Set(lastErrors.map((e) => e.code))],
+    lastErrors: lastErrors.slice(0, 10).map((e) => ({ code: e.code, path: e.path, message: e.message })),
+  });
+  return { ok: false, surfaceId, operations: [], error: explainFailure(lastErrors) };
+}
+
+// Per-code guidance phrased for the CALLING agent, which writes natural-language
+// descriptions (not raw components) — so "add an id" style advice is useless;
+// tell it what to change ABOUT THE DESCRIPTION. Only codes that can actually
+// surface here are covered (binding validation is disabled; the patch-delta
+// false-positives for no_root/unresolved_child are handled by the merge above,
+// but a GENUINE dangling reference can still occur, so they're kept).
+const FAILURE_HINTS: Partial<Record<A2UIValidationError["code"], string>> = {
+  unknown_component:
+    "The design asked for a component that doesn't exist. Use ONLY: Text, Row, Column, List, Card, Tabs, Divider, Modal, Button, TextField, CheckBox, ChoicePicker, Slider, DateTimeInput, Image, Icon, Video, AudioPlayer — approximate anything else (e.g. a table = a List of Rows, a chart = Text/'—' placeholders).",
+  unresolved_child: "Describe a complete layout — every element you reference (a card, a button, a panel) must also be described so it actually exists.",
+  no_root: "Describe a single top-level container (e.g. a Column or Card) that holds everything else.",
+  child_cycle: "Keep the layout a simple tree — containers hold elements; an element must not (directly or indirectly) contain itself.",
+  missing_required_prop: "Be specific about each element's content — e.g. give every Button a label, every Tabs its tab titles, every field its label.",
+  missing_component_type: "Name a concrete component for each element (Text, Button, Card, …) so the generator knows what to build.",
+  duplicate_id: "Avoid describing two elements with the same name/role in a way that collides — give each a distinct purpose.",
+  empty_components: "The request was too vague or too large to build. Break it into a concrete list of sections and the elements inside each.",
+};
+
+/** Turn the exhausted-retry validation errors into an actionable tool result the
+ *  calling agent can act on, instead of a dead-end generic message. */
+function explainFailure(errors: A2UIValidationError[]): string {
+  if (errors.length === 0) {
+    return "The UI generator returned nothing usable. Describe the layout more concretely — which containers, fields, and buttons — and try again.";
+  }
+  // The toolkit's own messages already name the offending component/id; surface
+  // a few, deduped, then add the BOS-level hint(s) for the codes seen.
+  const seen = new Set<string>();
+  const details: string[] = [];
+  for (const e of errors) {
+    const line = e.message.trim();
+    if (line && !seen.has(line)) {
+      seen.add(line);
+      details.push(line);
+    }
+    if (details.length >= 4) break;
+  }
+  const hints: string[] = [];
+  const seenCode = new Set<string>();
+  for (const e of errors) {
+    const hint = FAILURE_HINTS[e.code];
+    if (hint && !seenCode.has(e.code)) {
+      seenCode.add(e.code);
+      hints.push(hint);
+    }
+  }
+  const detailBlock = details.length ? ` Problems found: ${details.join("; ")}.` : "";
+  const hintBlock = hints.length ? ` ${hints.join(" ")}` : " Try rephrasing or simplifying the request.";
+  return `The UI couldn't be built after ${MAX_A2UI_ATTEMPTS} attempts.${detailBlock}${hintBlock}`;
+}
+
+/** Overlay a patch's returned delta on the current tree (by id, delta wins) to
+ *  form a self-contained set to validate — so a partial patch's child/root
+ *  references resolve. */
+function mergeComponentsById(base: A2UIComponentSnapshot[], overlay: Record<string, unknown>[]): Record<string, unknown>[] {
+  const byId = new Map<string, Record<string, unknown>>();
+  for (const c of base) if (typeof c.id === "string") byId.set(c.id, c);
+  for (const c of overlay) if (typeof c.id === "string") byId.set(c.id, c);
+  return [...byId.values()];
+}
+
+/** Generate a fresh A2UI surface from a natural-language description. */
+export function generateA2UI(params: { description: string; surfaceId?: string; signal: AbortSignal }): Promise<A2UIGenerationResult> {
+  return runGeneration({
+    intent: "create",
+    description: params.description,
+    surfaceId: params.surfaceId?.trim() || A2UI_DEFAULT_SURFACE_ID,
+    signal: params.signal,
+  });
+}
+
+/** Patch an already-rendered A2UI surface: the current component snapshot is
+ *  supplied so the sub-agent can target real existing ids (add/replace in
+ *  place / remove-by-omission) instead of relying on a prose description of
+ *  what already exists. */
+export function patchA2UI(params: {
+  description: string;
+  surfaceId?: string;
+  currentComponents: A2UIComponentSnapshot[];
+  signal: AbortSignal;
+}): Promise<A2UIGenerationResult> {
+  return runGeneration({
+    intent: "update",
+    description: params.description,
+    surfaceId: params.surfaceId?.trim() || A2UI_DEFAULT_SURFACE_ID,
+    currentComponents: params.currentComponents,
+    signal: params.signal,
+  });
+}

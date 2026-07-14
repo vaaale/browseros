@@ -1,11 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
 import { listSubAgents, createSubAgent, deleteSubAgent, ProtectedAgentError } from "@/lib/agent/subagents/store";
-import type { AgentType } from "@/lib/agent/subagents/types";
+import type { Agent, AgentType } from "@/lib/agent/subagents/types";
+import { CAPABILITIES } from "@/lib/agent/capabilities-registry";
+import { unresolvedToolIds } from "@/lib/assistant/gate";
 
 export const dynamic = "force-dynamic";
 
+// 025-agent-delegation-v2 (FR-023): surface each agent's unresolved tool ids
+// (e.g. a typo, or a stale pre-016 id) computed at read time — not stored —
+// so the existing Settings → Agents editor can flag them without a new page.
+function withUnresolvedToolIds(agents: Agent[]): (Agent & { unresolvedToolIds: string[] })[] {
+  const registryIds = new Set(CAPABILITIES.map((c) => c.id));
+  return agents.map((a) => ({
+    ...a,
+    unresolvedToolIds: [...unresolvedToolIds(a.tools, registryIds), ...unresolvedToolIds(a.deferredTools, registryIds)],
+  }));
+}
+
 export async function GET() {
-  return NextResponse.json({ subAgents: await listSubAgents() });
+  return NextResponse.json({ subAgents: withUnresolvedToolIds(await listSubAgents()) });
 }
 
 export async function POST(req: NextRequest) {
@@ -40,5 +53,5 @@ export async function DELETE(req: NextRequest) {
     }
     throw err;
   }
-  return NextResponse.json({ subAgents: await listSubAgents() });
+  return NextResponse.json({ subAgents: withUnresolvedToolIds(await listSubAgents()) });
 }

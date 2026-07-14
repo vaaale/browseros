@@ -11,13 +11,14 @@ import { configTools } from "./tools/server/config";
 import { mcpTools } from "./tools/server/mcp";
 import { workflowTools } from "./tools/server/workflows";
 import { subAgentTools } from "./tools/server/subagents";
+import { devDelegateTools } from "./tools/server/dev-delegate";
+import { schedulerTools } from "./tools/server/scheduler";
 import { agentAdminTools } from "./tools/server/agent-admin";
 import { selfImproveTools } from "./tools/server/self-improve";
 import { devSourceTools } from "./tools/server/dev-source";
 import { specTools } from "./tools/server/specs";
 import { scratchpadTools } from "./tools/server/scratchpad";
 import { integrationTools } from "./tools/server/integrations";
-import { a2uiRenderTools } from "./tools/server/a2ui-render";
 import { discoveryTools } from "./tools/server/discovery";
 
 // The assistant tool registry (Milestone C). Server tools call their lib
@@ -54,13 +55,14 @@ export function assistantTools(): Record<string, AssistantTool> {
     ...mcpTools(),
     ...workflowTools(),
     ...subAgentTools(),
+    ...devDelegateTools(),
     ...agentAdminTools(),
     ...selfImproveTools(),
     ...devSourceTools(),
     ...specTools(),
     ...scratchpadTools(),
     ...integrationTools(),
-    ...a2uiRenderTools(),
+    ...schedulerTools(),
   };
   cache = { ...combined, ...discoveryTools((id) => combined[id]) };
   return cache;

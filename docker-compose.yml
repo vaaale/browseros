@@ -41,7 +41,7 @@ services:
 networks:
   bos-net:
     name: bos-net
-    external: true   # created once with: docker network create bos-net
+    external: false   # created once with: docker network create bos-net
 
 volumes:
   bastion-data:
