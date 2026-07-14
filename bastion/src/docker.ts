@@ -168,59 +168,69 @@ export async function buildImage(
   onEvent: (event: { line?: string; error?: string; status?: string }) => void,
 ): Promise<void> {
   const path = await import("path");
+  const os = await import("os");
+  const fs = await import("fs");
   const tarFs = await import("tar-fs");
-  const tarStream = tarFs.default.pack(repoPath, {
-    // strict:false makes tar-fs SKIP unsupported file types (FIFOs, sockets,
-    // devices) instead of destroying the stream — the latter truncates the
-    // upload and the daemon reports the cryptic "Error in input stream".
-    strict: false,
-    ignore: (fullPath: string) => {
-      const rel = path.relative(repoPath, fullPath);
-      const segments = rel.split(path.sep);
-      if (segments.some((seg) => BUILD_IGNORE_DIRS.has(seg))) return true;
-      if (BUILD_IGNORE_FILES.has(path.basename(fullPath))) return true;
-      return false;
-    },
-  });
+  const { pipeline } = await import("stream/promises");
 
-  await new Promise<void>((resolve, reject) => {
-    // A failure reading the source tree (e.g. a vanished/socket file) surfaces
-    // here — reject cleanly instead of letting dockerode report a cryptic
-    // "Error in input stream".
-    tarStream.on("error", (err: Error) => {
-      console.error("[bastion] build tar stream error:", err);
-      reject(err);
+  // Pack the build context to a temp FILE first, rather than streaming tar-fs
+  // straight to the daemon. This is the key robustness fix: if packing errors
+  // (e.g. a special file), pipeline() rejects here — before any daemon
+  // interaction — so we never send a truncated stream that the daemon reports
+  // as the cryptic "Error in input stream". The daemon then always receives a
+  // complete, valid tar.
+  const tmpTar = path.join(os.tmpdir(), `bos-build-${Date.now()}-${Math.random().toString(36).slice(2)}.tar`);
+
+  try {
+    const tarStream = tarFs.default.pack(repoPath, {
+      strict: false, // skip unsupported file types instead of aborting
+      ignore: (fullPath: string) => {
+        const rel = path.relative(repoPath, fullPath);
+        const segments = rel.split(path.sep);
+        if (segments.some((seg) => BUILD_IGNORE_DIRS.has(seg))) return true;
+        if (BUILD_IGNORE_FILES.has(path.basename(fullPath))) return true;
+        return false;
+      },
     });
 
-    // Track daemon-reported build errors so a failed build rejects instead of
-    // falsely resolving (the daemon streams errors as progress events, not as
-    // a stream error).
-    let daemonError: string | null = null;
+    try {
+      await pipeline(tarStream, fs.createWriteStream(tmpTar));
+    } catch (err) {
+      console.error("[bastion] build context packing failed:", err);
+      onEvent({ error: `Failed to pack build context: ${String(err)}` });
+      throw err;
+    }
 
-    docker.buildImage(tarStream, { t: tag, dockerfile })
-      .then((buildStream) => {
-        docker.modem.followProgress(
-          buildStream,
-          (err: Error | null) => {
-            if (err) { console.error("[bastion] build stream error:", err); reject(err); }
-            else if (daemonError) { reject(new Error(daemonError)); }
-            else resolve();
-          },
-          (event: { stream?: string; error?: string; errorDetail?: { message?: string } }) => {
-            if (event.error || event.errorDetail?.message) {
-              const msg = event.errorDetail?.message ?? event.error ?? "build error";
-              daemonError = msg;
-              console.error("[bastion] build error event:", msg);
-              onEvent({ error: msg });
-            } else if (event.stream) {
-              const line = event.stream.replace(/\n$/, "");
-              if (line) onEvent({ line });
-            }
-          },
-        );
-      })
-      .catch((err: Error) => { console.error("[bastion] buildImage failed:", err); reject(err); });
-  });
+    await new Promise<void>((resolve, reject) => {
+      let daemonError: string | null = null;
+
+      docker.buildImage(fs.createReadStream(tmpTar), { t: tag, dockerfile })
+        .then((buildStream) => {
+          docker.modem.followProgress(
+            buildStream,
+            (err: Error | null) => {
+              if (err) { console.error("[bastion] build stream error:", err); reject(err); }
+              else if (daemonError) { reject(new Error(daemonError)); }
+              else resolve();
+            },
+            (event: { stream?: string; error?: string; errorDetail?: { message?: string } }) => {
+              if (event.error || event.errorDetail?.message) {
+                const msg = event.errorDetail?.message ?? event.error ?? "build error";
+                daemonError = msg;
+                console.error("[bastion] build error event:", msg);
+                onEvent({ error: msg });
+              } else if (event.stream) {
+                const line = event.stream.replace(/\n$/, "");
+                if (line) onEvent({ line });
+              }
+            },
+          );
+        })
+        .catch((err: Error) => { console.error("[bastion] buildImage failed:", err); reject(err); });
+    });
+  } finally {
+    fs.promises.unlink(tmpTar).catch(() => { /* temp file may not exist */ });
+  }
 }
 
 /** Fetch the recent stdout/stderr from a user's container (for diagnostics). */
