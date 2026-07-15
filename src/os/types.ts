@@ -69,6 +69,29 @@ export interface WindowInstance extends WindowBounds {
   params?: Record<string, unknown>;
 }
 
+// A Feature Context (027-vfs-specfs) scopes all spec + source changes belonging
+// to one development effort. The branch name `bos/feat/<id>` is the correlation
+// key across the user-specs repo and the BOS source repo. Exactly one context is
+// active per BOS instance at a time; it is persisted server-side so SpecFS can
+// read it without a client round-trip.
+export interface FeatureContext {
+  /** User-chosen slug, validated `^[a-z0-9-]+$`. */
+  id: string;
+  /** Derived branch name, always `bos/feat/<id>`. */
+  branchName: string;
+  description?: string;
+  /** VFS paths of spec folders written under this feature. */
+  touchedSpecs: string[];
+  /** BOS source paths modified under this feature. */
+  touchedSourcePaths: string[];
+  /** ISO-8601 creation timestamp. */
+  startedAt: string;
+}
+
+export interface FeatureContextFile {
+  active: FeatureContext | null;
+}
+
 export type VfsNodeType = "file" | "dir";
 
 export interface VfsEntry {

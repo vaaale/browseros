@@ -1,5 +1,11 @@
 import { createStore } from "zustand/vanilla";
-import type { AppManifest, OSSettings, WindowBounds, WindowInstance } from "@/os/types";
+import type {
+  AppManifest,
+  FeatureContext,
+  OSSettings,
+  WindowBounds,
+  WindowInstance,
+} from "@/os/types";
 
 export interface OSState {
   windows: WindowInstance[];
@@ -7,6 +13,8 @@ export interface OSState {
   zCounter: number;
   settings: OSSettings;
   apps: AppManifest[];
+  /** Read-only mirror of the server-authoritative active Feature Context. */
+  activeFeature: FeatureContext | null;
 
   launch: (appId: string, params?: Record<string, unknown>) => string | null;
   close: (id: string) => void;
@@ -20,12 +28,22 @@ export interface OSState {
   applySettings: (patch: Partial<OSSettings>) => void;
   registerApp: (app: AppManifest) => void;
   unregisterApp: (id: string) => void;
+
+  // Feature Context intents — the server module is the single writer; these
+  // await the API and refresh the mirror, then broadcast to other tabs.
+  setActiveFeature: (id: string, description?: string) => Promise<void>;
+  clearActiveFeature: () => Promise<void>;
+  refreshActiveFeature: () => Promise<void>;
 }
 
 export interface OSInit {
   settings: OSSettings;
   apps: AppManifest[];
+  /** SSR-seeded active Feature Context (optional). */
+  activeFeature?: FeatureContext | null;
 }
+
+const FEATURE_CHANNEL = "bos-feature-context";
 
 const TOPBAR_H = 32;
 const MARGIN = 24;
@@ -53,12 +71,23 @@ function nextLaunchOrigin(count: number, width: number, height: number): { x: nu
 }
 
 export function createOSStore(init: OSInit) {
-  return createStore<OSState>()((set, get) => ({
+  // Cross-tab sync: when one tab changes the active feature, others refresh
+  // their read-only mirror so a stale tab never believes the wrong feature is
+  // active. Guarded for SSR / environments without BroadcastChannel.
+  const channel =
+    typeof window !== "undefined" && typeof BroadcastChannel !== "undefined"
+      ? new BroadcastChannel(FEATURE_CHANNEL)
+      : null;
+
+  return createStore<OSState>()((set, get) => {
+    if (channel) channel.onmessage = () => void get().refreshActiveFeature();
+    return {
     windows: [],
     focusedId: null,
     zCounter: 1,
     settings: init.settings,
     apps: init.apps,
+    activeFeature: init.activeFeature ?? null,
 
     launch: (appId, params) => {
       const app = get().apps.find((a) => a.id === appId);
@@ -181,7 +210,37 @@ export function createOSStore(init: OSInit) {
         apps: s.apps.filter((a) => a.id !== id),
         windows: s.windows.filter((w) => w.appId !== id),
       })),
-  }));
+
+    setActiveFeature: async (id, description) => {
+      const res = await fetch("/api/feature-context", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, description }),
+      });
+      if (!res.ok) {
+        const { error } = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(error || `Failed to set feature (${res.status})`);
+      }
+      const { active } = (await res.json()) as { active: FeatureContext | null };
+      set({ activeFeature: active });
+      channel?.postMessage({ t: "changed" });
+    },
+
+    clearActiveFeature: async () => {
+      const res = await fetch("/api/feature-context", { method: "DELETE" });
+      if (!res.ok) throw new Error(`Failed to clear feature (${res.status})`);
+      set({ activeFeature: null });
+      channel?.postMessage({ t: "changed" });
+    },
+
+    refreshActiveFeature: async () => {
+      const res = await fetch("/api/feature-context");
+      if (!res.ok) return;
+      const { active } = (await res.json()) as { active: FeatureContext | null };
+      set({ activeFeature: active });
+    },
+    };
+  });
 }
 
 export type OSStoreApi = ReturnType<typeof createOSStore>;

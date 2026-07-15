@@ -4,6 +4,8 @@ import path from "path";
 import { dataDir } from "./data-dir";
 import { writeFileAtomic } from "./atomic-write";
 import type { VfsEntry } from "./types";
+import type { FSBackend } from "./fs-types";
+import { resolveMountPath, normalizeMountPrefix } from "./mount-table";
 
 const VFS_ROOT = path.join(dataDir(), "vfs");
 // A few VFS subtrees must survive a discarded PREVIEW data clone (live version
@@ -40,6 +42,27 @@ export function normalizeVfsPath(vfsPath: string): string {
   return path.posix.normalize("/" + (vfsPath || "/"));
 }
 
+// Mount table (027-vfs-specfs). A registered mount routes a VFS sub-tree to an
+// FSBackend; unmounted paths fall through to the default local VFS behaviour
+// below (identical to pre-027). Mounts are registered once at server startup.
+const mounts: { vfsPrefix: string; backend: FSBackend }[] = [];
+
+/** Route a VFS sub-tree to a backend. Idempotent per prefix (last wins). */
+export function registerMount(vfsPrefix: string, backend: FSBackend): void {
+  const prefix = normalizeMountPrefix(vfsPrefix);
+  const existing = mounts.findIndex((m) => m.vfsPrefix === prefix);
+  if (existing >= 0) mounts[existing] = { vfsPrefix: prefix, backend };
+  else mounts.push({ vfsPrefix: prefix, backend });
+}
+
+/** Resolve a normalized VFS path to a mounted backend + backend-relative path. */
+function findMount(norm: string): { backend: FSBackend; rel: string } | null {
+  const res = resolveMountPath(norm, mounts.map((m) => m.vfsPrefix));
+  if (!res) return null;
+  const mount = mounts.find((m) => m.vfsPrefix === res.prefix);
+  return mount ? { backend: mount.backend, rel: res.rel } : null;
+}
+
 /** The real filesystem path backing a VFS path (refusing escapes). Use when a
  *  subsystem must operate on VFS-backed files at the host level — e.g. run_command
  *  bind-mounting the VFS workspace into its sandbox. */
@@ -68,6 +91,9 @@ async function ensureVfs(): Promise<void> {
   for (const dir of ["Documents", "Pictures", "Desktop", "Apps"]) {
     await fs.mkdir(path.join(VFS_ROOT, dir), { recursive: true });
   }
+  // Mount-point stub: a real directory so "Specs" appears when listing
+  // /Documents even though reads/writes under it route to SpecFS (Phase 2).
+  await fs.mkdir(path.join(VFS_ROOT, "Documents", "Specs"), { recursive: true });
   const welcome = path.join(VFS_ROOT, "Documents", "welcome.txt");
   if (!(await exists(welcome))) {
     await writeFileAtomic(
@@ -79,6 +105,13 @@ async function ensureVfs(): Promise<void> {
 
 export async function list(vfsPath: string): Promise<VfsEntry[]> {
   await ensureVfs();
+  const norm = normalizeVfsPath(vfsPath);
+  const m = findMount(norm);
+  if (m) {
+    const entries = await m.backend.list(m.rel);
+    // Present canonical full VFS paths regardless of the backend's own rooting.
+    return entries.map((e) => ({ ...e, path: path.posix.join(norm, e.name) }));
+  }
   const real = resolveSafe(vfsPath);
   const names = await fs.readdir(real);
   const entries = await Promise.all(
@@ -87,7 +120,7 @@ export async function list(vfsPath: string): Promise<VfsEntry[]> {
       const st = await fs.stat(childReal);
       return {
         name,
-        path: path.posix.join(normalizeVfsPath(vfsPath), name),
+        path: path.posix.join(norm, name),
         type: st.isDirectory() ? "dir" : "file",
         size: st.size,
         modified: st.mtimeMs,
@@ -101,9 +134,11 @@ export async function list(vfsPath: string): Promise<VfsEntry[]> {
 
 export async function stat(vfsPath: string): Promise<VfsEntry> {
   await ensureVfs();
+  const norm = normalizeVfsPath(vfsPath);
+  const m = findMount(norm);
+  if (m) return { ...(await m.backend.stat(m.rel)), path: norm };
   const real = resolveSafe(vfsPath);
   const st = await fs.stat(real);
-  const norm = normalizeVfsPath(vfsPath);
   return {
     name: path.posix.basename(norm) || "/",
     path: norm,
@@ -115,33 +150,43 @@ export async function stat(vfsPath: string): Promise<VfsEntry> {
 
 export async function readText(vfsPath: string): Promise<string> {
   await ensureVfs();
+  const m = findMount(normalizeVfsPath(vfsPath));
+  if (m) return m.backend.readText(m.rel);
   return fs.readFile(resolveSafe(vfsPath), "utf8");
 }
 
 export async function readBuffer(vfsPath: string): Promise<Buffer> {
   await ensureVfs();
+  const m = findMount(normalizeVfsPath(vfsPath));
+  if (m) return m.backend.readBuffer(m.rel);
   return fs.readFile(resolveSafe(vfsPath));
 }
 
 export async function writeText(vfsPath: string, content: string): Promise<void> {
   await ensureVfs();
-  const real = resolveSafe(vfsPath);
-  await writeFileAtomic(real, content);
+  const m = findMount(normalizeVfsPath(vfsPath));
+  if (m) return m.backend.writeText(m.rel, content);
+  await writeFileAtomic(resolveSafe(vfsPath), content);
 }
 
 export async function writeBuffer(vfsPath: string, data: Buffer): Promise<void> {
   await ensureVfs();
-  const real = resolveSafe(vfsPath);
-  await writeFileAtomic(real, data);
+  const m = findMount(normalizeVfsPath(vfsPath));
+  if (m) return m.backend.writeBuffer(m.rel, data);
+  await writeFileAtomic(resolveSafe(vfsPath), data);
 }
 
 export async function mkdir(vfsPath: string): Promise<void> {
   await ensureVfs();
+  const m = findMount(normalizeVfsPath(vfsPath));
+  if (m) return m.backend.mkdir(m.rel);
   await fs.mkdir(resolveSafe(vfsPath), { recursive: true });
 }
 
 export async function remove(vfsPath: string): Promise<void> {
   await ensureVfs();
+  const m = findMount(normalizeVfsPath(vfsPath));
+  if (m) return m.backend.remove(m.rel);
   const real = resolveSafe(vfsPath);
   if (real === VFS_ROOT) throw new Error("Refusing to remove the VFS root");
   await fs.rm(real, { recursive: true, force: true });
@@ -149,6 +194,18 @@ export async function remove(vfsPath: string): Promise<void> {
 
 export async function rename(fromPath: string, toPath: string): Promise<void> {
   await ensureVfs();
+  const fromNorm = normalizeVfsPath(fromPath);
+  const toNorm = normalizeVfsPath(toPath);
+  const mFrom = findMount(fromNorm);
+  const mTo = findMount(toNorm);
+  // A rename that crosses the mount boundary (or between two different mounts)
+  // is not a simple fs.rename; refuse rather than silently corrupt.
+  if (mFrom || mTo) {
+    if (!mFrom || !mTo || mFrom.backend !== mTo.backend) {
+      throw new Error("Cannot rename across a VFS mount boundary");
+    }
+    return mFrom.backend.rename(mFrom.rel, mTo.rel);
+  }
   const from = resolveSafe(fromPath);
   const to = resolveSafe(toPath);
   await fs.mkdir(path.dirname(to), { recursive: true });
