@@ -10,6 +10,7 @@ import { userSpecRoot } from "@/lib/specs/spec-mount";
 import { installApp as storeInstallApp } from "@/lib/apps/store";
 import { readProjectDir } from "@/lib/apps/build";
 import { logger } from "@/lib/logging/server-logger";
+import type { AppManifest } from "@/os/types";
 import {
   validateManifest,
   validateMarketplaceUrl,
@@ -173,10 +174,7 @@ export async function adoptSpec(marketplaceId: string, itemId: string): Promise<
  * store, tagged with `origin: "marketplace"` so it runs in the opaque-origin
  * sandbox. The app must ship an index.html (built output), not source.
  */
-export async function installApp(
-  marketplaceId: string,
-  itemId: string,
-): Promise<{ appId: string; name: string }> {
+export async function installApp(marketplaceId: string, itemId: string): Promise<AppManifest> {
   const manifest = await readManifest(marketplaceId);
   const item = findItem(manifest, itemId);
   if (!item.app) throw new Error(`Item "${itemId}" has no app to install.`);
@@ -188,13 +186,13 @@ export async function installApp(
   if (!files["index.html"]) {
     throw new Error("Marketplace app has no index.html (it must ship pre-built static files).");
   }
-  const m = await storeInstallApp({
+  const installed = await storeInstallApp({
     name: item.name,
     icon: item.app.icon,
     files,
     origin: "marketplace",
     marketplaceId,
   });
-  logger().info(COMPONENT, "app installed", { marketplaceId, itemId, appId: m.id });
-  return { appId: m.id, name: m.name };
+  logger().info(COMPONENT, "app installed", { marketplaceId, itemId, appId: installed.id });
+  return installed;
 }

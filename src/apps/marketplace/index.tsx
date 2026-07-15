@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useOSStore } from "@/store/os-provider";
+import type { AppManifest } from "@/os/types";
 
 // Marketplace app (028): browse registered marketplaces and their items, add a
 // marketplace by git URL, sync/remove, and ADOPT a spec (fork into the user spec
@@ -27,6 +29,7 @@ interface Catalog {
 const API = "/api/marketplace";
 
 export default function MarketplaceApp() {
+  const registerApp = useOSStore((s) => s.registerApp);
   const [catalog, setCatalog] = useState<Catalog[]>([]);
   const [url, setUrl] = useState("");
   const [busy, setBusy] = useState(false);
@@ -167,7 +170,10 @@ export default function MarketplaceApp() {
                         disabled={busy}
                         onClick={() =>
                           void op({ op: "install-app", id: mk.id, itemId: item.id }, (d) => {
-                            const installed = d.installed as { name?: string } | undefined;
+                            const installed = d.installed as AppManifest | undefined;
+                            // Register in the OS store so it appears on the desktop
+                            // immediately (no browser refresh needed).
+                            if (installed) registerApp(installed);
                             setNotice(`Installed "${installed?.name ?? item.name}" — find it on your desktop.`);
                           })
                         }
