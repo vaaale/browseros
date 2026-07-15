@@ -1,0 +1,1384 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Memory App - Redesign Mockup</title>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #15171e;
+      color: white;
+      min-height: 100vh;
+      line-height: 1.6;
+    }
+
+    .app-container {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 12px;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Header */
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-bottom: 12px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+      margin-bottom: 12px;
+    }
+
+    .header h1 {
+      font-size: 18px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .header-icon {
+      width: 24px;
+      height: 24px;
+      color: #a78bfa;
+    }
+
+    .header-stats {
+      display: flex;
+      gap: 12px;
+    }
+
+    .stat-badge {
+      background: rgba(255, 255, 255, 0.05);
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 11px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      border-left: 2px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .stat-badge.pending {
+      border-left-color: #fbbf24;
+    }
+
+    .stat-badge.consolidated {
+      border-left-color: #34d399;
+    }
+
+    /* Navigation Tabs */
+    .tabs {
+      display: flex;
+      gap: 2px;
+      margin-bottom: 12px;
+      background: rgba(255, 255, 255, 0.02);
+      padding: 4px;
+      border-radius: 8px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .tab {
+      flex: 1;
+      padding: 8px 16px;
+      background: transparent;
+      border: none;
+      color: rgba(255, 255, 255, 0.7);
+      font-size: 11px;
+      font-weight: 500;
+      cursor: pointer;
+      border-radius: 6px;
+      transition: all 0.15s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+
+    .tab:hover {
+      background: rgba(255, 255, 255, 0.1);
+      color: white;
+    }
+
+    .tab.active {
+      background: rgba(255, 255, 255, 0.15);
+      color: white;
+    }
+
+    .tab-icon {
+      font-size: 14px;
+    }
+
+    /* Tab Content */
+    .tab-content {
+      flex: 1;
+      display: none;
+      overflow-y: auto;
+      min-height: 0;
+    }
+
+    .tab-content.active {
+      display: block;
+    }
+
+    /* Two-Pane Layout */
+    .two-pane {
+      display: grid;
+      grid-template-columns: 320px 1fr;
+      gap: 12px;
+      height: calc(100vh - 180px);
+    }
+
+    .pane {
+      background: rgba(255, 255, 255, 0.02);
+      border-radius: 8px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .pane-header {
+      padding: 10px 12px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    .pane-title {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+      color: rgba(255, 255, 255, 0.8);
+    }
+
+    .pane-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px;
+    }
+
+    /* List Items */
+    .list-item {
+      padding: 10px;
+      border-radius: 6px;
+      margin-bottom: 4px;
+      background: rgba(255, 255, 255, 0.03);
+      cursor: pointer;
+      transition: all 0.15s;
+      border: 1px solid transparent;
+    }
+
+    .list-item:hover {
+      border-color: rgba(255, 255, 255, 0.15);
+      background: rgba(255, 255, 255, 0.07);
+    }
+
+    .list-item.selected {
+      border-color: rgba(167, 139, 250, 0.5);
+      background: rgba(167, 139, 250, 0.1);
+    }
+
+    .item-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 6px;
+    }
+
+    .item-title {
+      font-weight: 500;
+      font-size: 12px;
+      word-break: break-word;
+      color: white;
+    }
+
+    .item-badge {
+      padding: 3px 6px;
+      border-radius: 4px;
+      font-size: 9px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+    }
+
+    .badge-pending {
+      background: rgba(251, 191, 36, 0.15);
+      color: #fbbf24;
+      border: 1px solid rgba(251, 191, 36, 0.2);
+    }
+
+    .badge-consolidated {
+      background: rgba(52, 211, 153, 0.15);
+      color: #34d399;
+      border: 1px solid rgba(52, 211, 153, 0.2);
+    }
+
+    .item-meta {
+      font-size: 10px;
+      color: rgba(255, 255, 255, 0.5);
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    /* Detail View */
+    .detail-header {
+      margin-bottom: 16px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .detail-title {
+      font-size: 14px;
+      font-weight: 600;
+      margin-bottom: 8px;
+      color: white;
+    }
+
+    .detail-meta {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-bottom: 12px;
+    }
+
+    .meta-item {
+      font-size: 10px;
+      color: rgba(255, 255, 255, 0.6);
+    }
+
+    .meta-item strong {
+      color: rgba(255, 255, 255, 0.9);
+    }
+
+    .detail-section {
+      margin-bottom: 14px;
+    }
+
+    .section-title {
+      font-size: 10px;
+      font-weight: 600;
+      color: #a78bfa;
+      margin-bottom: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .section-content {
+      background: rgba(255, 255, 255, 0.03);
+      padding: 10px;
+      border-radius: 6px;
+      font-size: 11px;
+      line-height: 1.7;
+      color: rgba(255, 255, 255, 0.85);
+    }
+
+    /* Buttons */
+    .btn {
+      padding: 6px 12px;
+      border-radius: 6px;
+      border: none;
+      font-size: 11px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .btn-primary {
+      background: rgba(255, 255, 255, 0.1);
+      color: white;
+    }
+
+    .btn-primary:hover {
+      background: rgba(255, 255, 255, 0.2);
+    }
+
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.05);
+      color: rgba(255, 255, 255, 0.9);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .btn-secondary:hover {
+      background: rgba(255, 255, 255, 0.1);
+    }
+
+    .btn-danger {
+      background: rgba(248, 113, 113, 0.15);
+      color: #f87171;
+      border: 1px solid rgba(248, 113, 113, 0.2);
+    }
+
+    .btn-danger:hover {
+      background: rgba(248, 113, 113, 0.25);
+    }
+
+    .btn-sm {
+      padding: 4px 8px;
+      font-size: 10px;
+    }
+
+    /* Filters */
+    .filters {
+      display: flex;
+      gap: 4px;
+      margin-bottom: 12px;
+    }
+
+    .filter-btn {
+      padding: 4px 10px;
+      border-radius: 4px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      background: transparent;
+      color: rgba(255, 255, 255, 0.6);
+      font-size: 10px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .filter-btn:hover,
+    .filter-btn.active {
+      background: rgba(255, 255, 255, 0.1);
+      border-color: rgba(255, 255, 255, 0.2);
+      color: white;
+    }
+
+    /* Search */
+    .search-box {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+
+    .search-input {
+      flex: 1;
+      padding: 8px 12px;
+      border-radius: 6px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      background: rgba(0, 0, 0, 0.3);
+      color: white;
+      font-size: 11px;
+      outline: none;
+    }
+
+    .search-input:focus {
+      border-color: rgba(255, 255, 255, 0.2);
+    }
+
+    /* Config Form */
+    .config-section {
+      background: rgba(255, 255, 255, 0.02);
+      border-radius: 8px;
+      padding: 14px;
+      margin-bottom: 14px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .config-title {
+      font-size: 11px;
+      font-weight: 600;
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: rgba(255, 255, 255, 0.9);
+    }
+
+    .config-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 12px;
+    }
+
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .form-label {
+      font-size: 10px;
+      color: rgba(255, 255, 255, 0.6);
+    }
+
+    .form-input,
+    .form-select {
+      padding: 7px 10px;
+      border-radius: 6px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      background: rgba(0, 0, 0, 0.3);
+      color: white;
+      font-size: 11px;
+      outline: none;
+    }
+
+    .form-input:focus,
+    .form-select:focus {
+      border-color: rgba(255, 255, 255, 0.2);
+    }
+
+    .toggle-switch {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+    }
+
+    .toggle-slider {
+      width: 36px;
+      height: 20px;
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 10px;
+      position: relative;
+      transition: all 0.2s;
+    }
+
+    .toggle-slider.active {
+      background: #34d399;
+    }
+
+    .toggle-slider::after {
+      content: '';
+      position: absolute;
+      width: 16px;
+      height: 16px;
+      background: white;
+      border-radius: 50%;
+      top: 2px;
+      left: 2px;
+      transition: all 0.2s;
+    }
+
+    .toggle-slider.active::after {
+      transform: translateX(16px);
+    }
+
+    /* Run History */
+    .history-item {
+      background: rgba(255, 255, 255, 0.03);
+      padding: 10px;
+      border-radius: 6px;
+      margin-bottom: 8px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .history-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 6px;
+    }
+
+    .history-title {
+      font-weight: 600;
+      font-size: 11px;
+      color: white;
+    }
+
+    .history-time {
+      font-size: 9px;
+      color: rgba(255, 255, 255, 0.5);
+    }
+
+    .history-stats {
+      display: flex;
+      gap: 12px;
+      font-size: 10px;
+      color: rgba(255, 255, 255, 0.6);
+      flex-wrap: wrap;
+    }
+
+    .history-stat {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    /* Topic Entry */
+    .topic-entry {
+      padding: 10px;
+      background: rgba(255, 255, 255, 0.03);
+      border-radius: 6px;
+      margin-bottom: 6px;
+      border-left: 2px solid #a78bfa;
+    }
+
+    .entry-number {
+      font-weight: 600;
+      color: #a78bfa;
+      margin-bottom: 4px;
+      font-size: 11px;
+    }
+
+    .entry-text {
+      font-size: 11px;
+      line-height: 1.6;
+      color: rgba(255, 255, 255, 0.85);
+    }
+
+    .entry-meta {
+      font-size: 9px;
+      color: rgba(255, 255, 255, 0.5);
+      margin-top: 6px;
+    }
+
+    /* Search Results */
+    .search-result {
+      padding: 10px;
+      background: rgba(255, 255, 255, 0.03);
+      border-radius: 6px;
+      margin-bottom: 8px;
+      cursor: pointer;
+      transition: all 0.15s;
+      border: 1px solid transparent;
+    }
+
+    .search-result:hover {
+      border-color: rgba(167, 139, 250, 0.3);
+      background: rgba(167, 139, 250, 0.08);
+    }
+
+    .result-source {
+      font-size: 9px;
+      color: #a78bfa;
+      margin-bottom: 4px;
+      font-family: ui-monospace, monospace;
+    }
+
+    .result-content {
+      font-size: 11px;
+      line-height: 1.6;
+      margin-bottom: 6px;
+      color: rgba(255, 255, 255, 0.85);
+    }
+
+    .result-score {
+      font-size: 9px;
+      color: rgba(255, 255, 255, 0.5);
+    }
+
+    /* Empty State */
+    .empty-state {
+      text-align: center;
+      padding: 48px 16px;
+      color: rgba(255, 255, 255, 0.5);
+    }
+
+    .empty-icon {
+      font-size: 36px;
+      margin-bottom: 12px;
+      opacity: 0.5;
+    }
+
+    /* Budget Bar */
+    .budget-bar {
+      width: 100%;
+      height: 4px;
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 2px;
+      overflow: hidden;
+      margin-top: 6px;
+    }
+
+    .budget-fill {
+      height: 100%;
+      background: #34d399;
+      transition: width 0.2s;
+    }
+
+    .budget-fill.warning {
+      background: #fbbf24;
+    }
+
+    .budget-fill.danger {
+      background: #f87171;
+    }
+
+    /* Action Buttons */
+    .action-buttons {
+      display: flex;
+      gap: 6px;
+      margin-top: 12px;
+    }
+
+    /* Info Banner */
+    .info-banner {
+      background: rgba(167, 139, 250, 0.1);
+      border: 1px solid rgba(167, 139, 250, 0.2);
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-size: 10px;
+      color: rgba(255, 255, 255, 0.9);
+      margin-top: 12px;
+    }
+
+    .info-banner.warning {
+      background: rgba(251, 191, 36, 0.1);
+      border-color: rgba(251, 191, 36, 0.2);
+      color: #fbbf24;
+    }
+
+    .info-banner.success {
+      background: rgba(52, 211, 153, 0.1);
+      border-color: rgba(52, 211, 153, 0.2);
+      color: #34d399;
+    }
+
+    /* Responsive */
+    @media (max-width: 900px) {
+      .two-pane {
+        grid-template-columns: 1fr;
+        height: auto;
+      }
+
+      .header-stats {
+        display: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app-container">
+    <!-- Header -->
+    <div class="header">
+      <h1>
+        <i data-lucide="brain" class="header-icon"></i>
+        Memory
+      </h1>
+      <div class="header-stats">
+        <div class="stat-badge pending">
+          <i data-lucide="clock" style="width: 12px; height: 12px;"></i>
+          <span>3 Pending</span>
+        </div>
+        <div class="stat-badge consolidated">
+          <i data-lucide="check-circle" style="width: 12px; height: 12px;"></i>
+          <span>12 Consolidated</span>
+        </div>
+        <div class="stat-badge">
+          <i data-lucide="folder" style="width: 12px; height: 12px;"></i>
+          <span>8 Topics</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Navigation Tabs -->
+    <div class="tabs">
+      <button class="tab active" data-tab="profile">
+        <i data-lucide="user" class="tab-icon"></i>
+        Profile & Notes
+      </button>
+      <button class="tab" data-tab="episodes">
+        <i data-lucide="file-text" class="tab-icon"></i>
+        Episodes
+      </button>
+      <button class="tab" data-tab="topics">
+        <i data-lucide="book-open" class="tab-icon"></i>
+        Topics
+      </button>
+      <button class="tab" data-tab="loops">
+        <i data-lucide="settings" class="tab-icon"></i>
+        Memory Loops
+      </button>
+      <button class="tab" data-tab="search">
+        <i data-lucide="search" class="tab-icon"></i>
+        Search
+      </button>
+    </div>
+
+    <!-- Tab 1: Profile & Notes -->
+    <div class="tab-content active" id="profile">
+      <div class="two-pane">
+        <div class="pane">
+          <div class="pane-header">
+            <span class="pane-title">User Profile</span>
+            <button class="btn btn-primary btn-sm">
+              <i data-lucide="plus" style="width: 12px; height: 12px;"></i>
+              Add
+            </button>
+          </div>
+          <div class="pane-body">
+            <div class="list-item selected">
+              <div class="item-header">
+                <span class="item-title">Prefers concise, action-oriented responses</span>
+              </div>
+              <div class="item-meta">
+                <span>2026-07-03</span>
+              </div>
+            </div>
+            <div class="list-item">
+              <div class="item-header">
+                <span class="item-title">Working on BrowserOS development</span>
+              </div>
+              <div class="item-meta">
+                <span>2026-07-04</span>
+              </div>
+            </div>
+            <div class="list-item">
+              <div class="item-header">
+                <span class="item-title">Uses TypeScript for all new projects</span>
+              </div>
+              <div class="item-meta">
+                <span>2026-07-02</span>
+              </div>
+            </div>
+            
+            <div style="margin-top: 16px; padding-top: 12px; border-top: 1px solid rgba(255, 255, 255, 0.1);">
+              <div style="font-size: 10px; color: rgba(255, 255, 255, 0.6); margin-bottom: 4px;">
+                Budget: 847 / 1200 chars
+              </div>
+              <div class="budget-bar">
+                <div class="budget-fill" style="width: 70%;"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="pane">
+          <div class="pane-header">
+            <span class="pane-title">Agent Notes</span>
+            <button class="btn btn-primary btn-sm">
+              <i data-lucide="plus" style="width: 12px; height: 12px;"></i>
+              Add
+            </button>
+          </div>
+          <div class="pane-body">
+            <div class="list-item">
+              <div class="item-header">
+                <span class="item-title">Memory loops are now automated via scheduler jobs</span>
+              </div>
+              <div class="item-meta">
+                <span>2026-07-05</span>
+                <span>📁 Links to 8 topics</span>
+              </div>
+            </div>
+            <div class="list-item">
+              <div class="item-header">
+                <span class="item-title">User prefers esbuild over webpack for app bundling</span>
+              </div>
+              <div class="item-meta">
+                <span>2026-07-04</span>
+              </div>
+            </div>
+            <div class="list-item">
+              <div class="item-header">
+                <span class="item-title">Development harness uses CLI transport with Claude Code</span>
+              </div>
+              <div class="item-meta">
+                <span>2026-07-03</span>
+              </div>
+            </div>
+            
+            <div style="margin-top: 16px; padding-top: 12px; border-top: 1px solid rgba(255, 255, 255, 0.1);">
+              <div style="font-size: 10px; color: rgba(255, 255, 255, 0.6); margin-bottom: 4px;">
+                Budget: 1,456 / 2,000 chars
+              </div>
+              <div class="budget-bar">
+                <div class="budget-fill warning" style="width: 73%;"></div>
+              </div>
+            </div>
+
+            <div class="info-banner">
+              <i data-lucide="info" style="width: 12px; height: 12px; display: inline; vertical-align: middle;"></i>
+              Changes take effect in your <strong>next conversation</strong>. Current session uses a frozen snapshot.
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab 2: Episodes -->
+    <div class="tab-content" id="episodes">
+      <div class="two-pane">
+        <div class="pane">
+          <div class="pane-header">
+            <span class="pane-title">Episodes</span>
+            <button class="btn btn-secondary btn-sm">
+              <i data-lucide="refresh-cw" style="width: 12px; height: 12px;"></i>
+            </button>
+          </div>
+          <div class="pane-body">
+            <div class="filters">
+              <button class="filter-btn active">All</button>
+              <button class="filter-btn">Pending</button>
+              <button class="filter-btn">Consolidated</button>
+            </div>
+
+            <div class="list-item selected">
+              <div class="item-header">
+                <span class="item-title">2026-07-05 - c-mr8dczbxapny</span>
+                <span class="item-badge badge-pending">Pending</span>
+              </div>
+              <div class="item-meta">
+                <span><i data-lucide="clock" style="width: 10px; height: 10px;"></i> 14:32</span>
+                <span><i data-lucide="message-circle" style="width: 10px; height: 10px;"></i> 47 turns</span>
+                <span><i data-lucide="wrench" style="width: 10px; height: 10px;"></i> 3 skills</span>
+              </div>
+            </div>
+
+            <div class="list-item">
+              <div class="item-header">
+                <span class="item-title">2026-07-05 - c-mr7tgmmovct9</span>
+                <span class="item-badge badge-pending">Pending</span>
+              </div>
+              <div class="item-meta">
+                <span><i data-lucide="clock" style="width: 10px; height: 10px;"></i> 12:15</span>
+                <span><i data-lucide="message-circle" style="width: 10px; height: 10px;"></i> 23 turns</span>
+                <span><i data-lucide="wrench" style="width: 10px; height: 10px;"></i> 1 skill</span>
+              </div>
+            </div>
+
+            <div class="list-item">
+              <div class="item-header">
+                <span class="item-title">2026-07-04 - c-mr69evatmbdx</span>
+                <span class="item-badge badge-pending">Pending</span>
+              </div>
+              <div class="item-meta">
+                <span><i data-lucide="clock" style="width: 10px; height: 10px;"></i> 18:42</span>
+                <span><i data-lucide="message-circle" style="width: 10px; height: 10px;"></i> 31 turns</span>
+                <span><i data-lucide="wrench" style="width: 10px; height: 10px;"></i> 2 skills</span>
+              </div>
+            </div>
+
+            <div class="list-item">
+              <div class="item-header">
+                <span class="item-title">2026-07-04 - c-mr5i49jdhxd9</span>
+                <span class="item-badge badge-consolidated">Consolidated</span>
+              </div>
+              <div class="item-meta">
+                <span><i data-lucide="clock" style="width: 10px; height: 10px;"></i> 09:23</span>
+                <span><i data-lucide="message-circle" style="width: 10px; height: 10px;"></i> 56 turns</span>
+                <span>✅ Merged into 3 topics</span>
+              </div>
+            </div>
+
+            <div class="list-item">
+              <div class="item-header">
+                <span class="item-title">2026-07-03 - c-mr3755vjgmpv</span>
+                <span class="item-badge badge-consolidated">Consolidated</span>
+              </div>
+              <div class="item-meta">
+                <span><i data-lucide="clock" style="width: 10px; height: 10px;"></i> 16:08</span>
+                <span><i data-lucide="message-circle" style="width: 10px; height: 10px;"></i> 42 turns</span>
+                <span>✅ Merged into 2 topics</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="pane">
+          <div class="pane-header">
+            <span class="pane-title">Episode Details</span>
+            <div style="display: flex; gap: 4px;">
+              <button class="btn btn-secondary btn-sm">
+                <i data-lucide="refresh-cw" style="width: 12px; height: 12px;"></i>
+                Review
+              </button>
+              <button class="btn btn-danger btn-sm">
+                <i data-lucide="trash-2" style="width: 12px; height: 12px;"></i>
+              </button>
+            </div>
+          </div>
+          <div class="pane-body">
+            <div class="detail-header">
+              <h2 class="detail-title">Memory Loops Implementation Discussion</h2>
+              <div class="detail-meta">
+                <div class="meta-item"><strong>Status:</strong> Pending</div>
+                <div class="meta-item"><strong>Conversation:</strong> c-mr8dczbxapny</div>
+                <div class="meta-item"><strong>Created:</strong> 2026-07-05 14:32</div>
+                <div class="meta-item"><strong>Updated:</strong> 2026-07-05 14:35</div>
+                <div class="meta-item"><strong>Watermark:</strong> msg_47892</div>
+              </div>
+              <div class="detail-meta">
+                <div class="meta-item"><strong>Skills Used:</strong> build-studio, spec-edit, file-write</div>
+                <div class="meta-item"><strong>Skill Candidates:</strong> [memory-app-redesign]</div>
+              </div>
+            </div>
+
+            <div class="detail-section">
+              <div class="section-title">Task & Outcome</div>
+              <div class="section-content">
+                User requested analysis of the 021-memory-loops spec and redesign proposal for the Memory app. Successfully reviewed the spec, identified gaps between implemented backend and UI, and created comprehensive redesign proposal with 5-tab structure.
+              </div>
+            </div>
+
+            <div class="detail-section">
+              <div class="section-title">What Worked</div>
+              <div class="section-content">
+                - Systematic approach: read spec → analyze current state → identify gaps → propose solution<br>
+                - Leveraged existing documentation to understand architecture<br>
+                - Created detailed mockup with realistic data<br>
+                - Clear separation of concerns in proposal
+              </div>
+            </div>
+
+            <div class="detail-section">
+              <div class="section-title">What Failed</div>
+              <div class="section-content">
+                - Initially attempted to delegate to developer without feature branch (caught by harness)<br>
+                - Had to manually explore file system instead of using dev tools
+              </div>
+            </div>
+
+            <div class="detail-section">
+              <div class="section-title">Corrections Received</div>
+              <div class="section-content">
+                User clarified that visual mockup was needed immediately rather than backend verification first.
+              </div>
+            </div>
+
+            <div class="detail-section">
+              <div class="section-title">Durable Lesson Candidates</div>
+              <div class="section-content">
+                - When redesigning apps after architectural changes, always create comprehensive proposal before implementation<br>
+                - Visual mockups help stakeholders understand complex UI changes<br>
+                - Memory app needs to expose episodic buffer and topic sharding to users
+              </div>
+            </div>
+
+            <div class="detail-section">
+              <div class="section-title">Profile Suggestions</div>
+              <div class="section-content">
+                User values systematic analysis and prefers receiving structured proposals with clear implementation paths.
+              </div>
+            </div>
+
+            <div class="action-buttons">
+              <button class="btn btn-secondary">
+                <i data-lucide="arrow-left" style="width: 12px; height: 12px;"></i>
+                Previous
+              </button>
+              <button class="btn btn-secondary">
+                Next
+                <i data-lucide="arrow-right" style="width: 12px; height: 12px;"></i>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab 3: Topics -->
+    <div class="tab-content" id="topics">
+      <div class="two-pane">
+        <div class="pane">
+          <div class="pane-header">
+            <span class="pane-title">Topics</span>
+            <button class="btn btn-primary btn-sm">
+              <i data-lucide="plus" style="width: 12px; height: 12px;"></i>
+              New
+            </button>
+          </div>
+          <div class="pane-body">
+            <input type="text" class="search-input" placeholder="Search topics..." style="margin-bottom: 12px;">
+
+            <div class="list-item selected">
+              <div class="item-header">
+                <span class="item-title">project-conventions</span>
+              </div>
+              <div class="item-meta">
+                <span><i data-lucide="file" style="width: 10px; height: 10px;"></i> 4 entries</span>
+                <span><i data-lucide="ruler" style="width: 10px; height: 10px;"></i> 1,234 / 4000 chars</span>
+              </div>
+              <div class="budget-bar" style="margin-top: 6px;">
+                <div class="budget-fill" style="width: 31%;"></div>
+              </div>
+            </div>
+
+            <div class="list-item">
+              <div class="item-header">
+                <span class="item-title">api-patterns</span>
+              </div>
+              <div class="item-meta">
+                <span><i data-lucide="file" style="width: 10px; height: 10px;"></i> 2 entries</span>
+                <span><i data-lucide="ruler" style="width: 10px; height: 10px;"></i> 567 / 4000 chars</span>
+              </div>
+              <div class="budget-bar" style="margin-top: 6px;">
+                <div class="budget-fill" style="width: 14%;"></div>
+              </div>
+            </div>
+
+            <div class="list-item">
+              <div class="item-header">
+                <span class="item-title">workflow-automation</span>
+              </div>
+              <div class="item-meta">
+                <span><i data-lucide="file" style="width: 10px; height: 10px;"></i> 3 entries</span>
+                <span><i data-lucide="ruler" style="width: 10px; height: 10px;"></i> 892 / 4000 chars</span>
+              </div>
+              <div class="budget-bar" style="margin-top: 6px;">
+                <div class="budget-fill" style="width: 22%;"></div>
+              </div>
+            </div>
+
+            <div class="list-item">
+              <div class="item-header">
+                <span class="item-title">memory-system</span>
+              </div>
+              <div class="item-meta">
+                <span><i data-lucide="file" style="width: 10px; height: 10px;"></i> 5 entries</span>
+                <span><i data-lucide="ruler" style="width: 10px; height: 10px;"></i> 2,103 / 4000 chars</span>
+              </div>
+              <div class="budget-bar" style="margin-top: 6px;">
+                <div class="budget-fill warning" style="width: 53%;"></div>
+              </div>
+            </div>
+
+            <div class="list-item">
+              <div class="item-header">
+                <span class="item-title">agent-delegation</span>
+              </div>
+              <div class="item-meta">
+                <span><i data-lucide="file" style="width: 10px; height: 10px;"></i> 2 entries</span>
+                <span><i data-lucide="ruler" style="width: 10px; height: 10px;"></i> 445 / 4000 chars</span>
+              </div>
+              <div class="budget-bar" style="margin-top: 6px;">
+                <div class="budget-fill" style="width: 11%;"></div>
+              </div>
+            </div>
+
+            <div class="list-item">
+              <div class="item-header">
+                <span class="item-title">spec-authoring</span>
+              </div>
+              <div class="item-meta">
+                <span><i data-lucide="file" style="width: 10px; height: 10px;"></i> 3 entries</span>
+                <span><i data-lucide="ruler" style="width: 10px; height: 10px;"></i> 1,567 / 4000 chars</span>
+              </div>
+              <div class="budget-bar" style="margin-top: 6px;">
+                <div class="budget-fill" style="width: 39%;"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="pane">
+          <div class="pane-header">
+            <span class="pane-title">project-conventions</span>
+            <div style="display: flex; gap: 4px;">
+              <button class="btn btn-primary btn-sm">
+                <i data-lucide="plus" style="width: 12px; height: 12px;"></i>
+                Entry
+              </button>
+              <button class="btn btn-danger btn-sm">Delete</button>
+            </div>
+          </div>
+          <div class="pane-body">
+            <div class="topic-entry">
+              <div class="entry-number">#1</div>
+              <div class="entry-text">Always use TypeScript for new projects instead of JavaScript. Type safety catches errors early and improves code maintainability.</div>
+              <div class="entry-meta">Added: 2026-07-03 10:00 | Consolidated from episode 2026-07-03-c-mr3755vjgmpv</div>
+            </div>
+
+            <div class="topic-entry">
+              <div class="entry-number">#2</div>
+              <div class="entry-text">Prefer esbuild over webpack for application bundling. It's faster, simpler, and works well with TypeScript out of the box.</div>
+              <div class="entry-meta">Added: 2026-07-04 15:30 | Consolidated from episode 2026-07-04-c-mr5i49jdhxd9</div>
+            </div>
+
+            <div class="topic-entry">
+              <div class="entry-number">#3</div>
+              <div class="entry-text">Use semantic commit messages with conventional commits format (feat:, fix:, docs:, etc.) for better changelog generation.</div>
+              <div class="entry-meta">Added: 2026-07-05 09:15 | Consolidated from episode 2026-07-05-c-mr8dczbxapny</div>
+            </div>
+
+            <div class="topic-entry">
+              <div class="entry-number">#4</div>
+              <div class="entry-text">Structure projects with src/ for source code, docs/ for documentation, and tests/ at root level. Keep configuration files at root.</div>
+              <div class="entry-meta">Added: 2026-07-05 11:42 | Consolidated from episode 2026-07-05-c-mr8dczbxapny</div>
+            </div>
+
+            <div class="info-banner">
+              <i data-lucide="lightbulb" style="width: 12px; height: 12px; display: inline; vertical-align: middle;"></i>
+              Entries are merged incrementally. Conflicting entries are replaced, not duplicated.
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab 4: Memory Loops -->
+    <div class="tab-content" id="loops">
+      <div style="max-width: 1000px; margin: 0 auto;">
+        <div class="config-section">
+          <div class="config-title">
+            <i data-lucide="zap" style="width: 14px; height: 14px;"></i>
+            Fast Loop Configuration
+          </div>
+          <div class="config-grid">
+            <div class="form-group">
+              <label class="toggle-switch">
+                <input type="checkbox" checked style="display: none;">
+                <div class="toggle-slider active"></div>
+                <span style="font-size: 11px; color: rgba(255, 255, 255, 0.8);">Enable Fast Loop</span>
+              </label>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Tick Interval (seconds)</label>
+              <input type="number" class="form-input" value="120">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Idle Threshold (seconds)</label>
+              <input type="number" class="form-input" value="300">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Unreviewed Turn Cap</label>
+              <input type="number" class="form-input" value="40">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Min New Turns to Review</label>
+              <input type="number" class="form-input" value="4">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Model Override (optional)</label>
+              <select class="form-select">
+                <option>(none)</option>
+                <option>qwen-3.5-122b</option>
+                <option>claude-3.5-sonnet</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div class="config-section">
+          <div class="config-title">
+            <i data-lucide="clock" style="width: 14px; height: 14px;"></i>
+            Slow Loop Configuration
+          </div>
+          <div class="config-grid">
+            <div class="form-group">
+              <label class="toggle-switch">
+                <input type="checkbox" checked style="display: none;">
+                <div class="toggle-slider active"></div>
+                <span style="font-size: 11px; color: rgba(255, 255, 255, 0.8);">Enable Slow Loop</span>
+              </label>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Interval (seconds)</label>
+              <input type="number" class="form-input" value="3600">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Batch Size (episodes per run)</label>
+              <input type="number" class="form-input" value="10">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Model Override (optional)</label>
+              <select class="form-select">
+                <option>(none)</option>
+                <option>qwen-3.5-122b</option>
+                <option>claude-3.5-sonnet</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div class="config-section">
+          <div class="config-title">
+            <i data-lucide="sliders" style="width: 14px; height: 14px;"></i>
+            Advanced Settings
+          </div>
+          <div class="config-grid">
+            <div class="form-group">
+              <label class="form-label">Episode Archive Age (days)</label>
+              <input type="number" class="form-input" value="14">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Topic Budget (chars)</label>
+              <input type="number" class="form-input" value="4000">
+            </div>
+          </div>
+        </div>
+
+        <div style="display: flex; gap: 8px; margin-bottom: 20px;">
+          <button class="btn btn-primary">
+            <i data-lucide="save" style="width: 12px; height: 12px;"></i>
+            Save Configuration
+          </button>
+          <button class="btn btn-secondary">
+            <i data-lucide="rotate-ccw" style="width: 12px; height: 12px;"></i>
+            Reset Defaults
+          </button>
+        </div>
+
+        <div class="config-section">
+          <div class="config-title">
+            <i data-lucide="activity" style="width: 14px; height: 14px;"></i>
+            Run History
+          </div>
+          
+          <div class="history-item">
+            <div class="history-header">
+              <span class="history-title">
+                <i data-lucide="zap" style="width: 12px; height: 12px;"></i>
+                Fast Loop
+              </span>
+              <span class="history-time">2 minutes ago</span>
+            </div>
+            <div class="history-stats">
+              <div class="history-stat">✅ Processed: 3 conversations</div>
+              <div class="history-stat">📝 Episodes created: 1</div>
+              <div class="history-stat">🔄 Episodes updated: 2</div>
+              <div class="history-stat">⏭️ Skipped: 5 (no new turns)</div>
+            </div>
+          </div>
+
+          <div class="history-item">
+            <div class="history-header">
+              <span class="history-title">
+                <i data-lucide="clock" style="width: 12px; height: 12px;"></i>
+                Slow Loop
+              </span>
+              <span class="history-time">38 minutes ago</span>
+            </div>
+            <div class="history-stats">
+              <div class="history-stat">✅ Processed: 5 episodes</div>
+              <div class="history-stat">📚 Topics updated: 2</div>
+              <div class="history-stat">🛠️ Skills patched: 1</div>
+              <div class="history-stat">📦 Episodes archived: 0</div>
+              <div class="history-stat">❌ Refusals: 0</div>
+            </div>
+          </div>
+
+          <div style="margin-top: 16px; display: flex; gap: 8px;">
+            <button class="btn btn-secondary">
+              <i data-lucide="zap" style="width: 12px; height: 12px;"></i>
+              Run Fast Loop Now
+            </button>
+            <button class="btn btn-secondary">
+              <i data-lucide="clock" style="width: 12px; height: 12px;"></i>
+              Run Slow Loop Now
+            </button>
+          </div>
+        </div>
+
+        <div class="info-banner success">
+          <i data-lucide="check-circle" style="width: 12px; height: 12px; display: inline; vertical-align: middle;"></i>
+          Both loops are running normally. Next fast loop tick in ~1 minute. Next slow loop in ~22 minutes.
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab 5: Search -->
+    <div class="tab-content" id="search">
+      <div style="max-width: 900px; margin: 0 auto;">
+        <div class="search-box">
+          <input type="text" class="search-input" placeholder="Search across all memory surfaces..." value="typescript">
+          <button class="btn btn-primary">
+            <i data-lucide="search" style="width: 12px; height: 12px;"></i>
+            Search
+          </button>
+        </div>
+
+        <div style="margin-bottom: 14px; display: flex; gap: 4px;">
+          <button class="filter-btn active">All Sources</button>
+          <button class="filter-btn">Topics</button>
+          <button class="filter-btn">Episodes</button>
+          <button class="filter-btn">Memory</button>
+        </div>
+
+        <div style="margin-bottom: 12px; color: rgba(255, 255, 255, 0.6); font-size: 11px;">
+          Found <strong>12 matches</strong> for "typescript"
+        </div>
+
+        <div class="search-result">
+          <div class="result-source">📄 Topics/project-conventions.md#entry-1</div>
+          <div class="result-content">Always use <strong>TypeScript</strong> for new projects instead of JavaScript. Type safety catches errors early and improves code maintainability.</div>
+          <div class="result-score">Relevance: 95% | Added: 2026-07-03</div>
+        </div>
+
+        <div class="search-result">
+          <div class="result-source">📄 MEMORY.md#entry-23</div>
+          <div class="result-content">User prefers <strong>TypeScript</strong> over JavaScript for all development work. This preference was stated explicitly and should be applied to new projects.</div>
+          <div class="result-score">Relevance: 92% | Added: 2026-07-02</div>
+        </div>
+
+        <div class="search-result">
+          <div class="result-source">📄 Episodes/2026-07-04-c-mr5i49jdhxd9.md#lessons</div>
+          <div class="result-content">Using <strong>TypeScript</strong> in the memory app redesign helped catch type errors in the episode data structure during implementation.</div>
+          <div class="result-score">Relevance: 87% | Episode: Pending</div>
+        </div>
+
+        <div class="search-result">
+          <div class="result-source">📄 Topics/api-patterns.md#entry-2</div>
+          <div class="result-content">API endpoints should use <strong>TypeScript</strong> types for request/response validation. Consider using Zod for runtime type checking.</div>
+          <div class="result-score">85% | Added: 2026-07-04</div>
+        </div>
+
+        <div class="search-result">
+          <div class="result-source">📄 Episodes/2026-07-03-c-mr3755vjgmpv.md#outcome</div>
+          <div class="result-content">Successfully migrated the spec authoring workflow to use <strong>TypeScript</strong> throughout, improving developer experience and reducing runtime errors.</div>
+          <div class="result-score">82% | Episode: Consolidated</div>
+        </div>
+
+        <button class="btn btn-secondary" style="margin-top: 12px;">Load More Results</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Initialize Lucide icons
+    lucide.createIcons();
+
+    // Tab switching
+    document.querySelectorAll('.tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+        
+        tab.classList.add('active');
+        const tabId = tab.getAttribute('data-tab');
+        document.getElementById(tabId).classList.add('active');
+      });
+    });
+
+    // Filter buttons
+    document.querySelectorAll('.filter-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const parent = btn.parentElement;
+        parent.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+      });
+    });
+
+    // List item selection
+    document.querySelectorAll('.list-item').forEach(item => {
+      item.addEventListener('click', () => {
+        const parent = item.parentElement;
+        parent.querySelectorAll('.list-item').forEach(i => i.classList.remove('selected'));
+        item.classList.add('selected');
+      });
+    });
+
+    // Toggle switches
+    document.querySelectorAll('.toggle-switch').forEach(toggle => {
+      toggle.addEventListener('click', () => {
+        const slider = toggle.querySelector('.toggle-slider');
+        slider.classList.toggle('active');
+      });
+    });
+
+    // Search result click
+    document.querySelectorAll('.search-result').forEach(result => {
+      result.addEventListener('click', () => {
+        alert('Navigate to source: ' + result.querySelector('.result-source').textContent);
+      });
+    });
+  </script>
+</body>
+</html>

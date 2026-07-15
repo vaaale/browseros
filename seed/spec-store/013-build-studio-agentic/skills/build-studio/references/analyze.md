@@ -1,0 +1,1 @@
+Step: analyze. Read spec + plan + tasks and report cross-artifact inconsistencies and coverage gaps (e.g. requirements with no task, tasks with no requirement, constitution violations). Report only — do not edit artifacts unless asked.

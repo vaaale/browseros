@@ -4,9 +4,7 @@
 
 **Created**: 2026-06-29
 
-**Status**: Implemented (see `019-tools-and-sandbox` for the delivered end state)
-
-> **Implementation note (2026-07-03):** delivered via `019-tools-and-sandbox`. Two divergences from the text below: (1) the capability registry uses a single `context: "action" | "tool" | "both"` field rather than separate `client`/`server` flags; (2) there is **no global active agent** — an agent's personality is per-conversation (`agentId` per conversation; `composeInstructions` throws on an empty id). Read "active agent" below as "this conversation's agent." See `discrepancies.md`.
+**Status**: Draft
 
 **Input**: "Introducing 'sub-agents' as their own thing was a mistake. There are only **Agents**. An agent becomes a *sub-agent* simply by being called by another agent — so any agent can be a sub-agent. Capabilities (tools/skills/MCP) follow the agent: one allowlist governs it the same whether it runs as the active chat personality or when delegated to."
 

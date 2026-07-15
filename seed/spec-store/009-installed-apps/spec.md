@@ -6,14 +6,6 @@
 
 **Status**: Implemented
 
-> **Extended by `028-marketplace-sandbox`**: installed apps gain a third source
-> (marketplace) and provenance (`AppManifest.origin`). The iframe SDK is served
-> from `/api/iframe-sdk` and auto-injected; apps reach BOS only via the
-> capability broker, with a per-app `storage` capability + `localStorage` shim.
-> **Marketplace (untrusted) apps run in an opaque-origin sandbox** (no
-> `allow-same-origin`) so the broker is their only channel; local/first-party
-> apps keep the same-origin path. See 028 for the marketplace + sandbox model.
-
 **Input**: "Installed apps are user-authored content rendered as a sandboxed iframe at /apps/<id>. An app may be a single static HTML file or a multi-file TypeScript/TSX project bundled at install time, so apps can be genuinely capable."
 
 > Migrated from `spec/self-modification/apps.md`. Covers **installed** apps (GitFS content). Built-in apps are a different category (first-class React folders `src/apps/<id>/`, auto-discovered) defined by the constitution and per-app docs.
