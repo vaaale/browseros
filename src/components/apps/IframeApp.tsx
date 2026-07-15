@@ -25,18 +25,23 @@ function isBosMessage(d: unknown): d is BosMessage {
 }
 
 const CAP_FOR_METHOD: Record<string, AppCapability> = {
-  "fs:list":       "fs:read",
-  "fs:read":       "fs:read",
-  "fs:write":      "fs:write",
-  "fs:delete":     "fs:write",
-  "settings:get":  "settings:read",
-  "notify":        "notify",
-  "window:title":  "window:title",
+  "fs:list":        "fs:read",
+  "fs:read":        "fs:read",
+  "fs:write":       "fs:write",
+  "fs:delete":      "fs:write",
+  "settings:get":   "settings:read",
+  "notify":         "notify",
+  "window:title":   "window:title",
+  "storage:get":    "storage",
+  "storage:set":    "storage",
+  "storage:remove": "storage",
+  "storage:keys":   "storage",
 };
 
 async function dispatch(
   method: string,
   params: Record<string, unknown>,
+  appId: string,
 ): Promise<unknown> {
   switch (method) {
     case "fs:list":
@@ -63,6 +68,22 @@ async function dispatch(
       // Lightweight: post a notification message back to the iframe for display.
       // A full notification system would hook into OS-level toasts.
       return { ok: true, message: params.message };
+    case "storage:get":
+    case "storage:set":
+    case "storage:remove":
+    case "storage:keys":
+      // Per-app persistent KV (028). The app id comes from the PARENT (trusted
+      // BOS code), never the iframe, so an app can't reach another's namespace.
+      return fetch("/api/app-storage", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          app: appId,
+          op: method.slice("storage:".length),
+          key: params.key,
+          value: params.value,
+        }),
+      }).then((r) => r.json()).then((d) => d.result);
     default:
       throw new Error(`Unknown method: ${method}`);
   }
@@ -74,6 +95,17 @@ export function IframeApp({ windowId, appId, params }: AppProps) {
   const capSet = new Set<AppCapability>(capabilities ?? []);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const setTitle = useOSStore((s) => s.setTitle);
+
+  // Untrusted marketplace apps run in an OPAQUE-ORIGIN sandbox (028): dropping
+  // allow-same-origin gives the frame a unique throwaway origin, so it cannot
+  // reach BOS's origin — the postMessage broker (below) is its only channel, and
+  // the SDK's localStorage shim (which activates precisely because native
+  // storage is unavailable in an opaque origin) backs storage via that broker.
+  // Trusted local/first-party apps keep the same-origin path.
+  const untrusted = params?.origin === "marketplace";
+  const sandbox = untrusted
+    ? "allow-scripts allow-forms allow-popups"
+    : "allow-scripts allow-forms allow-popups allow-same-origin";
 
   useEffect(() => {
     if (!capSet.size) return; // no grants — skip listener entirely
@@ -100,7 +132,7 @@ export function IframeApp({ windowId, appId, params }: AppProps) {
         return;
       }
 
-      dispatch(method, msgParams)
+      dispatch(method, msgParams, appId)
         .then((result) => respond(result))
         .catch((err: Error) => respond(null, err.message));
     }
@@ -115,7 +147,7 @@ export function IframeApp({ windowId, appId, params }: AppProps) {
       ref={iframeRef}
       src={url}
       className="h-full w-full border-0 bg-transparent"
-      sandbox="allow-scripts allow-forms allow-popups allow-same-origin"
+      sandbox={sandbox}
       title={`App: ${appId}`}
     />
   );

@@ -36,6 +36,10 @@ export interface InstalledApp {
   entry?: string;
   /** BOS SDK capability grants for this app. Absent/empty = plain sandboxed iframe, no BOS API access. */
   capabilities?: AppCapability[];
+  /** Provenance (028): "marketplace" apps are untrusted → opaque-origin sandbox. Absent = "local". */
+  origin?: "local" | "marketplace";
+  /** For marketplace apps: the source marketplace id. */
+  marketplaceId?: string;
 }
 
 function root(): string {
@@ -89,6 +93,8 @@ export async function readApp(id: string): Promise<InstalledApp | null> {
       uninstalledAt: typeof m.uninstalledAt === "number" ? m.uninstalledAt : undefined,
       entry: typeof m.entry === "string" ? m.entry : undefined,
       capabilities: Array.isArray(m.capabilities) ? (m.capabilities as AppCapability[]) : undefined,
+      origin: m.origin === "marketplace" ? "marketplace" : undefined,
+      marketplaceId: typeof m.marketplaceId === "string" ? m.marketplaceId : undefined,
     };
   } catch {
     return null;
@@ -127,6 +133,8 @@ export function toManifest(app: InstalledApp): AppManifest {
     url: `/apps/${app.id}`,
     source: app.dir,
     capabilities: app.capabilities,
+    origin: app.origin ?? "local",
+    marketplaceId: app.marketplaceId,
   };
 }
 
@@ -164,6 +172,9 @@ export async function installApp(
     entry?: string;
     /** BOS SDK capability grants. Absent = no BOS SDK access. */
     capabilities?: AppCapability[];
+    /** Provenance (028): "marketplace" → opaque-origin sandbox. */
+    origin?: "local" | "marketplace";
+    marketplaceId?: string;
   },
   opts?: { draft?: boolean },
 ): Promise<AppManifest> {
@@ -200,6 +211,8 @@ export async function installApp(
     status: "installed",
     entry: input.entry,
     capabilities: input.capabilities,
+    origin: input.origin,
+    marketplaceId: input.marketplaceId,
   };
   await writeManifest(app);
   await commitAll(r, `install app ${id}${opts?.draft ? " (draft)" : ""}`);

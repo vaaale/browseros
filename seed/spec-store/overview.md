@@ -35,7 +35,7 @@ to `000-browseros-core`.
 | 018 | External spec stores (system + user git repos) — *Draft* | `specs/018-external-spec-store/` |
 | 019 | Tool taxonomy, sandboxed `run_command`, per-conversation agents — *Implemented* | `specs/019-tools-and-sandbox/` |
 | 027 | User-spec relocation — VFS mount points, SpecFS, per-conversation feature scope, spec-store relocation to `<dataDir>/specs` — *In progress* | `specs/027-vfs-specfs-marketplace/` |
-| 028 | Marketplace + sandboxed apps (three-source app model, opaque-origin sandbox, iframe SDK) — *Draft* | `specs/028-marketplace-sandbox/` |
+| 028 | Marketplace + sandboxed apps (three-source app model, opaque-origin sandbox, iframe SDK) — *In progress* | `specs/028-marketplace-sandbox/` |
 
 ## Other artifacts
 

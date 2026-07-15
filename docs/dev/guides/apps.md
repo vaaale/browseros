@@ -27,6 +27,30 @@ Examples: user-created tools, experimental UIs, content apps.
 - Is the UI primarily a thin wrapper around a BOS subsystem? → **Built-in**.
 - Is it a self-contained user tool with its own lifecycle? → **Installed**.
 
+### Trust tiers, the SDK & sandbox (028)
+
+Installed/iframe apps reach BOS ONLY through the **iframe SDK** — `window.__bos`,
+served from `/api/iframe-sdk` and auto-injected into every app's HTML by the
+`/apps/[...slug]` route. It is a promise-based wrapper over a `postMessage`
+broker (`IframeApp.tsx`); a call succeeds only if the app's manifest **granted**
+that `AppCapability` (`fs:read`/`fs:write`/`settings:read`/`notify`/`window:title`/
+`storage`). `window.__bos.storage.{get,set,remove,keys}` is a per-app KV
+(`/api/app-storage`, namespaced by the app id the *parent* supplies — never the
+iframe). The SDK also shims `localStorage`/`sessionStorage` over `storage`, but
+ONLY when native storage is unavailable (opaque origin); same-origin apps keep
+native storage.
+
+Provenance (`AppManifest.origin`) sets the sandbox:
+
+| Tier | `origin` | Sandbox | BOS access |
+|---|---|---|---|
+| Built-in | (native) | n/a (React) | anything |
+| Installed, local | `local` | same-origin | broker + (today) same-origin |
+| Marketplace | `marketplace` | **opaque-origin** (no `allow-same-origin`) | broker only |
+
+Marketplace apps are untrusted, so they run opaque-origin: the broker is their
+only channel, and the `storage` shim backs their `localStorage`.
+
 ---
 
 ## 2. Anatomy of an app

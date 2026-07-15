@@ -25,6 +25,12 @@ export interface AppManifest {
   /** Capability grants for iframe apps — the set of BOS SDK APIs this app may call.
    *  Absent or empty means no BOS SDK access (plain sandboxed iframe). */
   capabilities?: AppCapability[];
+  /** Provenance (028). Untrusted "marketplace" apps run in an OPAQUE-ORIGIN
+   *  sandbox (broker is the only channel to BOS); "local"/absent apps keep the
+   *  same-origin path. Builtin apps are native and unaffected. */
+  origin?: "builtin" | "local" | "marketplace";
+  /** For marketplace apps: the marketplace they came from. */
+  marketplaceId?: string;
 }
 
 /** A BOS SDK capability that can be granted to a user-installed iframe app. */
@@ -33,7 +39,8 @@ export type AppCapability =
   | "fs:write"      // Write files to the user's VFS
   | "settings:read" // Read OS settings
   | "notify"        // Show desktop notifications via postMessage response
-  | "window:title"; // Set the window title
+  | "window:title"  // Set the window title
+  | "storage";      // Per-app persistent key/value store (backs the localStorage shim, 028)
 
 export type WallpaperFit = "cover" | "contain";
 
