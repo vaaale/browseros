@@ -126,7 +126,7 @@ const SEED: Omit<Skill, "id">[] = [
       "",
       "How to run any step:",
       "- Load the matching reference (references/<step>.md) and follow it.",
-      "- Read the command prompt and template with spec_template_read (commands/<step>.md and <artifact>-template.md), then write the artifact with spec_write / spec_edit using a STORE-PREFIXED path. Your file tools only reach the spec stores (never BOS source).",
+      "- Read the command prompt and template with spec_template_read (commands/<step>.md and <artifact>-template.md), then author with a STORE-PREFIXED path. Use spec_write ONLY to create a new artifact (or an intentional full rewrite). To MODIFY an existing artifact — adding a section, updating requirements, appending clarifications — read it first, then make targeted changes with spec_edit (one change) or spec_patch (several ordered find/replace hunks in one atomic call). Never rewrite a whole file just to add or tweak content. Your file tools only reach the spec stores (never BOS source).",
       "",
       "Golden rules:",
       "- The spec is the source of truth; never get ahead of an agreed spec.",

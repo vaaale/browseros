@@ -50,12 +50,40 @@ export function specTools(): Record<string, AssistantTool> {
     ),
     spec_write: serverTool(
       "spec_write",
-      "Create or overwrite a specification artifact by STORE-PREFIXED path (e.g. 'user-specs/003-x/spec.md'). New user specs go in the user store. REQUIRES an active feature branch — if none is set, call dev_branch_request first. Build the body from a template via spec_template_read.",
+      "Create a NEW specification artifact, or intentionally REPLACE an entire file, by STORE-PREFIXED path (e.g. 'user-specs/003-x/spec.md'). New user specs go in the user store. To MODIFY an existing artifact, prefer spec_edit (one change) or spec_patch (several changes) — do NOT rewrite the whole file just to add or tweak content. REQUIRES an active feature branch — if none is set, call dev_branch_request first. Build the body from a template via spec_template_read.",
       schema({ path: p.str("Store-prefixed artifact path"), content: p.str("Full file content") }, ["path", "content"]),
       async (input, ctx) => {
         const b = await requireBranch(ctx.conversationId, "spec_write");
         if ("error" in b) return b.error;
         return `Wrote ${await specfs.writeFile(input.path as string, (input.content as string) ?? "", b)}`;
+      },
+    ),
+    spec_patch: serverTool(
+      "spec_patch",
+      "Apply one or more targeted find/replace edits to an EXISTING spec artifact (STORE-PREFIXED path) in a single atomic change. PREFER THIS over spec_write when modifying an existing artifact (e.g. adding a section, updating requirements) — it changes only what you specify. Each hunk's `find` must occur exactly once at the moment it applies; hunks apply in order (a later hunk sees earlier results). If any hunk fails, nothing is written. REQUIRES an active feature branch — if none is set, call dev_branch_request first.",
+      schema(
+        {
+          path: p.str("Store-prefixed artifact path"),
+          hunks: {
+            type: "array",
+            description: "Ordered edits; each replaces the single occurrence of `find` with `replace`.",
+            items: {
+              type: "object",
+              properties: {
+                find: { type: "string", description: "Exact text to find (must be unique when this hunk applies)" },
+                replace: { type: "string", description: "Replacement text" },
+              },
+              required: ["find", "replace"],
+            },
+          },
+        },
+        ["path", "hunks"],
+      ),
+      async (input, ctx) => {
+        const b = await requireBranch(ctx.conversationId, "spec_patch");
+        if ("error" in b) return b.error;
+        const hunks = (input.hunks as specfs.SpecHunk[]) ?? [];
+        return `Patched ${await specfs.patchFile(input.path as string, hunks, b)}`;
       },
     ),
     spec_edit: serverTool(
