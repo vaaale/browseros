@@ -18,6 +18,23 @@ export function specTools(): Record<string, AssistantTool> {
     return branch ? { branch } : undefined;
   }
 
+  // A spec WRITE must belong to a feature (027: always require a feature
+  // context — never commit to a store's base branch). If the conversation has no
+  // active feature branch, refuse and steer the agent to elicit one from the user
+  // via dev_branch_request, then retry. Reads are unrestricted.
+  async function requireBranch(
+    conversationId: string,
+    toolName: string,
+  ): Promise<{ branch: string } | { error: string }> {
+    const branch = await getConversationActiveFeatureBranch(conversationId).catch(() => undefined);
+    if (!branch) {
+      return {
+        error: `Error: ${toolName}: writing a spec requires an active feature branch. Call dev_branch_request to set one up (it prompts the user for a name), then retry.`,
+      };
+    }
+    return { branch };
+  }
+
   return {
     spec_list: serverTool(
       "spec_list",
@@ -33,20 +50,26 @@ export function specTools(): Record<string, AssistantTool> {
     ),
     spec_write: serverTool(
       "spec_write",
-      "Create or overwrite a specification artifact by STORE-PREFIXED path (e.g. 'user-specs/003-x/spec.md'). New user specs go in the user store; writes go to the conversation's active feature branch when one is set. Build the body from a template via spec_template_read.",
+      "Create or overwrite a specification artifact by STORE-PREFIXED path (e.g. 'user-specs/003-x/spec.md'). New user specs go in the user store. REQUIRES an active feature branch — if none is set, call dev_branch_request first. Build the body from a template via spec_template_read.",
       schema({ path: p.str("Store-prefixed artifact path"), content: p.str("Full file content") }, ["path", "content"]),
-      async (input, ctx) =>
-        `Wrote ${await specfs.writeFile(input.path as string, (input.content as string) ?? "", await branchFor(ctx.conversationId))}`,
+      async (input, ctx) => {
+        const b = await requireBranch(ctx.conversationId, "spec_write");
+        if ("error" in b) return b.error;
+        return `Wrote ${await specfs.writeFile(input.path as string, (input.content as string) ?? "", b)}`;
+      },
     ),
     spec_edit: serverTool(
       "spec_edit",
-      "Replace a unique snippet of text in a spec artifact (STORE-PREFIXED path; the search text must occur exactly once).",
+      "Replace a unique snippet of text in a spec artifact (STORE-PREFIXED path; the search text must occur exactly once). REQUIRES an active feature branch — if none is set, call dev_branch_request first.",
       schema(
         { path: p.str("Store-prefixed artifact path"), find: p.str("Exact text to find (must occur exactly once)"), replace: p.str("Replacement text") },
         ["path", "find", "replace"],
       ),
-      async (input, ctx) =>
-        `Edited ${await specfs.editFile(input.path as string, input.find as string, (input.replace as string) ?? "", await branchFor(ctx.conversationId))}`,
+      async (input, ctx) => {
+        const b = await requireBranch(ctx.conversationId, "spec_edit");
+        if ("error" in b) return b.error;
+        return `Edited ${await specfs.editFile(input.path as string, input.find as string, (input.replace as string) ?? "", b)}`;
+      },
     ),
     spec_search: serverTool(
       "spec_search",
