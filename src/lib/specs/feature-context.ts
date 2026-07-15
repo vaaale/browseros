@@ -41,3 +41,17 @@ export async function getActiveBranch(): Promise<string | undefined> {
   }
   return undefined;
 }
+
+// Headers a caller (an app's request via the SDK, or an agent proxy) uses to
+// carry its feature scope to a generic VFS API request. An explicit branch wins
+// over a conversation id (option (b): an app that selected/created a branch).
+export const FEATURE_BRANCH_HEADER = "x-bos-feature-branch";
+export const FEATURE_CONVERSATION_HEADER = "x-bos-conversation";
+
+/** Build a feature scope from request headers (empty when neither is present). */
+export function scopeFromHeaders(headers: Headers): FeatureScope {
+  return {
+    branch: headers.get(FEATURE_BRANCH_HEADER)?.trim() || undefined,
+    conversationId: headers.get(FEATURE_CONVERSATION_HEADER)?.trim() || undefined,
+  };
+}
