@@ -11,6 +11,7 @@ import {
   workingDiff,
 } from "./git-fs";
 import { ensureRepo } from "@/lib/gitfs/store";
+import { STORE_MANIFEST } from "@/lib/specs/stores";
 import { boundDiff, deterministicMessage } from "./commit-message";
 import { encodeBranchDir } from "@/lib/specs/feature-id";
 import { getActiveBranch } from "@/lib/specs/feature-context";
@@ -228,7 +229,10 @@ export class SpecFS implements FSBackend {
   // ---- FSBackend: reads ----------------------------------------------------
 
   async list(relPath: string): Promise<VfsEntry[]> {
-    return (await this.readBackend()).list(relPath).catch(() => []);
+    const entries = await (await this.readBackend()).list(relPath).catch(() => []);
+    // Hide git internals and the store manifest from the file view (matches the
+    // pre-027 spec listing behaviour).
+    return entries.filter((e) => !e.name.startsWith(".") && e.name !== STORE_MANIFEST);
   }
   async stat(relPath: string): Promise<VfsEntry> {
     return (await this.readBackend()).stat(relPath);
