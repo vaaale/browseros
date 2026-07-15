@@ -78,7 +78,10 @@ async function ensureUserStore(dir: string): Promise<void> {
   const fresh = !(await pathExists(path.join(dir, ".git")));
   await ensureRepo(dir);
   if (!(await pathExists(path.join(dir, STORE_MANIFEST)))) await writeManifest(dir, USER_MANIFEST);
-  if (fresh) await commitAll(dir, "init user spec store");
+  // Always commit — a pre-existing (non-fresh) repo may still have just received
+  // migrated content, which must be committed by the seed rather than left for
+  // the SpecFS startup sweep. commitAll no-ops when the tree is clean.
+  await commitAll(dir, fresh ? "init user spec store" : "sync user spec store");
 }
 
 /** NON-DESTRUCTIVE relocation of legacy <cwd>/specs/<id> content into the new
