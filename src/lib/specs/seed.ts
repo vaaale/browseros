@@ -81,15 +81,16 @@ async function ensureUserStore(dir: string): Promise<void> {
   if (fresh) await commitAll(dir, "init user spec store");
 }
 
-/** One-time, NON-DESTRUCTIVE relocation of legacy <cwd>/specs/<id> content into
- *  the new root. Copies file content only (fresh repo + manifest are (re)built by
- *  the ensure* helpers); the legacy directory is never modified or removed. */
+/** NON-DESTRUCTIVE relocation of legacy <cwd>/specs/<id> content into the new
+ *  root. Uses additive copyMissing (never clobbers a diverged file), so it is
+ *  safe to run on every boot even if the destination store repo already exists —
+ *  which is exactly the case a pre-created-but-empty store hit. The legacy
+ *  directory is never modified or removed. */
 async function migrateLegacyStore(root: string, id: string): Promise<void> {
   if (path.resolve(root) === path.resolve(LEGACY_ROOT)) return; // same location, nothing to do
   const src = path.join(LEGACY_ROOT, id);
-  const dst = path.join(root, id);
-  if (await pathExists(path.join(dst, ".git"))) return; // already present in the new root
   if (!(await pathExists(src))) return; // no legacy content
+  const dst = path.join(root, id);
   await fs.mkdir(dst, { recursive: true });
   await copyMissing(src, dst);
 }
