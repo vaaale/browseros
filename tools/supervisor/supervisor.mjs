@@ -55,7 +55,11 @@ const APPS_REPO = process.env.BOS_APPS_DIR || path.join(REPO, "apps");
 // out on the SAME feature branch as the code (020-branch-coupled-specs) — one
 // feature = one branch name across the BOS repo and every store. Promote merges
 // both; discard drops both.
-const SPECS_ROOT = process.env.BOS_SPECS_ROOT || path.join(REPO, "specs");
+// 027 relocated the store container from <repo>/specs to <canonicalData>/specs so
+// the canonical stores live in the base data volume (matching the base app's
+// specsRoot() = <dataDir>/specs). Previews still get BOS_SPECS_ROOT=<worktree>/specs
+// (the branch-coupled worktree mounts), so coupling is unchanged.
+const SPECS_ROOT = process.env.BOS_SPECS_ROOT || path.join(CANONICAL_DATA, "specs");
 const APP_CANDIDATE_BRANCH = "app-candidate";
 const GIT_IDENTITY = ["-c", "user.name=BrowserOS", "-c", "user.email=bos@localhost"];
 /** @type {{branch:string, base:string}|null} */

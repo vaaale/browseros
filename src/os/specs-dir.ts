@@ -1,14 +1,17 @@
 import "server-only";
 import path from "path";
+import { dataDir } from "./data-dir";
 
 // Container directory for spec stores (018-external-spec-store). Each spec store
 // is an independent git repo living in a SUBDIRECTORY of this root; the root
-// itself is a plain container, never a git repo. Kept out of the BOS source repo
-// (gitignored when nested) so specs are distributable content, not source.
+// itself is a plain container, never a git repo.
 //
-// Configurable via BOS_SPECS_ROOT (set it in .env.local), defaulting to
-// <cwd>/specs — the same path the in-tree specs occupied before the migration.
+// 027 relocated the default from <cwd>/specs to <dataDir>/specs, so user specs
+// live in the per-user data volume (survive a VFS wipe, isolated per user under
+// the bastion) instead of the source clone. Still overridable via BOS_SPECS_ROOT
+// — the Supervisor sets it to a preview's `<worktree>/specs` so specs stay
+// branch-coupled to the code (020).
 export function specsRoot(): string {
   const override = process.env.BOS_SPECS_ROOT;
-  return override && override.trim() ? override.trim() : path.join(process.cwd(), "specs");
+  return override && override.trim() ? override.trim() : path.join(dataDir(), "specs");
 }
