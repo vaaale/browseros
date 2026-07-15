@@ -79,8 +79,26 @@ async function exists(real: string): Promise<boolean> {
   }
 }
 
+// Register the SpecFS mount exactly once, before any VFS op touches
+// /Documents/Specs. Dynamic import keeps the low-level VFS free of a static
+// dependency on the spec layer (and avoids an import cycle).
+let specMountReady = false;
+async function ensureSpecMount(): Promise<void> {
+  if (specMountReady) return;
+  specMountReady = true;
+  try {
+    const mod = await import("@/lib/specs/spec-mount");
+    mod.ensureSpecMount();
+  } catch {
+    // If the spec layer fails to load, unmounted VFS behaviour still works;
+    // /Documents/Specs then falls through to the local stub dir.
+    specMountReady = false;
+  }
+}
+
 let seeded = false;
 async function ensureVfs(): Promise<void> {
+  await ensureSpecMount();
   await fs.mkdir(VFS_ROOT, { recursive: true });
   // Conversations live in canonical data (CANONICAL_SUBPATHS) so they survive a
   // discarded preview clone — make sure that directory exists even when this version
