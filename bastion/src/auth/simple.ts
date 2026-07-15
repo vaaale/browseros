@@ -101,4 +101,8 @@ export class SimpleProvider implements AuthProvider {
     entry.admin = isAdmin;
     this.save();
   }
+
+  async adminExists(): Promise<boolean> {
+    return Object.values(this.users).some((u) => u.admin);
+  }
 }

@@ -1,4 +1,20 @@
 services:
+  bos-run-command:
+    image: bos-run-command:latest
+    build:
+      context: ./docker/run-command
+      dockerfile: Dockerfile
+    profiles:
+      - build-only
+
+  browseros:
+    image: browseros:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    profiles:
+      - build-only
+
   bastion:
     image: bos-bastion:latest
     build:

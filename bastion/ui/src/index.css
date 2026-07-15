@@ -1,0 +1,36 @@
+@import "tailwindcss";
+
+/* BOS design tokens — match the main BOS app exactly */
+@theme {
+  --color-bos-bg:      #0f0f0f;
+  --color-bos-surface: #1a1a1a;
+  --color-bos-border:  #2a2a2a;
+  --color-bos-border-strong: #444;
+  --color-bos-text:    #eeeeee;
+  --color-bos-muted:   #aaaaaa;
+  --color-bos-dim:     #555555;
+  --color-bos-blue:    #2563eb;
+  --color-bos-blue-hover: #1d4ed8;
+  --color-bos-red:     #991b1b;
+  --color-bos-red-hover: #7f1d1d;
+
+  /* Status colours matching BOS's existing STATUS_COLOR map */
+  --color-status-running:      #4ade80;
+  --color-status-stopped:      #f87171;
+  --color-status-provisioning: #fbbf24;
+  --color-status-unknown:      #94a3b8;
+}
+
+html, body, #root {
+  background-color: #0f0f0f;
+  color: #eeeeee;
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Scrollbar — subtle, matching BOS */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #444; }

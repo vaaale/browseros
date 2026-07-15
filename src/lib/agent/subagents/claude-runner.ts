@@ -1,7 +1,7 @@
 import "server-only";
 import { spawn } from "node:child_process";
 import { connectMcpClient, extractText } from "@/lib/mcp/client";
-import { getHarnessConfig } from "@/lib/devharness/harness-config";
+import { getHarnessConfig, harnessCredentialEnv } from "@/lib/devharness/harness-config";
 import { supervisorEnabled, supervisorBegin, supervisorBuild } from "@/lib/devharness/supervisor";
 import { stageAll } from "@/lib/system/git";
 import type { McpServerConfig } from "@/lib/mcp/types";
@@ -16,7 +16,10 @@ type OnEvent = (e: { tool: string; input: unknown }) => void;
 const CLI_TIMEOUT_MS = 1000_000;
 
 function envForCwd(cwd: string): NodeJS.ProcessEnv {
-  return { ...process.env, PWD: cwd };
+  // harnessCredentialEnv() sets HOME to the harness home when the user has
+  // provisioned Claude/OpenCode credentials, so the headless CLIs authenticate
+  // without an interactive login (essential in container deployments).
+  return { ...process.env, PWD: cwd, ...harnessCredentialEnv() };
 }
 
 function isStandaloneContentTask(task: string): boolean {

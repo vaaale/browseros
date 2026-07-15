@@ -83,7 +83,10 @@ function parseVolumes(v: unknown): Volume[] {
 
 export async function loadRcConfig(): Promise<RcConfig> {
   const s = await readNamespace(NAMESPACE);
-  const backend = s.backend === "local" ? "local" : "docker";
+  // In Bastion mode (BOS_PUBLIC_PORT set by the bastion when spawning this
+  // container), force the local backend — the user container IS the sandbox.
+  const bastionMode = !!process.env.BOS_PUBLIC_PORT;
+  const backend = bastionMode ? "local" : (s.backend === "local" ? "local" : "docker");
   return {
     enabled: s.enabled === true,
     backend,

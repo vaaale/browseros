@@ -1,16 +1,15 @@
-import { useState, FormEvent } from "react";
-import { useNavigate } from "react-router-dom";
+import { useState, type FormEvent } from "react";
 
-const s: Record<string, React.CSSProperties> = {
-  page: { display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh" },
-  box: { background: "#1a1a1a", border: "1px solid #333", borderRadius: 8, padding: 32, width: 320 },
-  title: { fontSize: 22, marginBottom: 24, color: "#eee", textAlign: "center" },
-  label: { display: "block", marginBottom: 4, fontSize: 13, color: "#aaa" },
-  input: { width: "100%", padding: "8px 12px", background: "#0f0f0f", border: "1px solid #444", borderRadius: 4, color: "#eee", fontSize: 14, marginBottom: 16 },
-  btn: { width: "100%", padding: "10px 0", background: "#2563eb", border: "none", borderRadius: 4, color: "#fff", fontSize: 14, cursor: "pointer", marginBottom: 8 },
-  err: { color: "#e55", fontSize: 13, marginBottom: 12 },
-  sep: { textAlign: "center", color: "#555", margin: "12px 0", fontSize: 13 },
-  kcBtn: { width: "100%", padding: "10px 0", background: "#1a3a6e", border: "1px solid #2563eb", borderRadius: 4, color: "#7af", fontSize: 14, cursor: "pointer", textDecoration: "none", display: "block", textAlign: "center" },
+const s = {
+  page:   { minHeight: "100vh", background: "#0f0f0f", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 },
+  box:    { background: "#1a1a1a", border: "1px solid #333", borderRadius: 8, padding: 32, width: 320 },
+  title:  { fontSize: 22, fontWeight: 600, color: "#eee", textAlign: "center" as const, marginBottom: 24 },
+  label:  { display: "block", marginBottom: 4, fontSize: 12, color: "#aaa" },
+  input:  { width: "100%", padding: "8px 12px", background: "#0f0f0f", border: "1px solid #444", borderRadius: 4, color: "#eee", fontSize: 13, marginBottom: 14, outline: "none", boxSizing: "border-box" as const },
+  btn:    { width: "100%", padding: "10px 0", background: "#2563eb", border: "none", borderRadius: 4, color: "#fff", fontSize: 13, cursor: "pointer", marginBottom: 8 },
+  err:    { color: "#f87171", fontSize: 12, marginBottom: 12 },
+  sep:    { textAlign: "center" as const, color: "#555", margin: "12px 0", fontSize: 12 },
+  kcBtn:  { width: "100%", padding: "10px 0", background: "#111", border: "1px solid #2563eb", borderRadius: 4, color: "#7af", fontSize: 13, cursor: "pointer", textDecoration: "none", display: "block", textAlign: "center" as const },
 };
 
 export default function Login() {
@@ -18,7 +17,6 @@ export default function Login() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const navigate = useNavigate();
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -29,9 +27,12 @@ export default function Login() {
       body: JSON.stringify({ username, password }),
     });
     setLoading(false);
-    // Full page navigation so the proxy picks it up and either routes
-    // directly into BOS (running) or shows the status page (starting).
-    if (res.ok) { window.location.href = "/"; return; }
+    if (res.ok) {
+      const data = await res.json().catch(() => ({})) as { isAdmin?: boolean };
+      // Admins land on the admin portal; regular users go straight into their BOS.
+      window.location.href = data.isAdmin ? "/app/admin" : "/";
+      return;
+    }
     setError("Invalid username or password");
   }
 
@@ -45,7 +46,9 @@ export default function Login() {
           <input style={s.input} value={username} onChange={e => setUsername(e.target.value)} autoFocus />
           <label style={s.label}>Password</label>
           <input style={s.input} type="password" value={password} onChange={e => setPassword(e.target.value)} />
-          <button style={s.btn} disabled={loading}>{loading ? "Signing in…" : "Sign in"}</button>
+          <button style={{ ...s.btn, opacity: loading ? 0.6 : 1 }} disabled={loading}>
+            {loading ? "Signing in…" : "Sign in"}
+          </button>
         </form>
         <div style={s.sep}>or</div>
         <a href="/auth/keycloak" style={s.kcBtn}>Sign in with Keycloak</a>

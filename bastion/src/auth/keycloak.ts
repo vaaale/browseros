@@ -68,4 +68,7 @@ export class KeycloakProvider implements AuthProvider {
   async deleteUser(): Promise<void> { throw new Error("User management not supported for Keycloak provider"); }
   async updatePassword(): Promise<void> { throw new Error("Password management not supported for Keycloak provider"); }
   async setAdmin(): Promise<void> { throw new Error("Role management not supported for Keycloak provider"); }
+  // In Keycloak mode there is no local admin record; the IdP owns all users.
+  // Bootstrap is informational only — the setup SPA page handles this case.
+  async adminExists(): Promise<boolean> { return true; }
 }

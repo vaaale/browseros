@@ -3,6 +3,7 @@ import path from "path";
 import type { Config } from "./config";
 import {
   containerName,
+  createBosContainer,
   startContainer,
   stopContainer,
   inspectContainer,
@@ -10,6 +11,7 @@ import {
   waitForHealthy,
 } from "./docker";
 import { provisionUser } from "./provision";
+import * as logStore from "./log-store";
 
 export type InstanceStatus = "running" | "stopped" | "provisioning" | "unknown";
 
@@ -20,6 +22,8 @@ export interface InstanceState {
   lastActive: number;
   provisionLog?: string;
   provisionError?: string;
+  /** Short human-readable reason for the last failure. */
+  error?: string;
 }
 
 const instances = new Map<string, InstanceState>();
@@ -51,7 +55,24 @@ export async function getOrProvision(username: string, cfg: Config): Promise<voi
 function log(username: string, msg: string, cfg: Config): void {
   const ts = new Date().toISOString();
   console.log(`[bastion] [${username}] ${msg}`);
+  logStore.append(username, msg);
   updateState(username, { provisionLog: `[${ts}] ${msg}` }, cfg);
+}
+
+/**
+ * Self-heal a stale container by recreating it fresh against the CURRENT network
+ * and waiting for health. The common trigger is a container bound to a network
+ * ID that no longer exists after a `docker compose` rebuild/recreate of bos-net
+ * ("network … not found" on start). createBosContainer ensures the network
+ * exists and evicts the stale container first; src/data bind mounts are
+ * preserved, so no user data is lost. Returns the new container ID.
+ */
+async function recreateAndHeal(username: string, cfg: Config): Promise<string> {
+  const newId = await createBosContainer(username, cfg);
+  await startContainer(newId);
+  updateState(username, { containerId: newId, status: "provisioning", provisionError: undefined, lastActive: Date.now() }, cfg);
+  await waitForHealthy(username, 300_000);
+  return newId;
 }
 
 async function _getOrProvision(username: string, cfg: Config): Promise<void> {
@@ -71,7 +92,7 @@ async function _getOrProvision(username: string, cfg: Config): Promise<void> {
   const info = await inspectContainer(containerName(username));
 
   if (info) {
-    const cid = info.Id;
+    let cid = info.Id;
     if (info.State.Running) {
       // Container is running — health-gate before declaring ready so we don't
       // mark it "running" while the supervisor / Next.js is still starting up.
@@ -80,14 +101,25 @@ async function _getOrProvision(username: string, cfg: Config): Promise<void> {
       try {
         await waitForHealthy(username, 300_000);
       } catch (err) {
+        // A "running" container can still be unreachable — e.g. bos-net was
+        // recreated underneath it, breaking its networking. Recreate it once
+        // against the current network before giving up.
         const msg = err instanceof Error ? err.message : String(err);
-        const stack = err instanceof Error ? (err.stack ?? msg) : msg;
-        console.error(`[bastion] [${username}] Health check failed:`, stack);
-        updateState(username, { status: "unknown", provisionError: stack, lastActive: Date.now() }, cfg);
-        throw err;
+        console.error(`[bastion] [${username}] Health check failed, recreating container:`, msg);
+        log(username, `Health check failed (${msg}) — recreating container against current network…`, cfg);
+        try {
+          cid = await recreateAndHeal(username, cfg);
+        } catch (err2) {
+          const msg2 = err2 instanceof Error ? err2.message : String(err2);
+          const stack2 = err2 instanceof Error ? (err2.stack ?? msg2) : msg2;
+          console.error(`[bastion] [${username}] Recreate/health failed:`, stack2);
+          logStore.append(username, `ERROR (recreate): ${stack2}`);
+          updateState(username, { status: "unknown", provisionError: stack2, error: msg2, lastActive: Date.now() }, cfg);
+          throw err2;
+        }
       }
       log(username, "Instance is ready!", cfg);
-      updateState(username, { containerId: cid, status: "running", lastActive: Date.now() }, cfg);
+      updateState(username, { containerId: cid, status: "running", error: undefined, lastActive: Date.now() }, cfg);
       resetIdleTimer(username, cfg);
       return;
     }
@@ -99,14 +131,26 @@ async function _getOrProvision(username: string, cfg: Config): Promise<void> {
       log(username, "Container started — waiting for supervisor and Next.js to become healthy (npm install may run)…", cfg);
       await waitForHealthy(username, 300_000);
     } catch (err) {
+      // Self-heal: a stopped container often can't be started after infra
+      // changes — most commonly it references a network ID that no longer exists
+      // once `docker compose` rebuilt/recreated bos-net ("network … not found").
+      // Recreate it fresh against the current network.
       const msg = err instanceof Error ? err.message : String(err);
-      const stack = err instanceof Error ? (err.stack ?? msg) : msg;
-      console.error(`[bastion] [${username}] Start/health failed:`, stack);
-      updateState(username, { status: "unknown", provisionError: stack, lastActive: Date.now() }, cfg);
-      throw err;
+      console.error(`[bastion] [${username}] Start failed, recreating container:`, msg);
+      log(username, `Start failed (${msg}) — recreating container against current network…`, cfg);
+      try {
+        cid = await recreateAndHeal(username, cfg);
+      } catch (err2) {
+        const msg2 = err2 instanceof Error ? err2.message : String(err2);
+        const stack2 = err2 instanceof Error ? (err2.stack ?? msg2) : msg2;
+        console.error(`[bastion] [${username}] Recreate/start failed:`, stack2);
+        logStore.append(username, `ERROR (recreate): ${stack2}`);
+        updateState(username, { status: "unknown", provisionError: stack2, error: msg2, lastActive: Date.now() }, cfg);
+        throw err2;
+      }
     }
     log(username, "Instance is ready!", cfg);
-    updateState(username, { containerId: cid, status: "running", lastActive: Date.now() }, cfg);
+    updateState(username, { containerId: cid, status: "running", error: undefined, lastActive: Date.now() }, cfg);
     resetIdleTimer(username, cfg);
     return;
   }
@@ -125,13 +169,14 @@ async function _getOrProvision(username: string, cfg: Config): Promise<void> {
     log(username, "Container created — waiting for supervisor and Next.js to become healthy (npm install will run on first start)…", cfg);
     await waitForHealthy(username, 300_000);
     log(username, "Instance is ready!", cfg);
-    updateState(username, { containerId, status: "running", lastActive: Date.now() }, cfg);
+    updateState(username, { containerId, status: "running", error: undefined, lastActive: Date.now() }, cfg);
     resetIdleTimer(username, cfg);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     const stack = err instanceof Error ? (err.stack ?? msg) : msg;
     console.error(`[bastion] [${username}] Provision failed:`, stack);
-    updateState(username, { status: "unknown", provisionError: stack, lastActive: Date.now() }, cfg);
+    logStore.append(username, `ERROR (provision): ${stack}`);
+    updateState(username, { status: "unknown", provisionError: stack, error: msg, lastActive: Date.now() }, cfg);
     throw err;
   }
 }

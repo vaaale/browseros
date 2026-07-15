@@ -1,10 +1,13 @@
 import { Router } from "express";
 import express from "express";
 import type { Request, Response, NextFunction } from "express";
+import fs from "fs";
+import path from "path";
+import busboy from "busboy";
 import type { Config } from "../config";
 import type { AuthProvider } from "../auth/index";
 import { verifySession } from "../sessions";
-import { getInstanceState, clearInstanceState } from "../lifecycle";
+import { getInstanceState, clearInstanceState, stopInstance } from "../lifecycle";
 import {
   reprovisionRestart,
   reprovisionResetData,
@@ -13,6 +16,7 @@ import {
   reprovisionFull,
 } from "../provision";
 import type { SessionPayload } from "../sessions";
+import * as logStore from "../log-store";
 
 type AuthenticatedRequest = Request & { user: SessionPayload };
 
@@ -63,6 +67,87 @@ export function createAccountRouter(cfg: Config, provider: AuthProvider): Router
       }
       // Clear stale lifecycle state so the proxy re-checks Docker by name
       // on the next request rather than using a potentially stale containerId.
+      clearInstanceState(username);
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  router.get("/log", (req, res) => {
+    const { username } = (req as AuthenticatedRequest).user;
+    res.json({ log: logStore.read(username, { tail: 200 }) });
+  });
+
+  // Avatar upload — hand-rolled multipart parse using busboy (no extra dep needed
+  // beyond busboy itself, which is now a direct dep).
+  router.post("/avatar", (req, res) => {
+    const { username } = (req as AuthenticatedRequest).user;
+    const avatarDir = path.join(cfg.dataDir, "avatars");
+    fs.mkdirSync(avatarDir, { recursive: true });
+
+    const bb = busboy({
+      headers: req.headers,
+      limits: { fileSize: 2 * 1024 * 1024, files: 1 },
+    });
+
+    let saved = false;
+    let limitHit = false;
+
+    bb.on("file", (_name, stream, info) => {
+      const { mimeType } = info;
+      if (!mimeType.startsWith("image/")) {
+        stream.resume();
+        res.status(400).json({ error: "Only image files are accepted" });
+        return;
+      }
+      // Derive extension from mime type.
+      const ext = mimeType === "image/jpeg" ? "jpg"
+        : mimeType === "image/png" ? "png"
+        : mimeType === "image/gif" ? "gif"
+        : mimeType === "image/webp" ? "webp"
+        : "bin";
+
+      // Remove any existing avatar files for this user before saving new one.
+      for (const e of ["png", "jpg", "gif", "webp", "bin"]) {
+        const f = path.join(avatarDir, `${username}.${e}`);
+        if (fs.existsSync(f)) fs.unlinkSync(f);
+      }
+
+      const dest = path.join(avatarDir, `${username}.${ext}`);
+      const out = fs.createWriteStream(dest, { mode: 0o600 });
+      stream.on("limit", () => { limitHit = true; stream.resume(); });
+      stream.pipe(out);
+      out.on("close", () => { saved = true; });
+    });
+
+    bb.on("finish", () => {
+      if (limitHit) { res.status(400).json({ error: "File exceeds 2 MB limit" }); return; }
+      if (!saved) { res.status(400).json({ error: "No file received" }); return; }
+      if (!res.headersSent) res.json({ ok: true });
+    });
+
+    bb.on("error", (err) => {
+      if (!res.headersSent) res.status(500).json({ error: String(err) });
+    });
+
+    req.pipe(bb);
+  });
+
+  // Wipe BOS data/ only (not avatar/log — those are bastion-managed and persist
+  // for admin diagnosis until the user is fully deleted via FR-007).
+  router.post("/wipe-data", async (req, res) => {
+    const { username } = (req as AuthenticatedRequest).user;
+    const { confirm } = req.body as { confirm?: boolean };
+    if (!confirm) {
+      res.status(400).json({ error: "confirm: true required" });
+      return;
+    }
+    try {
+      await stopInstance(username).catch(() => {});
+      const dataPath = path.join(cfg.volumeBase, username, "data");
+      if (fs.existsSync(dataPath)) fs.rmSync(dataPath, { recursive: true, force: true });
+      fs.mkdirSync(dataPath, { recursive: true });
       clearInstanceState(username);
       res.json({ ok: true });
     } catch (err) {
