@@ -13,18 +13,19 @@
 # ~150 MB, Claude Code + OpenCode ~200 MB, BOS source + Node.js base ~300 MB).
 # If > 3 GB is a concern, build a slim variant that omits LibreOffice.
 
-FROM node:20-alpine AS runtime
+#FROM node:20-alpine AS runtime
+FROM node:trixie AS runtime
 
 # System packages — all in one layer to minimise image size.
 # LibreOffice requires OpenJDK on Alpine; we include the headless JRE only.
-RUN apk add --no-cache \
-    git \
+RUN apt-get update && apt-get install -y \
+    git ca-certificates \
     python3 \
-    py3-virtualenv \
+    python3-venv \
     poppler-utils \
     libreoffice \
-    openjdk17-jre-headless \
-    font-dejavu
+    openjdk-25-jre-headless \
+    fonts-dejavu fonts-liberation
 
 # Python tooling lives in a virtualenv, NOT the system interpreter.
 # Alpine's system Python is "externally managed" (PEP 668) — bare pip installs
@@ -37,14 +38,14 @@ ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 # run_command behaves identically to the Docker-backend sandbox.
 RUN pip install --no-cache-dir \
     ipython \
-    "markitdown[pptx]" \
+    "markitdown[all]" \
     Pillow \
     python-pptx \
     docx
 
 # pptxgenjs is a Node package (used by run_command skills for pptx generation).
 # Make it resolvable from /workspace scripts via NODE_PATH.
-RUN npm install -g pptxgenjs
+RUN npm install -g pptxgenjs docx xlsx-populate
 ENV NODE_PATH=/usr/local/lib/node_modules
 
 WORKDIR /app

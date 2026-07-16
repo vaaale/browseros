@@ -14,7 +14,8 @@
 #
 # Build:   docker build -t browseros/run-command:latest docker/run-command
 # Configure: Settings -> Command Execution -> Docker image = browseros/run-command:latest
-FROM node:22-bookworm
+#FROM node:22-bookworm
+FROM node:trixie
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       python3 python3-pip python3-venv \
@@ -32,10 +33,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ENV VIRTUAL_ENV=/opt/venv
 RUN python3 -m venv "$VIRTUAL_ENV"
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
-RUN pip install --no-cache-dir ipython "markitdown[pptx]" Pillow python-pptx docx \
+RUN pip install --no-cache-dir ipython "markitdown[all]" Pillow python-pptx docx \
  && chown -R 1000:1000 "$VIRTUAL_ENV"
 
-RUN npm install -g pptxgenjs
+RUN npm install -g pptxgenjs docx xlsx-populate
 
 # Make globally-installed node modules (pptxgenjs) resolvable by scripts run from
 # /workspace, and keep python output unbuffered so the idle watchdog sees progress.
