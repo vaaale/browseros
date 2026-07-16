@@ -40,6 +40,10 @@ export function buildMcpIndexBlock(allowedMcp: string[] | undefined, mcpServers:
   return `\n\n## MCP servers\nExternal tools are available through MCP servers — their tools are NOT listed as direct functions. To use one: call searchMcpTools to find the right tool, getMcpToolSchema to inspect its input schema, then callMcpTool with arguments matching that schema. You can also listMcpServerTools for a full server listing.\n${index}`;
 }
 
+export function currentDateTimeBlock(): string {
+  return `Current date/time: ${new Date().toISOString().replace("T", " ").replace(/\.\d+Z$/, " UTC")}`;
+}
+
 // Composes the assistant's system instructions: an optional shared default
 // prompt (edited in Settings → Agents → Default Agent, opt-in per-agent via
 // useDefaultPrompt), the agent's personality, the curated memory snapshot
@@ -64,7 +68,8 @@ export async function composeInstructions(agentId: string): Promise<string> {
   const personality = agent?.systemPrompt?.trim() || "";
   const includeDefault = agent?.useDefaultPrompt ?? true;
   const defaultBody = includeDefault ? (defaultAgent?.systemPrompt?.trim() || "") : "";
-  let out = defaultBody
+  let out = currentDateTimeBlock() + "\n\n";
+  out += defaultBody
     ? personality
       ? `${defaultBody}\n\n## Personality\n${personality}`
       : defaultBody

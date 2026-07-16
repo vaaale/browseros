@@ -1,7 +1,7 @@
 import "server-only";
 import type { AssistantTool, ToolGateConfig } from "./tools";
 import { gateFor } from "./gate";
-import { composeInstructions, buildSkillsIndexBlock, buildMcpIndexBlock } from "@/lib/agent/instructions";
+import { composeInstructions, buildSkillsIndexBlock, buildMcpIndexBlock, currentDateTimeBlock } from "@/lib/agent/instructions";
 import { listSkills } from "@/lib/agent/skills/store";
 import { listMcpServers } from "@/lib/mcp/store";
 
@@ -71,7 +71,7 @@ export function ephemeralComposeSystem(
 ): () => Promise<string> {
   return async () => {
     const [skills, mcpServers] = await Promise.all([listSkills(), listMcpServers()]);
-    let out = systemPrompt;
+    let out = currentDateTimeBlock() + "\n\n" + systemPrompt;
     out += buildSkillsIndexBlock(parentAllowlists.skills, skills);
     out += buildMcpIndexBlock(parentAllowlists.mcp, mcpServers);
     return out;
