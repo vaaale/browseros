@@ -20,12 +20,18 @@ FROM node:trixie AS runtime
 # LibreOffice requires OpenJDK on Alpine; we include the headless JRE only.
 RUN apt-get update && apt-get install -y \
     git ca-certificates \
+    gosu \
     python3 \
     python3-venv \
     poppler-utils \
     libreoffice \
     openjdk-25-jre-headless \
     fonts-dejavu fonts-liberation
+
+# Create the non-root user that will own the runtime process.
+# Default UID/GID 1000; the entrypoint remaps them at runtime if BOS_UID/BOS_GID are set.
+RUN groupadd --gid 1000 bos && \
+    useradd --uid 1000 --gid 1000 --shell /bin/sh --home /home/bos --create-home bos
 
 # Python tooling lives in a virtualenv, NOT the system interpreter.
 # Alpine's system Python is "externally managed" (PEP 668) — bare pip installs

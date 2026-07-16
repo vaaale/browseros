@@ -29,6 +29,8 @@ services:
       - .:/bos-src:ro        # BOS source repo — cloned into each new user's src/ on first login
     environment:
       - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required}
+      - CONTAINER_UID=${CONTAINER_UID:-1000}
+      - CONTAINER_GID=${CONTAINER_GID:-1000}
       - AUTH_PROVIDER=${AUTH_PROVIDER:-simple}
       - BOS_IMAGE=${BOS_IMAGE:-browseros:latest}
       # VOLUME_BASE: bastion's own internal path (for mkdir, git clone, file ops)

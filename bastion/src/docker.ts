@@ -53,6 +53,8 @@ export async function createBosContainer(username: string, cfg: Config): Promise
       `BOS_PORT_BASE=3000`,     // next dev internal port
       `BOS_BASE_DEV=1`,         // supervisor starts next dev automatically
       ...(publicHostname && publicHostname !== "localhost" ? [`BOS_DEV_ORIGINS=${publicHostname}`] : []),
+      ...(cfg.containerUid != null ? [`BOS_UID=${cfg.containerUid}`] : []),
+      ...(cfg.containerGid != null ? [`BOS_GID=${cfg.containerGid}`] : []),
     ],
     HostConfig: {
       NetworkMode: cfg.bosNet,
