@@ -20,6 +20,7 @@ import { specTools } from "./tools/server/specs";
 import { scratchpadTools } from "./tools/server/scratchpad";
 import { integrationTools } from "./tools/server/integrations";
 import { discoveryTools } from "./tools/server/discovery";
+import { claudeCodeTools } from "./tools/server/claude-code-tools";
 
 // The assistant tool registry (Milestone C). Server tools call their lib
 // functions in-process; frontend tools are declared here (single source of
@@ -55,6 +56,7 @@ export function assistantTools(): Record<string, AssistantTool> {
     ...mcpTools(),
     ...workflowTools(),
     ...subAgentTools(),
+    ...claudeCodeTools(),
     ...devDelegateTools(),
     ...agentAdminTools(),
     ...selfImproveTools(),

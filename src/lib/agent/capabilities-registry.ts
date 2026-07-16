@@ -86,6 +86,7 @@ export const CAPABILITIES: Capability[] = [
   { id: "agent_list", group: "Agents", context: "action", description: "List available agents." },
   { id: "agent_create", group: "Agents", context: "action", description: "Create a reusable agent." },
   { id: "agent_delegate", group: "Agents", context: "action", description: "Delegate a task to an agent." },
+  { id: "Agent", group: "Agents", context: "action", description: "Claude Code-compatible agent launcher (maps to agent_delegate / dev_delegate)." },
   { id: "agent_request_claude", group: "Agents", context: "action", description: "Ask to use a Claude agent for a non-dev task." },
   { id: "agent_prompt_get", group: "Agents", context: "action", description: "Read the active agent's editable personality." },
   { id: "agent_prompt_set", group: "Agents", context: "action", description: "Rewrite the active agent's personality." },
