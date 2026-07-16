@@ -93,7 +93,7 @@ export const FRONTEND_TOOL_DECLARATIONS: ToolDeclaration[] = [
   ),
   decl(
     "agent_request_claude",
-    "Ask the user for permission to use a Claude sub-agent for a NON-development task (analysis, research, writing, etc.). Returns 'once', 'session', or 'local'. After receiving permission, immediately call agent_delegate with ephemeralType='claude' (for once/session) or ephemeralType='local' (for local) to actually run the task. Do NOT call this tool for development/coding tasks — use dev_delegate directly instead.",
+    "Ask the user for permission to use a Claude sub-agent for a NON-development task (analysis, research, writing, etc.). Returns 'once', 'session', or 'local'. After receiving permission, call agent_delegate with: ephemeralName (a descriptive name), ephemeralType='claude' (for once/session) or ephemeralType='local' (for local), ephemeralSystemPrompt (required — the agent's instructions), and contentOnly=true (since this is not a BOS source-code task). Do NOT call this tool for development/coding tasks — use dev_delegate directly instead.",
     { task: str("What you want the Claude agent to do") },
     ["task"],
   ),

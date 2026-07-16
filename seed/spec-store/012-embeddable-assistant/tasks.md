@@ -16,58 +16,68 @@ description: "Task list for Embeddable Assistant (012-embeddable-assistant)"
 
 ## Phase 1: Setup
 
-- [ ] T001 Create the `bos/embeddable-assistant` feature branch (developer).
-- [ ] T002 [P] Add `group: string` to the `Conversation` type in `src/lib/agent/conversations.ts`.
+- [x] T001 Create the `bos/embeddable-assistant` feature branch (developer).
+- [x] T002 [P] Add `agentId: string` as the sole partition key to the `Conversation` type in `src/lib/agent/conversations.ts` (the earlier `group: string` design was superseded — see spec Clarifications 2026-07-05).
 
 ---
 
 ## Phase 2: Foundational (Blocking — the core refactor)
 
-- [ ] T003 Make `src/lib/agent/conversations.ts` **group-aware**: a `group` field; on-disk layout `/Documents/Chats/<group>/<id>.json` with **back-compat migration** of existing flat files into the `assistant` group; a per-group active id (localStorage keyed by group); and group-scoped APIs (`useConversations(group)`, `useActiveConversationId(group)`, `new/select/delete` per group).
-- [ ] T004 Parameterize `src/components/agent/CopilotProvider.tsx` — accept `threadId`/`group` (and an optional pinned agent) instead of hardcoding the global active conversation; keep the `*Actions` registered inside.
-- [ ] T005 Key `src/components/agent/ChatPersistence.tsx` by `(group, threadId)` so each group persists to its own files. Restore MUST be **display-only and load-once** (core `FR-016`): load a thread at most once per open, claim it synchronously so the agent object's identity churn during a run does NOT re-trigger a load, and never re-load over an in-flight turn (re-issuing `setMessages` on a tool-call turn restarts the runtime → a re-render/remount loop).
+- [x] T003 Make `src/lib/agent/conversations.ts` **agentId-keyed**: remove the `group` field; conversations stored flat at `/Documents/Chats/<id>.json` (unchanged on disk — files carry `agentId` in their JSON); a per-agent active id (localStorage keyed as `bos.activeConversation.<agentId>`); agentId-scoped APIs (`useConversations(agentId)`, `useActiveConversationId(agentId)`, `new/select/delete` per agent); back-compat migration reads the legacy `group` field and maps it to `agentId` on load.
+- [x] T004 Parameterize `src/components/agent/CopilotProvider.tsx` — accept `agentId` only (no group); derive `threadId = activeByAgent[agentId]` internally; keep the `*Actions` registered inside.
+- [x] T005 Key `src/components/agent/ChatPersistence.tsx` by `agentId` so each agent's active conversation persists correctly. Restore MUST be **display-only and load-once** (core `FR-016`): load a thread at most once per open, claim it synchronously so the agent object's identity churn during a run does NOT re-trigger a load, and never re-load over an in-flight turn.
 
-**Checkpoint**: conversations partition by group; existing chats still load (migrated).
+**Checkpoint**: conversations partition by agentId; existing chats still load (migrated from group field).
 
 ---
 
 ## Phase 3: User Stories 1–3 — Embed, agent scope, chrome (P1)
 
-- [ ] T006 Add `src/components/agent/AssistantChat.tsx` — the embeddable surface: its own `CopilotProvider`, instructions composed for `agentId` (default = global active), `useChatPersistence` + `ChatToolRenderer`, and chrome props (`group`, `showConversations?`, `showInfo?`). Wrap the chat in a **per-surface card-collapse scope** (`FR-009`, core `FR-007`) so its event-card accordion is independent of other surfaces.
-- [ ] T007 Thread the embed's `agentId` to `/api/copilotkit` so `buildRuntimeOptions(agentId)` scopes MCP (a request header on the embed's `CopilotKit`, read in the route; fall back to `/api/copilotkit?agent=…` if per-provider headers aren't supported — confirm during build).
+- [x] T006 Add `src/components/agent/AssistantChat.tsx` — the embeddable surface: its own `CopilotProvider`, instructions composed for `agentId`, `useChatPersistence` + `ChatToolRenderer`, and chrome props (`showConversations?`, `showInfo?`, `allGroups?`). Wrap the chat in a **per-surface card-collapse scope** (`FR-009`, core `FR-007`) so its event-card accordion is independent of other surfaces.
+- [x] T007 Thread the embed's `agentId` to `/api/copilotkit` via the runtime URL (`/api/copilotkit?agent=…`) so `buildRuntimeOptions(agentId)` scopes MCP correctly.
 
 ---
 
 ## Phase 4: User Story 4 — Partitioned conversations UI (P1)
 
-- [ ] T008 `src/components/apps/assistant/ConversationPanel.tsx` — add a `group?` prop: unset → list **all** conversations **grouped/nested** (like Docs/Specs); set → only that group's conversations.
+- [x] T008 `src/components/apps/assistant/ConversationPanel.tsx` — `agentId?` prop: unset → list **all** conversations **nested by agent**; set → only that agent's conversations. In the all-agents view, `currentAgentId` constrains the highlight so exactly one conversation is active at a time (FR-010).
 
 ---
 
 ## Phase 5: User Story 5 — Assistant consumes the embed (P2)
 
-- [ ] T009 Refactor `src/apps/chat/index.tsx` to render `<AssistantChat group="assistant" showConversations showInfo />` (the reference consumer); remove the now-duplicated provider/chat wiring.
-- [ ] T009a **Remove the global `<CopilotKit>`/`CopilotProvider` from `src/app/page.tsx`.** Each chat surface (the Assistant app via `<AssistantChat>`, every embed) must be the sole top-level provider for its own sub-tree. This is REQUIRED, not optional: nested CopilotKit providers do NOT isolate, so leaving a global provider collapses all surfaces onto one runtime/thread (the shared-chat bug). Do this together with T006/T009 so a surface always has exactly one provider at every step.
+- [x] T009 Refactor `src/apps/chat/index.tsx` to render `<AssistantChat allGroups showConversations showInfo />` (the reference consumer); remove the now-duplicated provider/chat wiring.
+- [x] T009a **Remove the global `<CopilotKit>`/`CopilotProvider` from `src/app/page.tsx`.** Each chat surface (the Assistant app via `<AssistantChat>`, every embed) is the sole top-level provider for its own sub-tree. Nested CopilotKit providers do NOT isolate, so a global provider would collapse all surfaces onto one runtime/thread.
 
 ---
 
-## Phase 6: Polish & Cross-Cutting
+## Phase 6: agentId partition refactor (follow-up, 2026-07-05)
 
-- [ ] T010 [P] Docs: `docs/usage/assistant/*` + `docs/dev/assistant/*` for the embeddable assistant + conversation groups.
-- [ ] T011 [P] Tests: the existing desktop e2e (opens the Assistant) must still pass; add an embedded-chat smoke (full coverage lands with `013`, which provides a real embed). Add isolation guards: starting a new conversation in one surface MUST NOT appear in the other, and each surface's event-card accordion toggles independently. Add a restore guard: reopening a conversation with tool-call history appends nothing, starts no run, and its tool-card headers still toggle on click (core `FR-016`, `FR-007`).
-- [ ] T012 Run typecheck + lint to green; `/speckit.analyze` on `012`.
+- [x] T013 Remove `Conversation.group` entirely; replace `activeByGroup` with `activeByAgent` throughout; update all consumers (`CopilotProvider`, `AssistantChat`, `ChatPersistence`, `ConversationPanel`, `AgentSelector`, `SubAgentActions`, `GitActions`). Add migration in `readConversationFile`.
+- [x] T014 Fix double-highlight bug in all-agents `ConversationPanel`: constrain active indicator to `c.agentId === currentAgentId` (FR-010).
+- [x] T015 Add Build Studio agent configuration: Settings → Build Studio (agent picker); `GET/PATCH /api/config/build-studio`; Build Studio reads config on mount and passes `agentId` to `<AssistantChat>`.
+- [x] T016 [P] Update spec.md, plan.md, tasks.md, `docs/dev/build-studio.md`, `docs/dev/repository-and-data-layout.md` to reflect agentId-as-partition.
+
+---
+
+## Phase 7: Polish & Cross-Cutting
+
+- [x] T010 [P] Docs: `docs/usage/assistant/*` + `docs/dev/assistant/*` for the embeddable assistant + agentId-based conversation partitioning.
+- [ ] T011 [P] Tests: the existing desktop e2e (opens the Assistant) must still pass; add an embedded-chat smoke (full coverage lands with `013`, which provides a real embed). Add isolation guards: starting a new conversation in one surface MUST NOT appear in the other (unless same agentId), and each surface's event-card accordion toggles independently. Add a restore guard: reopening a conversation with tool-call history appends nothing, starts no run, and its tool-card headers still toggle on click (core `FR-016`, `FR-007`).
+- [x] T012 Run typecheck + lint to green; `/speckit.analyze` on `012`.
 
 ---
 
 ## Dependencies & Execution Order
 
-- **Setup (T001–T002)** → **Foundational (T003–T005, blocks everything)** → **Embed (T006–T007)** → **Conversations UI (T008)** → **Assistant consumer (T009)** → **Polish (T010–T012)**.
+- **Setup (T001–T002)** → **Foundational (T003–T005)** → **Embed (T006–T007)** → **Conversations UI (T008)** → **Assistant consumer (T009)** → **agentId refactor (T013–T016)** → **Polish (T010–T012)**.
 
 ## Implementation Strategy
 
-- **Highest risk is T003** (refactoring the conversation store). Land the back-compat migration first and keep the existing desktop e2e green throughout. Build the embed (T006) and only then flip the Assistant app to consume it (T009), so the app keeps working at every step.
+- **Highest risk was T003** (refactoring the conversation store). Landed back-compat migration first and kept the existing desktop e2e green throughout. The agentId-partition follow-up (T013) removed the group field entirely rather than patching around it — simpler model, no dual-field complexity.
 
 ## Notes
 
 - Each surface's OWN top-level CopilotKit provider (with NO global provider above it) is the mechanism for agent scoping and conversation partitioning. Nested CopilotKit providers do NOT isolate — an outer provider dominates inner ones (spec Clarifications + FR-006).
+- `agentId` is the sole partition key. A `group` field in old conversation JSON files is silently migrated to `agentId` on read and never written.
 - Per-embed *action* scoping is out of scope here (the `011` deferral in `TODO.md`).

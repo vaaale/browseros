@@ -69,18 +69,27 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json({ error: "agentId is required" }, { status: 400 });
     }
     if (typeof body.body === "string") {
-      await setAgentSystemPrompt(body.agentId, body.body);
+      const updated = await setAgentSystemPrompt(body.agentId, body.body);
+      if (!updated) {
+        return NextResponse.json({ error: `No agent found with id "${body.agentId}"` }, { status: 404 });
+      }
     }
     if (body.tools || body.skills || body.mcp || body.deferredTools) {
-      await setAgentCapabilities(body.agentId, {
+      const updated = await setAgentCapabilities(body.agentId, {
         tools: Array.isArray(body.tools) ? body.tools.map(String) : undefined,
         skills: Array.isArray(body.skills) ? body.skills.map(String) : undefined,
         mcp: Array.isArray(body.mcp) ? body.mcp.map(String) : undefined,
         deferredTools: Array.isArray(body.deferredTools) ? body.deferredTools.map(String) : undefined,
       });
+      if (!updated) {
+        return NextResponse.json({ error: `No agent found with id "${body.agentId}"` }, { status: 404 });
+      }
     }
     if (typeof body.useDefaultPrompt === "boolean") {
-      await setAgentUseDefaultPrompt(body.agentId, body.useDefaultPrompt);
+      const updated = await setAgentUseDefaultPrompt(body.agentId, body.useDefaultPrompt);
+      if (!updated) {
+        return NextResponse.json({ error: `No agent found with id "${body.agentId}"` }, { status: 404 });
+      }
     }
     return NextResponse.json({ ok: true });
   } catch (err) {

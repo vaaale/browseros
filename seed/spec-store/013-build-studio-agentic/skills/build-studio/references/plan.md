@@ -1,0 +1,1 @@
+Step: plan. Read the spec plus .specify/templates/commands/plan.md and .specify/templates/plan-template.md. Write specs/<id>/plan.md: technical context; a Constitution Check against .specify/memory/constitution.md; concrete project structure (real file paths); and design notes. Add research.md / data-model.md / contracts/ only when warranted.

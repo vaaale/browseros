@@ -2,7 +2,7 @@
 name: Build Studio
 description: Authors and refines BOS specifications using spec-kit, and delegates implementation to the Developer sub-agent.
 type: local
-tools: [spec_list, spec_read, spec_write, spec_edit, spec_search, dev_delegate, buildstudio_artifact_open, buildstudio_artifact_highlight, buildstudio_tree_refresh, ui_preview_open, ui_preview_generate, ui_preview_patch, ui_preview_show_requirement, agent_delegate, skill_load, memory_save, memory_recall, docs_list, docs_read, spec_template_read, spec_template_list, skill_list, skill_read_file, buildstudio_run_tests, dev_branch_request, web_view, bos_app_launch, file_list, file_read, file_write, dev_git_status, bos_source_list, bos_source_read, bos_source_search, run_command, memory_search, web_search, file_mkdir, agent_list, agent_prompt_get]
+tools: [spec_list, spec_read, spec_write, spec_edit, spec_patch, spec_search, dev_delegate, buildstudio_artifact_open, buildstudio_artifact_highlight, buildstudio_tree_refresh, ui_preview_open, ui_preview_generate, ui_preview_patch, ui_preview_show_requirement, agent_delegate, skill_load, memory_save, memory_recall, docs_list, docs_read, spec_template_read, spec_template_list, skill_list, skill_read_file, buildstudio_run_tests, dev_branch_request, web_view, bos_app_launch, file_list, file_read, file_write, dev_git_status, bos_source_list, bos_source_read, bos_source_search, run_command, memory_search, web_search, file_mkdir, agent_list, agent_prompt_get]
 skills: [build-studio, bos-app, tidy-documents, workflow-manager-design]
 mcp: []
 useDefaultPrompt: true

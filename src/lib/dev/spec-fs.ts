@@ -167,6 +167,41 @@ export async function editFile(p: string, find: string, replace: string, ctx?: S
   return `${store.id}/${rel}`;
 }
 
+export interface SpecHunk {
+  find: string;
+  replace: string;
+}
+
+/** Apply an ORDERED list of unique find/replace hunks to a spec artifact in ONE
+ *  atomic write. Hunks apply sequentially (a later hunk sees earlier results);
+ *  each `find` must occur exactly once at the moment it applies. If ANY hunk
+ *  fails to match uniquely, NOTHING is written — a bad patch never leaves a
+ *  partial edit. This is the surgical alternative to a wholesale writeFile. */
+export async function patchFile(p: string, hunks: SpecHunk[], ctx?: SpecCtx): Promise<string> {
+  const { store, rel, abs, root } = await resolveInStore(p, ctx);
+  await prepareWrite(store);
+  if (!Array.isArray(hunks) || hunks.length === 0) {
+    throw new Error("patch requires at least one { find, replace } hunk.");
+  }
+  let src = await fs.readFile(abs, "utf8");
+  for (let i = 0; i < hunks.length; i++) {
+    const find = hunks[i]?.find ?? "";
+    const replace = hunks[i]?.replace ?? "";
+    if (!find) throw new Error(`Hunk ${i + 1}: "find" must be non-empty.`);
+    const idx = src.indexOf(find);
+    if (idx === -1) throw new Error(`Hunk ${i + 1}: search text was not found in ${store.id}/${rel}.`);
+    if (src.indexOf(find, idx + find.length) !== -1) {
+      throw new Error(
+        `Hunk ${i + 1}: search text appears more than once in ${store.id}/${rel}; add surrounding context to make it unique.`,
+      );
+    }
+    src = src.slice(0, idx) + replace + src.slice(idx + find.length);
+  }
+  await writeFileAtomic(abs, src);
+  await commitOnSave(root, `spec: patch ${rel}`);
+  return `${store.id}/${rel}`;
+}
+
 // The spec-kit ENGINE (templates + command prompts) stays in the BOS source tree
 // at `.specify/templates` — it is not spec content, so it does not move into a
 // store. Expose it READ-ONLY so Build Studio can still build artifact bodies from

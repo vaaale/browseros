@@ -14,6 +14,11 @@ export interface Config {
   bosVolumeBaseHost: string;
   dataDir: string;
   bosNet: string;
+  /** UID/GID the BOS process runs as inside user containers. Passed as
+   *  BOS_UID / BOS_GID env vars; the entrypoint remaps the 'node' account and
+   *  drops privileges before starting the app. Unset = image default uid/gid 5000. */
+  containerUid?: number;
+  containerGid?: number;
   // Keycloak OIDC
   keycloakIssuer: string;
   keycloakClientId: string;
@@ -60,6 +65,8 @@ export function loadConfig(): Config {
     bosVolumeBaseHost: process.env.VOLUME_BASE_HOST ?? persisted.bosVolumeBaseHost ?? process.env.VOLUME_BASE ?? "/user-data",
     dataDir,
     bosNet: process.env.BOS_NET ?? "bos-net",
+    containerUid: process.env.CONTAINER_UID ? parseInt(process.env.CONTAINER_UID, 10) : undefined,
+    containerGid: process.env.CONTAINER_GID ? parseInt(process.env.CONTAINER_GID, 10) : undefined,
     keycloakIssuer: process.env.KEYCLOAK_ISSUER ?? "",
     keycloakClientId: process.env.KEYCLOAK_CLIENT_ID ?? "",
     keycloakClientSecret: process.env.KEYCLOAK_CLIENT_SECRET ?? "",

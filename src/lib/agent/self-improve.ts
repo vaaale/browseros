@@ -126,7 +126,7 @@ async function runSelfImprove(agentId: string, conversationId: string, trigger: 
     ].join("\n");
 
     log("info", "self-improve analyzing", { agentId, trigger: trigger.kind });
-    const result = await runToolLoop({ system: SELF_IMPROVE_SYSTEM, prompt, tools, maxSteps: 10 });
+    const result = await runToolLoop({ system: SELF_IMPROVE_SYSTEM, prompt, tools, maxSteps: 10, correlationId: conversationId });
 
     const summary = result.text.trim() || `Improved ${state.improvedSkills.length} skill(s).`;
     statusByConv.set(conversationId, { state: "done", startedAt: statusByConv.get(conversationId)?.startedAt ?? Date.now(), finishedAt: Date.now(), summary });

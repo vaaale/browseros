@@ -5,20 +5,28 @@ import { specsRoot } from "@/os/specs-dir";
 import { ensureRepo, commitAll } from "@/lib/gitfs/store";
 import { STORE_MANIFEST, type StoreManifest } from "@/lib/specs/stores";
 
-// Seed the built-in spec stores under BOS_SPECS_ROOT (018-external-spec-store).
-// The system store is seeded from a tracked bundle shipped with BOS, then kept in
-// sync ADDITIVELY (add missing specs on updates, never clobber local edits) — the
-// same idempotency discipline as seeded agents/skills. The user store is created
-// empty. Idempotent: safe to call on every startup.
+// Seed the built-in spec stores under specsRoot() (018-external-spec-store;
+// relocated to <dataDir>/specs by 027). The system store is seeded ADDITIVELY
+// from a tracked bundle (add missing specs on updates, never clobber in-flight
+// edits) and is READ-ONLY at runtime (Option B: system specs are source, edited
+// via the Developer agent). The user store is writable and backs the
+// Documents/Specs mount. Idempotent: safe to call on every startup.
+//
+// Migration (027 Phase 3): specsRoot() moved from <cwd>/specs to <dataDir>/specs.
+// On first boot in the new location we COPY legacy store content across
+// (non-destructively — the legacy dir is left intact as a fallback).
 
 const SEED_BUNDLE = path.join(process.cwd(), "seed", "spec-store");
+const LEGACY_ROOT = path.join(process.cwd(), "specs");
 const SYSTEM_STORE_ID = "bos-system-specs";
 const USER_STORE_ID = "user-specs";
+// Phase-2 fixed-layout artifacts that used the wrong ids; removed on migration.
+const STRAY_IDS = ["user", "system"];
 
 const SYSTEM_MANIFEST: StoreManifest = {
   label: "System specs",
   owner: "system",
-  writable: true,
+  writable: false, // Option B: read-only at runtime; edited as source via the Developer agent.
   requiresPromote: true,
 };
 const USER_MANIFEST: StoreManifest = {
@@ -42,7 +50,7 @@ async function writeManifest(dir: string, m: StoreManifest): Promise<void> {
 }
 
 /** Copy entries from `src` into `dst` that don't already exist in `dst` — additive,
- *  never overwriting a file the user may have edited. Skips `.git`/the manifest. */
+ *  never overwriting a file that may have been edited. Skips `.git`/the manifest. */
 async function copyMissing(src: string, dst: string): Promise<void> {
   const entries = await fs.readdir(src, { withFileTypes: true }).catch(() => [] as import("fs").Dirent[]);
   for (const e of entries) {
@@ -62,7 +70,7 @@ async function ensureSystemStore(dir: string): Promise<void> {
   const fresh = !(await pathExists(path.join(dir, ".git")));
   await ensureRepo(dir);
   if (await pathExists(SEED_BUNDLE)) await copyMissing(SEED_BUNDLE, dir);
-  if (!(await pathExists(path.join(dir, STORE_MANIFEST)))) await writeManifest(dir, SYSTEM_MANIFEST);
+  await writeManifest(dir, SYSTEM_MANIFEST); // read-only manifest (single source of truth)
   await commitAll(dir, fresh ? "seed system spec store" : "sync system specs");
 }
 
@@ -70,17 +78,43 @@ async function ensureUserStore(dir: string): Promise<void> {
   const fresh = !(await pathExists(path.join(dir, ".git")));
   await ensureRepo(dir);
   if (!(await pathExists(path.join(dir, STORE_MANIFEST)))) await writeManifest(dir, USER_MANIFEST);
-  if (fresh) await commitAll(dir, "init user spec store");
+  // Always commit — a pre-existing (non-fresh) repo may still have just received
+  // migrated content, which must be committed by the seed rather than left for
+  // the SpecFS startup sweep. commitAll no-ops when the tree is clean.
+  await commitAll(dir, fresh ? "init user spec store" : "sync user spec store");
 }
 
-/** Idempotently ensure the built-in system + user spec stores exist. Preview
- *  servers run with BOS_SPECS_SEED=0 (020): their spec root is a set of store
- *  WORKTREES on a feature branch, and a seed commit there would pollute it —
- *  seeding is base's job against the canonical stores. */
+/** NON-DESTRUCTIVE relocation of legacy <cwd>/specs/<id> content into the new
+ *  root. Uses additive copyMissing (never clobbers a diverged file), so it is
+ *  safe to run on every boot even if the destination store repo already exists —
+ *  which is exactly the case a pre-created-but-empty store hit. The legacy
+ *  directory is never modified or removed. */
+async function migrateLegacyStore(root: string, id: string): Promise<void> {
+  if (path.resolve(root) === path.resolve(LEGACY_ROOT)) return; // same location, nothing to do
+  const src = path.join(LEGACY_ROOT, id);
+  if (!(await pathExists(src))) return; // no legacy content
+  const dst = path.join(root, id);
+  await fs.mkdir(dst, { recursive: true });
+  await copyMissing(src, dst);
+}
+
+/** Idempotently ensure the built-in system + user spec stores exist under
+ *  specsRoot(). Preview servers run with BOS_SPECS_SEED=0 (020): their spec root
+ *  is a set of store WORKTREES on a feature branch, and a seed commit there would
+ *  pollute it — seeding is base's job against the canonical stores. */
 export async function ensureStores(): Promise<void> {
   if (process.env.BOS_SPECS_SEED === "0") return;
   const root = specsRoot();
   await fs.mkdir(root, { recursive: true });
+  // Remove Phase-2 fixed-layout artifacts (wrong ids) so discovery sees only the
+  // canonical stores.
+  for (const stray of STRAY_IDS) {
+    await fs.rm(path.join(root, stray), { recursive: true, force: true }).catch(() => {});
+  }
+  // Non-destructive legacy → new-root content migration.
+  await migrateLegacyStore(root, SYSTEM_STORE_ID);
+  await migrateLegacyStore(root, USER_STORE_ID);
+  // Seed / normalize both stores in place.
   await ensureSystemStore(path.join(root, SYSTEM_STORE_ID));
   await ensureUserStore(path.join(root, USER_STORE_ID));
 }

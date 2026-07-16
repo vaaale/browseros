@@ -65,6 +65,11 @@ next-env.d.ts
 # override with BOS_SPECS_ROOT. Gitignored so the nested store repos never
 # collide with the BOS source tree.
 /specs
+
+# The official marketplace is its OWN standalone git repo (registered by URL,
+# not compiled into BOS). Kept here for development; gitignored so it never
+# collides with the BOS source tree — push it to its own remote to publish.
+/bos-marketplace
 .memsearch
 
 # generated: built-in app registry (auto-discovered from src/apps/<id>/ by

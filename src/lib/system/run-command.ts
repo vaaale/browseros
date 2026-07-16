@@ -1,5 +1,5 @@
 import "server-only";
-import { spawn, execFile, execFileSync } from "node:child_process";
+import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
@@ -42,18 +42,25 @@ export interface RunResult {
   idleTimedOut?: boolean;
 }
 
-interface Volume {
-  hostPath: string;
-  mode: "ro" | "rw";
+export interface VfsMount {
+  /** VFS path, e.g. "/workspace" or "/Documents" */
+  vfsPath: string;
+  /** Path inside the sandbox, e.g. "/workspace" or "/Documents" */
+  containerPath: string;
+  mode: "rw" | "ro";
+  enabled: boolean;
 }
+
+export const DEFAULT_MOUNTS: VfsMount[] = [
+  { vfsPath: "/workspace", containerPath: "/workspace", mode: "rw", enabled: true },
+  { vfsPath: "/Documents", containerPath: "/Documents", mode: "rw", enabled: true },
+];
 
 interface RcConfig {
   enabled: boolean;
   backend: "local" | "docker";
   dockerImage: string;
-  /** VFS path mounted rw as /workspace (so files + outputs show up in Files). */
-  workspace: string;
-  volumes: Volume[];
+  vfsMounts: VfsMount[];
   network: boolean;
   idleTimeoutMs: number;
   maxTimeoutMs: number;
@@ -64,21 +71,22 @@ function positive(v: unknown, dflt: number): number {
   return Number.isFinite(n) && n > 0 ? n : dflt;
 }
 
-function parseVolumes(v: unknown): Volume[] {
-  if (typeof v !== "string") return [];
-  return v
-    .split("\n")
-    .map((l) => l.trim())
-    .filter(Boolean)
-    .map((line): Volume | null => {
-      const i = line.lastIndexOf(":");
-      const mode = i > 0 ? line.slice(i + 1).trim() : "";
-      if (i > 0 && (mode === "ro" || mode === "rw")) {
-        return { hostPath: line.slice(0, i).trim(), mode };
-      }
-      return { hostPath: line, mode: "ro" };
-    })
-    .filter((x): x is Volume => x !== null && x.hostPath.length > 0);
+function parseVfsMounts(raw: unknown): VfsMount[] {
+  if (!Array.isArray(raw) || raw.length === 0) return DEFAULT_MOUNTS;
+  const mounts: VfsMount[] = [];
+  for (const item of raw) {
+    if (
+      item &&
+      typeof item === "object" &&
+      typeof item.vfsPath === "string" &&
+      typeof item.containerPath === "string" &&
+      (item.mode === "rw" || item.mode === "ro") &&
+      typeof item.enabled === "boolean"
+    ) {
+      mounts.push(item as VfsMount);
+    }
+  }
+  return mounts.length > 0 ? mounts : DEFAULT_MOUNTS;
 }
 
 export async function loadRcConfig(): Promise<RcConfig> {
@@ -91,12 +99,24 @@ export async function loadRcConfig(): Promise<RcConfig> {
     enabled: s.enabled === true,
     backend,
     dockerImage: typeof s.dockerImage === "string" && s.dockerImage.trim() ? s.dockerImage.trim() : "browseros/run-command:latest",
-    workspace: typeof s.workspace === "string" && s.workspace.trim() ? s.workspace.trim() : "/workspace",
-    volumes: parseVolumes(s.volumes),
+    vfsMounts: parseVfsMounts(s.vfsMounts),
     network: s.network === true,
     idleTimeoutMs: positive(s.idleTimeoutSec, DEFAULT_IDLE_SEC) * 1000,
     maxTimeoutMs: positive(s.maxTimeoutSec, DEFAULT_MAX_SEC) * 1000,
   };
+}
+
+/**
+ * The uid:gid the run_command sandbox container runs as, matching THIS
+ * process's own live uid/gid — which, inside the browseros container, is the
+ * "user" account docker-entrypoint.sh creates from CONTAINER_UID/CONTAINER_GID
+ * (the host user's ids). Passed as a numeric --user, so no matching account
+ * needs to exist inside the sandbox image itself.
+ */
+function sandboxUser(): string {
+  const uid = process.getuid?.() ?? 1000;
+  const gid = process.getgid?.() ?? 1000;
+  return `${uid}:${gid}`;
 }
 
 function argvFor(language: RunLanguage, command: string): string[] {
@@ -128,124 +148,84 @@ function runChild(
   args: string[],
   o: { cwd?: string; idleMs: number; maxMs: number; backend: string },
 ): Promise<RunResult> {
-  const started = Date.now();
-  return new Promise<RunResult>((resolve) => {
-    const child = spawn(prog, args, { cwd: o.cwd, env: process.env });
-    const chunks: Buffer[] = [];
-    let bytes = 0;
-    let idleHit = false;
-    let maxHit = false;
-    let settled = false;
+  return new Promise((resolve) => {
+    const start = Date.now();
+    const child = spawn(prog, args, {
+      cwd: o.cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env },
+    });
 
-    const kill = () => {
-      try {
-        child.kill("SIGTERM");
-      } catch {
-        /* ignore */
-      }
-      setTimeout(() => {
-        try {
-          child.kill("SIGKILL");
-        } catch {
-          /* ignore */
-        }
-      }, 2_000).unref();
-    };
+    let buf = Buffer.alloc(0);
+    let timedOut = false;
+    let idleTimedOut = false;
 
-    let idleTimer: NodeJS.Timeout;
-    const resetIdle = () => {
+    const finish = (exitCode: number | null) => {
+      clearTimeout(maxTimer);
       clearTimeout(idleTimer);
-      idleTimer = setTimeout(() => {
-        idleHit = true;
-        kill();
-      }, o.idleMs);
+      resolve({
+        ok: exitCode === 0 && !timedOut && !idleTimedOut,
+        exitCode,
+        output: truncateTail(buf),
+        durationMs: Date.now() - start,
+        backend: o.backend,
+        timedOut,
+        idleTimedOut,
+      });
     };
+
+    let idleTimer = setTimeout(() => {
+      idleTimedOut = true;
+      child.kill("SIGKILL");
+    }, o.idleMs);
+
     const maxTimer = setTimeout(() => {
-      maxHit = true;
-      kill();
+      timedOut = true;
+      child.kill("SIGKILL");
     }, o.maxMs);
 
-    const onData = (d: Buffer) => {
-      const remaining = MAX_COLLECT_BYTES - bytes;
-      if (remaining > 0) {
-        const slice = d.length <= remaining ? d : d.subarray(0, remaining);
-        chunks.push(slice);
-        bytes += slice.length;
-        if (d.length > remaining) kill();
+    const onData = (chunk: Buffer) => {
+      clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        idleTimedOut = true;
+        child.kill("SIGKILL");
+      }, o.idleMs);
+      if (buf.length < MAX_COLLECT_BYTES) {
+        buf = Buffer.concat([buf, chunk]);
       }
-      resetIdle();
     };
+
     child.stdout.on("data", onData);
     child.stderr.on("data", onData);
-    resetIdle();
-
-    const finish = (r: RunResult) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(idleTimer);
-      clearTimeout(maxTimer);
-      resolve(r);
-    };
-
-    child.on("error", (err) =>
-      finish({ ok: false, exitCode: null, output: (err as Error).message, durationMs: Date.now() - started, backend: o.backend }),
-    );
-    child.on("close", (code) => {
-      let output = truncateTail(Buffer.concat(chunks));
-      if (idleHit) output += `\n[killed: no output for ${o.idleMs}ms]`;
-      if (maxHit) output += `\n[killed: exceeded ${o.maxMs}ms]`;
-      finish({
-        ok: code === 0 && !idleHit && !maxHit,
-        exitCode: code,
-        output,
-        durationMs: Date.now() - started,
-        backend: o.backend,
-        timedOut: maxHit || undefined,
-        idleTimedOut: idleHit || undefined,
-      });
-    });
+    child.on("close", finish);
+    child.on("error", () => finish(null));
   });
 }
 
-// --- Docker backend: one long-lived container per (session, agent) ---
-
-interface ContainerEntry {
-  name: string;
-  lastUsed: number;
+// ── Global container registry (survives hot-reloads via globalThis) ──────────
+declare global {
+  // eslint-disable-next-line no-var
+  var __bosRcContainers: Map<string, { name: string; lastUsed: number }> | undefined;
+  // eslint-disable-next-line no-var
+  var __bosRcReaper: ReturnType<typeof setInterval> | undefined;
+  // eslint-disable-next-line no-var
+  var __bosRcShutdown: boolean | undefined;
 }
-// Persist the container registry across dev hot-reloads.
-const g = globalThis as unknown as {
-  __bosRcContainers?: Map<string, ContainerEntry>;
-  __bosRcReaper?: NodeJS.Timeout;
-  __bosRcHooks?: boolean;
+const g = globalThis as typeof globalThis & {
+  __bosRcContainers?: Map<string, { name: string; lastUsed: number }>;
+  __bosRcReaper?: ReturnType<typeof setInterval>;
+  __bosRcShutdown?: boolean;
 };
-const containers: Map<string, ContainerEntry> = (g.__bosRcContainers ??= new Map());
+if (!g.__bosRcContainers) g.__bosRcContainers = new Map();
+const containers = g.__bosRcContainers;
 
-// Tear down sandbox containers when the server process exits. Registered once,
-// lazily (only after the docker backend is first used). Signal handlers use the
-// SYNC docker CLI so cleanup completes before the process terminates.
-function installShutdownHooks(): void {
-  if (g.__bosRcHooks) return;
-  g.__bosRcHooks = true;
-  const syncCleanup = () => {
-    for (const c of containers.values()) {
-      try {
-        execFileSync("docker", ["rm", "-f", c.name], { stdio: "ignore" });
-      } catch {
-        /* ignore */
-      }
-    }
-    containers.clear();
-  };
-  process.once("SIGTERM", () => {
-    syncCleanup();
-    process.exit(0);
-  });
-  process.once("SIGINT", () => {
-    syncCleanup();
-    process.exit(0);
-  });
-  process.once("exit", syncCleanup);
+function installShutdownHooks() {
+  if (g.__bosRcShutdown) return;
+  g.__bosRcShutdown = true;
+  const cleanup = () => { void shutdownRunCommand(); };
+  process.once("SIGTERM", cleanup);
+  process.once("SIGINT", cleanup);
+  process.once("exit", cleanup);
 }
 
 function containerName(sessionKey: string): string {
@@ -292,25 +272,28 @@ async function ensureContainer(cfg: RcConfig, sessionKey: string): Promise<strin
     return name;
   }
   containers.delete(sessionKey);
-  const workspaceHost = hostPath(cfg.workspace);
-  await fs.mkdir(workspaceHost, { recursive: true });
   await execFileP("docker", ["rm", "-f", name]).catch(() => {}); // clear any stale container
+
+  // Build volume flags from enabled mounts; ensure each VFS dir exists on the host.
+  const volumeArgs: string[] = [];
+  for (const mount of cfg.vfsMounts.filter((m) => m.enabled)) {
+    const hp = hostPath(mount.vfsPath);
+    await fs.mkdir(hp, { recursive: true }).catch(() => {});
+    volumeArgs.push("-v", `${hp}:${mount.containerPath}:${mount.mode}`);
+  }
+
   const args = [
     "run", "-d", "--name", name,
     "--label", CONTAINER_LABEL,
     "--workdir", "/workspace",
-    "-v", `${workspaceHost}:/workspace:rw`,
-    "--user", "1000:1000",
+    "--user", sandboxUser(),
     "--cap-drop", "ALL",
     "--security-opt", "no-new-privileges",
     "--pids-limit", "512",
     "--memory", "2g",
-    // NOT --read-only: the agent legitimately writes to the venv (pip install),
-    // node_modules, etc. Non-root uid 1000 still can't touch root-owned system
-    // files, so system tampering is prevented regardless.
     "--tmpfs", "/tmp:rw,exec,size=512m",
     ...(cfg.network ? [] : ["--network", "none"]),
-    ...cfg.volumes.flatMap((v) => ["-v", `${v.hostPath}:${v.hostPath}:${v.mode}`]),
+    ...volumeArgs,
     cfg.dockerImage,
     "sleep", "infinity",
   ];
@@ -319,6 +302,32 @@ async function ensureContainer(cfg: RcConfig, sessionKey: string): Promise<strin
   scheduleReaper();
   installShutdownHooks();
   return name;
+}
+
+/**
+ * Sync VFS mount symlinks for the local backend.
+ * Uses `sudo /usr/local/bin/bos-vfs-link` (narrow sudoers entry) so the
+ * non-root bos process can create/remove symlinks at absolute paths.
+ * All errors are non-fatal — commands still run even if a symlink fails.
+ */
+async function syncLocalSymlinks(mounts: VfsMount[]): Promise<void> {
+  for (const mount of mounts) {
+    const target = hostPath(mount.vfsPath);
+    const link = mount.containerPath;
+    if (mount.enabled) {
+      await fs.mkdir(target, { recursive: true }).catch(() => {});
+      // Only call sudo if the symlink doesn't already point to the right place.
+      const existing = await fs.readlink(link).catch(() => null);
+      if (existing !== target) {
+        await execFileP("sudo", ["/usr/local/bin/bos-vfs-link", "add", link, target]).catch(() => {});
+      }
+    } else {
+      const st = await fs.lstat(link).catch(() => null);
+      if (st?.isSymbolicLink()) {
+        await execFileP("sudo", ["/usr/local/bin/bos-vfs-link", "remove", link]).catch(() => {});
+      }
+    }
+  }
 }
 
 /** Run one command in the (session, agent) sandbox. Never throws.
@@ -341,12 +350,14 @@ export async function runCommand(opts: {
   const maxMs = Math.min(positive(opts.timeoutMs, cfg.maxTimeoutMs), cfg.maxTimeoutMs);
   const [prog, ...args] = argvFor(language, opts.command);
 
-  // The workspace: a VFS-backed folder that is the CWD (local) or bind-mounted at
-  // /workspace (docker). Because it's in the VFS, files the agent writes and
-  // command outputs show up in the Files app, and file_write to the same path
-  // targets the same bytes the sandbox sees.
-  const workspaceHost = hostPath(cfg.workspace);
+  // Resolve workspace: the mount whose containerPath is "/workspace".
+  // Files the agent writes and command outputs show up in the Files app because
+  // the workspace vfsPath is VFS-backed.
+  const workspaceMount = cfg.vfsMounts.find((m) => m.containerPath === "/workspace" && m.enabled);
+  const workspaceVfsPath = workspaceMount?.vfsPath ?? "/workspace";
+  const workspaceHost = hostPath(workspaceVfsPath);
   await fs.mkdir(workspaceHost, { recursive: true }).catch(() => {});
+
   if (opts.skill) {
     const staged = await stageSkillFiles(opts.skill, workspaceHost).catch(() => false);
     if (!staged) {
@@ -367,7 +378,8 @@ export async function runCommand(opts: {
     return runChild("docker", ["exec", "-i", name, prog, ...args], { idleMs: cfg.idleTimeoutMs, maxMs, backend: "docker" });
   }
 
-  // local backend
+  // Local backend: sync VFS symlinks so absolute paths like /Documents resolve.
+  await syncLocalSymlinks(cfg.vfsMounts);
   return runChild(prog, args, { cwd: workspaceHost, idleMs: cfg.idleTimeoutMs, maxMs, backend: "local" });
 }
 

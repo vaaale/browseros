@@ -5,11 +5,17 @@
 ```
 seed/spec-store/                 Shipped bundle that seeds the system spec store (018)
 .specify/templates/              spec-kit ENGINE (templates + command prompts) — stays in source
-/specs  (BOS_SPECS_ROOT)         External spec stores — GITIGNORED, not tracked; seeded at runtime:
-  bos-system-specs/              BOS-owned system store (own git repo + spec-store.json);
-                                 holds NNN-feature specs, overview.md, discrepancies.md,
-                                 and .specify/memory/constitution.md
-  user-specs/                    User-owned store (own git repo)
+data/specs/  (BOS_SPECS_ROOT)    External spec stores — GITIGNORED, not tracked; seeded at
+                                 runtime. Relocated from <cwd>/specs to <dataDir>/specs by 027
+                                 so user specs live in the per-user data volume (survive a VFS
+                                 wipe, isolated per user). Overridable via BOS_SPECS_ROOT — the
+                                 Supervisor sets it to a preview's <worktree>/specs (020).
+  bos-system-specs/              BOS-owned system store — READ-ONLY at runtime (Option B, 027):
+                                 seeded/synced from seed/spec-store/; edited as SOURCE via the
+                                 Developer agent. Holds NNN-feature specs, overview.md,
+                                 discrepancies.md, .specify/memory/constitution.md
+  user-specs/                    User-owned, writable store (own git repo); backs the
+                                 Documents/Specs VFS mount (027 SpecFS)
 docs/
   usage/                        End-user documentation (this guide's user half)
   dev/                          Developer/agent documentation (this tree)
@@ -93,6 +99,7 @@ apps/                           Installed apps — standalone git repo (GitFS), 
 | Path | Contents |
 |---|---|
 | `data/vfs/` | The user VFS (Documents, Pictures, Desktop). Chat history at `data/vfs/Documents/Chats/<id>.json` — each file carries `agentId` (the sole partition key), `title`, `createdAt`, optional `activeFeatureBranch`, and the message array. Old files with a `group` field are migrated to `agentId` on first read. Active conversation per agent is tracked in `localStorage` as `bos.activeConversation.<agentId>`. Workflows at `data/vfs/Workflows/`. |
+| `data/specs/` | External spec stores (`BOS_SPECS_ROOT`, 027). `bos-system-specs/` (read-only, seeded from `seed/spec-store/`) + `user-specs/` (writable, backs the `Documents/Specs` SpecFS mount). `.worktrees/` holds SpecFS self-provisioned feature-branch worktrees. |
 | `data/settings.json` | OS settings (wallpaper, accent, theme). |
 | `data/config/<ns>.json` | Generic per‑namespace config (e.g. `dev-harness`, `browser-automation`, `datafs`, `assistant`, `build-studio`). |
 | `data/provider.json` | AI provider config incl. the API key — **masked** in API responses. |
@@ -122,7 +129,7 @@ apps are discovered by listing the directory. See
 |---|---|---|
 | `BOS_DATA_DIR` | Runtime‑state root | `<cwd>/data` |
 | `BOS_APPS_DIR` | Installed‑apps (GitFS) root | `<cwd>/apps` |
-| `BOS_SPECS_ROOT` | Spec-store container root. The Supervisor sets it explicitly per version (020): previews → `<worktree>/specs` (store worktrees on the feature branch), base → the canonical root | `<cwd>/specs` |
+| `BOS_SPECS_ROOT` | Spec-store container root. The Supervisor sets it explicitly per version (020): previews → `<worktree>/specs` (store worktrees on the feature branch), base → the canonical root | `<dataDir>/specs` |
 | `BOS_SPECS_SEED` | `0` disables store seeding (set by the Supervisor for previews — seeding is base's job) | — |
 | `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` | Seed the default provider | — |
 | `BOS_AGENT_MODEL` | Seed the default model | `claude-sonnet-4-6` |

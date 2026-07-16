@@ -558,7 +558,7 @@ async function renderAgentPreamble(agentId: string): Promise<string> {
 
 async function consolidateEpisode(ep: Episode, tools: Record<string, LlmTool>, preamble: string): Promise<void> {
   const prompt = `${preamble}\n\n---\n\nPending episode to consolidate:\n\n${renderEpisodeForPrompt(ep)}`;
-  await runToolLoop({ system: SLOW_LOOP_SYSTEM_PROMPT, prompt, tools, maxSteps: 12 });
+  await runToolLoop({ system: SLOW_LOOP_SYSTEM_PROMPT, prompt, tools, maxSteps: 12, correlationId: ep.meta.conversationId });
 }
 
 function renderEpisodeForPrompt(ep: Episode): string {
