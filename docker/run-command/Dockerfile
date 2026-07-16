@@ -6,8 +6,14 @@
 #   - LibreOffice (soffice) + poppler (pdftoppm)   (document -> pdf -> image)
 #   - common fonts
 #
-# Runs as non-root uid 1000 to match the executor's `--user 1000:1000`. The
-# executor bind-mounts a per-(session,agent) host dir at /workspace (rw) and runs
+# Runs as an ARBITRARY uid:gid, chosen at container-creation time by the
+# executor (`--user $CONTAINER_UID:$CONTAINER_GID`, numeric — matches the host
+# user so bind-mounted files don't end up owned by a foreign uid). No account
+# is created for this identity; Docker doesn't require one for a numeric
+# --user. Because the uid is unknown at build time, every writable path below
+# is made world-writable instead of chown'd to a fixed id.
+#
+# The executor bind-mounts a per-(session,agent) host dir at /workspace (rw) and runs
 # commands via `docker exec`; when a skill is used its files are staged INTO
 # /workspace so SKILL.md's relative paths (e.g. `python scripts/office/unpack.py`)
 # resolve verbatim.
@@ -28,13 +34,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Python tooling lives in a virtualenv, NOT the system interpreter. On Debian the
 # system Python is "externally managed" (PEP 668), so `pip install` there fails
 # unless forced — the exact error agents hit. A venv on PATH makes python/pip/
-# ipython resolve to it, so plain `pip install <pkg>` just works at runtime. The
-# venv is owned by uid 1000 (the sandbox user) so runtime installs can write to it.
+# ipython resolve to it, so plain `pip install <pkg>` just works at runtime.
+# World-writable (not chown'd) since the runtime uid is arbitrary and unknown here.
 ENV VIRTUAL_ENV=/opt/venv
 RUN python3 -m venv "$VIRTUAL_ENV"
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 RUN pip install --no-cache-dir ipython "markitdown[all]" Pillow python-pptx docx \
- && chown -R 1000:1000 "$VIRTUAL_ENV"
+ && chmod -R a+rwX "$VIRTUAL_ENV"
 
 RUN npm install -g pptxgenjs docx xlsx-populate
 
@@ -43,10 +49,10 @@ RUN npm install -g pptxgenjs docx xlsx-populate
 ENV NODE_PATH=/usr/local/lib/node_modules
 ENV PYTHONUNBUFFERED=1
 
-# node:22-bookworm already ships a uid 1000 user; just make /workspace writable.
-RUN mkdir -p /workspace && chown 1000:1000 /workspace
+# /workspace is world-writable for the same reason — the executor's --user is
+# only known at `docker run` time, not at build time.
+RUN mkdir -p /workspace && chmod a+rwX /workspace
 WORKDIR /workspace
-USER 1000:1000
 
-# Kept alive by the executor; commands run via `docker exec`.
+# Kept alive by the executor; commands run via `docker exec --user $CONTAINER_UID:$CONTAINER_GID`.
 CMD ["sleep", "infinity"]

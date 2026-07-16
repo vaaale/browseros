@@ -109,7 +109,7 @@ async function anthropicTurn(c: ProviderConfig, opts: TurnOpts): Promise<TurnRes
       })),
       stream: true,
     },
-    { signal: opts.signal, headers: { "X-Correlation-Id": opts.conversationId } },
+    { signal: opts.signal, headers: { "X-Correlation-Id": opts.runId } },
   );
 
   let text = "";
@@ -210,7 +210,7 @@ async function openaiChatTurn(c: ProviderConfig, opts: TurnOpts): Promise<TurnRe
       stream: true,
       ...openaiTokenParam(c),
     },
-    { signal: opts.signal, headers: { "X-Correlation-Id": opts.conversationId } },
+    { signal: opts.signal, headers: { "X-Correlation-Id": opts.runId } },
   );
 
   let text = "";
@@ -290,7 +290,7 @@ async function responsesTurn(c: ProviderConfig, opts: TurnOpts): Promise<TurnRes
       })) as never,
       ...(c.maxTokens && c.maxTokens > 0 ? { max_output_tokens: c.maxTokens } : {}),
     } as Parameters<typeof client.responses.create>[0],
-    { signal: opts.signal, headers: { "X-Correlation-Id": opts.conversationId } },
+    { signal: opts.signal, headers: { "X-Correlation-Id": opts.runId } },
   ) as unknown as Promise<Record<string, unknown>>);
 
   const output = ((res.output as unknown[]) ?? []).map((i) => i as Record<string, unknown>);

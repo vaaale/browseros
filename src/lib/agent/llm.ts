@@ -42,6 +42,12 @@ function openaiClient(c: ProviderConfig): OpenAI {
   return new OpenAI({ apiKey, baseURL });
 }
 
+/** Per-request options carrying X-Correlation-Id when a caller has an
+ *  identifier (conversationId, runId, loop-run id, ...) worth tracing by. */
+function correlationOpts(correlationId?: string): { headers: Record<string, string> } | Record<string, never> {
+  return correlationId ? { headers: { "X-Correlation-Id": correlationId } } : {};
+}
+
 function extractResponsesText(output: unknown[]): string {
   return output
     .filter((item) => (item as Record<string, unknown>).type === "message")
@@ -56,14 +62,18 @@ async function openaiResponsesComplete(
   system: string | undefined,
   prompt: string,
   maxTokens: number | undefined,
+  correlationId?: string,
 ): Promise<string> {
   const client = openaiClient(c);
-  const res = await (client.responses.create({
-    model: c.model,
-    input: prompt,
-    ...(system ? { instructions: system } : {}),
-    ...(maxTokens && maxTokens > 0 ? { max_output_tokens: maxTokens } : {}),
-  } as Parameters<typeof client.responses.create>[0]) as unknown as Promise<Record<string, unknown>>);
+  const res = await (client.responses.create(
+    {
+      model: c.model,
+      input: prompt,
+      ...(system ? { instructions: system } : {}),
+      ...(maxTokens && maxTokens > 0 ? { max_output_tokens: maxTokens } : {}),
+    } as Parameters<typeof client.responses.create>[0],
+    correlationOpts(correlationId),
+  ) as unknown as Promise<Record<string, unknown>>);
   return extractResponsesText(res.output as unknown[]);
 }
 
@@ -80,6 +90,7 @@ async function openaiResponsesToolLoop(
   onEvent?: (e: ToolEvent) => void,
   hiddenIds?: Set<string>,
   revealed?: Set<string>,
+  correlationId?: string,
 ): Promise<ToolLoopResult> {
   const client = openaiClient(c);
   const revealedSet = revealed ?? new Set<string>();
@@ -100,13 +111,16 @@ async function openaiResponsesToolLoop(
         parameters: t.parameters,
       }));
 
-    const res = await (client.responses.create({
-      model: c.model,
-      instructions: system,
-      input: input as Parameters<typeof client.responses.create>[0]["input"],
-      tools: toolSchemas as Parameters<typeof client.responses.create>[0]["tools"],
-      ...(c.maxTokens && c.maxTokens > 0 ? { max_output_tokens: c.maxTokens } : {}),
-    } as Parameters<typeof client.responses.create>[0]) as unknown as Promise<Record<string, unknown>>);
+    const res = await (client.responses.create(
+      {
+        model: c.model,
+        instructions: system,
+        input: input as Parameters<typeof client.responses.create>[0]["input"],
+        tools: toolSchemas as Parameters<typeof client.responses.create>[0]["tools"],
+        ...(c.maxTokens && c.maxTokens > 0 ? { max_output_tokens: c.maxTokens } : {}),
+      } as Parameters<typeof client.responses.create>[0],
+      correlationOpts(correlationId),
+    ) as unknown as Promise<Record<string, unknown>>);
 
     const output = (res.output as unknown[]).map((i) => i as Record<string, unknown>);
     const fnCalls = output.filter((item) => item.type === "function_call");
@@ -144,23 +158,26 @@ async function openaiResponsesToolLoop(
 }
 
 /** A single, non-tool completion. */
-export async function complete(opts: { system?: string; prompt: string; maxTokens?: number }): Promise<string> {
+export async function complete(opts: { system?: string; prompt: string; maxTokens?: number; correlationId?: string }): Promise<string> {
   const c = await getProviderConfig();
   const maxTokens = opts.maxTokens ?? c.maxTokens;
 
   if (familyOf(c.provider) === "anthropic") {
     // Anthropic requires `max_tokens` — fall back to a sensible default when unset.
-    const res = await anthropicClient(c).messages.create({
-      model: c.model,
-      max_tokens: maxTokens ?? DEFAULT_MAX_TOKENS,
-      system: opts.system ? [{ type: "text", text: opts.system }] : undefined,
-      messages: [{ role: "user", content: opts.prompt }],
-    });
+    const res = await anthropicClient(c).messages.create(
+      {
+        model: c.model,
+        max_tokens: maxTokens ?? DEFAULT_MAX_TOKENS,
+        system: opts.system ? [{ type: "text", text: opts.system }] : undefined,
+        messages: [{ role: "user", content: opts.prompt }],
+      },
+      correlationOpts(opts.correlationId),
+    );
     return res.content.filter((b): b is Anthropic.TextBlock => b.type === "text").map((b) => b.text).join("");
   }
 
   if (c.provider === "openai-responses") {
-    return openaiResponsesComplete(c, opts.system, opts.prompt, maxTokens);
+    return openaiResponsesComplete(c, opts.system, opts.prompt, maxTokens, opts.correlationId);
   }
 
   const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [];
@@ -172,12 +189,15 @@ export async function complete(opts: { system?: string; prompt: string; maxToken
   // (`HPE_UNEXPECTED_CONTENT_LENGTH`), surfacing as an opaque "Connection error".
   // The chunked streaming response has no such framing, so it parses cleanly — this
   // is the same path the chat proxy already uses successfully against those servers.
-  const stream = await openaiClient(c).chat.completions.create({
-    model: c.model,
-    messages,
-    stream: true,
-    ...openaiTokenParam(c, maxTokens),
-  });
+  const stream = await openaiClient(c).chat.completions.create(
+    {
+      model: c.model,
+      messages,
+      stream: true,
+      ...openaiTokenParam(c, maxTokens),
+    },
+    correlationOpts(opts.correlationId),
+  );
   let content = "";
   let reasoning = "";
   for await (const chunk of stream) {
@@ -204,6 +224,7 @@ async function anthropicToolLoop(
   onEvent?: (e: ToolEvent) => void,
   hiddenIds?: Set<string>,
   revealed?: Set<string>,
+  correlationId?: string,
 ): Promise<ToolLoopResult> {
   const client = anthropicClient(c);
   const revealedSet = revealed ?? new Set<string>();
@@ -219,13 +240,16 @@ async function anthropicToolLoop(
         input_schema: t.parameters as Anthropic.Tool.InputSchema,
       }));
 
-    const res = await client.messages.create({
-      model: c.model,
-      max_tokens: c.maxTokens ?? DEFAULT_MAX_TOKENS,
-      system: [{ type: "text", text: system, cache_control: { type: "ephemeral" } }],
-      messages,
-      tools: toolSchemas,
-    });
+    const res = await client.messages.create(
+      {
+        model: c.model,
+        max_tokens: c.maxTokens ?? DEFAULT_MAX_TOKENS,
+        system: [{ type: "text", text: system, cache_control: { type: "ephemeral" } }],
+        messages,
+        tools: toolSchemas,
+      },
+      correlationOpts(correlationId),
+    );
     if (res.stop_reason === "tool_use") {
       const results: Anthropic.ToolResultBlockParam[] = [];
       for (const block of res.content) {
@@ -264,6 +288,7 @@ async function openaiToolLoop(
   onEvent?: (e: ToolEvent) => void,
   hiddenIds?: Set<string>,
   revealed?: Set<string>,
+  correlationId?: string,
 ): Promise<ToolLoopResult> {
   const client = openaiClient(c);
   const revealedSet = revealed ?? new Set<string>();
@@ -285,13 +310,16 @@ async function openaiToolLoop(
     // rationale as `complete()`: some OpenAI-compatible servers frame
     // non-streaming responses with a Content-Length that Node's `undici`
     // parser rejects (`HPE_UNEXPECTED_CONTENT_LENGTH`).
-    const stream = await client.chat.completions.create({
-      model: c.model,
-      messages,
-      tools: toolSchemas,
-      stream: true,
-      ...openaiTokenParam(c, c.maxTokens),
-    });
+    const stream = await client.chat.completions.create(
+      {
+        model: c.model,
+        messages,
+        tools: toolSchemas,
+        stream: true,
+        ...openaiTokenParam(c, c.maxTokens),
+      },
+      correlationOpts(correlationId),
+    );
     let content = "";
     let reasoning = "";
     const toolCallsAcc: OpenAI.Chat.Completions.ChatCompletionMessageFunctionToolCall[] = [];
@@ -387,12 +415,15 @@ export async function runToolLoop(opts: {
   onEvent?: (e: ToolEvent) => void;
   hiddenIds?: Set<string>;
   revealed?: Set<string>;
+  /** Sent as X-Correlation-Id on every LLM call in this loop, when the caller
+   *  has an identifier worth tracing by (conversationId, runId, ...). */
+  correlationId?: string;
 }): Promise<ToolLoopResult> {
   const c = await getProviderConfig();
   const maxSteps = opts.maxSteps ?? MAX_STEPS;
   if (familyOf(c.provider) === "anthropic")
-    return anthropicToolLoop(c, opts.system, opts.prompt, opts.tools, maxSteps, opts.onEvent, opts.hiddenIds, opts.revealed);
+    return anthropicToolLoop(c, opts.system, opts.prompt, opts.tools, maxSteps, opts.onEvent, opts.hiddenIds, opts.revealed, opts.correlationId);
   if (c.provider === "openai-responses")
-    return openaiResponsesToolLoop(c, opts.system, opts.prompt, opts.tools, maxSteps, opts.onEvent, opts.hiddenIds, opts.revealed);
-  return openaiToolLoop(c, opts.system, opts.prompt, opts.tools, maxSteps, opts.onEvent, opts.hiddenIds, opts.revealed);
+    return openaiResponsesToolLoop(c, opts.system, opts.prompt, opts.tools, maxSteps, opts.onEvent, opts.hiddenIds, opts.revealed, opts.correlationId);
+  return openaiToolLoop(c, opts.system, opts.prompt, opts.tools, maxSteps, opts.onEvent, opts.hiddenIds, opts.revealed, opts.correlationId);
 }

@@ -15,8 +15,8 @@ export interface Config {
   dataDir: string;
   bosNet: string;
   /** UID/GID the BOS process runs as inside user containers. Passed as
-   *  BOS_UID / BOS_GID env vars; the entrypoint remaps the 'bos' user and
-   *  drops privileges before starting the app. Unset = default UID 1000. */
+   *  BOS_UID / BOS_GID env vars; the entrypoint remaps the 'node' account and
+   *  drops privileges before starting the app. Unset = image default uid/gid 5000. */
   containerUid?: number;
   containerGid?: number;
   // Keycloak OIDC

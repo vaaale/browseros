@@ -22,11 +22,11 @@ export function webSearchTools(): Record<string, AssistantTool> {
         },
         ["query"],
       ),
-      async (input) => {
+      async (input, ctx) => {
         if (!(await isNativeWebSearchAvailable())) {
           return "Error: web_search: not available for the current provider — native web search needs an Anthropic or OpenAI provider with an API key (Settings → AI Provider). Answer from your own knowledge or ask the user to switch providers.";
         }
-        const result = await webSearch(input as unknown as WebSearchInput);
+        const result = await webSearch(input as unknown as WebSearchInput, ctx.runId);
         const lines = [`Web search results for: ${result.query}`];
         if (result.text) lines.push("", result.text);
         if (result.hits.length) {

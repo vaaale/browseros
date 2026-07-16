@@ -43,6 +43,9 @@ export type StreamTurn = (opts: {
   messageId: string;
   /** For server-side compaction keyed by conversation (empty in unit tests). */
   conversationId: string;
+  /** Run identifier sent as X-Correlation-Id on every LLM API call so individual
+   *  model turns are traceable in provider dashboards / observability tools. */
+  runId: string;
   /** 025-agent-delegation-v2: optional model-name override (e.g. a named
    *  agent's `model` field) — same provider/apiKey/baseUrl, different model
    *  string. Undefined for the primary run and for ephemeral/surface agents. */
@@ -226,6 +229,7 @@ export async function runAgentLoop(deps: AgentLoopDeps, input: AgentLoopInput): 
           signal,
           messageId,
           conversationId: deps.conversationId,
+          runId: deps.runId,
           onDelta: (d) =>
             emit({
               type: d.kind === "reasoning" ? "reasoning_delta" : "text_delta",

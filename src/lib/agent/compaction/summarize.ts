@@ -193,22 +193,23 @@ function skip(convId: string, reason: string, level: "debug" | "info" | "warn" =
   return { skipped: true, reason };
 }
 
-async function callSummarizer(userPrompt: string): Promise<string> {
+async function callSummarizer(userPrompt: string, convId: string): Promise<string> {
   const text = await complete({
     system: SUMMARY_SYSTEM_PROMPT,
     prompt: userPrompt,
+    correlationId: convId,
   });
   return text?.trim() ?? "";
 }
 
 async function callWithRetry(convId: string, userPrompt: string): Promise<string> {
   try {
-    const text = await callSummarizer(userPrompt);
+    const text = await callSummarizer(userPrompt, convId);
     if (text) return text;
     throw new Error("empty summarizer output");
   } catch (err) {
     log("warn", convId, "summary.retry", undefined, err);
-    const text = await callSummarizer(userPrompt);
+    const text = await callSummarizer(userPrompt, convId);
     if (!text) throw new Error("empty summarizer output on retry");
     return text;
   }

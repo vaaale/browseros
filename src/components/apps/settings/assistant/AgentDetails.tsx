@@ -71,8 +71,9 @@ export function AgentDetails({ agent, catalog, onSaved, onDeleted }: AgentDetail
         throw new Error(body?.error || `Failed to update instructions (${res.status})`);
       }
       notifyAgentUpdated();
+      onSaved?.();
     },
-    [agent.id, notifyAgentUpdated],
+    [agent.id, onSaved, notifyAgentUpdated],
   );
 
   const patchCapabilities = useCallback(

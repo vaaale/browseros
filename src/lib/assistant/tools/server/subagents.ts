@@ -66,17 +66,17 @@ export function subAgentTools(): Record<string, AssistantTool> {
 
     agent_delegate: serverTool(
       "agent_delegate",
-      "Delegate a task to an agent. Provide an existing 'agent' id/name (a persisted agent OR a window-scoped surface agent from an open app), OR an 'ephemeral' agent spec to create-and-run a one-off agent. Use a Claude agent (type 'claude') for ALL development tasks; Local otherwise.",
+      "Delegate a task to a named or one-off (ephemeral) agent.\n\nNAMED — supply `agent` with an existing id/name (persisted or surface). Use find_agent to discover options.\n\nEPHEMERAL — supply all three of `ephemeralName` + `ephemeralType` + `ephemeralSystemPrompt` (all three are required; omitting any one fails). Choose the type:\n• `ephemeralType: 'local'` — for research, analysis, writing, or any non-BOS-development task. No feature branch needed.\n• `ephemeralType: 'claude'` — ONLY for BOS source-code development. Requires an active feature branch; call dev_branch_request first if none is set.",
       schema(
         {
           agent: p.str("Existing agent id/name — persisted or a currently-registered surface agent (optional if ephemeral)"),
           task: p.str("The task to perform"),
-          ephemeralName: p.str("For a one-off agent: its name"),
-          ephemeralType: p.str("'local' or 'claude'"),
-          ephemeralSystemPrompt: p.str("For a one-off agent: its instructions"),
-          ephemeralSubagentType: p.str("For a one-off 'claude' agent: harness subagent_type (defaults to the name)"),
+          ephemeralName: p.str("One-off agent display name. MUST be combined with ephemeralType and ephemeralSystemPrompt — all three are required for ephemeral mode."),
+          ephemeralType: p.str("'local' for research, analysis, writing, or any non-development task (no feature branch needed). 'claude' ONLY for BOS source-code development (requires an active feature branch; call dev_branch_request first if none is set)."),
+          ephemeralSystemPrompt: p.str("REQUIRED when ephemeralName is set — the system instructions defining the agent's role and scope. Omitting this while providing ephemeralName will fail."),
+          ephemeralSubagentType: p.str("For 'claude' ephemeral agents only: the Claude Code harness subagent_type (defaults to the agent name). Not applicable to 'local' agents."),
           contentOnly: p.bool(
-            "Set true ONLY for standalone app content generation (e.g. a self-contained index.html or an iframe app project for app_build). Never for BrowserOS source analysis or implementation.",
+            "Set true when the 'claude' agent should produce content or perform analysis without touching BOS source files (bypasses the feature branch requirement). Set false (default) when the agent needs full BOS source access for implementation.",
           ),
         },
         ["task"],
@@ -85,6 +85,10 @@ export function subAgentTools(): Record<string, AssistantTool> {
         const task = String(input.task ?? "");
         if (!task) return "Error: agent_delegate: task is required.";
         const contentOnly = input.contentOnly === true;
+
+        if (input.ephemeralName && !input.ephemeralSystemPrompt) {
+          return "Error: agent_delegate: ephemeralSystemPrompt is required when ephemeralName is set — provide the agent's system instructions.";
+        }
 
         if (input.ephemeralName && input.ephemeralSystemPrompt) {
           const name = String(input.ephemeralName);
@@ -112,7 +116,7 @@ export function subAgentTools(): Record<string, AssistantTool> {
           if (surfaceAgent) return delegateToSurfaceAgent(surfaceAgent, task, ctx, "agent_delegate");
         }
 
-        return `Error: agent_delegate: no agent "${input.agent}" and no ephemeral spec provided.`;
+        return `Error: agent_delegate: no matching agent found${input.agent ? ` for "${input.agent}"` : ""} and no ephemeral spec provided. Supply either an existing \`agent\` id/name, or all three of \`ephemeralName\` + \`ephemeralType\` + \`ephemeralSystemPrompt\`.`;
       },
     ),
   };

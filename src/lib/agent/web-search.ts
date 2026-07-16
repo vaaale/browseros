@@ -84,7 +84,7 @@ export async function isNativeWebSearchAvailable(): Promise<boolean> {
   return !!config.apiKey;
 }
 
-export async function webSearch(input: WebSearchInput): Promise<WebSearchOutput> {
+export async function webSearch(input: WebSearchInput, runId?: string): Promise<WebSearchOutput> {
   const valid = validateWebSearchInput(input);
   const config = await getProviderConfig();
 
@@ -96,11 +96,11 @@ export async function webSearch(input: WebSearchInput): Promise<WebSearchOutput>
   }
 
   return familyOf(config.provider) === "anthropic"
-    ? anthropicWebSearch(valid, config)
-    : openaiWebSearch(valid, config);
+    ? anthropicWebSearch(valid, config, runId)
+    : openaiWebSearch(valid, config, runId);
 }
 
-async function anthropicWebSearch(valid: WebSearchInput, config: ProviderConfig): Promise<WebSearchOutput> {
+async function anthropicWebSearch(valid: WebSearchInput, config: ProviderConfig, runId?: string): Promise<WebSearchOutput> {
   const client = new Anthropic({ apiKey: config.apiKey, baseURL: config.baseUrl || undefined });
   const res = await client.beta.messages.create({
     model: config.model,
@@ -114,7 +114,10 @@ async function anthropicWebSearch(valid: WebSearchInput, config: ProviderConfig)
         ...(valid.blocked_domains ? { blocked_domains: valid.blocked_domains } : {}),
       },
     ],
-  } as Parameters<typeof client.beta.messages.create>[0], { timeout: await providerTimeoutMs() }) as { content: unknown[] };
+  } as Parameters<typeof client.beta.messages.create>[0], {
+    timeout: await providerTimeoutMs(),
+    ...(runId ? { headers: { "X-Correlation-Id": runId } } : {}),
+  }) as { content: unknown[] };
 
   const blocks: WebSearchResultBlock[] = [];
   const hits: WebSearchHit[] = [];
@@ -140,7 +143,7 @@ async function anthropicWebSearch(valid: WebSearchInput, config: ProviderConfig)
   return { query: valid.query, hits: dedupeHits(hits), text: text.join("\n").trim(), blocks };
 }
 
-async function openaiWebSearch(valid: WebSearchInput, config: ProviderConfig): Promise<WebSearchOutput> {
+async function openaiWebSearch(valid: WebSearchInput, config: ProviderConfig, runId?: string): Promise<WebSearchOutput> {
   const baseURL = config.baseUrl ? normalizeApiBase(config.baseUrl) : undefined;
   const client = new OpenAI({ apiKey: config.apiKey, baseURL });
   const res = await client.responses.create(
@@ -149,7 +152,10 @@ async function openaiWebSearch(valid: WebSearchInput, config: ProviderConfig): P
       input: valid.query,
       tools: [{ type: "web_search_preview" }],
     },
-    { timeout: await providerTimeoutMs() },
+    {
+      timeout: await providerTimeoutMs(),
+      ...(runId ? { headers: { "X-Correlation-Id": runId } } : {}),
+    },
   );
 
   const hits: WebSearchHit[] = [];
