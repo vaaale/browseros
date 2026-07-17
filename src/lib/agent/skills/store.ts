@@ -310,7 +310,7 @@ async function writeAssetsDir(dir: string, assets: SkillAsset[] | undefined): Pr
   const existing = (await fs.readdir(dir).catch(() => [])).filter((f) => !f.startsWith("."));
   const keep = new Set(assets.map((a) => safeAssetName(a.name)));
   for (const name of existing) {
-    if (!keep.has(name)) await fs.rm(path.join(dir, name), { force: true });
+    if (!keep.has(name)) await fs.rm(path.join(dir, name), { force: true, recursive: true });
   }
   for (const asset of assets) {
     const name = safeAssetName(asset.name);
