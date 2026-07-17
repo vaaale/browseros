@@ -6,6 +6,32 @@ BrowserOS (BOS) is an agentic operating system that runs in the browser. It has 
 
 ---
 
+## Marketplace
+
+BOS has a built-in **Marketplace** app that lets you extend the OS with apps, assistant skills, and spec templates published in external git repositories. Just paste a URL and BOS handles the rest.
+
+![Marketplace with two registered sources](./docs/assets/marketplace/05-anthropic-added.png)
+
+**Key features:**
+
+- **Three item types** — install sandboxed **apps** (appear on the desktop instantly), **skills** (available to the assistant immediately), or **adopt spec templates** into your own Build Studio workflow.
+- **Multi-format support** — BOS automatically detects the format when you add a URL. It supports BOS-native marketplaces (e.g. [vaaale/bos-marketplace](https://github.com/vaaale/bos-marketplace)), Anthropic agent-skills repos (e.g. [anthropics/skills](https://github.com/anthropics/skills)), and Claude Code skill repos (e.g. [ericgandrade/claude-superskills](https://github.com/ericgandrade/claude-superskills)). No manual configuration needed.
+- **Search and filter** — a live filter narrows items across all registered marketplaces by name, description, or tag.
+- **Installed badges** — items you've already installed are highlighted so you never lose track of what's in your OS.
+- **Sync and remove** — pull the latest from any marketplace with one click, or remove a source entirely without affecting what you've already installed.
+
+**To get started**, open the Marketplace app and add any of these URLs:
+
+| Marketplace | URL |
+|---|---|
+| BOS Marketplace | `https://github.com/vaaale/bos-marketplace.git` |
+| Anthropic Agent Skills | `https://github.com/anthropics/skills.git` |
+| Claude Superskills | `https://github.com/ericgandrade/claude-superskills.git` |
+
+→ **[Full tutorial: Using the Marketplace](docs/usage/tutorials/marketplace.md)**
+
+---
+
 ## Getting started
 
 There are two ways to run BOS:
