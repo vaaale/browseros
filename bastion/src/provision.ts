@@ -125,7 +125,18 @@ export async function reprovisionUpdateSrc(username: string, cfg: Config): Promi
   // Fetch the target branch explicitly — shallow clones only have the branch
   // they were cloned with, so a generic `fetch origin` won't make other
   // branches available.
-  await execFileAsync("git", ["-C", src, "fetch", "--depth=1", "origin", cfg.bosBaseRef]);
+  try {
+    await execFileAsync("git", ["-C", src, "fetch", "--depth=1", "origin", cfg.bosBaseRef]);
+  } catch (err) {
+    const raw = err instanceof Error ? err.message : String(err);
+    if (raw.includes("couldn't find remote ref") || raw.includes("invalid refspec")) {
+      throw new Error(
+        `Branch '${cfg.bosBaseRef}' not found on the remote. ` +
+        `Update BOS_BASE_REF to a valid branch name (e.g. "main").`,
+      );
+    }
+    throw new Error(`git fetch failed: ${raw.split("\n").find((l) => l.trim()) ?? raw}`);
+  }
   const { stdout: currentBranch } = await execFileAsync("git", ["-C", src, "rev-parse", "--abbrev-ref", "HEAD"]);
   if (currentBranch.trim() !== cfg.bosBaseRef) {
     await execFileAsync("git", ["-C", src, "checkout", "-B", cfg.bosBaseRef, "FETCH_HEAD"]);

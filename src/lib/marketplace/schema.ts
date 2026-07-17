@@ -19,6 +19,12 @@ export interface MarketplaceItemSpec {
   version: string;
 }
 
+export interface MarketplaceItemSkill {
+  /** Path (relative to the marketplace repo root) to the skill folder (contains SKILL.md). */
+  path: string;
+  version: string;
+}
+
 export interface MarketplaceItem {
   id: string;
   name: string;
@@ -26,6 +32,7 @@ export interface MarketplaceItem {
   tags?: string[];
   app?: MarketplaceItemApp;
   spec?: MarketplaceItemSpec;
+  skill?: MarketplaceItemSkill;
 }
 
 export interface MarketplaceManifest {
@@ -93,7 +100,14 @@ export function validateManifest(raw: unknown): MarketplaceManifest {
       spec = { path: s.path as string, version: typeof s.version === "string" ? s.version : "0.0.0" };
     }
 
-    if (!app && !spec) throw new Error(`item ${o.id}: must expose an app and/or a spec`);
+    let skill: MarketplaceItemSkill | undefined;
+    if (o.skill != null) {
+      const sk = o.skill as Record<string, unknown>;
+      if (!relPathOk(sk.path)) throw new Error(`item ${o.id}: invalid skill.path`);
+      skill = { path: sk.path as string, version: typeof sk.version === "string" ? sk.version : "0.0.0" };
+    }
+
+    if (!app && !spec && !skill) throw new Error(`item ${o.id}: must expose an app, spec, and/or a skill`);
     return {
       id: o.id as string,
       name: o.name as string,
@@ -101,6 +115,7 @@ export function validateManifest(raw: unknown): MarketplaceManifest {
       tags: Array.isArray(o.tags) ? o.tags.filter((t): t is string => typeof t === "string") : undefined,
       app,
       spec,
+      skill,
     };
   });
 

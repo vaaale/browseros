@@ -261,19 +261,29 @@ export async function waitForHealthy(username: string, timeoutMs: number): Promi
     if (info && !info.State.Running && !info.State.Restarting &&
         info.State.Status !== "created") {
       const logs = await getContainerLogs(username, 60);
-      throw new Error(
-        `Container ${hostname} exited during startup ` +
+      // Full logs go to server console only — the thrown message stays short.
+      console.error(
+        `[bastion] [${username}] Container exited during startup ` +
         `(status=${info.State.Status}, exitCode=${info.State.ExitCode}).\n` +
         `Recent container logs:\n${logs || "(no logs captured)"}`,
+      );
+      throw new Error(
+        `Container exited during startup (status=${info.State.Status}, exitCode=${info.State.ExitCode}). ` +
+        `See server logs for container output.`,
       );
     }
 
     await sleep(2000);
   }
   const logs = await getContainerLogs(username, 60);
-  throw new Error(
-    `Container ${hostname} did not become healthy within ${Math.round(timeoutMs / 1000)}s.\n` +
+  // Full logs go to server console only — the thrown message stays short.
+  console.error(
+    `[bastion] [${username}] Container did not become healthy within ${Math.round(timeoutMs / 1000)}s.\n` +
     `Recent container logs:\n${logs || "(no logs captured)"}`,
+  );
+  throw new Error(
+    `Container did not become healthy within ${Math.round(timeoutMs / 1000)}s. ` +
+    `See server logs for container output.`,
   );
 }
 
