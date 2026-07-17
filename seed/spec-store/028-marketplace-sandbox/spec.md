@@ -104,3 +104,17 @@ The launcher lists builtin, local, and marketplace apps uniformly; native apps r
 1. **Given** an adopted spec, **When** its source marketplace is removed, **Then** the adopted spec is unaffected (adoption is a fork).
 2. **Given** a marketplace with running apps, **When** removed (with confirmation), **Then** its clones are deleted and its apps are delisted.
 3. **Given** an installed app, **When** uninstalled, **Then** it leaves the launcher and any local copy is deleted.
+
+### User Story 6 — Claude plugin marketplace compatibility (Priority: P2)
+
+A marketplace repo that follows the Claude Code plugin format (`skills_index.json` + `.claude-plugin/plugin.json`, skills under `skills/<name>/SKILL.md`) can be registered by URL and its skills are presented and installable alongside native BOS marketplace items.
+
+**Design**: On `addMarketplace`, if the repo has no `marketplace.json` but has `skills_index.json`, the client synthesizes and writes a `marketplace.json` from `skills_index.json` + `.claude-plugin/plugin.json`. The synthesized manifest uses `skill` items (a third item type alongside `app` and `spec`). On `syncMarketplace`, the conversion is re-run after pull to pick up new skills. "Install skill" copies the entire skill folder (`SKILL.md` → content; `scripts/**` → scripts assets; everything else → reference assets) into BOS's skill store via `saveSkill()`.
+
+**Schema addition**: `MarketplaceItemSkill { path: string; version: string }` added as optional `skill` field on `MarketplaceItem`. Validation requires at least one of `app`, `spec`, or `skill`.
+
+**Acceptance Scenarios**:
+1. **Given** a Claude plugin repo URL, **When** registered, **Then** BOS synthesizes `marketplace.json` and lists the marketplace with all skills as items (no manual conversion step).
+2. **Given** a skill item, **When** "Install skill" is clicked, **Then** the full skill folder (SKILL.md + scripts + references) is saved into BOS's skill store and available to the assistant immediately.
+3. **Given** a synced Claude plugin marketplace, **When** new skills appear in `skills_index.json`, **Then** they appear in the catalog after sync.
+4. **Given** a repo with both `marketplace.json` and `skills_index.json`, **When** registered, **Then** the BOS-native `marketplace.json` takes precedence (no conversion).

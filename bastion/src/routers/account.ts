@@ -70,7 +70,7 @@ export function createAccountRouter(cfg: Config, provider: AuthProvider): Router
       clearInstanceState(username);
       res.json({ ok: true });
     } catch (err) {
-      res.status(500).json({ error: String(err) });
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
     }
   });
 
