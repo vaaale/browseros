@@ -19,18 +19,15 @@ import { mkdir } from "@/os/vfs";
 export type { DaemonStatus };
 export { getDaemonStatus, stopDaemon, tick };
 
-// Memory Loops write into /Documents/Memory even before any loop has run —
-// e.g. UI listings, the consolidator peeking at /Episodes. Seed the folders at
-// daemon boot so first-write callers never trip on ENOENT.
-async function ensureMemoryDirs(): Promise<void> {
-  await mkdir("/Documents/Memory");
-  await mkdir("/Documents/Memory/Episodes");
-  await mkdir("/Documents/Memory/Topics");
+// Seed the /Memories root at daemon boot so listing callers never trip on
+// ENOENT before any agent has written their first memory.
+async function ensureMemoryRoot(): Promise<void> {
+  await mkdir("/Memories");
 }
 
 export function startDaemon(opts: { tickMs?: number } = {}): void {
-  void ensureMemoryDirs().catch((err) => {
-    console.error("[scheduler] ensureMemoryDirs failed:", err);
+  void ensureMemoryRoot().catch((err) => {
+    console.error("[scheduler] ensureMemoryRoot failed:", err);
   });
   installBuiltInHandlers();
   startEngineDaemon(opts);
