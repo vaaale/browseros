@@ -2,9 +2,17 @@ import { createProxyMiddleware } from "http-proxy-middleware";
 import type { RequestHandler } from "express";
 import type { Server } from "http";
 import type { Config } from "./config";
-import { verifySession, clearSession } from "./sessions";
+import { verifySession, clearSession, shouldRefreshSession, sessionSetCookie, SESSION_TTL_MS } from "./sessions";
 import { getOrProvision, resetIdleTimer, getInstanceState } from "./lifecycle";
 import { containerName } from "./docker";
+
+// Per-request stash for a rolling-session refresh cookie. Set in the middleware
+// when the token crosses its refresh threshold; consumed either by the proxyRes
+// hook (proxied responses) or set directly on bastion-generated responses.
+const REFRESH_COOKIE = Symbol("bosRefreshCookie");
+interface RefreshReq {
+  [REFRESH_COOKIE]?: string;
+}
 
 // ── Status page ───────────────────────────────────────────────────────────────
 // Shown while the container is provisioning or starting. Polls /account/instance
@@ -176,6 +184,18 @@ export function createBosProxy(cfg: Config): RequestHandler & { upgrade?: (serve
             // session endpoint (used by the toolbar "My profile" link).
             proxyReq.setHeader("x-bos-username", username);
           },
+          proxyRes: (proxyRes, req) => {
+            // Rolling session: append the refreshed cookie to the upstream
+            // response so an active user's session never expires. Injecting via
+            // the proxied response is reliable; an Express res.cookie() set
+            // before proxying can be clobbered by the upstream headers.
+            const refresh = (req as unknown as RefreshReq)[REFRESH_COOKIE];
+            if (refresh) {
+              const existing = proxyRes.headers["set-cookie"];
+              const arr = Array.isArray(existing) ? existing : existing ? [existing] : [];
+              proxyRes.headers["set-cookie"] = [...arr, refresh];
+            }
+          },
           error: (_err, _req, res) => {
             if (res && "writeHead" in res) {
               res.writeHead(502, { "Content-Type": "text/html" });
@@ -198,12 +218,29 @@ export function createBosProxy(cfg: Config): RequestHandler & { upgrade?: (serve
       return;
     }
 
+    // Rolling session: any authenticated request past the refresh threshold
+    // re-issues the cookie, so an active user is never logged out mid-work.
+    // Stash it for the proxyRes hook (the reliable path for proxied responses);
+    // bastion-generated responses below set it directly on res.
+    const refreshCookie = shouldRefreshSession(session) ? sessionSetCookie(session, cfg) : undefined;
+    if (refreshCookie) (req as unknown as RefreshReq)[REFRESH_COOKIE] = refreshCookie;
+
+    // Keep the container alive for as long as the user is logged in: the idle
+    // stop tracks the session's expiry (+ grace), so it only elapses once the
+    // rolling auth session has lapsed. If we just refreshed, the effective
+    // expiry is now + TTL; otherwise it's the token's own exp.
+    const sessionExpMs = refreshCookie
+      ? Date.now() + SESSION_TTL_MS
+      : session.exp ? session.exp * 1000 : Date.now() + SESSION_TTL_MS;
+    const stopAtMs = sessionExpMs + cfg.idleTimeoutMs;
+
     const { username } = session;
     const state = getInstanceState(username);
 
-    // Fast path: already running — proxy immediately.
+    // Fast path: already running — proxy immediately (proxyRes injects the
+    // refresh cookie into the upstream response).
     if (state?.status === "running") {
-      resetIdleTimer(username, cfg);
+      resetIdleTimer(username, cfg, stopAtMs);
       getProxy(username)(req, res, next);
       return;
     }
@@ -211,6 +248,7 @@ export function createBosProxy(cfg: Config): RequestHandler & { upgrade?: (serve
     // Non-HTML requests (assets, API calls) while not running get a simple 503.
     const acceptsHtml = (req.headers.accept ?? "").includes("text/html");
     if (!acceptsHtml) {
+      if (refreshCookie) res.setHeader("Set-Cookie", refreshCookie);
       res.status(503).json({ error: "BOS instance not ready", status: state?.status ?? "unknown" });
       return;
     }
@@ -222,6 +260,7 @@ export function createBosProxy(cfg: Config): RequestHandler & { upgrade?: (serve
 
     // Return the status page immediately. Its JS polls /account/instance and
     // redirects to / when status flips to "running".
+    if (refreshCookie) res.setHeader("Set-Cookie", refreshCookie);
     res.status(200).send(STATUS_PAGE);
   };
 

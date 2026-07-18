@@ -16,6 +16,7 @@ import { MessageListV2 } from "./MessageListV2";
 import { ChatInputV2 } from "./ChatInputV2";
 import { FrontendToolsV2 } from "./FrontendToolsV2";
 import { InfoPanelV2 } from "./InfoPanelV2";
+import { VoiceTTSPlayer } from "@/components/voice/VoiceTTSPlayer";
 
 // The embeddable Assistant, v2 — server-owned runs. Same surface API as the
 // CopilotKit-era AssistantChat (agentId / showConversations / allGroups /
@@ -122,6 +123,7 @@ export function AssistantChatV2(props: AssistantChatV2Props) {
               <SelfImproveIndicator key={conversationId} conversationId={conversationId} />
             </div>
             <MessageListV2 conversationId={conversationId} agentId={resolvedAgentId} initialLabel={props.initialLabel} />
+            <VoiceTTSPlayer conversationId={conversationId} />
           </div>
           <ChatInputV2
             conversationId={conversationId}

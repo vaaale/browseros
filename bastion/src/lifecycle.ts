@@ -12,6 +12,7 @@ import {
 } from "./docker";
 import { provisionUser } from "./provision";
 import * as logStore from "./log-store";
+import { SESSION_TTL_MS } from "./sessions";
 
 export type InstanceStatus = "running" | "stopped" | "provisioning" | "unknown";
 
@@ -181,13 +182,26 @@ async function _getOrProvision(username: string, cfg: Config): Promise<void> {
   }
 }
 
-export function resetIdleTimer(username: string, cfg: Config): void {
+/**
+ * (Re)arm the container idle-stop. The container is kept alive as long as the
+ * user is logged in: `stopAtMs` is the user's session-expiry instant plus a
+ * grace period, so the idle countdown only really elapses once the (rolling)
+ * auth session has lapsed. Callers without session context (provision/start/
+ * reconcile) omit it and get a full-session-window fallback, which the next
+ * authenticated request refines.
+ */
+export function resetIdleTimer(username: string, cfg: Config, stopAtMs?: number): void {
   const existing = idleTimers.get(username);
   if (existing) clearTimeout(existing);
 
+  // Default: a full session window + grace, so a just-provisioned instance is
+  // never stopped before its owner's session could even expire.
+  const deadline = stopAtMs ?? Date.now() + SESSION_TTL_MS + cfg.idleTimeoutMs;
+  const delay = Math.max(cfg.idleTimeoutMs, deadline - Date.now());
+
   const timer = setTimeout(async () => {
     await stopInstance(username).catch(console.error);
-  }, cfg.idleTimeoutMs);
+  }, delay);
 
   idleTimers.set(username, timer);
 

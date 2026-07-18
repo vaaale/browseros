@@ -5,6 +5,7 @@ import { ArrowUp, Square, X, Paperclip, FileText } from "lucide-react";
 import { useChatState, setEditing } from "@/lib/assistant/client/chat-store";
 import { sendMessage, stopRun } from "@/lib/assistant/client/run-client";
 import type { Attachment } from "@/lib/assistant/messages";
+import { VoiceMicButton } from "@/components/voice/VoiceMicButton";
 
 const MAX_ROWS = 5;
 const ACCEPT = "image/*,application/pdf";
@@ -181,6 +182,15 @@ export function ChatInputV2({
         >
           <Paperclip size={15} />
         </button>
+        <VoiceMicButton
+          conversationId={conversationId}
+          agentId={agentId}
+          ensureConversation={ensureConversation}
+          onTranscript={(t) => {
+            setText((prev) => (prev ? `${prev} ${t}` : t));
+            requestAnimationFrame(autoResize);
+          }}
+        />
         <textarea
           ref={textareaRef}
           rows={1}

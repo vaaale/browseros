@@ -1,6 +1,7 @@
 import "server-only";
 import { promises as fs } from "fs";
 import path from "path";
+import { randomBytes } from "crypto";
 
 // Crash-safe write: write to a temp file in the SAME directory, flush to disk,
 // then rename over the target (atomic on a single filesystem). This is the
@@ -9,7 +10,7 @@ import path from "path";
 export async function writeFileAtomic(filePath: string, data: string | Uint8Array): Promise<void> {
   const dir = path.dirname(filePath);
   await fs.mkdir(dir, { recursive: true });
-  const tmp = path.join(dir, `.${path.basename(filePath)}.${process.pid}.${Date.now()}.tmp`);
+  const tmp = path.join(dir, `.${path.basename(filePath)}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`);
   try {
     const handle = await fs.open(tmp, "w");
     try {

@@ -283,3 +283,13 @@ export function resolveActionGate(allow: string[] | null | undefined): (id: stri
 export function actionCapabilities(): Capability[] {
   return CAPABILITIES.filter((c) => c.context !== "tool");
 }
+
+/** Capability ids deferred BY REGISTRY DEFAULT (hidden from initial context,
+ *  discovered via find_tools). Since the Claude-compatibility refactor the
+ *  registry no longer marks any capability deferred by default — deferral is
+ *  now entirely per-agent (`agent.deferredTools`), which runners union with
+ *  this set. Kept as the (empty) default layer so that union stays a single
+ *  code path. */
+export function deferredCapabilityIds(): Set<string> {
+  return new Set<string>();
+}

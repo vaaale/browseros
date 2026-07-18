@@ -297,3 +297,20 @@ export async function sendFeedback(conversationId: string, messageId: string, ra
     body: JSON.stringify({ messageId, feedback: { rating, at: Date.now() } }),
   }).catch(() => undefined);
 }
+
+/** Delete the last turn (last user message + its responses). Server-owned
+ *  transcript, so the server truncates and we reload the resulting history.
+ *  Returns false if a run is active (the server rejects it with 409). */
+export async function deleteLastTurn(conversationId: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  const res = await fetch(`/api/assistant/conversations/${encodeURIComponent(conversationId)}/messages`, {
+    method: "DELETE",
+  }).catch(() => undefined);
+  if (!res) return { ok: false, error: "Network error" };
+  if (!res.ok) {
+    const data = (await res.json().catch(() => ({}))) as { error?: string };
+    return { ok: false, error: data.error ?? `HTTP ${res.status}` };
+  }
+  const data = (await res.json()) as { messages?: ChatMessage[] };
+  setHistory(conversationId, Array.isArray(data.messages) ? data.messages : []);
+  return { ok: true };
+}

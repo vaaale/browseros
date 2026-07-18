@@ -4,6 +4,8 @@ import { readNamespace, patchNamespace, writeNamespace } from "./store";
 import { getProviderConfig, updateProviderConfig, type ProviderConfig } from "@/lib/agent/provider";
 import { PROVIDER_LIST } from "@/lib/agent/provider-meta";
 import { getSettings, updateSettings } from "@/os/settings";
+import { loadVoiceConfig, saveVoiceConfig, redactVoiceConfig } from "@/lib/voice/config";
+import type { VoiceConfig } from "@/lib/voice/types";
 
 export interface ConfigRegistration {
   schema: ConfigSchema;
@@ -53,6 +55,20 @@ const REGISTRATIONS: ConfigRegistration[] = [
     },
     load: async () => ({}),
     save: async () => {},
+  },
+  {
+    schema: {
+      namespace: "voice",
+      title: "Voice",
+      description: "Text-to-speech and speech-to-text configuration for the assistant and Build Studio.",
+      order: 11,
+      customComponent: "voice",
+      fields: [],
+    },
+    load: async () => redactVoiceConfig(await loadVoiceConfig()) as unknown as Record<string, unknown>,
+    save: async (patch) => {
+      await saveVoiceConfig(patch as Partial<VoiceConfig>);
+    },
   },
   {
     schema: {
