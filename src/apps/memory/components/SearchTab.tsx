@@ -37,8 +37,8 @@ const PAGE_INCREMENT = 20;
 const DEBOUNCE_MS = 400;
 
 function classifySource(source: string): FilterId {
-  if (source.startsWith("/Documents/Memory/Topics/")) return "topics";
-  if (source.startsWith("/Documents/Memory/Episodes/")) return "episodes";
+  if (/^\/Memories\/[^/]+\/Topics\//.test(source)) return "topics";
+  if (/^\/Memories\/[^/]+\/Episodes\//.test(source)) return "episodes";
   return "memory";
 }
 

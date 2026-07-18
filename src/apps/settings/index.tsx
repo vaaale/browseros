@@ -15,6 +15,7 @@ import { McpServersTab } from "@/components/apps/settings/McpServersTab";
 import { LogsTab } from "@/components/apps/settings/LogsTab";
 import { BuildStudioTab } from "@/components/apps/settings/BuildStudioTab";
 import { RunCommandTab } from "@/components/apps/settings/RunCommandTab";
+import { VoiceTab } from "@/components/apps/settings/VoiceTab";
 import { ConfigForm } from "@/components/apps/settings/ConfigForm";
 import { ProviderSettings } from "@/components/apps/ProviderSettings";
 
@@ -34,6 +35,7 @@ const CUSTOM_TABS: Record<string, React.ComponentType> = {
   "self-modification": VersionsTab,
   logging: LogsTab,
   "run-command": RunCommandTab,
+  voice: VoiceTab,
 };
 
 export default function SettingsApp() {

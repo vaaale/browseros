@@ -3,8 +3,12 @@ import { startAssistantRun } from "@/lib/assistant/start-run";
 import { ActiveRunError, runManager, type SurfaceAgentEntry } from "@/lib/assistant/run-manager";
 import type { ToolDeclaration } from "@/lib/assistant/tools";
 import type { Attachment } from "@/lib/assistant/messages";
+import { registerVoiceModeHook } from "@/lib/voice/voice-hook";
 
 export const dynamic = "force-dynamic";
+
+// Register the voice-mode system-prompt hook once at module load time.
+registerVoiceModeHook();
 
 // POST — start a run (the loop runs detached from this request).
 //   { conversationId, agentId, message, editOfMessageId?, surfaceTools?, surfaceAgents? }

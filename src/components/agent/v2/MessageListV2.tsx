@@ -1,11 +1,11 @@
 "use client";
 
 import { useEffect, useMemo, useRef } from "react";
-import { Brain, ChevronDown, ChevronRight, Pencil, RotateCcw, ThumbsDown, ThumbsUp } from "lucide-react";
+import { Brain, ChevronDown, ChevronRight, Pencil, RotateCcw, ThumbsDown, ThumbsUp, Trash2 } from "lucide-react";
 import type { ChatMessage } from "@/lib/assistant/messages";
 import { lastUserIndex } from "@/lib/assistant/messages";
 import { useChatState, setEditing, type ChatState, type ToolCallView } from "@/lib/assistant/client/chat-store";
-import { sendFeedback, sendMessage } from "@/lib/assistant/client/run-client";
+import { sendFeedback, sendMessage, deleteLastTurn } from "@/lib/assistant/client/run-client";
 import { registerCard, toggleCard, useCardOpen, useCardScope } from "@/lib/agent/card-collapse";
 import { ChatMarkdown } from "./ChatMarkdown";
 import { ToolCallCard, type ToolCardData } from "./ToolCallCard";
@@ -223,15 +223,27 @@ export function MessageListV2({
                 )}
                 {m.content && <span className="whitespace-pre-wrap break-words">{m.content}</span>}
                 {isEditable && (
-                  <button
-                    type="button"
-                    aria-label="Edit and resend"
-                    data-testid="edit-message"
-                    onClick={() => setEditing(conversationId, m.id)}
-                    className="absolute -left-7 top-1.5 rounded p-1 text-white/35 opacity-0 transition-opacity hover:bg-white/10 hover:text-white/80 group-hover:opacity-100"
-                  >
-                    <Pencil size={13} />
-                  </button>
+                  <div className="absolute -left-7 top-1.5 flex flex-col gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+                    <button
+                      type="button"
+                      aria-label="Edit and resend"
+                      data-testid="edit-message"
+                      onClick={() => setEditing(conversationId, m.id)}
+                      className="rounded p-1 text-white/35 hover:bg-white/10 hover:text-white/80"
+                    >
+                      <Pencil size={13} />
+                    </button>
+                    <button
+                      type="button"
+                      aria-label="Delete last turn"
+                      data-testid="delete-turn"
+                      title="Delete this turn (your message and its response)"
+                      onClick={() => void deleteLastTurn(conversationId)}
+                      className="rounded p-1 text-white/35 hover:bg-rose-500/20 hover:text-rose-300"
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
                 )}
               </div>
             </div>

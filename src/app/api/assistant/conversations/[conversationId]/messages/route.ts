@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as vfs from "@/os/vfs";
 import { enqueuePerKey } from "@/lib/agent/write-queue";
-import { loadConversationMessages } from "@/lib/assistant/conversation-store";
+import { loadConversationMessages, saveConversationMessages } from "@/lib/assistant/conversation-store";
+import { lastUserIndex } from "@/lib/assistant/messages";
+import { runManager } from "@/lib/assistant/run-manager";
 
 export const dynamic = "force-dynamic";
 
@@ -40,4 +42,28 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ conversat
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 404 });
   }
+}
+
+// DELETE — remove the last turn: the most recent user message and everything
+// after it (its assistant/tool responses), or just the trailing user message if
+// the agent never responded. The transcript is server-owned, so like feedback
+// this is a client-driven mutation gated on there being no active run.
+export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ conversationId: string }> }) {
+  const { conversationId } = await ctx.params;
+
+  if (runManager().activeFor(conversationId)) {
+    return NextResponse.json({ error: "Cannot delete a turn while a run is active." }, { status: 409 });
+  }
+
+  const messages = await loadConversationMessages(conversationId);
+  const idx = lastUserIndex(messages);
+  if (idx === -1) {
+    return NextResponse.json({ error: "No turn to delete." }, { status: 404 });
+  }
+
+  const next = messages.slice(0, idx);
+  // agentId is only used to seed metadata when the file is missing; the file
+  // already exists here, so its stored agentId is preserved.
+  await saveConversationMessages(conversationId, "", next);
+  return NextResponse.json({ messages: next });
 }

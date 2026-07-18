@@ -76,3 +76,7 @@ next-env.d.ts
 # tools/gen-apps.mjs; regenerated on predev/prebuild and `npm run gen:apps`)
 /src/apps/_manifests.generated.ts
 /src/apps/_components.generated.ts
+
+# generated: Silero VAD model + ONNX runtime WASM copied from node_modules by
+# tools/copy-vad-assets.mjs (regenerated on predev/prebuild)
+/public/vad/
