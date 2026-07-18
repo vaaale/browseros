@@ -53,6 +53,69 @@ services:
       - bos-net
     restart: unless-stopped
 
+  omnivoice:
+    image: hangrylabs/omnivoicetts:latest
+    container_name: omnivoice
+    hostname: omnivoice
+    profiles:
+      - voice
+    environment:
+      - HF_HUB_OFFLINE=0
+      - HF_TOKEN=${HF_TOKEN}
+    volumes:
+      - openai_voice_profiles:/app/openai_voice_profiles
+      - ${HOME}/.cache/huggingface:/app/.cache/huggingface
+    ports:
+      - "7861:7861"
+    networks: [ 'bos-net' ]
+    # GPU support (enabled by default for this compose file)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: [ "0" ]
+              capabilities: [ gpu ]
+
+  speaches:
+    container_name: speaches
+    hostname: speaches
+    profiles:
+      - voice
+    image: ghcr.io/speaches-ai/speaches:latest-cuda
+    restart: unless-stopped
+    networks:
+      - bos-net
+    volumes:
+      - speaches-huggingface:/home/ubuntu/.cache/huggingface/hub
+    develop:
+      watch:
+        - action: rebuild
+          path: ./uv.lock
+        - action: sync+restart
+          path: ./src
+          target: /home/ubuntu/speaches/src
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      UVICORN_PORT: 8082
+    healthcheck:
+      test: [ "CMD", "curl", "--fail", "http://0.0.0.0:8082/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: [ "0" ]
+              capabilities: [ gpu ]
+
+
+
 # BOS user containers are spawned at runtime by the bastion.
 # They are NOT defined here — the bastion creates them via the Docker API.
 
@@ -63,3 +126,5 @@ networks:
 
 volumes:
   bastion-data:
+  openai_voice_profiles:
+  speaches-huggingface:
