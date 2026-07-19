@@ -30,12 +30,13 @@ command **outputs** appear in the **Files app**, and `file_write` + `run_command
 share one filesystem. Only `/workspace` (+ a tmpfs `/tmp`) exist in the sandbox —
 other VFS folders like `/Documents` are NOT mounted.
 
-## Languages & skill scripts
+## Shell & skill scripts
 
-`language`: `bash` (`bash -lc`, default), `python` (`ipython -c`), `node`
-(`node -e`). Pass **`skill=<id>`** to stage that skill's bundled files into
-`/workspace` first, so a `SKILL.md` command like `python scripts/office/unpack.py`
-resolves as-written (see `stageSkillFiles` in `skills/store.ts`).
+All commands run through `bash -lc`, so `python3`, `node`, `pip3`, `ffmpeg`,
+`libreoffice`, etc. work directly. Pass **`skill=<id>`** to stage that skill's
+bundled files into `/workspace` first, so a `SKILL.md` command like
+`python3 scripts/office/unpack.py` resolves as-written (see `stageSkillFiles`
+in `skills/store.ts`).
 
 ## Watchdogs
 

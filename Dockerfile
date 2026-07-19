@@ -55,7 +55,7 @@ RUN pip install --no-cache-dir \
     "markitdown[all]" \
     Pillow \
     python-pptx \
-    docx
+    python-docx
 
 # pptxgenjs is a Node package (used by run_command skills for pptx generation).
 # Make it resolvable from /workspace scripts via NODE_PATH.

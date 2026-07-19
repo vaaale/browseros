@@ -239,7 +239,16 @@ export async function runAgentLoop(deps: AgentLoopDeps, input: AgentLoopInput): 
         });
       } catch (e) {
         if (signal.aborted) return finish({ reason: "cancelled" });
-        return finish({ reason: "error", error: (e as Error).message });
+        // Persist the failure AS the assistant message (not an empty/dropped
+        // turn) so the transcript stays truthful and the UI can render an error
+        // card with retry. The message carries no tool calls, so the transcript
+        // stays settled.
+        const errorText = (e as Error).message || "The model provider returned an error.";
+        const errorMessage: ChatMessage = { id: messageId, role: "assistant", content: errorText, error: true };
+        messages = [...messages, errorMessage];
+        await io.saveMessages(messages);
+        emit({ type: "message", message: errorMessage });
+        return finish({ reason: "error", error: errorText });
       }
       if (signal.aborted) return finish({ reason: "cancelled" });
 

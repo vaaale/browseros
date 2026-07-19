@@ -233,7 +233,6 @@ export const RUN_COMMAND_SCHEMA: Record<string, unknown> = {
   type: "object",
   properties: {
     command: { type: "string" },
-    language: { type: "string", enum: ["bash", "python", "node"] },
     skill: { type: "string", description: "Optional skill id to stage into the working dir first." },
     timeoutMs: { type: "number" },
   },

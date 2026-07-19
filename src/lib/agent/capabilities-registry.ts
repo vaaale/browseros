@@ -133,7 +133,7 @@ export const CAPABILITIES: Capability[] = [
   { id: "bos_source_list", group: "Dev", context: "both", description: "List BOS source (read-only, sub-agent)." },
   { id: "bos_source_read", group: "Dev", context: "both", description: "Read a BOS source file (read-only, sub-agent)." },
   { id: "bos_source_search", group: "Dev", context: "both", description: "Search BOS source (read-only, sub-agent)." },
-  { id: "run_command", group: "Dev", context: "both", description: "Run a command in a sandboxed environment (bash/python/node)." },
+  { id: "run_command", group: "Dev", context: "both", description: "Run a shell command in a sandboxed environment (python3, node, pip3, etc.)." },
 
   // Docs
   { id: "docs_list", group: "Docs", context: "action", description: "List documentation pages." },

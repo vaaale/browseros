@@ -30,8 +30,6 @@ const CONTAINER_TTL_MS = 15 * 60_000; // reap idle containers after 15 min
 
 const execFileP = promisify(execFile);
 
-export type RunLanguage = "bash" | "python" | "node";
-
 export interface RunResult {
   ok: boolean;
   exitCode: number | null;
@@ -117,19 +115,6 @@ function sandboxUser(): string {
   const uid = process.getuid?.() ?? 1000;
   const gid = process.getgid?.() ?? 1000;
   return `${uid}:${gid}`;
-}
-
-function argvFor(language: RunLanguage, command: string): string[] {
-  switch (language) {
-    // Python one-liners via IPython (rich errors); the image must provide it.
-    case "python":
-      return ["ipython", "--no-banner", "-c", command];
-    // Node eval; the image must provide node.
-    case "node":
-      return ["node", "-e", command];
-    default:
-      return ["bash", "-lc", command];
-  }
 }
 
 function truncateTail(buf: Buffer): string {
@@ -338,7 +323,6 @@ async function syncLocalSymlinks(mounts: VfsMount[]): Promise<void> {
 export async function runCommand(opts: {
   command: string;
   sessionKey: string;
-  language?: RunLanguage;
   timeoutMs?: number;
   skill?: string;
 }): Promise<RunResult> {
@@ -346,9 +330,8 @@ export async function runCommand(opts: {
   if (!cfg.enabled) {
     return { ok: false, exitCode: null, output: "run_command is disabled. Enable it in Settings → Command Execution.", durationMs: 0, backend: "none" };
   }
-  const language = opts.language ?? "bash";
   const maxMs = Math.min(positive(opts.timeoutMs, cfg.maxTimeoutMs), cfg.maxTimeoutMs);
-  const [prog, ...args] = argvFor(language, opts.command);
+  const [prog, ...args] = ["bash", "-lc", opts.command];
 
   // Resolve workspace: the mount whose containerPath is "/workspace".
   // Files the agent writes and command outputs show up in the Files app because

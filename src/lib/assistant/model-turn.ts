@@ -35,6 +35,68 @@ export const streamModelTurn: StreamTurn = async (opts) => {
 
 type TurnOpts = Parameters<StreamTurn>[0];
 
+// Some OpenAI-compatible local servers answer a STREAMING request that fails
+// (e.g. context overflow) with HTTP 200 + a bare JSON error body served under a
+// `text/event-stream` content-type — instead of a 4xx status or an SSE `error`/
+// `response.failed` event. The SDK's SSE parser then yields zero events and the
+// stream ends silently, producing an empty turn with no error surfaced.
+//
+// Peek the first byte of the body: a valid SSE stream starts with a field line
+// (`event:` / `data:` / `:`) and never with `{`. If we instead see a JSON body
+// carrying a top-level `error`, re-emit it as HTTP 400 so the SDK throws (the
+// agent loop turns that into the error card). Anything else is replayed verbatim
+// through a lazy stream so normal streaming is completely unaffected.
+const errorAwareFetch: typeof fetch = async (input, init) => {
+  const res = await fetch(input, init);
+  if (!res.ok || !res.body) return res;
+  const reader = res.body.getReader();
+  const first = await reader.read();
+  const value = first.value;
+  if (value && value[0] === 0x7b /* '{' */) {
+    const chunks: Uint8Array[] = [value];
+    for (;;) {
+      const r = await reader.read();
+      if (r.done) break;
+      if (r.value) chunks.push(r.value);
+    }
+    const buf = Buffer.concat(chunks.map((c) => Buffer.from(c)));
+    const text = buf.toString("utf8");
+    try {
+      const j = JSON.parse(text) as { error?: unknown };
+      if (j && typeof j === "object" && j.error) {
+        return new Response(text, { status: 400, statusText: "Bad Request", headers: res.headers });
+      }
+    } catch {
+      /* not JSON we recognise — replay verbatim below */
+    }
+    return new Response(buf, { status: res.status, statusText: res.statusText, headers: res.headers });
+  }
+  const replay = new ReadableStream<Uint8Array>({
+    start(controller) {
+      if (value) controller.enqueue(value);
+      if (first.done) controller.close();
+    },
+    async pull(controller) {
+      const r = await reader.read();
+      if (r.done) controller.close();
+      else controller.enqueue(r.value);
+    },
+    cancel(reason) {
+      return reader.cancel(reason);
+    },
+  });
+  return new Response(replay, { status: res.status, statusText: res.statusText, headers: res.headers });
+};
+
+/** OpenAI-family client (chat + responses) with the error-aware fetch installed. */
+function openAIClient(c: ProviderConfig): OpenAI {
+  return new OpenAI({
+    apiKey: c.apiKey || "local",
+    baseURL: c.baseUrl ? normalizeApiBase(c.baseUrl) : undefined,
+    fetch: errorAwareFetch,
+  });
+}
+
 function parseArgs(raw: string): Record<string, unknown> {
   try {
     const v = JSON.parse(raw || "{}");
@@ -191,10 +253,7 @@ function toOpenAiMessages(system: string, messages: ChatMessage[]): OpenAI.Chat.
 }
 
 async function openaiChatTurn(c: ProviderConfig, opts: TurnOpts): Promise<TurnResult> {
-  const client = new OpenAI({
-    apiKey: c.apiKey || "local",
-    baseURL: c.baseUrl ? normalizeApiBase(c.baseUrl) : undefined,
-  });
+  const client = openAIClient(c);
   const stream = await client.chat.completions.create(
     {
       model: c.model,
@@ -273,10 +332,7 @@ function toResponsesInput(messages: ChatMessage[]): unknown[] {
 }
 
 async function responsesTurn(c: ProviderConfig, opts: TurnOpts): Promise<TurnResult> {
-  const client = new OpenAI({
-    apiKey: c.apiKey || "local",
-    baseURL: c.baseUrl ? normalizeApiBase(c.baseUrl) : undefined,
-  });
+  const client = openAIClient(c);
   const stream = (await client.responses.create(
     {
       model: c.model,
@@ -301,6 +357,16 @@ async function responsesTurn(c: ProviderConfig, opts: TurnOpts): Promise<TurnRes
   const calls: TurnToolCall[] = [];
   for await (const ev of stream) {
     switch (ev.type) {
+      // The Responses stream reports provider failures as in-band events, NOT
+      // as an HTTP error or a top-level `error` field — so the OpenAI SDK does
+      // not throw on them (it only throws for `data.error` / an `error` SSE
+      // event). Local servers use these for context-overflow, bad-model, etc.
+      // Throw so the agent loop settles the run as reason:"error" (→ error card)
+      // instead of finishing an empty turn silently.
+      case "error":
+        throw new Error(ev.message || "the model provider returned an error");
+      case "response.failed":
+        throw new Error(ev.response.error?.message || "the model provider reported a failed response");
       case "response.output_text.delta":
         text += ev.delta;
         opts.onDelta({ kind: "text", messageId: opts.messageId, delta: ev.delta });
