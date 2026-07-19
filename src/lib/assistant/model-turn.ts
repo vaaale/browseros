@@ -15,8 +15,8 @@ import { compactChatMessages } from "@/lib/agent/compaction/v2";
 //     `reasoning_content` deltas (DeepSeek/Qwen), max_tokens vs
 //     max_completion_tokens by provider, jinja "no user message" guard;
 //   - openai-responses: Responses API item shapes (function_call /
-//     function_call_output). Non-streamed for now — the text arrives as a
-//     single delta; acceptable until a Responses streaming pass.
+//     function_call_output). Streamed via SSE: output_text / reasoning_summary
+//     deltas surface live, function_call arguments accumulate per output item.
 // Provider config is resolved per call so Settings changes apply immediately.
 
 export const streamModelTurn: StreamTurn = async (opts) => {
@@ -277,7 +277,7 @@ async function responsesTurn(c: ProviderConfig, opts: TurnOpts): Promise<TurnRes
     apiKey: c.apiKey || "local",
     baseURL: c.baseUrl ? normalizeApiBase(c.baseUrl) : undefined,
   });
-  const res = await (client.responses.create(
+  const stream = (await client.responses.create(
     {
       model: c.model,
       instructions: opts.system,
@@ -288,25 +288,51 @@ async function responsesTurn(c: ProviderConfig, opts: TurnOpts): Promise<TurnRes
         description: t.description,
         parameters: t.parameters,
       })) as never,
+      stream: true,
       ...(c.maxTokens && c.maxTokens > 0 ? { max_output_tokens: c.maxTokens } : {}),
     } as Parameters<typeof client.responses.create>[0],
     { signal: opts.signal, headers: { "X-Correlation-Id": opts.runId } },
-  ) as unknown as Promise<Record<string, unknown>>);
+  )) as unknown as AsyncIterable<OpenAI.Responses.ResponseStreamEvent>;
 
-  const output = ((res.output as unknown[]) ?? []).map((i) => i as Record<string, unknown>);
-  const text = output
-    .filter((item) => item.type === "message")
-    .flatMap((msg) => (msg.content as unknown[]) ?? [])
-    .filter((blk) => (blk as Record<string, unknown>).type === "output_text")
-    .map((blk) => (blk as Record<string, unknown>).text as string)
-    .join("");
-  if (text) opts.onDelta({ kind: "text", messageId: opts.messageId, delta: text });
-  const toolCalls: TurnToolCall[] = output
-    .filter((item) => item.type === "function_call")
-    .map((item) => ({
-      id: (item.call_id as string) || (item.id as string) || `call-${opts.messageId}`,
-      name: item.name as string,
-      arguments: (item.arguments as string) || "{}",
-    }));
-  return { text, toolCalls };
+  let text = "";
+  // function_call items keyed by output-item id; arguments accumulate across
+  // delta events, finalized (authoritatively) on the matching done event.
+  const openCalls = new Map<string, TurnToolCall>();
+  const calls: TurnToolCall[] = [];
+  for await (const ev of stream) {
+    switch (ev.type) {
+      case "response.output_text.delta":
+        text += ev.delta;
+        opts.onDelta({ kind: "text", messageId: opts.messageId, delta: ev.delta });
+        break;
+      // Some servers/models emit reasoning as a summary, others as raw text.
+      case "response.reasoning_summary_text.delta":
+      case "response.reasoning_text.delta":
+        opts.onDelta({ kind: "reasoning", messageId: opts.messageId, delta: ev.delta });
+        break;
+      case "response.output_item.added":
+        if (ev.item.type === "function_call") {
+          const call: TurnToolCall = {
+            id: ev.item.call_id || ev.item.id || `call-${opts.messageId}`,
+            name: ev.item.name,
+            arguments: "",
+          };
+          openCalls.set(ev.item.id ?? call.id, call);
+          calls.push(call);
+        }
+        break;
+      case "response.function_call_arguments.delta": {
+        const call = openCalls.get(ev.item_id);
+        if (call) call.arguments += ev.delta;
+        break;
+      }
+      case "response.function_call_arguments.done": {
+        const call = openCalls.get(ev.item_id);
+        if (call) call.arguments = ev.arguments;
+        break;
+      }
+    }
+  }
+  for (const call of calls) if (!call.arguments) call.arguments = "{}";
+  return { text, toolCalls: calls };
 }
