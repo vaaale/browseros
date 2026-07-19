@@ -220,6 +220,7 @@ export async function runAgentLoop(deps: AgentLoopDeps, input: AgentLoopInput): 
 
       // ── Model turn (streamed). A stop here discards the partial turn. ──
       const messageId = newMessageId();
+      let reasoningBuf = "";
       let turn: TurnResult;
       try {
         turn = await deps.streamTurn({
@@ -230,12 +231,14 @@ export async function runAgentLoop(deps: AgentLoopDeps, input: AgentLoopInput): 
           messageId,
           conversationId: deps.conversationId,
           runId: deps.runId,
-          onDelta: (d) =>
+          onDelta: (d) => {
+            if (d.kind === "reasoning") reasoningBuf += d.delta;
             emit({
               type: d.kind === "reasoning" ? "reasoning_delta" : "text_delta",
               messageId: d.messageId,
               delta: d.delta,
-            }),
+            });
+          },
         });
       } catch (e) {
         if (signal.aborted) return finish({ reason: "cancelled" });
@@ -269,6 +272,7 @@ export async function runAgentLoop(deps: AgentLoopDeps, input: AgentLoopInput): 
         id: messageId,
         role: "assistant",
         content: turn.text,
+        ...(reasoningBuf ? { reasoning: reasoningBuf } : {}),
         ...(toolCallRefs.length ? { toolCalls: toolCallRefs } : {}),
       };
       messages = [...messages, assistantMessage];

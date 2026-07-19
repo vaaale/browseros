@@ -35,6 +35,11 @@ export interface ChatMessage {
   attachments?: Attachment[];
   /** Thumbs feedback stamped by the UI; consumed by the memory fast loop. */
   feedback?: { rating: "up" | "down"; at: number };
+  /** role:"assistant" only — reasoning/thinking text emitted by the model via
+   *  separate reasoning_delta events (e.g. Claude extended thinking, DeepSeek R1).
+   *  Stored separately from content so it never gets injected back into the model
+   *  context. The UI renders it as a collapsible "Reasoning" card. */
+  reasoning?: string;
   /** role:"assistant" only — set when the model turn failed; `content` holds the
    *  provider error. The UI renders it as an error card (retry / dismiss) rather
    *  than as a normal reply. */

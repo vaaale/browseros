@@ -89,7 +89,13 @@ function AssistantTurn({
   agentId: string;
   isLast: boolean;
 }) {
-  const { reasoning, answer, live } = splitReasoning(message.content ?? "");
+  // Prefer the explicit reasoning field (set when the model uses reasoning_delta
+  // events). Fall back to extracting <think> tags from content for models that
+  // embed thinking inline (DeepSeek/Qwen style).
+  const fromContent = splitReasoning(message.content ?? "");
+  const reasoning = message.reasoning ?? fromContent.reasoning;
+  const answer = message.reasoning ? (message.content ?? "") : fromContent.answer;
+  const live = message.reasoning ? false : fromContent.live;
   const cards = cardsFor(message, resultsByCall, state.toolCalls);
   const rating = message.feedback?.rating;
 
