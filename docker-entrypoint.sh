@@ -18,19 +18,13 @@ useradd --uid "$BOS_UID" --gid "$BOS_GID" --shell /bin/sh --home /home/user --cr
 # account to exist by the time anything invokes sudo.
 
 # Fix ownership of writable volumes/directories now that "user" exists.
-# Only do a recursive chown when the top-level owner doesn't already match —
-# avoids an expensive pass over node_modules on every restart.
 #
-# /app itself is the bind-mounted git checkout (owned by whoever the bastion
-# ran `git clone`/`git pull` as on the host side — typically root, not "user").
-# npm needs to write package-lock.json at its top level, so this needs fixing
-# too, not just the node_modules/data volumes. The bastion's own git operations
-# still work afterward regardless of this chown, since they run as root there
-# (root ignores file ownership for read/write).
-APP_OWNER=$(stat -c '%u' /app 2>/dev/null || echo "0")
-if [ "$APP_OWNER" != "$BOS_UID" ]; then
-  chown -R user:user /app
-fi
+# /app is the bind-mounted git checkout. The bastion runs git operations as root
+# (git clone, git reset --hard) between container starts, which rechowns individual
+# files (including package-lock.json) back to root even when the /app directory
+# itself remains owned by "user". Always chown the whole tree — node_modules is a
+# separate Docker volume so this only traverses the source tree and is fast.
+chown -R user:user /app
 
 NM_OWNER=$(stat -c '%u' /app/node_modules 2>/dev/null || echo "0")
 if [ "$NM_OWNER" != "$BOS_UID" ]; then

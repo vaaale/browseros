@@ -18,6 +18,15 @@ const execFileAsync = promisify(execFile);
 
 const USERNAME_RE = /^[a-z0-9_-]+$/;
 
+/** chown the src checkout to the container user so npm install can write files. */
+async function chownSrc(src: string, cfg: Config): Promise<void> {
+  const uid = cfg.containerUid ?? 1000;
+  const gid = cfg.containerGid ?? 1000;
+  await execFileAsync("chown", ["-R", `${uid}:${gid}`, src]).catch((err) => {
+    console.warn(`[bastion] chown ${src} failed (non-fatal):`, err);
+  });
+}
+
 export function assertValidUsername(username: string): void {
   if (!USERNAME_RE.test(username)) {
     throw new Error(`Invalid username '${username}': must match [a-z0-9_-]`);
@@ -64,6 +73,9 @@ export async function provisionUser(username: string, cfg: Config): Promise<stri
     fs.mkdirSync(path.dirname(src), { recursive: true }); // git clone creates `src` itself
     await execFileAsync("git", ["clone", "--depth=1", "--branch", cfg.bosBaseRef,
       cfg.bosRepoPath, src]);
+    // git runs as root; chown so the BOS container's non-root user can write to
+    // the checkout (e.g. npm install writing package-lock.json).
+    await chownSrc(src, cfg);
   }
 
   await createNmVolume(username);
@@ -143,6 +155,8 @@ export async function reprovisionUpdateSrc(username: string, cfg: Config): Promi
   } else {
     await execFileAsync("git", ["-C", src, "reset", "--hard", "FETCH_HEAD"]);
   }
+  // git reset --hard recreates files as root; chown so npm install can write them.
+  await chownSrc(src, cfg);
   const info = await inspectContainer(containerName(username));
   if (info) {
     if (info.State.Running) await stopContainer(info.Id);
