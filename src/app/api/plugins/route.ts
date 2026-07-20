@@ -1,12 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getPluginsForSettings, savePluginSettings, setPluginOrder } from "@/lib/plugins/settings";
+import { getPluginsForSettings, savePluginSettings, setPluginOrder, ensureDefaultPlugins } from "@/lib/plugins/settings";
 import { uninstallPlugin } from "@/lib/plugins/loader";
 import { logger } from "@/lib/logging";
+
+// Register built-in plugins at module load so the Settings UI sees them
+// without waiting for a run to start (runs/route.ts loads them lazily).
+import "@/plugins/compaction/init";
+import "@/plugins/memory/init";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
   try {
+    await ensureDefaultPlugins();
     const plugins = await getPluginsForSettings();
     return NextResponse.json({ plugins });
   } catch (err) {
