@@ -31,10 +31,28 @@ const memoryPlugin: PluginDefinition = {
       // This hook is a placeholder for future per-run memory operations.
       return undefined;
     },
-    onRunFinished: async () => {
-      // Optionally trigger a memory review for this conversation.
-      // The actual fast-loop runs on the scheduler's tick; this is for
-      // immediate post-run triggers if needed.
+    onRunFinished: async (summary, ctx) => {
+      // When a run completes successfully, trigger the fast-loop for this
+      // conversation. The fast-loop runs asynchronously and checks eligibility
+      // (idle threshold, turn cap, etc.) before doing any work.
+      if (summary.reason !== "completed") return;
+
+      const config = await getMemoryLoopsConfig().catch(() => null);
+      if (!config?.fastLoop.enabled) return;
+
+      try {
+        const { runFastLoop } = await import("@/lib/agent/memory/fast-loop");
+        // Fire-and-forget: the fast-loop scans all eligible conversations;
+        // pass onlyConversationId for a targeted check.
+        void runFastLoop({ onlyConversationId: ctx.conversationId }).catch(
+          (err: unknown) => {
+            // Log but never throw — onRunFinished is a fire-and-forget hook.
+            console.error("[memory-plugin] fast-loop trigger failed:", (err as Error).message);
+          },
+        );
+      } catch {
+        // Import failure — non-fatal.
+      }
     },
   },
   initialize: async (ctx: PluginContext) => {

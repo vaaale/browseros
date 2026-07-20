@@ -1,8 +1,9 @@
 import type { PluginDefinition, PluginContext } from "@/lib/plugins/types";
 
 // Compaction plugin — wraps the existing compaction middleware into a plugin.
-// When active, the middleware delegates to this plugin's compactPrompt.
-// When inactive, the middleware is a no-op pass-through.
+// When active, the middleware delegates to this plugin's beforeRun hook which
+// calls compactChatMessages. When inactive, the middleware applies the default
+// compaction logic directly.
 
 async function getCompactionConfig() {
   const { readCompactionConfig } = await import("@/lib/agent/compaction/config");
@@ -54,11 +55,31 @@ const compactionPlugin: PluginDefinition = {
     },
   },
   hooks: {
-    beforeRun: async () => {
-      // The compaction plugin's beforeRun is a pass-through — actual compaction
-      // happens at model-call time via the middleware. The hook is declared so
-      // the plugin appears in the "provides" list.
-      return undefined;
+    beforeRun: async (messages, ctx) => {
+      // Delegate to the existing compaction system via compactChatMessages.
+      // The compaction middleware (middleware.ts) skips its own logic when this
+      // plugin is active, so this is the sole compaction entry point.
+      const config = await getCompactionConfig();
+      if (!config.enabled) return undefined;
+
+      try {
+        const { compactChatMessages } = await import("@/lib/agent/compaction/v2");
+        // compactChatMessages converts ChatMessage[] → v3 prompt, runs
+        // compaction, and converts back. The system prompt is composed
+        // separately (not in the messages array) so we pass an empty string;
+        // the compaction logic operates on message content regardless.
+        const compacted = await compactChatMessages(
+          ctx.conversationId,
+          "",
+          messages as never,
+          undefined,
+        );
+        if (compacted.length === 0) return undefined;
+        return compacted as typeof messages;
+      } catch {
+        // On error, pass through unchanged — same as the middleware's safety net.
+        return undefined;
+      }
     },
   },
   initialize: async (ctx: PluginContext) => {
