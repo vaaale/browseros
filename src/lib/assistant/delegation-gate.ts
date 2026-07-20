@@ -12,9 +12,22 @@ import { listMcpServers } from "@/lib/mcp/store";
 // of-being-empty gates (FR-003/FR-004/FR-007/FR-025), never a separately
 // configured `tools:` field.
 
-/** Named agent: reuse gateFor(agentId) unchanged. */
-export function namedDelegationGate(agentId: string): Promise<ToolGateConfig> {
-  return gateFor(agentId);
+// Tools that orchestrate other agents. Sub-agents never get these — only the
+// top-level agent is the orchestrator; allowing sub-agents to delegate further
+// creates unbounded delegation chains.
+const ORCHESTRATION_TOOLS = new Set(["agent_delegate", "dev_delegate", "agent_list"]);
+
+function stripOrchestrationTools(gate: ToolGateConfig): ToolGateConfig {
+  return {
+    ...gate,
+    allow: new Set([...gate.allow].filter((id) => !ORCHESTRATION_TOOLS.has(id))),
+    deferred: new Set([...gate.deferred].filter((id) => !ORCHESTRATION_TOOLS.has(id))),
+  };
+}
+
+/** Named agent: reuse gateFor(agentId), then strip orchestration tools. */
+export async function namedDelegationGate(agentId: string): Promise<ToolGateConfig> {
+  return stripOrchestrationTools(await gateFor(agentId));
 }
 
 function serverOnlyIds(allow: Set<string>, tools: Record<string, AssistantTool>): Set<string> {
@@ -27,12 +40,12 @@ function serverOnlyIds(allow: Set<string>, tools: Record<string, AssistantTool>)
  *  own. Frontend/Tier-2 tools are deliberately excluded — see spec.md's
  *  Clarifications for why this is a scope line, not a technical limitation. */
 export function ephemeralDelegationGate(parentGate: ToolGateConfig, tools: Record<string, AssistantTool>): ToolGateConfig {
-  return {
+  return stripOrchestrationTools({
     allow: serverOnlyIds(parentGate.allow, tools),
     deferred: new Set(),
     registryIds: parentGate.registryIds,
     descriptions: parentGate.descriptions,
-  };
+  });
 }
 
 /** Surface agent: exactly the app-declared `toolNames`, immediately visible
@@ -42,12 +55,12 @@ export function ephemeralDelegationGate(parentGate: ToolGateConfig, tools: Recor
  *  CAPABILITIES bypasses the allow-check entirely, same as it does today for
  *  the primary personality (FR-025). */
 export function surfaceDelegationGate(toolNames: string[], parentGate: ToolGateConfig): ToolGateConfig {
-  return {
+  return stripOrchestrationTools({
     allow: new Set(toolNames),
     deferred: new Set(),
     registryIds: parentGate.registryIds,
     descriptions: parentGate.descriptions,
-  };
+  });
 }
 
 /** Named agent: identical composition to the primary-personality path — this

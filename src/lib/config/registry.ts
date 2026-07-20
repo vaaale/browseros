@@ -31,6 +31,13 @@ function clampToolTimeout(n: number): number {
   return Math.min(3600, Math.max(10, Math.round(n)));
 }
 
+// Clamps tools.maxAgentSteps into 4..200 (default 32).
+const MAX_AGENT_STEPS_DEFAULT = 32;
+function clampMaxAgentSteps(n: number): number {
+  if (!Number.isFinite(n)) return MAX_AGENT_STEPS_DEFAULT;
+  return Math.min(200, Math.max(4, Math.round(n)));
+}
+
 const REGISTRATIONS: ConfigRegistration[] = [
   {
     schema: {
@@ -109,15 +116,24 @@ const REGISTRATIONS: ConfigRegistration[] = [
           description:
             "Max time a single assistant tool call may run before it is aborted and reported to the agent as an error. Streaming tools (agent_delegate, workflow_run) treat this as an idle timeout instead. 10–3600, default 600.",
         },
+        {
+          key: "maxAgentSteps",
+          label: "Max agent steps",
+          type: "number",
+          description:
+            "Maximum number of model turns per agent run. Each agent (including delegated sub-agents) gets this many steps independently. 4–200, default 32.",
+        },
       ],
     },
     load: async () => {
       const s = await readNamespace("tools");
       const raw = typeof s.maxFindResults === "number" ? s.maxFindResults : 10;
       const rawTimeout = typeof s.toolCallTimeoutSec === "number" ? s.toolCallTimeoutSec : TOOL_TIMEOUT_DEFAULT;
+      const rawSteps = typeof s.maxAgentSteps === "number" ? s.maxAgentSteps : MAX_AGENT_STEPS_DEFAULT;
       return {
         maxFindResults: clampMaxFindResults(raw),
         toolCallTimeoutSec: clampToolTimeout(rawTimeout),
+        maxAgentSteps: clampMaxAgentSteps(rawSteps),
       };
     },
     save: async (patch) => {
@@ -129,6 +145,10 @@ const REGISTRATIONS: ConfigRegistration[] = [
       if (next.toolCallTimeoutSec !== undefined) {
         const n = typeof next.toolCallTimeoutSec === "number" ? next.toolCallTimeoutSec : Number(next.toolCallTimeoutSec);
         next.toolCallTimeoutSec = clampToolTimeout(Number.isFinite(n) ? n : TOOL_TIMEOUT_DEFAULT);
+      }
+      if (next.maxAgentSteps !== undefined) {
+        const n = typeof next.maxAgentSteps === "number" ? next.maxAgentSteps : Number(next.maxAgentSteps);
+        next.maxAgentSteps = clampMaxAgentSteps(Number.isFinite(n) ? n : MAX_AGENT_STEPS_DEFAULT);
       }
       await patchNamespace("tools", next);
     },
@@ -470,4 +490,12 @@ export async function getMaxFindResults(): Promise<number> {
   const v = await getConfigValue("tools", "maxFindResults");
   const n = typeof v === "number" ? v : 10;
   return clampMaxFindResults(n);
+}
+
+/** Resolve the current tools.maxAgentSteps (used by start-run and inner-loop delegation).
+ *  Always returns a clamped, defaulted number so callers never need to guard. */
+export async function getMaxAgentSteps(): Promise<number> {
+  const v = await getConfigValue("tools", "maxAgentSteps");
+  const n = typeof v === "number" ? v : MAX_AGENT_STEPS_DEFAULT;
+  return clampMaxAgentSteps(n);
 }
