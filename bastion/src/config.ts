@@ -12,6 +12,11 @@ export interface Config {
   bosBaseRef: string;
   bosRepoPath: string;
   bosVolumeBaseHost: string;
+  /** When set, mount this HOST path directly at /app instead of creating a
+   *  per-user clone. Feature branches created inside the container are
+   *  immediately visible in the host repo. Intended for single-developer
+   *  setups where the repo is on the same machine as the Docker host. */
+  bosRepoHostPath?: string;
   dataDir: string;
   bosNet: string;
   /** UID/GID the BOS process runs as inside user containers. Passed as
@@ -63,6 +68,7 @@ export function loadConfig(): Config {
     bosBaseRef: process.env.BOS_BASE_REF ?? persisted.bosBaseRef ?? "main",
     bosRepoPath: process.env.BOS_REPO_PATH ?? persisted.bosRepoPath ?? "/bos-src",
     bosVolumeBaseHost: process.env.VOLUME_BASE_HOST ?? persisted.bosVolumeBaseHost ?? process.env.VOLUME_BASE ?? "/user-data",
+    bosRepoHostPath: process.env.BOS_REPO_HOST_PATH ?? persisted.bosRepoHostPath,
     dataDir,
     bosNet: process.env.BOS_NET ?? "bos-net",
     containerUid: process.env.CONTAINER_UID ? parseInt(process.env.CONTAINER_UID, 10) : undefined,

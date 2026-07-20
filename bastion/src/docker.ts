@@ -31,7 +31,10 @@ export async function createBosContainer(username: string, cfg: Config): Promise
   // Docker resolves bind mount sources against the HOST filesystem, not the
   // bastion container's filesystem. Use bosVolumeBaseHost (the host-side path)
   // for mounts, and cfg.volumeBase (the bastion-internal path) for file ops.
-  const srcPath       = `${cfg.bosVolumeBaseHost}/${username}/src`;
+  // Direct-mount mode: use the host repo itself instead of a per-user clone.
+  // Feature branches created inside the container appear immediately in the
+  // host repo. Only safe for single-developer setups.
+  const srcPath       = cfg.bosRepoHostPath ?? `${cfg.bosVolumeBaseHost}/${username}/src`;
   const dataPath      = `${cfg.bosVolumeBaseHost}/${username}/data`;
   const worktreesPath = `${cfg.bosVolumeBaseHost}/${username}/worktrees`;
   const clonesPath    = `${cfg.bosVolumeBaseHost}/${username}/data-clones`;
