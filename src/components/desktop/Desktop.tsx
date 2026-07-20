@@ -21,7 +21,7 @@ export function Desktop() {
     >
       <Topbar />
 
-      <div className="absolute left-3 top-11 flex select-none flex-col gap-3">
+      <div className="absolute left-3 top-11 flex h-[calc(100vh-7.5rem)] select-none flex-col flex-wrap gap-3">
         {apps.filter((app) => !app.hidden).map((app) => (
           <button
             key={app.id}
