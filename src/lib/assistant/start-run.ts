@@ -12,7 +12,7 @@ import type { Attachment } from "./messages";
 import { composeHooks, globalRunHooks, type RunHooks } from "./hooks";
 import { composeInstructions } from "@/lib/agent/instructions";
 import { getConversationActiveFeatureBranch } from "@/lib/agent/conversations-server";
-import { getConfigValue } from "@/lib/config/registry";
+import { getConfigValue, getMaxAgentSteps } from "@/lib/config/registry";
 import { listSubAgents } from "@/lib/agent/subagents/store";
 import { logger } from "@/lib/logging";
 
@@ -20,7 +20,6 @@ import { logger } from "@/lib/logging";
 // loop's dependencies from real BOS services and owns the run lifecycle
 // (create → loop → finish). The loop runs DETACHED from any request.
 
-const DEFAULT_MAX_STEPS = 24;
 const CANCEL_WAIT_MS = 10_000;
 
 export interface StartRunOptions {
@@ -121,7 +120,7 @@ export async function startAssistantRun(opts: StartRunOptions): Promise<Run> {
   Object.assign(run.tools, assistantTools());
   manager.addSurfaceTools(run, opts.surfaceTools ?? []);
 
-  const [gate, timeoutMs] = await Promise.all([gateFor(opts.agentId), toolTimeoutMs()]);
+  const [gate, timeoutMs, maxSteps] = await Promise.all([gateFor(opts.agentId), toolTimeoutMs(), getMaxAgentSteps()]);
   run.toolTimeoutMs = timeoutMs;
   await addSurfaceAgentsWithBackstop(run, opts.surfaceAgents ?? []);
 
@@ -156,7 +155,7 @@ export async function startAssistantRun(opts: StartRunOptions): Promise<Run> {
           hooks,
           io: conversationIO(opts.conversationId, opts.agentId),
           awaitFrontendResult: (callId, ms) => manager.awaitFrontendResult(run, callId, ms),
-          maxSteps: DEFAULT_MAX_STEPS,
+          maxSteps,
           toolTimeoutMs: timeoutMs,
         },
         { userMessage: { content: opts.message, attachments: opts.attachments }, editOfMessageId: opts.editOfMessageId },

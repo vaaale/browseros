@@ -4,6 +4,7 @@ import { runClaudeAgent } from "./claude-runner";
 import { composeInstructions } from "@/lib/agent/instructions";
 import type { Agent, AgentRunResult } from "./types";
 import type { ChatMessage } from "@/lib/assistant/messages";
+import { getMaxAgentSteps } from "@/lib/config/registry";
 
 export type SubAgentEvent = ToolEvent;
 
@@ -31,13 +32,12 @@ async function runLocalHeadless(
   task: string,
   opts?: { onEvent?: (e: SubAgentEvent) => void },
 ): Promise<AgentRunResult> {
-  const [{ runAgentLoop }, { assistantTools }, { gateFor, gateFromAgent }, { streamModelTurn }, { defaultMaxSteps }, { e2eScriptedTurn }] =
+  const [{ runAgentLoop }, { assistantTools }, { gateFor, gateFromAgent }, { streamModelTurn }, { e2eScriptedTurn }] =
     await Promise.all([
       import("@/lib/assistant/agent-loop"),
       import("@/lib/assistant/registry"),
       import("@/lib/assistant/gate"),
       import("@/lib/assistant/model-turn"),
-      import("@/lib/assistant/inner-loop"),
       import("@/lib/assistant/e2e-provider"),
     ]);
   const streamTurn = e2eScriptedTurn(task) ?? streamModelTurn;
@@ -50,7 +50,7 @@ async function runLocalHeadless(
     registryIds: baseGate.registryIds,
     descriptions: baseGate.descriptions,
   };
-  const maxSteps = defaultMaxSteps(gate);
+  const maxSteps = await getMaxAgentSteps();
 
   let messages: ChatMessage[] = [];
   const toolCalls: { tool: string; input: unknown }[] = [];
