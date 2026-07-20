@@ -68,7 +68,7 @@ export function loadConfig(): Config {
     bosBaseRef: process.env.BOS_BASE_REF ?? persisted.bosBaseRef ?? "main",
     bosRepoPath: process.env.BOS_REPO_PATH ?? persisted.bosRepoPath ?? "/bos-src",
     bosVolumeBaseHost: process.env.VOLUME_BASE_HOST ?? persisted.bosVolumeBaseHost ?? process.env.VOLUME_BASE ?? "/user-data",
-    bosRepoHostPath: process.env.BOS_REPO_HOST_PATH ?? persisted.bosRepoHostPath,
+    bosRepoHostPath: process.env.BOS_REPO_HOST_PATH || persisted.bosRepoHostPath || undefined,
     dataDir,
     bosNet: process.env.BOS_NET ?? "bos-net",
     containerUid: process.env.CONTAINER_UID ? parseInt(process.env.CONTAINER_UID, 10) : undefined,
