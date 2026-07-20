@@ -1,6 +1,7 @@
 import "server-only";
 import { promises as fs } from "fs";
 import path from "path";
+import { createRequire } from "node:module";
 import { dataDir } from "@/os/data-dir";
 import { logger } from "@/lib/logging";
 import type { PluginManifest, PluginDefinition, PluginContext } from "./types";
@@ -97,9 +98,13 @@ export async function loadPluginFromDir(pluginDir: string): Promise<PluginDefini
   const entryFile = manifest.entry ?? "index.js";
   const entryPath = path.join(pluginDir, entryFile);
 
+  // Use createRequire instead of import() so the bundler never tries to
+  // statically resolve a runtime path. Plugins are CommonJS modules (per spec),
+  // so require() is the correct loader and bypasses Next.js bundling entirely.
+  const nodeRequire = createRequire(import.meta.url);
   let mod: { default?: PluginDefinition } & Record<string, unknown>;
   try {
-    mod = (await import(entryPath)) as typeof mod;
+    mod = nodeRequire(entryPath) as typeof mod;
   } catch (err) {
     logger().warn(COMPONENT, "plugin.load-error", {
       data: { id: manifest.id, path: entryPath, error: (err as Error).message },
