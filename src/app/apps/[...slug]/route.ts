@@ -104,6 +104,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ slug: string[]
       if (cssContent !== null) {
         headInject += `<style>${cssContent}</style>`;
       }
+      // Use a function replacement to prevent $& / $' / $` expansion in headInject.
       html = /<head[^>]*>/i.test(html)
         ? html.replace(/<head[^>]*>/i, (m) => `${m}${headInject}`)
         : `${headInject}${html}`;
@@ -114,10 +115,13 @@ export async function GET(_req: Request, ctx: { params: Promise<{ slug: string[]
       }
 
       // Replace <script src="bundle.js"> with the inline script.
+      // Use a function replacement — string replacements interpret $& / $' / $`
+      // as special patterns, and minified JS bundles routinely contain $& which
+      // would expand to the matched tag text, corrupting the output.
       if (jsContent !== null) {
         html = html.replace(
           /<script\b[^>]*\bsrc=["']bundle\.js["'][^>]*><\/script>/gi,
-          `<script>${jsContent}</script>`,
+          () => `<script>${jsContent}</script>`,
         );
       }
 
