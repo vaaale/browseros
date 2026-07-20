@@ -1,6 +1,8 @@
 node_modules
 .next
 data
+bos-worktrees
+bos-data-clones
 user-data
 bastion/node_modules
 bastion/ui/node_modules

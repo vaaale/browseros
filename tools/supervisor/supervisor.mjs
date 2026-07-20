@@ -29,9 +29,9 @@ const BASE_PORT = Number(process.env.BOS_PORT_BASE || 3000);
 // Number of preview ports available ABOVE the base port: BASE_PORT+1 .. BASE_PORT+POOL_SIZE.
 const POOL_SIZE = Number(process.env.BOS_PORT_POOL_SIZE || 20);
 let baseBranch = process.env.BOS_BASE_BRANCH || "";             // resolved to REPO's current branch at startup
-const WORKTREES = process.env.BOS_WORKTREES || path.join(REPO, "data", "bos-worktrees");
+const WORKTREES = process.env.BOS_WORKTREES || path.join(REPO, "bos-worktrees");
 const CANONICAL_DATA = process.env.BOS_CANONICAL_DATA || path.join(REPO, "data");
-const CLONES = process.env.BOS_DATA_CLONES || path.join(REPO, "data", "bos-data-clones");
+const CLONES = process.env.BOS_DATA_CLONES || path.join(REPO, "bos-data-clones");
 const PUSH_MODE = process.env.BOS_PUSH_MODE || "manual";        // manual | auto-on-promote
 const REMOTE = process.env.BOS_REMOTE || "origin";
 const HEALTH_TIMEOUT_MS = Number(process.env.BOS_HEALTH_TIMEOUT_MS || 120_000);

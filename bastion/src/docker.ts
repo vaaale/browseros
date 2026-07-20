@@ -158,7 +158,7 @@ export async function listBosImages(): Promise<Array<{ id: string; tags: string[
 // .dockerignore — packing data/ or user-data/ (live container state, sockets,
 // concurrently-written files) is what causes "Error in input stream".
 const BUILD_IGNORE_DIRS = new Set([
-  "node_modules", ".next", ".git", "data", "user-data",
+  "node_modules", ".next", ".git", "data", "bos-worktrees", "bos-data-clones", "user-data",
   "apps", "specs", "playwright-report", "test-results", "dist",
 ]);
 const BUILD_IGNORE_FILES = new Set([".env", ".env.local"]);
