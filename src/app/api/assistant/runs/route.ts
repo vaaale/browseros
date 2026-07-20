@@ -72,13 +72,16 @@ async function initDefaultPlugins(): Promise<void> {
     });
   }
 }
-void initDefaultPlugins();
+
+// Module-level promise so the first POST handler waits for init.
+const pluginsReady: Promise<void> = initDefaultPlugins();
 
 // POST — start a run (the loop runs detached from this request).
 //   { conversationId, agentId, message, editOfMessageId?, surfaceTools?, surfaceAgents? }
 // 409 when the conversation already has an active run (edit-resubmit instead
 // auto-cancels it) or when editOfMessageId is not the last user message.
 export async function POST(req: NextRequest) {
+  await pluginsReady;
   try {
     const body = (await req.json().catch(() => ({}))) as {
       conversationId?: string;
@@ -119,6 +122,7 @@ export async function POST(req: NextRequest) {
 
 // GET ?conversationId= — the conversation's active run, if any (reconnect path).
 export async function GET(req: NextRequest) {
+  await pluginsReady;
   const conversationId = new URL(req.url).searchParams.get("conversationId")?.trim();
   if (!conversationId) {
     return NextResponse.json({ error: "conversationId is required" }, { status: 400 });

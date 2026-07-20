@@ -203,6 +203,48 @@ export async function activatePlugin(id: string): Promise<void> {
     config.active.push(id);
     await writePluginsConfig(config);
   }
+
+  // Hot-register: if the plugin isn't already in the in-memory registry,
+  // load it from disk so it takes effect without a server restart.
+  if (!state().plugins.has(id)) {
+    try {
+      const { loadPluginFromDir } = await import("./loader");
+      const { dataDir } = await import("@/os/data-dir");
+      const path = await import("path");
+      const pluginDir = path.default.join(dataDir(), "plugins", id);
+      const def = await loadPluginFromDir(pluginDir);
+      if (def) {
+        registerPlugin(def);
+        if (def.initialize) {
+          const { logger } = await import("@/lib/logging");
+          const ctx = {
+            dataDir: dataDir(),
+            readFile: async (rel: string) => {
+              const fs = await import("fs");
+              return fs.promises.readFile(path.default.join(dataDir(), "plugins", id, rel), "utf8");
+            },
+            writeFile: async (rel: string, content: string) => {
+              const fs = await import("fs");
+              const fullPath = path.default.join(dataDir(), "plugins", id, rel);
+              await fs.promises.mkdir(path.default.dirname(fullPath), { recursive: true });
+              await fs.promises.writeFile(fullPath, content, "utf8");
+            },
+            readTranscript: async (convId: string) => {
+              const { loadConversationMessages } = await import("@/lib/assistant/conversation-store");
+              return loadConversationMessages(convId);
+            },
+            log: (level: "debug" | "info" | "warn" | "error", msg: string, data?: Record<string, unknown>) => {
+              logger().log({ level, component: `plugins.${id}`, msg, ...(data ? { data } : {}) });
+            },
+          };
+          setPluginContext(id, ctx);
+          await def.initialize(ctx);
+        }
+      }
+    } catch {
+      // Hot-register failure is non-fatal — plugin will be available after restart.
+    }
+  }
 }
 
 export async function deactivatePlugin(id: string): Promise<void> {

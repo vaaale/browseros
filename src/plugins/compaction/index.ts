@@ -93,8 +93,8 @@ const compactionPlugin: PluginDefinition = {
     return config as unknown as Record<string, unknown>;
   },
   setConfig: async (config: Record<string, unknown>) => {
-    const { patchNamespace } = await import("@/lib/config/store");
-    await patchNamespace("compaction", config);
+    const { patchPluginConfig } = await import("@/lib/plugins/registry");
+    await patchPluginConfig("bos-compaction", config);
   },
 };
 

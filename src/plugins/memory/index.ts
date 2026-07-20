@@ -66,8 +66,8 @@ const memoryPlugin: PluginDefinition = {
     return config as unknown as Record<string, unknown>;
   },
   setConfig: async (config: Record<string, unknown>) => {
-    const { patchNamespace } = await import("@/lib/config/store");
-    await patchNamespace("memoryLoops", config);
+    const { patchPluginConfig } = await import("@/lib/plugins/registry");
+    await patchPluginConfig("bos-memory", config);
   },
 };
 

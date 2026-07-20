@@ -67,7 +67,7 @@ export async function migrateLegacyPluginConfigs(): Promise<void> {
 }
 
 /** Load a single plugin from its directory. */
-async function loadPluginFromDir(pluginDir: string): Promise<PluginDefinition | null> {
+export async function loadPluginFromDir(pluginDir: string): Promise<PluginDefinition | null> {
   const manifestPath = path.join(pluginDir, "plugin.json");
   let raw: string;
   try {
