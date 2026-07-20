@@ -41,11 +41,13 @@ services:
       # Defaults to $PWD/user-data (i.e. the project directory + /user-data).
       - VOLUME_BASE_HOST=${VOLUME_BASE_HOST:-${PWD}/user-data}
       - BOS_REPO_PATH=/bos-src
-      # BOS_REPO_HOST_PATH: when set, mount this HOST path directly at /app in
-      # user containers instead of creating a per-user clone. Feature branches
-      # created inside the container are immediately visible in the host repo.
-      # Set to ${PWD} for single-developer setups on the same machine.
-      - BOS_REPO_HOST_PATH=${BOS_REPO_HOST_PATH:-}
+      # BOS_REPO_HOST_PATH: HOST-absolute path to mount directly at /app in user
+      # containers instead of creating a per-user clone. Feature branches created
+      # inside the container are immediately visible in the host repo. Defaults to
+      # ${PWD} (the repo root — the directory docker-compose is run from).
+      # Must be absolute — Docker rejects relative paths as bind mount sources.
+      # Set to an empty string in .env to disable and use per-user clones instead.
+      - BOS_REPO_HOST_PATH=${BOS_REPO_HOST_PATH:-${PWD}}
       - IDLE_TIMEOUT_MS=${IDLE_TIMEOUT_MS:-1800000}
       - MAX_CONCURRENT_INSTANCES=${MAX_CONCURRENT_INSTANCES:-50}
       - BOS_BASE_REF=${BOS_BASE_REF:-main}
