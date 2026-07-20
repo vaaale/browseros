@@ -12,13 +12,9 @@ import { elicit } from "@/lib/assistant/client/elicitations";
 // server registry offers to the model). The server loop dispatches these calls
 // to an attached page; the kernel executes them; the result is posted back.
 // Mounted once inside AssistantChatV2.
-export function FrontendToolsV2({ conversationId }: { conversationId: string }) {
+export function FrontendToolsV2(_: { conversationId: string }) {
   const store = useOSStoreApi();
   const htmlViewerIdRef = useRef<string | null>(null);
-  const conversationIdRef = useRef(conversationId);
-  useEffect(() => {
-    conversationIdRef.current = conversationId;
-  }, [conversationId]);
 
   useEffect(() => {
     const handlers: Record<string, FrontendToolHandler> = {
@@ -124,8 +120,11 @@ export function FrontendToolsV2({ conversationId }: { conversationId: string }) 
       },
       // Elicitations: push a blocking card into the transcript and await the
       // user's choice (the kernel's signal withdraws the card on stop).
-      agent_request_claude: (input, { signal }) => elicit("agent_request_claude", input, conversationIdRef.current, signal),
-      dev_branch_request: (input, { signal }) => elicit("dev_branch_request", input, conversationIdRef.current, signal),
+      // conversationId comes from the dispatch context (run-client.ts), not a
+      // ref, so the card always appears in the correct chat even when multiple
+      // AssistantChatV2 instances are mounted simultaneously (e.g. Chat + Build Studio).
+      agent_request_claude: (input, { signal, conversationId }) => elicit("agent_request_claude", input, conversationId, signal),
+      dev_branch_request: (input, { signal, conversationId }) => elicit("dev_branch_request", input, conversationId, signal),
     };
     const unbind = Object.entries(handlers).map(([name, h]) => registerFrontendTool(name, h));
     return () => unbind.forEach((u) => u());

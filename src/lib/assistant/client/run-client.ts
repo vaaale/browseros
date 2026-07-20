@@ -121,7 +121,7 @@ async function postToolResult(runId: string, callId: string, result: string): Pr
   }).catch(() => undefined);
 }
 
-function dispatchFrontendCall(runId: string, e: Extract<RunEvent, { type: "tool_call" }>) {
+function dispatchFrontendCall(runId: string, conversationId: string, e: Extract<RunEvent, { type: "tool_call" }>) {
   const handler = handlers.get(e.name) ?? findSurfaceToolHandler(e.name);
   if (!handler) return; // another surface may claim it; server times out in-band
   let input: Record<string, unknown> = {};
@@ -130,7 +130,7 @@ function dispatchFrontendCall(runId: string, e: Extract<RunEvent, { type: "tool_
   } catch {
     /* tool reports its own validation error */
   }
-  void runToolHandler(e.name, ({ signal }) => handler(input, { signal })).then(async (result) => {
+  void runToolHandler(e.name, ({ signal }) => handler(input, { signal, conversationId })).then(async (result) => {
     // Give a window this call may have just opened a couple of paints to
     // mount and register its surface tools, THEN sync — and post the tool's
     // own result only after that sync lands. Otherwise a tool that opens a
@@ -181,7 +181,7 @@ export async function attachToRun(conversationId: string, runId: string): Promis
             sawEvent = true;
             applyRunEvent(conversationId, event);
             if (event.type === "tool_call" && event.execution === "frontend") {
-              dispatchFrontendCall(runId, event);
+              dispatchFrontendCall(runId, conversationId, event);
             }
             if (event.type === "run_finished") {
               finished = true;
