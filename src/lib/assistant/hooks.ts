@@ -8,6 +8,7 @@
 
 import type { RunFinishReason } from "./run-events";
 import type { TurnToolCall } from "./agent-loop";
+import type { ChatMessage } from "./messages";
 
 export interface HookContext {
   runId: string;
@@ -21,6 +22,9 @@ export interface ToolCallDecision {
 }
 
 export interface RunHooks {
+  /** Run before the loop starts. Can inspect/modify the message array.
+   *  Return the (possibly modified) messages, or undefined to pass through. */
+  beforeRun?: (messages: ChatMessage[], ctx: HookContext) => Promise<ChatMessage[] | undefined>;
   /** Extra system-prompt text appended after the agent's composed instructions. */
   extendSystemPrompt?: (ctx: HookContext) => Promise<string | undefined>;
   /** Veto/inspect a tool call BEFORE it executes. A deny becomes an in-band
@@ -28,8 +32,13 @@ export interface RunHooks {
   beforeToolCall?: (call: TurnToolCall, ctx: HookContext) => Promise<ToolCallDecision | void>;
   /** Observe a tool call's settled result (including in-band errors). */
   afterToolCall?: (call: TurnToolCall, result: string, ctx: HookContext) => Promise<void>;
+  /** Run after the loop ends. Can inspect/modify the response. Return the
+   *  (possibly modified) response, or undefined to pass through. */
+  afterRun?: (response: { text: string; toolCalls: TurnToolCall[] }, ctx: HookContext) => Promise<{ text: string; toolCalls: TurnToolCall[] } | undefined>;
   /** Observe run completion (any reason, including cancelled). */
   onRunFinished?: (summary: { reason: RunFinishReason; error?: string }, ctx: HookContext) => Promise<void>;
+  /** Handle errors that occur during the run. */
+  onError?: (error: Error, ctx: HookContext) => Promise<void>;
 }
 
 /** Per-invocation budget. Hooks are decision points, not workers. */
@@ -51,13 +60,23 @@ async function guarded<T>(label: string, fn: () => Promise<T>, onError?: (msg: s
 }
 
 /** Fan-out composition over many hook sets:
+ *  - beforeRun / afterRun: pipeline (each hook transforms the value);
  *  - extendSystemPrompt: results concatenate (blank-line separated);
  *  - beforeToolCall: the FIRST deny wins;
- *  - afterToolCall / onRunFinished: every hook runs.
+ *  - afterToolCall / onRunFinished / onError: every hook runs.
  *  `onError` receives diagnostics (wire it to the logger). */
 export function composeHooks(sets: RunHooks[], onError?: (msg: string) => void): RunHooks {
   const hooks = sets.filter(Boolean);
   return {
+    beforeRun: async (messages, ctx) => {
+      let current = messages;
+      for (const h of hooks) {
+        if (!h.beforeRun) continue;
+        const result = await guarded("beforeRun", () => h.beforeRun!(current, ctx), onError);
+        if (result) current = result;
+      }
+      return current;
+    },
     extendSystemPrompt: async (ctx) => {
       const parts: string[] = [];
       for (const h of hooks) {
@@ -81,10 +100,25 @@ export function composeHooks(sets: RunHooks[], onError?: (msg: string) => void):
         await guarded("afterToolCall", () => h.afterToolCall!(call, result, ctx), onError);
       }
     },
+    afterRun: async (response, ctx) => {
+      let current = response;
+      for (const h of hooks) {
+        if (!h.afterRun) continue;
+        const result = await guarded("afterRun", () => h.afterRun!(current, ctx), onError);
+        if (result) current = result;
+      }
+      return current;
+    },
     onRunFinished: async (summary, ctx) => {
       for (const h of hooks) {
         if (!h.onRunFinished) continue;
         await guarded("onRunFinished", () => h.onRunFinished!(summary, ctx), onError);
+      }
+    },
+    onError: async (error, ctx) => {
+      for (const h of hooks) {
+        if (!h.onError) continue;
+        await guarded("onError", () => h.onError!(error, ctx), onError);
       }
     },
   };

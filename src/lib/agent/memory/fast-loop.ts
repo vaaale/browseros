@@ -23,6 +23,7 @@ import { getMemoryLoopsConfig } from "./config";
 import { nudgeSkillScore } from "@/lib/agent/skills/improve";
 import { startSelfImprove } from "@/lib/agent/self-improve";
 import { DEFAULT_AGENT_ID } from "@/lib/agent/agent-ids";
+import { getPlugin, readPluginsConfig } from "@/lib/plugins/registry";
 
 // Thumbs-up score reinforcement per skill used in a well-rated turn.
 const THUMBS_UP_NUDGE = 0.5;
@@ -39,6 +40,28 @@ export const FAST_LOOP_JOB_ID = "system:memory.fast-loop";
 export const FAST_LOOP_HANDLER_REF = "memory.fast-loop";
 
 const CHATS_DIR = "/Documents/Chats";
+
+const MEMORY_PLUGIN_ID = "bos-memory";
+
+let _pluginActiveCache: { at: number; active: boolean } | null = null;
+const PLUGIN_CACHE_TTL_MS = 2000;
+
+/** Check if the memory plugin is registered and active in config. */
+async function isMemoryPluginActive(): Promise<boolean> {
+  const now = Date.now();
+  if (_pluginActiveCache && now - _pluginActiveCache.at < PLUGIN_CACHE_TTL_MS) {
+    return _pluginActiveCache.active;
+  }
+  const plugin = getPlugin(MEMORY_PLUGIN_ID);
+  if (!plugin) {
+    _pluginActiveCache = { at: now, active: false };
+    return false;
+  }
+  const config = await readPluginsConfig();
+  const active = config.active.includes(MEMORY_PLUGIN_ID);
+  _pluginActiveCache = { at: now, active };
+  return active;
+}
 
 // ── Embedded system prompt (FR-021) ───────────────────────────────────────
 // Bundled at specs/bos-system-specs/021-memory-loops/prompts/fast-loop-system.md
@@ -398,6 +421,14 @@ export async function runFastLoop(opts: {
   if (!(await hasCredentials())) {
     logger().warn(LOG, "fast loop: no AI credentials configured — cannot run");
     summary.reason = "no AI provider configured";
+    return summary;
+  }
+
+  // When the memory plugin is active, the plugin's hooks handle memory
+  // operations. Skip the fast-loop's own logic to avoid duplicate work.
+  if (await isMemoryPluginActive()) {
+    logger().info(LOG, "fast loop skipped — memory plugin is active");
+    summary.reason = "memory plugin active";
     return summary;
   }
 

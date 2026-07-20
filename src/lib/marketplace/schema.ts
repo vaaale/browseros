@@ -25,6 +25,12 @@ export interface MarketplaceItemSkill {
   version: string;
 }
 
+export interface MarketplaceItemServerPlugin {
+  /** Path (relative to the marketplace repo root) to the plugin directory (contains plugin.json). */
+  entrypoint: string;
+  version: string;
+}
+
 export interface MarketplaceItem {
   id: string;
   name: string;
@@ -33,6 +39,7 @@ export interface MarketplaceItem {
   app?: MarketplaceItemApp;
   spec?: MarketplaceItemSpec;
   skill?: MarketplaceItemSkill;
+  serverPlugin?: MarketplaceItemServerPlugin;
 }
 
 export interface MarketplaceManifest {
@@ -107,7 +114,14 @@ export function validateManifest(raw: unknown): MarketplaceManifest {
       skill = { path: sk.path as string, version: typeof sk.version === "string" ? sk.version : "0.0.0" };
     }
 
-    if (!app && !spec && !skill) throw new Error(`item ${o.id}: must expose an app, spec, and/or a skill`);
+    let serverPlugin: MarketplaceItemServerPlugin | undefined;
+    if (o.serverPlugin != null) {
+      const sp = o.serverPlugin as Record<string, unknown>;
+      if (!relPathOk(sp.entrypoint)) throw new Error(`item ${o.id}: invalid serverPlugin.entrypoint`);
+      serverPlugin = { entrypoint: sp.entrypoint as string, version: typeof sp.version === "string" ? sp.version : "0.0.0" };
+    }
+
+    if (!app && !spec && !skill && !serverPlugin) throw new Error(`item ${o.id}: must expose an app, spec, skill, and/or a serverPlugin`);
     return {
       id: o.id as string,
       name: o.name as string,
@@ -116,6 +130,7 @@ export function validateManifest(raw: unknown): MarketplaceManifest {
       app,
       spec,
       skill,
+      serverPlugin,
     };
   });
 
