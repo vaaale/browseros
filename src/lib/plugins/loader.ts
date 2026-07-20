@@ -97,14 +97,12 @@ export async function loadPluginFromDir(pluginDir: string): Promise<PluginDefini
   const entryFile = manifest.entry ?? "index.js";
   const entryPath = path.join(pluginDir, entryFile);
 
-  // eval('require') escapes webpack's static analyzer — it won't trace through
-  // eval(), so the dynamic entryPath never triggers a "Can't resolve <dynamic>"
-  // build error. At runtime this is just the real Node.js require().
-  // eslint-disable-next-line no-eval
-  const nodeRequire = eval("require") as NodeRequire;
+  // import() with webpackIgnore prevents Turbopack/webpack from trying to
+  // statically resolve the runtime path at build time. Without this comment
+  // both bundlers raise "Can't resolve <dynamic>" for any variable-path import.
   let mod: { default?: PluginDefinition } & Record<string, unknown>;
   try {
-    mod = nodeRequire(entryPath) as typeof mod;
+    mod = await import(/* webpackIgnore: true */ entryPath) as typeof mod;
   } catch (err) {
     logger().warn(COMPONENT, "plugin.load-error", {
       data: { id: manifest.id, path: entryPath, error: (err as Error).message },
