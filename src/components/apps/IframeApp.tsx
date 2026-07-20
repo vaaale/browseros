@@ -146,7 +146,7 @@ export function IframeApp({ windowId, appId, params }: AppProps) {
     <iframe
       ref={iframeRef}
       src={url}
-      className="h-full w-full border-0 bg-transparent"
+      className="h-full w-full border-0 bg-black"
       sandbox={sandbox}
       title={`App: ${appId}`}
     />
