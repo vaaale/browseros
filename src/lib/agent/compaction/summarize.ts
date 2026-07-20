@@ -172,6 +172,51 @@ async function invokeFastLoop(convId: string): Promise<void> {
   }
 }
 
+// ── Span chunking (context-overflow guard) ────────────────────────────────
+//
+// The summarizer receives the raw client transcript which can be much larger
+// than the model's context window (large tool outputs, hundreds of turns). To
+// avoid provider context-overflow errors we split the span into chunks that
+// fit comfortably, then do rolling summarization: each chunk's output becomes
+// the "previous summary" for the next chunk, so the final summary is a
+// single merged document regardless of how many passes were needed.
+
+const CHARS_PER_TOKEN = 4; // same heuristic as estimate.ts
+// Tokens reserved for the system prompt + previous-summary preamble in each
+// summarizer call. Intentionally generous.
+const SUMMARIZER_OVERHEAD_TOKENS = 4000;
+// Mirror of DEFAULT_MAX_TOKENS in estimate.ts / llm.ts.
+const OUTPUT_HEADROOM_TOKENS = 65_535;
+
+/** Maximum span chars to send in a single summarizer call, derived from the
+ *  configured context window. The remainder is reserved for the system prompt,
+ *  previous summary, and model output. */
+function chunkCharBudget(assumedContextTokens: number): number {
+  const inputTokens = Math.max(8000, assumedContextTokens - OUTPUT_HEADROOM_TOKENS - SUMMARIZER_OVERHEAD_TOKENS);
+  return inputTokens * CHARS_PER_TOKEN;
+}
+
+/** Split a message span into chunks whose rendered size stays within
+ *  charBudget. A single message that exceeds the budget is kept as its own
+ *  chunk rather than dropped — the provider error path already retries. */
+function chunkSpan(messages: ClientMessage[], charBudget: number): ClientMessage[][] {
+  const chunks: ClientMessage[][] = [];
+  let current: ClientMessage[] = [];
+  let currentChars = 0;
+  for (const m of messages) {
+    const mChars = renderClientMessages([m]).length;
+    if (current.length > 0 && currentChars + mChars > charBudget) {
+      chunks.push(current);
+      current = [];
+      currentChars = 0;
+    }
+    current.push(m);
+    currentChars += mChars;
+  }
+  if (current.length > 0) chunks.push(current);
+  return chunks;
+}
+
 // ── Summarization core ─────────────────────────────────────────────────────
 
 export interface SummarizeSuccess {
@@ -254,14 +299,26 @@ export async function summarizeConversation(
     await invokeFastLoop(convId);
 
     const previousSummary = currentSidecar.summary?.trim() ?? "";
-    const rendered = renderClientMessages(span);
-    const userPrompt = previousSummary
-      ? `Previous summary:\n${previousSummary}\n\nNew span to fold in (oldest first):\n${rendered}`
-      : `Conversation span to compact (oldest first):\n${rendered}`;
+    const charBudget = chunkCharBudget(config.assumedContextTokens);
+    const chunks = chunkSpan(span, charBudget);
+    if (chunks.length > 1) {
+      log("info", convId, "summary.chunked", { chunks: chunks.length, spanMessages: span.length, charBudget });
+    }
 
-    let summaryText: string;
+    let summaryText = previousSummary;
+    let totalChars = 0;
     try {
-      summaryText = await callWithRetry(convId, userPrompt);
+      for (let i = 0; i < chunks.length; i++) {
+        const rendered = renderClientMessages(chunks[i]);
+        totalChars += rendered.length;
+        const userPrompt = summaryText
+          ? `Previous summary:\n${summaryText}\n\nNew span to fold in (oldest first):\n${rendered}`
+          : `Conversation span to compact (oldest first):\n${rendered}`;
+        summaryText = await callWithRetry(convId, userPrompt);
+        if (chunks.length > 1) {
+          log("info", convId, "summary.chunk.done", { chunk: i + 1, of: chunks.length });
+        }
+      }
     } catch (err) {
       log("error", convId, "summary.failed", undefined, err);
       return { skipped: true, reason: "summarizer-failed" };
@@ -278,13 +335,13 @@ export async function summarizeConversation(
       boundary,
       summary: summaryText,
       stats: {
-        estimatedTokens: Math.ceil(rendered.length / 4),
+        estimatedTokens: Math.ceil(totalChars / 4),
         compactedAt: new Date().toISOString(),
         runs: (currentSidecar.stats?.runs ?? 0) + 1,
       },
     };
     await writeSidecar(convId, next);
-    log("info", convId, "summary.applied", { boundaryCount: cut, spanHash });
+    log("info", convId, "summary.applied", { boundaryCount: cut, spanHash, chunks: chunks.length });
     return { boundary, summary: summaryText };
   } finally {
     try {
