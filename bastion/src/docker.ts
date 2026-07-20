@@ -1,6 +1,12 @@
 import Dockerode from "dockerode";
 import http from "http";
+import fs from "fs";
+import path from "path";
+import { execFile } from "child_process";
+import { promisify } from "util";
 import type { Config } from "./config";
+
+const execAsync = promisify(execFile);
 
 const docker = new Dockerode({ socketPath: "/var/run/docker.sock" });
 
@@ -25,9 +31,24 @@ export async function createBosContainer(username: string, cfg: Config): Promise
   // Docker resolves bind mount sources against the HOST filesystem, not the
   // bastion container's filesystem. Use bosVolumeBaseHost (the host-side path)
   // for mounts, and cfg.volumeBase (the bastion-internal path) for file ops.
-  const srcPath = `${cfg.bosVolumeBaseHost}/${username}/src`;
-  const dataPath = `${cfg.bosVolumeBaseHost}/${username}/data`;
+  const srcPath       = `${cfg.bosVolumeBaseHost}/${username}/src`;
+  const dataPath      = `${cfg.bosVolumeBaseHost}/${username}/data`;
+  const worktreesPath = `${cfg.bosVolumeBaseHost}/${username}/worktrees`;
+  const clonesPath    = `${cfg.bosVolumeBaseHost}/${username}/data-clones`;
   const nmVol = volumeName(username);
+
+  // Worktrees and data-clones must live outside /app (the src bind-mount) so
+  // that chown -R /app never traverses them (worktrees contain a full source
+  // tree + node_modules; clones contain a full copy of /app/data). Create and
+  // chown the host-side directories now — idempotent on re-runs, and cheap
+  // because they're always empty at container-create time.
+  const uid = cfg.containerUid ?? 1000;
+  const gid = cfg.containerGid ?? 1000;
+  for (const subdir of ["worktrees", "data-clones"]) {
+    const dir = path.join(cfg.volumeBase, username, subdir);
+    fs.mkdirSync(dir, { recursive: true });
+    await execAsync("chown", [`${uid}:${gid}`, dir]).catch(() => {});
+  }
 
   // Derive allowed dev origins from PUBLIC_URL so Next.js dev accepts
   // cross-origin HMR/dev requests when BOS is reached via a LAN hostname.
@@ -49,6 +70,8 @@ export async function createBosContainer(username: string, cfg: Config): Promise
     Image: cfg.bosImage,
     Env: [
       `BOS_DATA_DIR=/app/data`,
+      `BOS_WORKTREES=/worktrees`,     // outside /app — not traversed by chownSrc
+      `BOS_DATA_CLONES=/data-clones`, // outside /app — not traversed by chownSrc
       `BOS_PUBLIC_PORT=8090`,   // bastion proxies to this port
       `BOS_PORT_BASE=3000`,     // next dev internal port
       `BOS_BASE_DEV=1`,         // supervisor starts next dev automatically
@@ -64,6 +87,9 @@ export async function createBosContainer(username: string, cfg: Config): Promise
         // inside that clone with their own per-user volumes.
         `${srcPath}:/app`,
         `${dataPath}:/app/data`,
+        // Supervisor ephemeral dirs — separate from /app so chownSrc is fast.
+        `${worktreesPath}:/worktrees`,
+        `${clonesPath}:/data-clones`,
       ],
       Mounts: [
         {

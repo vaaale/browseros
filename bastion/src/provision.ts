@@ -41,6 +41,14 @@ function dataDir(username: string, cfg: Config): string {
   return path.join(cfg.volumeBase, username, "data");
 }
 
+function worktreesDir(username: string, cfg: Config): string {
+  return path.join(cfg.volumeBase, username, "worktrees");
+}
+
+function dataClonesDir(username: string, cfg: Config): string {
+  return path.join(cfg.volumeBase, username, "data-clones");
+}
+
 // ── Full provision ─────────────────────────────────────────────────────────────
 
 /** True if `dir` is a healthy git checkout (has a .git and rev-parse succeeds). */
@@ -106,8 +114,16 @@ export async function deprovisionUser(username: string, cfg: Config, opts: Depro
   if (opts.wipeSrc && fs.existsSync(src)) {
     fs.rmSync(src, { recursive: true, force: true });
   }
+  // Worktrees are git worktrees of src — wipe them together with src.
+  if (opts.wipeSrc && fs.existsSync(worktreesDir(username, cfg))) {
+    fs.rmSync(worktreesDir(username, cfg), { recursive: true, force: true });
+  }
   if (opts.wipeData && fs.existsSync(data)) {
     fs.rmSync(data, { recursive: true, force: true });
+  }
+  // Data-clones are snapshots of data — wipe them together with data.
+  if (opts.wipeData && fs.existsSync(dataClonesDir(username, cfg))) {
+    fs.rmSync(dataClonesDir(username, cfg), { recursive: true, force: true });
   }
   if (opts.wipeNm) {
     await removeNmVolume(username);
@@ -155,6 +171,10 @@ export async function reprovisionUpdateSrc(username: string, cfg: Config): Promi
   } else {
     await execFileAsync("git", ["-C", src, "reset", "--hard", "FETCH_HEAD"]);
   }
+  // Unshallow after updating so the supervisor can always find merge-bases
+  // between the new base tip and any existing feature-branch worktrees.
+  // --unshallow exits non-zero on a complete repo; that's expected, ignore it.
+  await execFileAsync("git", ["-C", src, "fetch", "--unshallow", "origin"]).catch(() => {});
   // git reset --hard recreates files as root; chown so npm install can write them.
   await chownSrc(src, cfg);
   const info = await inspectContainer(containerName(username));
