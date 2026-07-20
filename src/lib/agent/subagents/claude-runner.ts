@@ -135,19 +135,21 @@ function runClaudeCli(agent: Agent, task: string, cwd: string, onEvent?: OnEvent
       finish({ ...base, output: "", error: `${HARNESS_UNAVAILABLE} failed to spawn claude (${e.message}). Is the Claude CLI installed and on PATH?` }),
     );
     child.on("close", async (code) => {
-      if (isError || code !== 0) {
-        finish({ ...base, output: resultText, steps, toolCalls, error: resultText || stderr.trim() || `claude exited with code ${code}.` });
-        return;
-      }
       // Deterministic backstop: stage everything the agent created/changed so
-      // new files are never left untracked. Feature-branch + .gitignore make
-      // `git add -A` safe; a staging error must never fail the task.
+      // new files are never left untracked. Runs unconditionally — even on a
+      // non-zero exit the agent may have written partial work that supervisorBuild
+      // should commit and preserve. Feature-branch + .gitignore make `git add -A`
+      // safe; a staging error must never fail the task.
       let note = "";
       try {
         const r = await stageAll(cwd);
         if (r.staged > 0) note = `\n\n[harness] Staged ${r.staged} changed file(s)${r.created ? ` (${r.created} new)` : ""}.`;
       } catch {
         /* ignore staging errors */
+      }
+      if (isError || code !== 0) {
+        finish({ ...base, output: resultText + note, steps, toolCalls, error: resultText || stderr.trim() || `claude exited with code ${code}.` });
+        return;
       }
       finish({ ...base, output: resultText + note, steps, toolCalls });
     });
@@ -252,17 +254,17 @@ function runOpenCodeCli(agent: Agent, task: string, cwd: string, onEvent?: OnEve
       finish({ ...base, output: "", error: `${HARNESS_UNAVAILABLE} failed to spawn opencode (${e.message}). Is the OpenCode CLI installed and on PATH?` }),
     );
     child.on("close", async (code) => {
-      if (errorText || code !== 0) {
-        finish({ ...base, output: finalText(), steps, toolCalls, error: errorText || stderr.trim() || `opencode exited with code ${code}.` });
-        return;
-      }
-      // Same deterministic staging backstop as the Claude path.
+      // Same unconditional staging backstop as the Claude path.
       let note = "";
       try {
         const r = await stageAll(cwd);
         if (r.staged > 0) note = `\n\n[harness] Staged ${r.staged} changed file(s)${r.created ? ` (${r.created} new)` : ""}.`;
       } catch {
         /* ignore staging errors */
+      }
+      if (errorText || code !== 0) {
+        finish({ ...base, output: finalText() + note, steps, toolCalls, error: errorText || stderr.trim() || `opencode exited with code ${code}.` });
+        return;
       }
       finish({ ...base, output: finalText() + note, steps, toolCalls });
     });
@@ -447,7 +449,11 @@ export async function runClaudeAgent(
       ? await runViaMcp(runAgent, task, { ...harness.server, cwd, env: { ...(harness.server.env ?? {}), PWD: cwd } }, opts?.onEvent)
       : await (harness.tool === "opencode" ? runOpenCodeCli : runClaudeCli)(runAgent, task, cwd, opts?.onEvent);
 
-  if (!result.error) {
+  // Always build when a candidate branch exists — even if the agent reported an
+  // error, any staged partial work gets committed and health-gated so it is
+  // inspectable and recoverable rather than silently left uncommitted. Only skip
+  // when the worktree was never provisioned (no branch).
+  if (candidateBranch) {
     opts?.onEvent?.({ tool: "Supervisor: build + health-gate candidate", input: {} });
     const built = await supervisorBuild(candidateBranch).catch(() => null);
     // Tell the caller the change is a CANDIDATE, not the live/active version — the
@@ -455,7 +461,7 @@ export async function runClaudeAgent(
     // doesn't work" confusion (the user was viewing active) and the bad workaround
     // of re-editing the main checkout in place (which then breaks Promote).
     const state = built && typeof built.state === "string" ? (built.state as string) : "";
-    const brand = candidateBranch ? `\`${candidateBranch}\`` : "the next candidate";
+    const brand = `\`${candidateBranch}\``;
     result.output =
       (result.output || "") +
       (state === "ready"
