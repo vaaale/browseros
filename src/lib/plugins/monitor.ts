@@ -28,7 +28,7 @@ function ensureHangCheck(): void {
   if (hangCheckTimer) return;
   hangCheckTimer = setInterval(() => {
     const now = Date.now();
-    for (const [key, inv] of active()) {
+    for (const [, inv] of active()) {
       const elapsed = now - inv.startedAt;
       if (elapsed > HANG_THRESHOLD_MS) {
         logger().warn(COMPONENT, "hook.potential-hang", {

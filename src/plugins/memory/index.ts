@@ -1,4 +1,4 @@
-import type { PluginDefinition, PluginContext, BosPluginHooks, ChatMessage, RunContext } from "@/lib/plugins/types";
+import type { PluginDefinition, PluginContext } from "@/lib/plugins/types";
 
 // Memory plugin — wraps the existing memory system (fast-loop + slow-loop)
 // into a plugin. The memory loops run as scheduler jobs; the plugin provides
@@ -26,12 +26,12 @@ const memoryPlugin: PluginDefinition = {
     },
   },
   hooks: {
-    afterRun: async (response: { text: string; toolCalls: unknown[] }, ctx: RunContext) => {
+    afterRun: async () => {
       // The memory fast-loop is triggered by the scheduler, not inline here.
       // This hook is a placeholder for future per-run memory operations.
       return undefined;
     },
-    onRunFinished: async (summary, ctx) => {
+    onRunFinished: async () => {
       // Optionally trigger a memory review for this conversation.
       // The actual fast-loop runs on the scheduler's tick; this is for
       // immediate post-run triggers if needed.

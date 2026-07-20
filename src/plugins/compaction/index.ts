@@ -1,4 +1,4 @@
-import type { PluginDefinition, PluginContext, BosPluginHooks, ChatMessage, RunContext } from "@/lib/plugins/types";
+import type { PluginDefinition, PluginContext } from "@/lib/plugins/types";
 
 // Compaction plugin — wraps the existing compaction middleware into a plugin.
 // When active, the middleware delegates to this plugin's compactPrompt.
@@ -54,7 +54,7 @@ const compactionPlugin: PluginDefinition = {
     },
   },
   hooks: {
-    beforeRun: async (messages: ChatMessage[], ctx: RunContext) => {
+    beforeRun: async () => {
       // The compaction plugin's beforeRun is a pass-through — actual compaction
       // happens at model-call time via the middleware. The hook is declared so
       // the plugin appears in the "provides" list.

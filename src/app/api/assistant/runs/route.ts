@@ -6,6 +6,7 @@ import type { Attachment } from "@/lib/assistant/messages";
 import { registerVoiceModeHook } from "@/lib/voice/voice-hook";
 import { ensureDefaultPlugins } from "@/lib/plugins/settings";
 import { listPlugins, setPluginContext, readPluginsConfig } from "@/lib/plugins/registry";
+import { loadAllPlugins } from "@/lib/plugins/loader";
 import { dataDir } from "@/os/data-dir";
 import { logger } from "@/lib/logging";
 
@@ -24,6 +25,10 @@ import "@/plugins/memory/init";
 const COMPONENT = "plugins.init";
 async function initDefaultPlugins(): Promise<void> {
   try {
+    // Load marketplace-installed plugins from dataDir()/plugins/ first.
+    // This also runs legacy config migration (compaction.json, memoryLoops.json).
+    await loadAllPlugins();
+
     await ensureDefaultPlugins();
     const config = await readPluginsConfig();
     const activeSet = new Set(config.active);

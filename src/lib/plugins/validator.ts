@@ -1,4 +1,4 @@
-import type { PluginManifest, PluginHookType } from "./types";
+import type { PluginHookType } from "./types";
 
 // Plugin manifest validation — ensures manifests are well-formed before loading.
 

@@ -1,7 +1,6 @@
 import "server-only";
-import type { PluginStatus, PluginsConfig } from "./types";
-import { listPlugins, readPluginsConfig, writePluginsConfig, registerPlugin, unregisterPlugin, setPluginContext, patchPluginConfig } from "./registry";
-import { dataDir } from "@/os/data-dir";
+import type { PluginStatus } from "./types";
+import { listPlugins, readPluginsConfig, writePluginsConfig } from "./registry";
 import { logger } from "@/lib/logging";
 
 // Settings integration — provides the data layer for the PluginsTab.
