@@ -1,8 +1,13 @@
 import type { PluginDefinition, PluginContext } from "@/lib/plugins/types";
+import { logger } from "@/lib/logging";
 
 // Memory plugin — wraps the existing memory system (fast-loop + slow-loop)
 // into a plugin. The memory loops run as scheduler jobs; the plugin provides
 // the onRunFinished hook to trigger the fast-loop review after each run.
+
+function log(level: "debug" | "info" | "warn" | "error", convId: string, msg: string, data?: Record<string, unknown>): void {
+  logger().log({ level, component: "plugins.memory", conversation: convId, msg, ...(data ? { data } : {}) });
+}
 
 async function getMemoryLoopsConfig() {
   const { getMemoryLoopsConfig } = await import("@/lib/agent/memory/config");
@@ -49,26 +54,30 @@ const memoryPlugin: PluginDefinition = {
       return undefined;
     },
     onRunFinished: async (summary, ctx) => {
-      // When a run completes successfully, trigger the fast-loop for this
-      // conversation. The fast-loop runs asynchronously and checks eligibility
-      // (idle threshold, turn cap, etc.) before doing any work.
-      if (summary.reason !== "completed") return;
+      log("debug", ctx.conversationId, "onRunFinished.invoked", { reason: summary.reason });
+
+      if (summary.reason !== "completed") {
+        log("debug", ctx.conversationId, "onRunFinished.skipped", { reason: summary.reason });
+        return;
+      }
 
       const config = await getMemoryLoopsConfig().catch(() => null);
-      if (!config?.fastLoop.enabled) return;
+      if (!config?.fastLoop.enabled) {
+        log("debug", ctx.conversationId, "onRunFinished.skipped", { reason: "fast-loop-disabled" });
+        return;
+      }
+
+      log("info", ctx.conversationId, "onRunFinished.fast-loop.triggered");
 
       try {
         const { runFastLoop } = await import("@/lib/agent/memory/fast-loop");
-        // Fire-and-forget: the fast-loop scans all eligible conversations;
-        // pass onlyConversationId for a targeted check.
         void runFastLoop({ onlyConversationId: ctx.conversationId }).catch(
           (err: unknown) => {
-            // Log but never throw — onRunFinished is a fire-and-forget hook.
-            console.error("[memory-plugin] fast-loop trigger failed:", (err as Error).message);
+            log("warn", ctx.conversationId, "onRunFinished.fast-loop.failed", { error: (err as Error).message });
           },
         );
-      } catch {
-        // Import failure — non-fatal.
+      } catch (err) {
+        log("warn", ctx.conversationId, "onRunFinished.fast-loop.import-failed", { error: (err as Error).message });
       }
     },
   },

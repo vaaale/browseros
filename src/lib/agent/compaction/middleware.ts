@@ -24,37 +24,8 @@ import { readCompactionConfig, type CompactionConfig } from "./config";
 // applied to every model call (initial user turn + intra-turn tool-loop steps).
 // The system prompt (params.system-equivalent — carried as an in-array
 // system-role message by the AI SDK v6 conversion) is never mutated (FR-017).
-//
-// When the compaction plugin (bos-compaction) is active, the middleware
-// skips its own logic — the plugin's beforeRun hook handles compaction
-// via compactChatMessages. When no plugin is active, the middleware
-// applies the default compaction logic directly.
-
-import { getPlugin, readPluginsConfig } from "@/lib/plugins/registry";
 
 const COMPONENT = "compaction";
-
-const COMPACTION_PLUGIN_ID = "bos-compaction";
-
-let _pluginActiveCache: { at: number; active: boolean } | null = null;
-const PLUGIN_CACHE_TTL_MS = 2000;
-
-/** Check if the compaction plugin is registered and active in config. */
-async function isCompactionPluginActive(): Promise<boolean> {
-  const now = Date.now();
-  if (_pluginActiveCache && now - _pluginActiveCache.at < PLUGIN_CACHE_TTL_MS) {
-    return _pluginActiveCache.active;
-  }
-  const plugin = getPlugin(COMPACTION_PLUGIN_ID);
-  if (!plugin) {
-    _pluginActiveCache = { at: now, active: false };
-    return false;
-  }
-  const config = await readPluginsConfig();
-  const active = config.active.includes(COMPACTION_PLUGIN_ID);
-  _pluginActiveCache = { at: now, active };
-  return active;
-}
 
 function toViewConfig(cfg: CompactionConfig): CompactionView {
   return {
@@ -190,13 +161,6 @@ async function scheduleSummarization(convId: string): Promise<void> {
 async function transformCall(convId: string, params: { prompt: unknown; maxOutputTokens?: number }): Promise<{ prompt?: unknown }> {
   const messages = extractPromptMessages(params.prompt);
   if (!messages || messages.length === 0) return {};
-
-  // When the compaction plugin is active, the plugin's beforeRun hook handles
-  // compaction via compactChatMessages. Skip the middleware's own logic to
-  // avoid double-compaction.
-  if (await isCompactionPluginActive()) {
-    return {};
-  }
 
   let config: CompactionConfig;
   try {
