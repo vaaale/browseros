@@ -525,6 +525,19 @@ const REGISTRATIONS: ConfigRegistration[] = [
       await patchNamespace("logging", patch);
     },
   },
+  {
+    schema: {
+      namespace: "plugins",
+      title: "Plugins",
+      description:
+        "Manage server-side plugins that extend the assistant pipeline. Plugins can provide compaction, memory, telemetry, and other subsystems. Install from Marketplace, reorder the pipeline, and configure individual plugins.",
+      order: 17,
+      customComponent: "plugins",
+      fields: [],
+    },
+    load: async () => ({}),
+    save: async () => {},
+  },
 ];
 
 export function listConfigSchemas(): ConfigSchema[] {

@@ -416,3 +416,57 @@ export async function installApp(marketplaceId: string, itemId: string): Promise
   logger().info(COMPONENT, "app installed", { marketplaceId, itemId, appId: installed.id });
   return installed;
 }
+
+/**
+ * Install a server plugin from a marketplace. Validates the plugin manifest,
+ * copies files to dataDir()/plugins/<id>/, and registers it.
+ */
+export async function installServerPlugin(
+  marketplaceId: string,
+  itemId: string,
+): Promise<{ pluginId: string }> {
+  const manifest = await readManifest(marketplaceId);
+  const item = findItem(manifest, itemId);
+
+  // Read the plugin.json from the marketplace item's directory.
+  const itemDir = path.join(cloneDir(marketplaceId), item.app?.entrypoint ?? "");
+  const pluginJsonPath = path.join(itemDir, "plugin.json");
+
+  if (!(await pathExists(pluginJsonPath))) {
+    throw new Error(`Item "${itemId}" has no plugin.json — not a server plugin.`);
+  }
+
+  const pluginJsonContent = await fs.readFile(pluginJsonPath, "utf8");
+  const pluginManifest = JSON.parse(pluginJsonContent) as {
+    id?: string;
+    name?: string;
+    version?: string;
+    type?: string;
+    provides?: string[];
+  };
+
+  if (!pluginManifest.id) throw new Error("plugin.json missing required 'id' field");
+  if (pluginManifest.type !== "server-plugin") throw new Error("plugin.json type must be 'server-plugin'");
+
+  // Install the plugin files to dataDir()/plugins/<id>/.
+  const { installPlugin } = await import("@/lib/plugins/loader");
+  await installPlugin(itemDir, {
+    id: pluginManifest.id,
+    name: pluginManifest.name ?? item.name,
+    version: pluginManifest.version ?? "0.0.0",
+    type: "server-plugin",
+    provides: (pluginManifest.provides as never[]) ?? [],
+    description: item.description,
+  });
+
+  // Auto-activate the plugin.
+  const { activatePlugin } = await import("@/lib/plugins/registry");
+  await activatePlugin(pluginManifest.id);
+
+  logger().info(COMPONENT, "server plugin installed", {
+    marketplaceId,
+    itemId,
+    pluginId: pluginManifest.id,
+  });
+  return { pluginId: pluginManifest.id };
+}

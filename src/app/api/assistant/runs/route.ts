@@ -10,6 +10,11 @@ export const dynamic = "force-dynamic";
 // Register the voice-mode system-prompt hook once at module load time.
 registerVoiceModeHook();
 
+// Register default plugins (compaction, memory) at module load time.
+// The init modules register themselves with the plugin registry.
+import "@/plugins/compaction/init";
+import "@/plugins/memory/init";
+
 // POST — start a run (the loop runs detached from this request).
 //   { conversationId, agentId, message, editOfMessageId?, surfaceTools?, surfaceAgents? }
 // 409 when the conversation already has an active run (edit-resubmit instead

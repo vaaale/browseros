@@ -10,6 +10,7 @@ import { gateFor } from "./gate";
 import type { ToolDeclaration } from "./tools";
 import type { Attachment } from "./messages";
 import { composeHooks, globalRunHooks, type RunHooks } from "./hooks";
+import { composePluginHooks, listPlugins } from "@/lib/plugins/registry";
 import { composeInstructions } from "@/lib/agent/instructions";
 import { getConversationActiveFeatureBranch } from "@/lib/agent/conversations-server";
 import { getConfigValue } from "@/lib/config/registry";
@@ -125,8 +126,23 @@ export async function startAssistantRun(opts: StartRunOptions): Promise<Run> {
   run.toolTimeoutMs = timeoutMs;
   await addSurfaceAgentsWithBackstop(run, opts.surfaceAgents ?? []);
 
+  // Compose plugin hooks with existing RunHooks. Plugin hooks run after
+  // built-in hooks (featureBranch, global hooks) but before per-run hooks.
+  const pluginHooksList = listPlugins();
+  const pluginHooks: RunHooks = pluginHooksList.length > 0
+    ? (() => {
+        const composed = composePluginHooks(pluginHooksList, (msg) => logger().error("assistant.plugins", msg));
+        return {
+          extendSystemPrompt: composed.extendSystemPrompt,
+          beforeToolCall: composed.beforeToolCall,
+          afterToolCall: composed.afterToolCall,
+          onRunFinished: composed.onRunFinished,
+        } as RunHooks;
+      })()
+    : {};
+
   const hooks = composeHooks(
-    [featureBranchHook, ...globalRunHooks(), ...(opts.hooks ?? [])],
+    [featureBranchHook, ...globalRunHooks(), pluginHooks, ...(opts.hooks ?? [])],
     (msg) => logger().error("assistant.hooks", msg),
   );
 
