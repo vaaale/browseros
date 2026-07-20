@@ -6,6 +6,9 @@ import type { TurnToolCall } from "@/lib/assistant/agent-loop";
 import type { ToolCallDecision, HookContext } from "@/lib/assistant/hooks";
 import type { RunFinishReason } from "@/lib/assistant/run-events";
 
+// Re-export so plugin implementations can import from this module.
+export type { ChatMessage } from "@/lib/assistant/messages";
+
 // ── Hook context (re-export for convenience) ────────────────────────────────
 
 export type RunContext = HookContext;

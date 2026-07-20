@@ -133,10 +133,13 @@ export async function startAssistantRun(opts: StartRunOptions): Promise<Run> {
     ? (() => {
         const composed = composePluginHooks(pluginHooksList, (msg) => logger().error("assistant.plugins", msg));
         return {
+          beforeRun: composed.beforeRun,
           extendSystemPrompt: composed.extendSystemPrompt,
           beforeToolCall: composed.beforeToolCall,
           afterToolCall: composed.afterToolCall,
+          afterRun: composed.afterRun,
           onRunFinished: composed.onRunFinished,
+          onError: composed.onError,
         } as RunHooks;
       })()
     : {};

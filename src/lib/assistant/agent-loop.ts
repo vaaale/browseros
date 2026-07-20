@@ -203,6 +203,10 @@ export async function runAgentLoop(deps: AgentLoopDeps, input: AgentLoopInput): 
     await io.saveMessages(messages);
     emit({ type: "message", message: userMessage });
 
+    // Plugin hook: beforeRun — plugins may inspect/modify messages before the loop.
+    const hookModified = await hooks?.beforeRun?.(messages, hookCtx);
+    if (hookModified) messages = hookModified;
+
     let system = await deps.composeSystem();
     const extra = await hooks?.extendSystemPrompt?.(hookCtx);
     if (extra?.trim()) system += `\n\n${extra.trim()}`;
@@ -242,6 +246,7 @@ export async function runAgentLoop(deps: AgentLoopDeps, input: AgentLoopInput): 
         });
       } catch (e) {
         if (signal.aborted) return finish({ reason: "cancelled" });
+        await hooks?.onError?.(e as Error, hookCtx);
         // Persist the failure AS the assistant message (not an empty/dropped
         // turn) so the transcript stays truthful and the UI can render an error
         // card with retry. The message carries no tool calls, so the transcript
@@ -279,7 +284,11 @@ export async function runAgentLoop(deps: AgentLoopDeps, input: AgentLoopInput): 
       await io.saveMessages(messages);
       emit({ type: "message", message: assistantMessage });
 
-      if (toolCallRefs.length === 0) return finish({ reason: "completed" });
+      if (toolCallRefs.length === 0) {
+        // Plugin hook: afterRun — plugins may inspect/modify the final response.
+        await hooks?.afterRun?.({ text: turn.text, toolCalls: turn.toolCalls }, hookCtx);
+        return finish({ reason: "completed" });
+      }
 
       // ── Execute tool calls sequentially. Once the assistant message is
       // persisted, EVERY call gets an answer — execution, in-band error, or
@@ -364,6 +373,7 @@ export async function runAgentLoop(deps: AgentLoopDeps, input: AgentLoopInput): 
     emit({ type: "message", message: limitMessage });
     return finish({ reason: "max_steps" });
   } catch (e) {
+    await hooks?.onError?.(e as Error, hookCtx);
     return finish({ reason: "error", error: (e as Error).message });
   }
 }

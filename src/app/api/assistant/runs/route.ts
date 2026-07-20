@@ -4,6 +4,10 @@ import { ActiveRunError, runManager, type SurfaceAgentEntry } from "@/lib/assist
 import type { ToolDeclaration } from "@/lib/assistant/tools";
 import type { Attachment } from "@/lib/assistant/messages";
 import { registerVoiceModeHook } from "@/lib/voice/voice-hook";
+import { ensureDefaultPlugins } from "@/lib/plugins/settings";
+import { listPlugins, setPluginContext, readPluginsConfig } from "@/lib/plugins/registry";
+import { dataDir } from "@/os/data-dir";
+import { logger } from "@/lib/logging";
 
 export const dynamic = "force-dynamic";
 
@@ -14,6 +18,56 @@ registerVoiceModeHook();
 // The init modules register themselves with the plugin registry.
 import "@/plugins/compaction/init";
 import "@/plugins/memory/init";
+
+// Initialize default plugins: ensure they are active in config and call
+// initialize() on each with its PluginContext.
+const COMPONENT = "plugins.init";
+async function initDefaultPlugins(): Promise<void> {
+  try {
+    await ensureDefaultPlugins();
+    const config = await readPluginsConfig();
+    const activeSet = new Set(config.active);
+    for (const plugin of listPlugins()) {
+      if (!activeSet.has(plugin.manifest.id)) continue;
+      if (!plugin.initialize) continue;
+      const ctx = {
+        dataDir: dataDir(),
+        readFile: async (rel: string) => {
+          const { promises: fs } = await import("fs");
+          const path = await import("path");
+          return fs.readFile(path.default.join(dataDir(), "plugins", plugin.manifest.id, rel), "utf8");
+        },
+        writeFile: async (rel: string, content: string) => {
+          const { promises: fs } = await import("fs");
+          const path = await import("path");
+          const fullPath = path.default.join(dataDir(), "plugins", plugin.manifest.id, rel);
+          await fs.mkdir(path.default.dirname(fullPath), { recursive: true });
+          await fs.writeFile(fullPath, content, "utf8");
+        },
+        readTranscript: async (convId: string) => {
+          const { loadConversationMessages } = await import("@/lib/assistant/conversation-store");
+          return loadConversationMessages(convId);
+        },
+        log: (level: "debug" | "info" | "warn" | "error", msg: string, data?: Record<string, unknown>) => {
+          logger().log({ level, component: `${COMPONENT}.${plugin.manifest.id}`, msg, ...(data ? { data } : {}) });
+        },
+      };
+      setPluginContext(plugin.manifest.id, ctx);
+      try {
+        await plugin.initialize(ctx);
+      } catch (err) {
+        logger().error(COMPONENT, `plugin.initialize failed: ${plugin.manifest.id}`, undefined, {
+          error: (err as Error).message,
+        });
+      }
+    }
+  } catch (err) {
+    logger().error(COMPONENT, "default plugin initialization failed", undefined, {
+      error: (err as Error).message,
+    });
+  }
+}
+void initDefaultPlugins();
 
 // POST — start a run (the loop runs detached from this request).
 //   { conversationId, agentId, message, editOfMessageId?, surfaceTools?, surfaceAgents? }

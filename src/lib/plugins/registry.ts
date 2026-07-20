@@ -1,8 +1,6 @@
 import "server-only";
 import type {
   PluginDefinition,
-  BosPluginHooks,
-  PluginHookType,
   RunContext,
   PluginContext,
   PluginStatus,
@@ -12,6 +10,7 @@ import type { ChatMessage } from "@/lib/assistant/messages";
 import type { TurnToolCall } from "@/lib/assistant/agent-loop";
 import type { ToolCallDecision } from "@/lib/assistant/hooks";
 import type { RunFinishReason } from "@/lib/assistant/run-events";
+import { trackStart, trackEnd } from "./monitor";
 
 // ── Global registry ─────────────────────────────────────────────────────────
 // Uses globalThis for hot-reload safety, matching the existing __bosRunHooks
@@ -78,6 +77,7 @@ export function setPluginContext(id: string, ctx: PluginContext): void {
 const HOOK_TIMEOUT_MS = 15_000;
 
 async function guarded<T>(label: string, fn: () => Promise<T>, onError?: (msg: string) => void): Promise<T | undefined> {
+  const key = trackStart("pipeline", label);
   try {
     return await Promise.race([
       fn(),
@@ -89,6 +89,8 @@ async function guarded<T>(label: string, fn: () => Promise<T>, onError?: (msg: s
   } catch (e) {
     onError?.(`plugin hook ${label} failed: ${(e as Error).message}`);
     return undefined;
+  } finally {
+    trackEnd(key);
   }
 }
 

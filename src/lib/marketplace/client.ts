@@ -428,8 +428,14 @@ export async function installServerPlugin(
   const manifest = await readManifest(marketplaceId);
   const item = findItem(manifest, itemId);
 
+  // Use item.serverPlugin.entrypoint if available, falling back to item.app?.entrypoint.
+  const pluginEntrypoint = item.serverPlugin?.entrypoint ?? item.app?.entrypoint;
+  if (!pluginEntrypoint) {
+    throw new Error(`Item "${itemId}" has no serverPlugin or app entrypoint — not a server plugin.`);
+  }
+
   // Read the plugin.json from the marketplace item's directory.
-  const itemDir = path.join(cloneDir(marketplaceId), item.app?.entrypoint ?? "");
+  const itemDir = path.join(cloneDir(marketplaceId), pluginEntrypoint);
   const pluginJsonPath = path.join(itemDir, "plugin.json");
 
   if (!(await pathExists(pluginJsonPath))) {

@@ -3,15 +3,67 @@ import { promises as fs } from "fs";
 import path from "path";
 import { dataDir } from "@/os/data-dir";
 import { logger } from "@/lib/logging";
-import type { PluginManifest, PluginDefinition, PluginContext, BosPluginHooks } from "./types";
-import { registerPlugin, setPluginContext, readPluginsConfig } from "./registry";
+import type { PluginManifest, PluginDefinition, PluginContext } from "./types";
+import { registerPlugin, setPluginContext, readPluginsConfig, writePluginsConfig } from "./registry";
 import { validateManifest } from "./validator";
-import { wrapPluginSandbox } from "./sandbox";
 
 const COMPONENT = "plugins";
 
 function pluginsDir(): string {
   return path.join(dataDir(), "plugins");
+}
+
+const configDir = () => path.join(dataDir(), "config");
+
+async function pathExists(p: string): Promise<boolean> {
+  return fs.access(p).then(() => true).catch(() => false);
+}
+
+/**
+ * Migrate legacy config files (data/config/compaction.json and
+ * data/config/memory.json) into data/config/plugins.json under the
+ * appropriate plugin IDs. Runs once; legacy files are left in place
+ * (non-destructive) but a .migrated marker prevents re-running.
+ */
+export async function migrateLegacyPluginConfigs(): Promise<void> {
+  const marker = path.join(configDir(), ".plugins-migrated");
+  if (await pathExists(marker)) return;
+
+  const config = await readPluginsConfig();
+  let changed = false;
+
+  // Migrate compaction.json → bos-compaction plugin config
+  try {
+    const raw = await fs.readFile(path.join(configDir(), "compaction.json"), "utf8");
+    const compactionCfg = JSON.parse(raw) as Record<string, unknown>;
+    if (Object.keys(compactionCfg).length > 0 && !config.config["bos-compaction"]) {
+      config.config["bos-compaction"] = compactionCfg;
+      changed = true;
+      logger().info(COMPONENT, "config.migrated", { data: { from: "compaction.json", to: "bos-compaction" } });
+    }
+  } catch {
+    // No legacy file — skip.
+  }
+
+  // Migrate memoryLoops.json → bos-memory plugin config
+  try {
+    const raw = await fs.readFile(path.join(configDir(), "memoryLoops.json"), "utf8");
+    const memoryCfg = JSON.parse(raw) as Record<string, unknown>;
+    if (Object.keys(memoryCfg).length > 0 && !config.config["bos-memory"]) {
+      config.config["bos-memory"] = memoryCfg;
+      changed = true;
+      logger().info(COMPONENT, "config.migrated", { data: { from: "memoryLoops.json", to: "bos-memory" } });
+    }
+  } catch {
+    // No legacy file — skip.
+  }
+
+  if (changed) {
+    await writePluginsConfig(config);
+  }
+
+  // Write marker so we don't run again.
+  await fs.writeFile(marker, new Date().toISOString(), "utf8").catch(() => {});
 }
 
 /** Load a single plugin from its directory. */
@@ -67,34 +119,14 @@ async function loadPluginFromDir(pluginDir: string): Promise<PluginDefinition | 
   // Ensure the manifest is attached.
   def.manifest = manifest;
 
-  // Build a PluginContext scoped to this plugin's directory.
-  const ctx: PluginContext = {
-    dataDir: dataDir(),
-    readFile: async (rel: string) => fs.readFile(path.join(pluginDir, rel), "utf8"),
-    writeFile: async (rel: string, content: string) => {
-      const fullPath = path.join(pluginDir, rel);
-      await fs.mkdir(path.dirname(fullPath), { recursive: true });
-      await fs.writeFile(fullPath, content, "utf8");
-    },
-    readTranscript: async (convId: string) => {
-      const { loadConversationMessages } = await import("@/lib/assistant/conversation-store");
-      return loadConversationMessages(convId);
-    },
-    log: (level, msg, data) => {
-      logger().log({ level, component: `${COMPONENT}.${manifest.id}`, msg, ...(data ? { data } : {}) });
-    },
-  };
-
-  // Wrap hooks in a sandbox for access restrictions.
-  if (def.hooks) {
-    def.hooks = wrapPluginSandbox(manifest.id, def.hooks, pluginDir);
-  }
-
   return { manifest, hooks: def.hooks ?? {}, initialize: def.initialize, dispose: def.dispose, getConfig: def.getConfig, setConfig: def.setConfig };
 }
 
 /** Load all plugins from dataDir()/plugins/ and register active ones. */
 export async function loadAllPlugins(): Promise<void> {
+  // Migrate legacy config files before loading plugins.
+  await migrateLegacyPluginConfigs();
+
   const dir = pluginsDir();
   let entries: string[];
   try {
