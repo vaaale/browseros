@@ -53,6 +53,23 @@ const compactionPlugin: PluginDefinition = {
       order: 16,
       description: "Server-side view transformation on what is sent to the model.",
     },
+    configSchema: {
+      type: "object",
+      title: "Context Compaction",
+      properties: {
+        enabled: { type: "boolean", title: "Enabled", description: "Master switch. When off, the middleware is a pass-through.", default: true },
+        assumedContextTokens: { type: "number", title: "Assumed context window (tokens)", description: "Used when the provider does not declare a maxInputTokens. Default 128000.", default: 128000 },
+        clearThreshold: { type: "number", title: "Clear threshold (fraction of budget)", description: "Estimated tokens above this fraction trigger Layer 1 tool-result clearing. Default 0.50.", default: 0.5 },
+        summarizeThreshold: { type: "number", title: "Summarize threshold (fraction of budget)", description: "Estimated tokens above this fraction schedule Layer 2 summarization. Default 0.75.", default: 0.75 },
+        hardLimit: { type: "number", title: "Hard limit (fraction of budget)", description: "Estimated tokens above this fraction trigger synchronous truncation. Default 0.92.", default: 0.92 },
+        keepToolResults: { type: "number", title: "Keep last N tool-result pairs", description: "Tool-results older than the newest N pairs are eligible for clearing. Default 5.", default: 5 },
+        keepTailMessages: { type: "number", title: "Minimum tail messages", description: "The kept tail is at least this many messages. Default 10.", default: 10 },
+        tailBudgetFraction: { type: "number", title: "Tail-budget fraction", description: "Target size of the kept tail as a fraction of the effective budget. Default 0.20.", default: 0.2 },
+        unrecoverableTools: { type: "string", title: "Unrecoverable tools", description: "Comma or newline separated list of tool names whose results must never be cleared." },
+        model: { type: "string", title: "Summarizer model override", description: "Optional cheaper model id for the summarizer." },
+        lockStalenessMs: { type: "number", title: "Lock staleness (ms)", description: "How long a summarization lock is honored. Default 600000 (10 min).", default: 600000 },
+      },
+    } as Record<string, unknown>,
   },
   hooks: {
     beforeRun: async (messages, ctx) => {
