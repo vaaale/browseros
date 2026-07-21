@@ -1,4 +1,5 @@
 import type { PluginDefinition, PluginContext } from "@/lib/plugins/types";
+import { logger } from "@/lib/logging";
 
 // Memory plugin — wraps the existing memory system (fast-loop + slow-loop)
 // into a plugin. The memory loops run exclusively as scheduler jobs; this
