@@ -14,6 +14,40 @@ async function getMemoryLoopsConfig() {
   return getMemoryLoopsConfig();
 }
 
+// ── Mutex guard ───────────────────────────────────────────────────────────
+// Prevents concurrent activate/deactivate from racing each other.
+
+let _lifecyclePromise: Promise<void> | null = null;
+
+async function runLifecycle(fn: () => Promise<void>): Promise<void> {
+  const prev = _lifecyclePromise;
+  _lifecyclePromise = (async () => {
+    if (prev) await prev;
+    await fn();
+  })();
+  return _lifecyclePromise;
+}
+
+// ── Job lifecycle helpers ─────────────────────────────────────────────────
+
+async function seedAndResumeJobs(): Promise<void> {
+  const { ensureFastLoopJob } = await import("@/lib/agent/memory/fast-loop");
+  const { ensureSlowLoopJob } = await import("@/lib/agent/memory/consolidate");
+  const { resumeJob } = await import("@/lib/scheduler/engine");
+
+  await ensureFastLoopJob();
+  await resumeJob("system:memory.fast-loop");
+  await ensureSlowLoopJob();
+  await resumeJob("system:memory.slow-loop");
+}
+
+async function pauseJobs(): Promise<void> {
+  const { pauseJob } = await import("@/lib/scheduler/engine");
+
+  await pauseJob("system:memory.fast-loop");
+  await pauseJob("system:memory.slow-loop");
+}
+
 const memoryPlugin: PluginDefinition = {
   manifest: {
     id: "bos-memory",
@@ -82,10 +116,25 @@ const memoryPlugin: PluginDefinition = {
     },
   },
   initialize: async (ctx: PluginContext) => {
-    ctx.log("info", "memory plugin initialized");
+    await runLifecycle(async () => {
+      try {
+        await seedAndResumeJobs();
+        ctx.log("info", "memory plugin: scheduler jobs seeded and resumed");
+      } catch (error) {
+        ctx.log("error", "memory plugin: failed to seed scheduler jobs", { error: (error as Error).message });
+      }
+    });
   },
   dispose: async () => {
-    // Memory loops are scheduler jobs — they stop when the scheduler stops.
+    await runLifecycle(async () => {
+      try {
+        await pauseJobs();
+      } catch (error) {
+        logger().error("plugins.memory", "failed to pause scheduler jobs", undefined, {
+          error: (error as Error).message,
+        });
+      }
+    });
   },
   getConfig: async () => {
     const config = await getMemoryLoopsConfig();
@@ -94,6 +143,14 @@ const memoryPlugin: PluginDefinition = {
   setConfig: async (config: Record<string, unknown>) => {
     const { patchPluginConfig } = await import("@/lib/plugins/registry");
     await patchPluginConfig("bos-memory", config);
+    // Re-seed jobs with new intervals
+    try {
+      await seedAndResumeJobs();
+    } catch (error) {
+      logger().error("plugins.memory", "failed to re-seed scheduler jobs after config change", undefined, {
+        error: (error as Error).message,
+      });
+    }
   },
 };
 
