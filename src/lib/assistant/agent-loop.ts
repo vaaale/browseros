@@ -115,9 +115,11 @@ function toolError(tool: string, detail: string, hint?: string): string {
 async function runServerTool(
   tool: AssistantTool,
   input: Record<string, unknown>,
-  ctx: Omit<ToolContext, "onEvent">,
+  ctx: Omit<ToolContext, "onEvent" | "elicit">,
   timeoutMs: number,
   onProgress: (event: unknown) => void,
+  awaitFrontendResult: (callId: string, timeout: number) => Promise<FrontendOutcome>,
+  emitEvent: (e: RunEventInput) => void,
 ): Promise<string> {
   if (!tool.execute) return toolError(tool.name, "tool has no server executor", "this is a BOS bug");
   const callAbort = new AbortController();
@@ -167,8 +169,20 @@ async function runServerTool(
       armTimer();
       onProgress(event);
     };
+    // Inline elicitation: emits a frontend tool_call to the NDJSON stream,
+    // then waits for the user's response exactly like the loop does for a
+    // real frontend tool. Re-arms the idle timer so a slow user response
+    // does not trigger the server-tool timeout.
+    const elicit = async (toolName: string, args: Record<string, unknown>): Promise<string> => {
+      const elicitCallId = newMessageId();
+      onEvent({ type: "elicitation_started", tool: toolName }); // re-arm timer
+      emitEvent({ type: "tool_call", callId: elicitCallId, name: toolName, args: JSON.stringify(args), execution: "frontend" });
+      const outcome = await awaitFrontendResult(elicitCallId, timeoutMs);
+      if (outcome.kind === "result") return outcome.result;
+      throw new Error(outcome.kind === "timeout" ? "elicitation timed out" : "cancelled by user");
+    };
     tool
-      .execute!(input, { ...ctx, signal: callAbort.signal, onEvent })
+      .execute!(input, { ...ctx, signal: callAbort.signal, onEvent, elicit })
       .then((out) => settle(typeof out === "string" ? out : JSON.stringify(out)))
       .catch((e) => settle(toolError(tool.name, (e as Error).message)));
   });
@@ -203,9 +217,12 @@ export async function runAgentLoop(deps: AgentLoopDeps, input: AgentLoopInput): 
     await io.saveMessages(messages);
     emit({ type: "message", message: userMessage });
 
-    // Plugin hook: beforeRun — plugins may inspect/modify messages before the loop.
+    // Plugin hook: beforeRun — plugins may add ephemeral context (e.g. memory
+    // injection) for the model. The return value becomes the model context for
+    // this run but is NEVER persisted — `messages` stays as the canonical
+    // transcript for every io.saveMessages call.
     const hookModified = await hooks?.beforeRun?.(messages, hookCtx);
-    if (hookModified) messages = hookModified;
+    let contextMessages = hookModified ?? messages;
 
     let system = await deps.composeSystem();
     const extra = await hooks?.extendSystemPrompt?.(hookCtx);
@@ -229,7 +246,7 @@ export async function runAgentLoop(deps: AgentLoopDeps, input: AgentLoopInput): 
       try {
         turn = await deps.streamTurn({
           system,
-          messages,
+          messages: contextMessages,
           tools: declarations,
           signal,
           messageId,
@@ -281,6 +298,7 @@ export async function runAgentLoop(deps: AgentLoopDeps, input: AgentLoopInput): 
         ...(toolCallRefs.length ? { toolCalls: toolCallRefs } : {}),
       };
       messages = [...messages, assistantMessage];
+      contextMessages = [...contextMessages, assistantMessage];
       await io.saveMessages(messages);
       emit({ type: "message", message: assistantMessage });
 
@@ -329,6 +347,8 @@ export async function runAgentLoop(deps: AgentLoopDeps, input: AgentLoopInput): 
               },
               deps.toolTimeoutMs,
               (event) => emit({ type: "tool_progress", callId: call.id, event }),
+              deps.awaitFrontendResult,
+              emit,
             );
           } else {
             const outcome = await deps.awaitFrontendResult(call.id, deps.toolTimeoutMs);
@@ -355,6 +375,7 @@ export async function runAgentLoop(deps: AgentLoopDeps, input: AgentLoopInput): 
           toolCallId: call.id,
         };
         messages = [...messages, toolMessage];
+        contextMessages = [...contextMessages, toolMessage];
         await io.saveMessages(messages);
         emit({ type: "tool_result", callId: call.id, result });
         emit({ type: "message", message: toolMessage });

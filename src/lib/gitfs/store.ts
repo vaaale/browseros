@@ -58,7 +58,14 @@ export async function commitAll(root: string, message: string): Promise<void> {
   await git(root, ["add", "-A"]);
   const dirty = await git(root, ["status", "--porcelain"]);
   if (!dirty) return;
-  await git(root, ["commit", "-q", "-m", message]).catch(() => {});
+  try {
+    await git(root, ["commit", "-q", "-m", message]);
+  } catch (err: unknown) {
+    // A concurrent writer may have already committed our staged changes between
+    // the status check and the commit — treat that as success, re-throw anything else.
+    const msg = String((err as { stderr?: string; stdout?: string; message?: string })?.stderr ?? (err as { message?: string })?.message ?? err);
+    if (!msg.includes("nothing to commit")) throw err;
+  }
 }
 
 /** Commit history touching a given path (e.g. one app dir). Newest first. */

@@ -23,6 +23,12 @@ export interface ToolContext {
   /** Streaming progress (nested sub-agent/workflow events). Each call also
    *  resets the tool's idle timeout — long but chatty work is never cut off. */
   onEvent: (event: unknown) => void;
+  /** Trigger an inline frontend-tool elicitation and await its result string.
+   *  Use this when a server tool needs user input before it can proceed (e.g.
+   *  branch selection). The elicitation card renders in the chat; on submit the
+   *  tool resumes with the result. Also re-arms the tool's idle timeout so a
+   *  user who takes time to respond does not trigger a spurious timeout. */
+  elicit: (toolName: string, args: Record<string, unknown>) => Promise<string>;
   /** Nested-delegation depth (025-agent-delegation-v2). 0 for the primary/
    *  top-level run; incremented by one for each inner-loop delegation. Used
    *  by agent_delegate/dev_delegate to enforce MAX_DELEGATE_DEPTH uniformly

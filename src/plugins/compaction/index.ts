@@ -1,11 +1,6 @@
 import type { PluginDefinition, PluginContext } from "@/lib/plugins/types";
-import { logger } from "@/lib/logging";
 
 // Compaction plugin — wraps the existing compaction middleware into a plugin.
-
-function log(level: "debug" | "info" | "warn" | "error", convId: string, msg: string, data?: Record<string, unknown>): void {
-  logger().log({ level, component: "plugins.compaction", conversation: convId, msg, ...(data ? { data } : {}) });
-}
 
 async function getCompactionConfig() {
   const { readCompactionConfig } = await import("@/lib/agent/compaction/config");
@@ -46,7 +41,7 @@ const compactionPlugin: PluginDefinition = {
     name: "Context Compaction",
     version: "1.0.0",
     type: "server-plugin",
-    provides: ["beforeRun"],
+    provides: [],
     description:
       "Server-side context compaction. Layer 1 clears older tool results, Layer 2 async-summarizes past thresholds, Layer 3 truncates as a last resort.",
     settingsRegistration: {
@@ -73,36 +68,7 @@ const compactionPlugin: PluginDefinition = {
       },
     } as Record<string, unknown>,
   },
-  hooks: {
-    beforeRun: async (messages, ctx) => {
-      const config = await getCompactionConfig();
-      if (!config.enabled) {
-        log("debug", ctx.conversationId, "beforeRun.skipped", { reason: "disabled" });
-        return undefined;
-      }
-
-      log("debug", ctx.conversationId, "beforeRun.invoked", { messageCount: messages.length });
-
-      try {
-        const { compactChatMessages } = await import("@/lib/agent/compaction/v2");
-        const compacted = await compactChatMessages(
-          ctx.conversationId,
-          "",
-          messages as never,
-          undefined,
-        );
-        if (compacted.length === 0) return undefined;
-        const after = (compacted as unknown[]).length;
-        if (after !== messages.length) {
-          log("info", ctx.conversationId, "beforeRun.compacted", { before: messages.length, after });
-        }
-        return compacted as typeof messages;
-      } catch (err) {
-        log("warn", ctx.conversationId, "beforeRun.error", { error: (err as Error).message });
-        return undefined;
-      }
-    },
-  },
+  hooks: {},
   initialize: async (ctx: PluginContext) => {
     ctx.log("info", "compaction plugin initialized");
   },

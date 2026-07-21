@@ -19,20 +19,27 @@ export function specTools(): Record<string, AssistantTool> {
   }
 
   // A spec WRITE must belong to a feature (027: always require a feature
-  // context — never commit to a store's base branch). If the conversation has no
-  // active feature branch, refuse and steer the agent to elicit one from the user
-  // via dev_branch_request, then retry. Reads are unrestricted.
+  // context — never commit to a store's base branch). When no branch is active
+  // the tool elicits one inline via dev_branch_request (same card the model
+  // would show) rather than returning an error the model might lose in context.
   async function requireBranch(
     conversationId: string,
     toolName: string,
+    ctx: import("@/lib/assistant/tools").ToolContext,
   ): Promise<{ branch: string } | { error: string }> {
-    const branch = await getConversationActiveFeatureBranch(conversationId).catch(() => undefined);
-    if (!branch) {
-      return {
-        error: `Error: ${toolName}: writing a spec requires an active feature branch. Call dev_branch_request to set one up (it prompts the user for a name), then retry.`,
-      };
+    const existing = await getConversationActiveFeatureBranch(conversationId).catch(() => undefined);
+    if (existing) return { branch: existing };
+    // Inline elicitation — shows the branch card in the chat, blocks until the
+    // user creates/selects a branch (or cancels). The card sets the branch in
+    // the conversation file before resolving, so the re-read below finds it.
+    try {
+      await ctx.elicit("dev_branch_request", { task: `Set up a feature branch to write ${toolName}` });
+    } catch {
+      return { error: `Error: ${toolName}: feature branch setup was cancelled or timed out.` };
     }
-    return { branch };
+    const branch = await getConversationActiveFeatureBranch(conversationId).catch(() => undefined);
+    if (branch) return { branch };
+    return { error: `Error: ${toolName}: no feature branch was set after elicitation.` };
   }
 
   return {
@@ -53,7 +60,7 @@ export function specTools(): Record<string, AssistantTool> {
       "Create a NEW specification artifact, or intentionally REPLACE an entire file, by STORE-PREFIXED path (e.g. 'user-specs/003-x/spec.md'). New user specs go in the user store. To MODIFY an existing artifact, prefer spec_edit (one change) or spec_patch (several changes) — do NOT rewrite the whole file just to add or tweak content. REQUIRES an active feature branch — if none is set, call dev_branch_request first. Build the body from a template via spec_template_read.",
       schema({ path: p.str("Store-prefixed artifact path"), content: p.str("Full file content") }, ["path", "content"]),
       async (input, ctx) => {
-        const b = await requireBranch(ctx.conversationId, "spec_write");
+        const b = await requireBranch(ctx.conversationId, "spec_write", ctx);
         if ("error" in b) return b.error;
         return `Wrote ${await specfs.writeFile(input.path as string, (input.content as string) ?? "", b)}`;
       },
@@ -80,7 +87,7 @@ export function specTools(): Record<string, AssistantTool> {
         ["path", "hunks"],
       ),
       async (input, ctx) => {
-        const b = await requireBranch(ctx.conversationId, "spec_patch");
+        const b = await requireBranch(ctx.conversationId, "spec_patch", ctx);
         if ("error" in b) return b.error;
         const hunks = (input.hunks as specfs.SpecHunk[]) ?? [];
         return `Patched ${await specfs.patchFile(input.path as string, hunks, b)}`;
@@ -94,7 +101,7 @@ export function specTools(): Record<string, AssistantTool> {
         ["path", "find", "replace"],
       ),
       async (input, ctx) => {
-        const b = await requireBranch(ctx.conversationId, "spec_edit");
+        const b = await requireBranch(ctx.conversationId, "spec_edit", ctx);
         if ("error" in b) return b.error;
         return `Edited ${await specfs.editFile(input.path as string, input.find as string, (input.replace as string) ?? "", b)}`;
       },
