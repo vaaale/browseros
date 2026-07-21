@@ -44,10 +44,7 @@ docker build -t bos-bastion:latest ./bastion
 
 > **Tip:** You can also add `--platform linux/amd64` if building on Apple Silicon for a Linux target host.
 
-## 3. Create the Docker network
-
-The bastion and user containers communicate over a shared bridge network. Create it once:
-
+## 3. Configure environment
 
 ```bash
 cp .env.example .env
@@ -81,10 +78,10 @@ PUBLIC_URL=http://localhost
 # Host port for the bastion (default 80; change if port 80 is taken)
 BASTION_PORT=80
 
-# Host directory for per-user data (Docker bind-mount source — must be absolute)
-# The path on the HOST machine, not inside any container.
-VOLUME_BASE_HOST=/absolute/path/to/user-data
-VOLUME_BASE=./user-data   # used by the bastion internally — keep in sync
+# Host directory for per-user data — relative paths resolve against the repo
+# root (where docker-compose.yml lives), regardless of which directory you
+# run `docker compose` from. Use an absolute path to store it elsewhere.
+VOLUME_BASE=./user-data
 ```
 
 ### Example `.env` for a LAN server at `192.168.1.10`
@@ -96,8 +93,7 @@ AUTH_PROVIDER=simple
 BOS_IMAGE=browseros:latest
 PUBLIC_URL=http://192.168.1.10
 BASTION_PORT=80
-VOLUME_BASE_HOST=/srv/bos/user-data
-VOLUME_BASE=./user-data
+VOLUME_BASE=/srv/bos/user-data
 ```
 
 ## 4. Start the stack
@@ -223,8 +219,7 @@ docker build -t browseros:latest .
 | `BOS_IMAGE` | `browseros:latest` | Docker image for user containers |
 | `BASTION_PORT` | `80` | Host port for the bastion |
 | `PUBLIC_URL` | `http://localhost` | Public-facing URL (used in redirects) |
-| `VOLUME_BASE` | `./user-data` | Bastion-internal path for user data |
-| `VOLUME_BASE_HOST` | `$PWD/user-data` | Host path for Docker bind mounts |
+| `VOLUME_BASE` | `./user-data` | Host directory for per-user data (resolved against the repo root) |
 | `IDLE_TIMEOUT_MS` | `1800000` | ms before idle containers are stopped (30 min) |
 | `MAX_CONCURRENT_INSTANCES` | `50` | Max simultaneously running user containers |
 | `BOS_BASE_REF` | `main` | Git branch to clone for each new user |

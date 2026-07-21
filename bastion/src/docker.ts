@@ -77,10 +77,8 @@ export async function createBosContainer(username: string, cfg: Config): Promise
   // self-discovered — see resolveOwnMountSource) for mounts, and cfg.volumeBase
   // (the bastion-internal path) for file ops. Every user is provisioned via
   // their own isolated clone — no direct/shared mount of the operator's own
-  // checkout (024 FR-020). Direct-mount mode: use the host repo itself instead
-  // of a per-user clone. Feature branches created inside the container appear
-  // immediately in the host repo. Only safe for single-developer setups.
-  const srcPath       = cfg.bosRepoHostPath ?? `${cfg.bosVolumeBaseHost}/${username}/src`;
+  // checkout (024 FR-020).
+  const srcPath       = `${cfg.bosVolumeBaseHost}/${username}/src`;
   const dataPath      = `${cfg.bosVolumeBaseHost}/${username}/data`;
   const worktreesPath = `${cfg.bosVolumeBaseHost}/${username}/worktrees`;
   const clonesPath    = `${cfg.bosVolumeBaseHost}/${username}/data-clones`;

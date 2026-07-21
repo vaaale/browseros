@@ -70,24 +70,19 @@ export async function provisionUser(username: string, cfg: Config): Promise<stri
   const data = dataDir(username, cfg);
   fs.mkdirSync(data, { recursive: true });
 
-  if (cfg.bosRepoHostPath) {
-    // Direct-mount mode: the host repo is mounted at /app; no clone needed.
-    // The repo must already exist and be a valid git repo on the host.
-  } else {
-    const src = srcDir(username, cfg);
-    // Ensure a valid source checkout. Self-heal from a partial/interrupted prior
-    // provision: if src exists but isn't a healthy git repo (e.g. a half-finished
-    // clone left a non-empty directory), wipe it so `git clone` gets a clean
-    // destination instead of failing with "destination path already exists".
-    if (!(await isValidGitRepo(src))) {
-      fs.rmSync(src, { recursive: true, force: true });
-      fs.mkdirSync(path.dirname(src), { recursive: true }); // git clone creates `src` itself
-      await execFileAsync("git", ["clone", "--depth=1", "--branch", cfg.bosBaseRef,
-        cfg.bosRepoPath, src]);
-      // git runs as root; chown so the BOS container's non-root user can write to
-      // the checkout (e.g. npm install writing package-lock.json).
-      await chownSrc(src, cfg);
-    }
+  const src = srcDir(username, cfg);
+  // Ensure a valid source checkout. Self-heal from a partial/interrupted prior
+  // provision: if src exists but isn't a healthy git repo (e.g. a half-finished
+  // clone left a non-empty directory), wipe it so `git clone` gets a clean
+  // destination instead of failing with "destination path already exists".
+  if (!(await isValidGitRepo(src))) {
+    fs.rmSync(src, { recursive: true, force: true });
+    fs.mkdirSync(path.dirname(src), { recursive: true }); // git clone creates `src` itself
+    await execFileAsync("git", ["clone", "--depth=1", "--branch", cfg.bosBaseRef,
+      cfg.bosRepoPath, src]);
+    // git runs as root; chown so the BOS container's non-root user can write to
+    // the checkout (e.g. npm install writing package-lock.json).
+    await chownSrc(src, cfg);
   }
 
   await createNmVolume(username);
@@ -115,8 +110,7 @@ export async function deprovisionUser(username: string, cfg: Config, opts: Depro
   const src = srcDir(username, cfg);
   const data = dataDir(username, cfg);
 
-  if (opts.wipeSrc && !cfg.bosRepoHostPath && fs.existsSync(src)) {
-    // Never wipe the host repo in direct-mount mode — it's the developer's repo.
+  if (opts.wipeSrc && fs.existsSync(src)) {
     fs.rmSync(src, { recursive: true, force: true });
   }
   // Worktrees are git worktrees of src — wipe them together with src.
@@ -154,13 +148,6 @@ export async function reprovisionResetData(username: string, cfg: Config): Promi
 
 /** git fetch + switch to bosBaseRef if needed + pull, then restart. */
 export async function reprovisionUpdateSrc(username: string, cfg: Config): Promise<void> {
-  if (cfg.bosRepoHostPath) {
-    // Direct-mount mode: the developer manages their own git workflow on the
-    // host repo. "Update Source" just restarts the container so the supervisor
-    // picks up any changes (e.g. new commits, branch switches) already made.
-    await reprovisionRestart(username, cfg);
-    return;
-  }
   const src = srcDir(username, cfg);
   // Fetch the target branch explicitly — shallow clones only have the branch
   // they were cloned with, so a generic `fetch origin` won't make other

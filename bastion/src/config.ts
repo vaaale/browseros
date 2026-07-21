@@ -18,11 +18,6 @@ export interface Config {
    *  overwrites it at startup with the value self-discovered from the
    *  bastion's own container mounts (024 FR-020) — no env var for this. */
   bosVolumeBaseHost: string;
-  /** When set, mount this HOST path directly at /app instead of creating a
-   *  per-user clone. Feature branches created inside the container are
-   *  immediately visible in the host repo. Intended for single-developer
-   *  setups where the repo is on the same machine as the Docker host. */
-  bosRepoHostPath?: string;
   dataDir: string;
   bosNet: string;
   /** UID/GID the BOS process runs as inside user containers. Passed as
@@ -85,7 +80,6 @@ export function loadConfig(): Config {
     // case "the host path" and "this process's own filesystem" are the same
     // thing anyway, so a cwd-relative resolution is correct.
     bosVolumeBaseHost: path.resolve("user-data"),
-    bosRepoHostPath: process.env.BOS_REPO_HOST_PATH || persisted.bosRepoHostPath || undefined,
     dataDir,
     bosNet: process.env.BOS_NET ?? "bos-net",
     containerUid: process.env.CONTAINER_UID ? parseInt(process.env.CONTAINER_UID, 10) : undefined,
@@ -106,6 +100,7 @@ export function saveConfig(dataDir: string, patch: Partial<Config>): void {
     existing = JSON.parse(fs.readFileSync(file, "utf8")) as Partial<Config>;
   } catch { /* start fresh */ }
   const allowed: (keyof Config)[] = [
+    "bosImage", "idleTimeoutMs", "maxConcurrentInstances",
     "bosBaseRef", "bosRepoPath", "bosNet", "keycloakIssuer", "keycloakClientId",
     "keycloakUsernameClaim", "keycloakAdminRole", "publicUrl",
   ];

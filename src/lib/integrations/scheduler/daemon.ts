@@ -35,6 +35,7 @@ const g = globalThis as unknown as { __bosIntegrationsDaemon?: DaemonState };
 
 /** True once the daemon interval is active. */
 export function isSchedulerRunning(): boolean {
+  return g.__bosIntegrationsDaemon !== undefined;
 }
 
 /**

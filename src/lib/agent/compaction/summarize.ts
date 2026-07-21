@@ -142,36 +142,6 @@ function renderClientMessages(messages: ClientMessage[]): string {
   return lines.join("\n\n");
 }
 
-// ── 021 fast-loop hook (soft dependency, FR-014) ───────────────────────────
-
-let fastLoopSkipLogged = false;
-
-async function invokeFastLoop(convId: string): Promise<void> {
-  try {
-    // Feature-detect the module: on absence we log skip once per process.
-    const mod = (await import("@/lib/agent/memory/fast-loop")) as {
-      runFastLoop?: (opts: { onlyConversationId?: string; waiveIdle?: boolean }) => Promise<unknown>;
-    };
-    if (typeof mod.runFastLoop !== "function") {
-      if (!fastLoopSkipLogged) {
-        fastLoopSkipLogged = true;
-        log("info", convId, "fast-loop.skipped", { reason: "module-exports-missing" });
-      }
-      return;
-    }
-    try {
-      await mod.runFastLoop({ onlyConversationId: convId, waiveIdle: true });
-    } catch (err) {
-      log("warn", convId, "fast-loop.failed", undefined, err);
-    }
-  } catch {
-    if (!fastLoopSkipLogged) {
-      fastLoopSkipLogged = true;
-      log("info", convId, "fast-loop.skipped", { reason: "module-absent" });
-    }
-  }
-}
-
 // ── Span chunking (context-overflow guard) ────────────────────────────────
 //
 // The summarizer receives the raw client transcript which can be much larger
@@ -294,9 +264,6 @@ export async function summarizeConversation(
     if (currentSidecar.boundary && currentSidecar.boundary.spanHash === spanHash && currentSidecar.summary) {
       return skip(convId, "already-summarized");
     }
-
-    // FR-014: fast-loop hook FIRST (soft dependency).
-    await invokeFastLoop(convId);
 
     const previousSummary = currentSidecar.summary?.trim() ?? "";
     const charBudget = chunkCharBudget(config.assumedContextTokens);
