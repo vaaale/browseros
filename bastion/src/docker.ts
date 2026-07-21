@@ -1,6 +1,7 @@
 import Dockerode from "dockerode";
 import http from "http";
 import fs from "fs";
+import os from "os";
 import path from "path";
 import { execFile } from "child_process";
 import { promisify } from "util";
@@ -18,6 +19,30 @@ export function volumeName(username: string): string {
   return `bos-nm-${username}`;
 }
 
+/**
+ * Discover the HOST-absolute path bind-mounted at `containerPath` inside our
+ * OWN container, by inspecting our own container via the Docker SDK — Docker
+ * sets a container's hostname to its own (short) ID by default, and the API
+ * accepts ID prefixes, so `os.hostname()` reliably resolves to "this
+ * container" without any operator configuration. Returns null when not
+ * running in a container at all (e.g. local dev via `npm run dev` outside
+ * Docker) or when `containerPath` isn't mounted, so callers can fall back
+ * sensibly. This avoids trusting a second, independently-configurable env
+ * var for a value Docker itself already knows authoritatively (024 FR-020) —
+ * the operator-invocation-dependent equivalent of this variable was the
+ * direct cause of a prior incident (a spawned container's bind mount source
+ * silently pointed at the wrong host directory).
+ */
+export async function resolveOwnMountSource(containerPath: string): Promise<string | null> {
+  try {
+    const info = await docker.getContainer(os.hostname()).inspect();
+    const mount = info.Mounts?.find((m) => m.Destination === containerPath);
+    return mount?.Source ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export async function ensureNetwork(networkName: string): Promise<void> {
   try {
     await docker.getNetwork(networkName).inspect();
@@ -26,15 +51,34 @@ export async function ensureNetwork(networkName: string): Promise<void> {
   }
 }
 
+/**
+ * Compare a container's stored network endpoint ID for `networkName` against
+ * the network's current ID and reconnect if they differ. Self-heals
+ * containers whose network reference went stale after `bos-net` was
+ * recreated with a new ID (e.g. by a `docker compose down`/`up` cycle) —
+ * Docker refuses to start a container whose stored reference no longer
+ * exists ("network <id> not found"), even though a network with the same
+ * NAME is present. No-ops if already in sync or not attached to this network
+ * at all. Cheap on the common case (just two inspects). (024 FR-019.)
+ */
+export async function reconcileNetworkAttachment(containerId: string, networkName: string): Promise<void> {
+  const network = docker.getNetwork(networkName);
+  const netInfo = await network.inspect();
+  const containerInfo = await docker.getContainer(containerId).inspect();
+  const attached = containerInfo.NetworkSettings.Networks?.[networkName];
+  if (!attached || attached.NetworkID === netInfo.Id) return;
+  await network.connect({ Container: containerId });
+}
+
 export async function createBosContainer(username: string, cfg: Config): Promise<string> {
   const name = containerName(username);
   // Docker resolves bind mount sources against the HOST filesystem, not the
-  // bastion container's filesystem. Use bosVolumeBaseHost (the host-side path)
-  // for mounts, and cfg.volumeBase (the bastion-internal path) for file ops.
-  // Direct-mount mode: use the host repo itself instead of a per-user clone.
-  // Feature branches created inside the container appear immediately in the
-  // host repo. Only safe for single-developer setups.
-  const srcPath       = cfg.bosRepoHostPath ?? `${cfg.bosVolumeBaseHost}/${username}/src`;
+  // bastion container's filesystem. Use bosVolumeBaseHost (the host-side path,
+  // self-discovered — see resolveOwnMountSource) for mounts, and cfg.volumeBase
+  // (the bastion-internal path) for file ops. Every user is provisioned via
+  // their own isolated clone — no direct/shared mount of the operator's own
+  // checkout (024 FR-020).
+  const srcPath       = `${cfg.bosVolumeBaseHost}/${username}/src`;
   const dataPath      = `${cfg.bosVolumeBaseHost}/${username}/data`;
   const worktreesPath = `${cfg.bosVolumeBaseHost}/${username}/worktrees`;
   const clonesPath    = `${cfg.bosVolumeBaseHost}/${username}/data-clones`;

@@ -8,6 +8,7 @@ import {
   stopContainer,
   inspectContainer,
   listBosContainers,
+  reconcileNetworkAttachment,
   waitForHealthy,
 } from "./docker";
 import { provisionUser } from "./provision";
@@ -128,6 +129,11 @@ async function _getOrProvision(username: string, cfg: Config): Promise<void> {
     log(username, "Container is stopped — starting…", cfg);
     updateState(username, { containerId: cid, status: "stopped", provisionError: undefined }, cfg);
     try {
+      // Defensive re-check in case the network changed since startup
+      // reconciliation ran (rare, but cheap to guard against). See FR-019.
+      await reconcileNetworkAttachment(cid, cfg.bosNet).catch((err) => {
+        console.error(`[bastion] [${username}] pre-start network reconcile failed (non-fatal):`, err);
+      });
       await startContainer(cid);
       log(username, "Container started — waiting for supervisor and Next.js to become healthy (npm install may run)…", cfg);
       await waitForHealthy(username, 300_000);
@@ -241,6 +247,14 @@ export async function reconcileOnStartup(cfg: Config): Promise<void> {
   const running = await listBosContainers();
   for (const c of running) {
     const username = c.name.replace(/^bos-/, "");
+    // Proactively repair a stale bos-net attachment (most commonly left behind
+    // by a `docker compose down`/`up` cycle recreating the network with a new
+    // ID) before any login attempt can reach this container. Best-effort: if
+    // it fails, getOrProvision's existing recreate-and-heal fallback still
+    // covers it on first use. See 024 FR-019.
+    await reconcileNetworkAttachment(c.id, cfg.bosNet).catch((err) => {
+      console.error(`[bastion] [${username}] startup network reconcile failed (non-fatal):`, err);
+    });
     const status: InstanceStatus = c.status === "running" ? "running" : "stopped";
     updateState(username, { containerId: c.id, status, lastActive: Date.now() }, cfg);
     if (status === "running") resetIdleTimer(username, cfg);

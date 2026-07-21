@@ -1,13 +1,8 @@
 import type { PluginDefinition, PluginContext } from "@/lib/plugins/types";
-import { logger } from "@/lib/logging";
 
 // Memory plugin — wraps the existing memory system (fast-loop + slow-loop)
-// into a plugin. The memory loops run as scheduler jobs; the plugin provides
-// the onRunFinished hook to trigger the fast-loop review after each run.
-
-function log(level: "debug" | "info" | "warn" | "error", convId: string, msg: string, data?: Record<string, unknown>): void {
-  logger().log({ level, component: "plugins.memory", conversation: convId, msg, ...(data ? { data } : {}) });
-}
+// into a plugin. The memory loops run exclusively as scheduler jobs; this
+// plugin only surfaces their configuration in Settings.
 
 async function getMemoryLoopsConfig() {
   const { getMemoryLoopsConfig } = await import("@/lib/agent/memory/config");
@@ -20,7 +15,7 @@ const memoryPlugin: PluginDefinition = {
     name: "Memory System",
     version: "1.0.0",
     type: "server-plugin",
-    provides: ["onRunFinished", "afterRun"],
+    provides: [],
     description:
       "Automated memory reflection. Fast loop reviews idle conversations and writes episodes; slow loop consolidates into long-term memory.",
     settingsRegistration: {
@@ -47,40 +42,7 @@ const memoryPlugin: PluginDefinition = {
       },
     } as Record<string, unknown>,
   },
-  hooks: {
-    afterRun: async () => {
-      // The memory fast-loop is triggered by the scheduler, not inline here.
-      // This hook is a placeholder for future per-run memory operations.
-      return undefined;
-    },
-    onRunFinished: async (summary, ctx) => {
-      log("debug", ctx.conversationId, "onRunFinished.invoked", { reason: summary.reason });
-
-      if (summary.reason !== "completed") {
-        log("debug", ctx.conversationId, "onRunFinished.skipped", { reason: summary.reason });
-        return;
-      }
-
-      const config = await getMemoryLoopsConfig().catch(() => null);
-      if (!config?.fastLoop.enabled) {
-        log("debug", ctx.conversationId, "onRunFinished.skipped", { reason: "fast-loop-disabled" });
-        return;
-      }
-
-      log("info", ctx.conversationId, "onRunFinished.fast-loop.triggered");
-
-      try {
-        const { runFastLoop } = await import("@/lib/agent/memory/fast-loop");
-        void runFastLoop({ onlyConversationId: ctx.conversationId }).catch(
-          (err: unknown) => {
-            log("warn", ctx.conversationId, "onRunFinished.fast-loop.failed", { error: (err as Error).message });
-          },
-        );
-      } catch (err) {
-        log("warn", ctx.conversationId, "onRunFinished.fast-loop.import-failed", { error: (err as Error).message });
-      }
-    },
-  },
+  hooks: {},
   initialize: async (ctx: PluginContext) => {
     ctx.log("info", "memory plugin initialized");
   },

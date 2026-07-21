@@ -25,20 +25,14 @@ docker build -t browseros:latest .
 docker compose build bastion
 ```
 
-### 3. Create the network (once only)
-
-`bos-net` is declared `external` in compose so it is never recreated on `compose up`. Create it once before first start — and once only, ever:
-
-```bash
-docker network create bos-net
-```
-
-### 4. Configure
+### 3. Configure
 ```bash
 cp .env.example .env
 # Edit .env — JWT_SECRET is required:
 echo "JWT_SECRET=$(openssl rand -hex 32)" >> .env
 ```
+
+`bos-net` needs no manual setup — Compose creates it automatically on first `up`. It stays Compose-managed (not `external`), so a `docker compose down`/`up` cycle *will* recreate it with a new ID; the bastion detects and repairs any user container left pointing at the old ID automatically (at startup, and defensively before every restart), so this never requires operator intervention.
 
 ### 4. Create an admin user (Simple auth)
 ```bash

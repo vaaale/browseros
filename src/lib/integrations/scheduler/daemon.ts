@@ -28,11 +28,14 @@ interface DaemonState {
   tickCount: number;
 }
 
-let daemon: DaemonState | undefined;
+// Lives on globalThis (same pattern as scheduler/engine.ts) so a dev hot-reload
+// gets the SAME daemon instead of orphaning the old interval — an orphaned timer
+// keeps ticking forever and pins its entire stale module graph in memory.
+const g = globalThis as unknown as { __bosIntegrationsDaemon?: DaemonState };
 
 /** True once the daemon interval is active. */
 export function isSchedulerRunning(): boolean {
-  return daemon !== undefined;
+  return g.__bosIntegrationsDaemon !== undefined;
 }
 
 /**
@@ -41,12 +44,12 @@ export function isSchedulerRunning(): boolean {
  * calls return immediately.
  */
 export function ensureSchedulerStarted(): void {
-  if (daemon) return;
+  if (g.__bosIntegrationsDaemon) return;
   const timer = setInterval(() => {
     void tick();
   }, TICK_INTERVAL_MS);
   timer.unref?.();
-  daemon = { timer, startedAt: Date.now(), tickCount: 0 };
+  g.__bosIntegrationsDaemon = { timer, startedAt: Date.now(), tickCount: 0 };
   // Fire once shortly after start so we don't wait a full interval for the
   // first tick — helpful right after enabling polling in the UI.
   setTimeout(() => {
@@ -56,9 +59,10 @@ export function ensureSchedulerStarted(): void {
 
 /** Stop the daemon. Test/hot-reload only — production callers never stop it. */
 export function stopScheduler(): void {
+  const daemon = g.__bosIntegrationsDaemon;
   if (!daemon) return;
   clearInterval(daemon.timer);
-  daemon = undefined;
+  g.__bosIntegrationsDaemon = undefined;
 }
 
 /**
@@ -66,7 +70,7 @@ export function stopScheduler(): void {
  * endpoint (developer-only) and by tests. Never throws.
  */
 export async function tick(): Promise<void> {
-  const state = daemon;
+  const state = g.__bosIntegrationsDaemon;
   if (!state) return;
   state.lastTickAt = Date.now();
   state.tickCount += 1;
@@ -90,6 +94,7 @@ export async function tick(): Promise<void> {
 
 /** Snapshot the daemon's current status. Called by /api/integrations/scheduler GET. */
 export function getSchedulerStatus(): SchedulerStatus {
+  const daemon = g.__bosIntegrationsDaemon;
   if (!daemon) {
     return { running: false, tickCount: 0, jobs: listJobStatus() };
   }

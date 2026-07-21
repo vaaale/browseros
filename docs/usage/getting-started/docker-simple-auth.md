@@ -44,15 +44,7 @@ docker build -t bos-bastion:latest ./bastion
 
 > **Tip:** You can also add `--platform linux/amd64` if building on Apple Silicon for a Linux target host.
 
-## 3. Create the Docker network
-
-The bastion and user containers communicate over a shared bridge network. Create it once:
-
-```bash
-docker network create bos-net
-```
-
-## 4. Configure environment
+## 3. Configure environment
 
 ```bash
 cp .env.example .env
@@ -86,10 +78,10 @@ PUBLIC_URL=http://localhost
 # Host port for the bastion (default 80; change if port 80 is taken)
 BASTION_PORT=80
 
-# Host directory for per-user data (Docker bind-mount source — must be absolute)
-# The path on the HOST machine, not inside any container.
-VOLUME_BASE_HOST=/absolute/path/to/user-data
-VOLUME_BASE=./user-data   # used by the bastion internally — keep in sync
+# Host directory for per-user data — relative paths resolve against the repo
+# root (where docker-compose.yml lives), regardless of which directory you
+# run `docker compose` from. Use an absolute path to store it elsewhere.
+VOLUME_BASE=./user-data
 ```
 
 ### Example `.env` for a LAN server at `192.168.1.10`
@@ -101,11 +93,10 @@ AUTH_PROVIDER=simple
 BOS_IMAGE=browseros:latest
 PUBLIC_URL=http://192.168.1.10
 BASTION_PORT=80
-VOLUME_BASE_HOST=/srv/bos/user-data
-VOLUME_BASE=./user-data
+VOLUME_BASE=/srv/bos/user-data
 ```
 
-## 5. Start the stack
+## 4. Start the stack
 
 ```bash
 docker compose up -d
@@ -113,7 +104,7 @@ docker compose up -d
 
 The bastion will be available at `http://localhost` (or your `PUBLIC_URL`) within a few seconds.
 
-## 6. First-run — set the admin password
+## 5. First-run — set the admin password
 
 On first visit the bastion detects no admin user and shows a **Set admin password** page instead of the normal login.
 
@@ -121,7 +112,7 @@ Enter and confirm a password (minimum 8 characters). The admin account is create
 
 > **Race safety:** if two operators submit the form simultaneously, only one admin is created; the second request gets a clear "already configured" error.
 
-## 7. Admin portal — manage users and containers
+## 6. Admin portal — manage users and containers
 
 After setting the admin password you land in the **Admin Portal**. It has four tabs:
 
@@ -152,7 +143,7 @@ Lists every user container with live status. Actions: **Start**, **Stop** (grace
 
 Per-user provisioning log — the first place to look when a container fails to start.
 
-## 8. User first login
+## 7. User first login
 
 Direct your users to `http://<your-host>/`. They log in with the credentials you created. On first login:
 
@@ -163,7 +154,7 @@ Direct your users to `http://<your-host>/`. They log in with the credentials you
 
 Each user's files, settings, and conversation history are isolated under `user-data/<username>/data/`.
 
-## 9. User account page
+## 8. User account page
 
 Each user can manage their own instance at `/app/account`:
 
@@ -228,8 +219,7 @@ docker build -t browseros:latest .
 | `BOS_IMAGE` | `browseros:latest` | Docker image for user containers |
 | `BASTION_PORT` | `80` | Host port for the bastion |
 | `PUBLIC_URL` | `http://localhost` | Public-facing URL (used in redirects) |
-| `VOLUME_BASE` | `./user-data` | Bastion-internal path for user data |
-| `VOLUME_BASE_HOST` | `$PWD/user-data` | Host path for Docker bind mounts |
+| `VOLUME_BASE` | `./user-data` | Host directory for per-user data (resolved against the repo root) |
 | `IDLE_TIMEOUT_MS` | `1800000` | ms before idle containers are stopped (30 min) |
 | `MAX_CONCURRENT_INSTANCES` | `50` | Max simultaneously running user containers |
 | `BOS_BASE_REF` | `main` | Git branch to clone for each new user |

@@ -34,6 +34,11 @@ function clientKey(req: NextRequest): string {
 
 function checkRateLimit(key: string): number | null {
   const now = Date.now();
+  // Sweep buckets whose newest entry fell out of the window, so the map stays
+  // bounded by the set of clients active within WINDOW_MS (not all-time IPs).
+  for (const [k, times] of buckets) {
+    if (times.length === 0 || now - times[times.length - 1] >= WINDOW_MS) buckets.delete(k);
+  }
   const recent = (buckets.get(key) ?? []).filter((time) => now - time < WINDOW_MS);
   if (recent.length >= MAX_REQUESTS) {
     buckets.set(key, recent);
