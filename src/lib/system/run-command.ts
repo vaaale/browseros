@@ -331,7 +331,12 @@ export async function runCommand(opts: {
     return { ok: false, exitCode: null, output: "run_command is disabled. Enable it in Settings → Command Execution.", durationMs: 0, backend: "none" };
   }
   const maxMs = Math.min(positive(opts.timeoutMs, cfg.maxTimeoutMs), cfg.maxTimeoutMs);
-  const [prog, ...args] = ["bash", "-lc", opts.command];
+  // Non-login, non-interactive shell so the child inherits process.env as-is.
+  // Login shells (-l) source /etc/profile which typically resets PATH to the
+  // system default, losing the virtualenv at /opt/venv/bin set by the Docker
+  // ENV directive. The Docker ENV already provides the correct runtime
+  // environment; profile scripts are not needed.
+  const [prog, ...args] = ["bash", "-c", opts.command];
 
   // Resolve workspace: the mount whose containerPath is "/workspace".
   // Files the agent writes and command outputs show up in the Files app because
