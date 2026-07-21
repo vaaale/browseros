@@ -231,7 +231,12 @@ async function isolationMethod() {
   }
 }
 async function provisionClone(target) {
-  await fs.rm(target, { recursive: true, force: true }).catch(() => {});
+  // Idempotent: a preview's data-clone persists across Supervisor restarts
+  // (it lives on a bind-mounted host directory in the bastion deployment, or
+  // just on disk standalone). If it already exists, it may hold data drift
+  // from the preview's own testing — never blow it away just because the
+  // Supervisor restarted; only a genuinely missing clone gets (re-)provisioned.
+  if (await fs.stat(target).catch(() => null)) return;
   await fs.mkdir(path.dirname(target), { recursive: true });
   const method = await isolationMethod();
   const run = (args) => exec("cp", args, { maxBuffer: 8 * 1024 * 1024, timeout: 180_000 });
@@ -413,11 +418,28 @@ async function addBaseWorktree(commit) {
   return wt;
 }
 
+// True if `wt` is already a healthy worktree checked out on `branch` at the
+// branch's current tip, with its node_modules copy present — lets
+// addWorktreeForBranch() skip the expensive destroy+recreate (git worktree
+// add + a full node_modules copy, potentially GBs) when nothing has actually
+// changed since the last time it ran. Restarting the Supervisor process
+// (i.e. every container restart, not just a full recreate) used to pay this
+// cost unconditionally for every known feature branch, every time.
+async function isHealthyWorktree(wt, branch) {
+  if (!(await gitTry(["rev-parse", "--git-dir"], wt))) return false;
+  if ((await gitTry(["rev-parse", "--abbrev-ref", "HEAD"], wt)) !== branch) return false;
+  const worktreeHead = await gitTry(["rev-parse", "HEAD"], wt);
+  const branchTip = await gitTry(["rev-parse", branch]);
+  if (!worktreeHead || !branchTip || worktreeHead !== branchTip) return false;
+  return !!(await fs.stat(path.join(wt, "node_modules")).catch(() => null));
+}
+
 // Create/replace a worktree for an EXISTING branch at WORKTREES/<branch>. Branch
 // names may contain '/', kept as nested dirs (git ref rules forbid foo AND foo/bar
 // at once, so no path collision); mkdir the parent.
 async function addWorktreeForBranch(branch) {
   const wt = worktreePath(branch);
+  if (await isHealthyWorktree(wt, branch)) return wt;
   await gitTry(["worktree", "remove", "--force", wt]);
   await fs.rm(wt, { recursive: true, force: true }).catch(() => {});
   await fs.mkdir(path.dirname(wt), { recursive: true });
