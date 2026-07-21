@@ -222,6 +222,21 @@ async function transformCall(convId: string, params: { prompt: unknown; maxOutpu
       messagesAfter: truncated.length,
     });
     finalRest = truncated;
+    // The hard-limit truncation fundamentally changes the message array, making
+    // the stored clearWatermark stale (it was computed from the larger pre-
+    // truncation array).  Reset it so the next turn's applyLayer1Clearing uses
+    // keepCut rather than a watermark that exceeds the new array length.
+    void (async () => {
+      try {
+        const fresh = await readSidecar(convId);
+        if (fresh && fresh.clearWatermark > 0) {
+          await writeSidecar(convId, { ...fresh, clearWatermark: 0 });
+          log("info", convId, "watermark.reset-after-truncation", { previous: fresh.clearWatermark });
+        }
+      } catch (err) {
+        log("error", convId, "watermark.reset failed", undefined, err);
+      }
+    })();
     // Still schedule Layer 2 so the next turn benefits from a real summary.
     if (canSummarize && !applied.stats.summarySpliced) void scheduleSummarization(convId);
   }

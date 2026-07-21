@@ -92,7 +92,13 @@ function applyLayer1Clearing(
   config: CompactionView,
 ): { messages: CompactionPrompt; clearedResults: number } {
   const keepCut = findKeepPairsCut(messages, config.keepToolResults);
-  const clearBefore = Math.max(sidecar.clearWatermark, keepCut);
+  // A watermark from a previous (larger) array — e.g. after a hard-limit
+  // truncation — can exceed the current array length, which would clear every
+  // message including the most recent tool results.  Clamp it to stay within
+  // bounds: if the stored watermark ≥ messages.length it is stale and we fall
+  // back to keepCut only.
+  const boundedWatermark = sidecar.clearWatermark < messages.length ? sidecar.clearWatermark : 0;
+  const clearBefore = Math.max(boundedWatermark, keepCut);
   if (clearBefore <= 0) return { messages, clearedResults: 0 };
   const unrecoverable = new Set(config.unrecoverableTools);
   let cleared = 0;
