@@ -3,8 +3,8 @@ import { readNamespace } from "@/lib/config/store";
 
 // Resolved memoryLoops configuration with defaults. The `memoryLoops` namespace
 // in the config registry (src/lib/config/registry.ts) is the sole source of
-// truth; this module just provides a strongly-typed reader with defaults so
-// the fast/slow loops don't sprinkle magic numbers.
+// truth; this module provides a strongly-typed reader with defaults so the
+// fast/slow loops don't sprinkle magic numbers.
 
 export interface MemoryLoopsConfig {
   fastLoop: {
@@ -54,6 +54,7 @@ function bool(v: unknown, fallback: boolean): boolean {
 }
 
 export async function getMemoryLoopsConfig(): Promise<MemoryLoopsConfig> {
+  const { readNamespace } = await import("@/lib/config/store");
   const stored = await readNamespace("memoryLoops");
   return {
     fastLoop: {

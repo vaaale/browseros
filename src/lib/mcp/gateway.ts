@@ -46,7 +46,9 @@ async function toolsForServer(cfg: McpServerConfig): Promise<{ tools?: McpToolDe
     if (now - entry.at >= CACHE_TTL_MS) toolCache.delete(name);
   }
   const hit = toolCache.get(cfg.name);
-  if (hit && now - hit.at < CACHE_TTL_MS) return { tools: hit.tools };
+for (const [name, entry] of toolCache) {
+  if (now - entry.at >= CACHE_TTL_MS) toolCache.delete(name);
+}
   let client;
   try {
     client = await connectMcpClient(cfg);

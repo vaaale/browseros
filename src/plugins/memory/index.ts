@@ -1,12 +1,51 @@
 import type { PluginDefinition, PluginContext } from "@/lib/plugins/types";
+import { logger } from "@/lib/logging";
 
 // Memory plugin — wraps the existing memory system (fast-loop + slow-loop)
-// into a plugin. The memory loops run exclusively as scheduler jobs; this
-// plugin only surfaces their configuration in Settings.
+// into a plugin. The memory loops run as scheduler jobs; the plugin provides
+// the onRunFinished hook to trigger the fast-loop review after each run.
+
+function log(level: "debug" | "info" | "warn" | "error", convId: string, msg: string, data?: Record<string, unknown>): void {
+  logger().log({ level, component: "plugins.memory", conversation: convId, msg, ...(data ? { data } : {}) });
+}
 
 async function getMemoryLoopsConfig() {
   const { getMemoryLoopsConfig } = await import("@/lib/agent/memory/config");
   return getMemoryLoopsConfig();
+}
+
+// ── Mutex guard ───────────────────────────────────────────────────────────
+// Prevents concurrent activate/deactivate from racing each other.
+
+let _lifecyclePromise: Promise<void> | null = null;
+
+async function runLifecycle(fn: () => Promise<void>): Promise<void> {
+  const prev = _lifecyclePromise;
+  _lifecyclePromise = (async () => {
+    if (prev) await prev;
+    await fn();
+  })();
+  return _lifecyclePromise;
+}
+
+// ── Job lifecycle helpers ─────────────────────────────────────────────────
+
+async function seedAndResumeJobs(): Promise<void> {
+  const { ensureFastLoopJob } = await import("@/lib/agent/memory/fast-loop");
+  const { ensureSlowLoopJob } = await import("@/lib/agent/memory/consolidate");
+  const { resumeJob } = await import("@/lib/scheduler/engine");
+
+  await ensureFastLoopJob();
+  await resumeJob("system:memory.fast-loop");
+  await ensureSlowLoopJob();
+  await resumeJob("system:memory.slow-loop");
+}
+
+async function pauseJobs(): Promise<void> {
+  const { pauseJob } = await import("@/lib/scheduler/engine");
+
+  await pauseJob("system:memory.fast-loop");
+  await pauseJob("system:memory.slow-loop");
 }
 
 const memoryPlugin: PluginDefinition = {
@@ -42,12 +81,60 @@ const memoryPlugin: PluginDefinition = {
       },
     } as Record<string, unknown>,
   },
-  hooks: {},
+  hooks: {
+    afterRun: async () => {
+      // The memory fast-loop is triggered by the scheduler, not inline here.
+      // This hook is a placeholder for future per-run memory operations.
+      return undefined;
+    },
+    onRunFinished: async (summary, ctx) => {
+      log("debug", ctx.conversationId, "onRunFinished.invoked", { reason: summary.reason });
+
+      if (summary.reason !== "completed") {
+        log("debug", ctx.conversationId, "onRunFinished.skipped", { reason: summary.reason });
+        return;
+      }
+
+      const config = await getMemoryLoopsConfig().catch(() => null);
+      if (!config?.fastLoop.enabled) {
+        log("debug", ctx.conversationId, "onRunFinished.skipped", { reason: "fast-loop-disabled" });
+        return;
+      }
+
+      log("info", ctx.conversationId, "onRunFinished.fast-loop.triggered");
+
+      try {
+        const { runFastLoop } = await import("@/lib/agent/memory/fast-loop");
+        void runFastLoop({ onlyConversationId: ctx.conversationId }).catch(
+          (err: unknown) => {
+            log("warn", ctx.conversationId, "onRunFinished.fast-loop.failed", { error: (err as Error).message });
+          },
+        );
+      } catch (err) {
+        log("warn", ctx.conversationId, "onRunFinished.fast-loop.import-failed", { error: (err as Error).message });
+      }
+    },
+  },
   initialize: async (ctx: PluginContext) => {
-    ctx.log("info", "memory plugin initialized");
+    await runLifecycle(async () => {
+      try {
+        await seedAndResumeJobs();
+        ctx.log("info", "memory plugin: scheduler jobs seeded and resumed");
+      } catch (error) {
+        ctx.log("error", "memory plugin: failed to seed scheduler jobs", { error: (error as Error).message });
+      }
+    });
   },
   dispose: async () => {
-    // Memory loops are scheduler jobs — they stop when the scheduler stops.
+    await runLifecycle(async () => {
+      try {
+        await pauseJobs();
+      } catch (error) {
+        logger().error("plugins.memory", "failed to pause scheduler jobs", undefined, {
+          error: (error as Error).message,
+        });
+      }
+    });
   },
   getConfig: async () => {
     const config = await getMemoryLoopsConfig();
@@ -56,6 +143,14 @@ const memoryPlugin: PluginDefinition = {
   setConfig: async (config: Record<string, unknown>) => {
     const { patchPluginConfig } = await import("@/lib/plugins/registry");
     await patchPluginConfig("bos-memory", config);
+    // Re-seed jobs with new intervals
+    try {
+      await seedAndResumeJobs();
+    } catch (error) {
+      logger().error("plugins.memory", "failed to re-seed scheduler jobs after config change", undefined, {
+        error: (error as Error).message,
+      });
+    }
   },
 };
 
