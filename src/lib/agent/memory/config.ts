@@ -1,10 +1,9 @@
 import "server-only";
-import { readNamespace } from "@/lib/config/store";
 
-// Resolved memoryLoops configuration with defaults. The `memoryLoops` namespace
-// in the config registry (src/lib/config/registry.ts) is the sole source of
-// truth; this module just provides a strongly-typed reader with defaults so
-// the fast/slow loops don't sprinkle magic numbers.
+// Resolved memoryLoops configuration with defaults. The `bos-memory` plugin
+// config in data/config/plugins.json (via the plugins registry) is the sole
+// source of truth; this module provides a strongly-typed reader with defaults
+// so the fast/slow loops don't sprinkle magic numbers.
 
 export interface MemoryLoopsConfig {
   fastLoop: {
@@ -54,7 +53,9 @@ function bool(v: unknown, fallback: boolean): boolean {
 }
 
 export async function getMemoryLoopsConfig(): Promise<MemoryLoopsConfig> {
-  const stored = await readNamespace("memoryLoops");
+  const { readPluginsConfig } = await import("@/lib/plugins/registry");
+  const pluginsConfig = await readPluginsConfig();
+  const stored = pluginsConfig.config["bos-memory"] ?? {};
   return {
     fastLoop: {
       enabled: bool(stored["fastLoop.enabled"], DEFAULTS.fastLoop.enabled),
