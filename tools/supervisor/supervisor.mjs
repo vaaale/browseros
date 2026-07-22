@@ -689,7 +689,7 @@ async function buildAndStartBaseDev() {
   return base.state;
 }
 
-// Predict whether the candidate can be rebased onto base WITHOUT touching the
+// Predict whether the candidate can be squash-merged onto base WITHOUT touching the
 // worktree (so a conflict leaves the running preview intact). Returns null when the
 // 3-way merge applies cleanly, else the conflict report (which files).
 async function mergeTreeConflicts(cwd, ref) {
@@ -816,16 +816,22 @@ async function promote(branch) {
   if (specConflicts) throw new Error(`promote blocked — ${specConflicts}`);
 
   // 1) Make the preview a clean descendant of base, in its own worktree. FF: already
-  //    ahead → nothing to do. Non-FF: rebase onto base, then rebuild + re-gate.
+  //    ahead → nothing to do. Non-FF: squash all candidate commits into one, then
+  //    rebase that single commit onto base. The single-commit rebase is guaranteed
+  //    conflict-free because mergeTreeConflicts already verified the combined diff
+  //    applies cleanly — no per-commit replay means no spurious conflicts.
   if ((await gitTry(["merge-base", "--is-ancestor", baseBranch, "HEAD"], cand.worktree)) === null) {
     const conflicts = await mergeTreeConflicts(cand.worktree, baseBranch);
-    if (conflicts) throw new Error(`preview ${cand.branch} can't be auto-rebased onto ${baseBranch} — manual merge required:\n${conflicts}`);
+    if (conflicts) throw new Error(`preview ${cand.branch} can't be auto-merged onto ${baseBranch} — manual merge required:\n${conflicts}`);
     await stopProc(cand);
     try {
+      const mb = (await git(["merge-base", baseBranch, "HEAD"], cand.worktree)).trim();
+      await git(["reset", "--soft", mb], cand.worktree);
+      await git([...GIT_IDENTITY, "commit", "-m", `squash: ${cand.branch}`], cand.worktree);
       await git(["rebase", baseBranch], cand.worktree);
     } catch (e) {
       await gitTry(["rebase", "--abort"], cand.worktree);
-      throw new Error(`auto-rebase of ${cand.branch} onto ${baseBranch} failed: ${e.message || e}`);
+      throw new Error(`auto-squash-rebase of ${cand.branch} onto ${baseBranch} failed: ${e.message || e}`);
     }
     const st = await buildAndStart(cand);
     if (st !== "ready") throw new Error(`rebuilt preview ${cand.branch} failed its health check (state: ${st}); base unchanged.`);
