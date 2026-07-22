@@ -46,7 +46,7 @@ RUN pip install --no-cache-dir \
     python-pptx \
     python-docx
 
- RUN chmod -R a+rwX "$VIRTUAL_ENV"
+#RUN chmod -R a+rwX "$VIRTUAL_ENV"
 
 RUN npm install -g pptxgenjs docx xlsx-populate
 
