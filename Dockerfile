@@ -79,6 +79,7 @@ WORKDIR /app
 COPY . .
 
 # Install Claude Code and OpenCode CLIs globally
+RUN npm install -g --allow-scripts=@anthropic-ai/claude-code,opencode-ai
 RUN npm install -g @anthropic-ai/claude-code opencode-ai
 
 COPY docker-entrypoint.sh /docker-entrypoint.sh
