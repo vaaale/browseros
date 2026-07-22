@@ -6,6 +6,8 @@ services:
       dockerfile: Dockerfile
     command:
       - /bin/ls
+    restart:
+      no
 
   browseros:
     image: browseros:latest
@@ -14,6 +16,8 @@ services:
       dockerfile: Dockerfile
     entrypoint:
       - /bin/ls
+    restart:
+      no
 
   bastion:
     image: bos-bastion:latest
