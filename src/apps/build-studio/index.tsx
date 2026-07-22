@@ -3,6 +3,7 @@
 import { Children, isValidElement, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Markdown } from "@copilotkit/react-ui";
 import "@copilotkit/react-ui/styles.css";
+import { markdownRenderers } from "@/components/agent/MarkdownRenderers";
 import {
   ChevronDown,
   ChevronRight,
@@ -429,6 +430,7 @@ export default function BuildStudioApp({ windowId }: AppProps) {
         return <Tag id={slugify(plainText(children))}>{children}</Tag>;
       };
     return {
+      ...markdownRenderers,
       h1: heading(1),
       h2: heading(2),
       h3: heading(3),
