@@ -825,9 +825,16 @@ async function promote(branch) {
     if (conflicts) throw new Error(`preview ${cand.branch} can't be auto-merged onto ${baseBranch} — manual merge required:\n${conflicts}`);
     await stopProc(cand);
     try {
-      const mb = (await git(["merge-base", baseBranch, "HEAD"], cand.worktree)).trim();
-      await git(["reset", "--soft", mb], cand.worktree);
-      await git([...GIT_IDENTITY, "commit", "-m", `squash: ${cand.branch}`], cand.worktree);
+      // Prefer squash: collapse all feature commits into one before rebasing so
+      // the single-commit rebase is guaranteed conflict-free (mergeTreeConflicts
+      // verified the combined diff above). Fall back to plain rebase when
+      // merge-base can't be resolved (shallow clone, fork-point only in reflog)
+      // because git-rebase uses --fork-point internally and handles that case.
+      const mb = await gitTry(["merge-base", baseBranch, "HEAD"], cand.worktree);
+      if (mb) {
+        await git(["reset", "--soft", mb.trim()], cand.worktree);
+        await git([...GIT_IDENTITY, "commit", "-m", `squash: ${cand.branch}`], cand.worktree);
+      }
       await git(["rebase", baseBranch], cand.worktree);
     } catch (e) {
       await gitTry(["rebase", "--abort"], cand.worktree);
