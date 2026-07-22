@@ -4,16 +4,16 @@ services:
     build:
       context: ./docker/run-command
       dockerfile: Dockerfile
-    profiles:
-      - build-only
+    command:
+      - /bin/ls
 
   browseros:
     image: browseros:latest
     build:
       context: .
       dockerfile: Dockerfile
-    profiles:
-      - build-only
+    entrypoint:
+      - /bin/ls
 
   bastion:
     image: bos-bastion:latest
