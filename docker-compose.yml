@@ -123,5 +123,6 @@ networks:
 
 volumes:
   bastion-data:
+  user-data:
   openai_voice_profiles:
   speaches-huggingface:

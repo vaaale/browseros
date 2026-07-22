@@ -472,7 +472,9 @@ function startProc(v) {
       BOS_SPECS_ROOT: v.role === "preview" ? path.join(v.worktree, "specs") : SPECS_ROOT,
       ...(v.role === "preview" ? { BOS_SPECS_SEED: "0" } : {}),
     },
-    stdio: "inherit",
+    // Redirect Next.js stderr → supervisor stdout so Docker/Dokploy doesn't
+    // classify normal request logs (which Next.js writes to stderr) as errors.
+    stdio: ["inherit", "inherit", process.stdout],
     // detached: true puts the child in its own process group so stopProc can
     // kill the ENTIRE group (npx + its next-server child) via negative PID.
     // Without this, killing npx orphans the next process which keeps the port.
@@ -664,7 +666,9 @@ function startBaseDevProc(v) {
       BOS_SPECS_ROOT: SPECS_ROOT,
       BOS_SUPERVISOR_URL: `http://127.0.0.1:${PUBLIC_PORT}`,
     },
-    stdio: "inherit",
+    // Redirect Next.js stderr → supervisor stdout so Docker/Dokploy doesn't
+    // classify normal request logs (which Next.js writes to stderr) as errors.
+    stdio: ["inherit", "inherit", process.stdout],
     detached: true,
   });
   v.proc.on("exit", (code) => {
