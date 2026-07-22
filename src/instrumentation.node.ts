@@ -4,8 +4,6 @@
 // scheduler daemon starts ticking. Before this, nothing called startDaemon(),
 // so scheduled jobs only ran when triggered manually.
 export async function register(): Promise<void> {
-  // Only the Node.js runtime can run the daemon (fs, timers, server-only libs).
-  if (process.env.NEXT_RUNTIME !== "nodejs") return;
   try {
     const { loadAllPlugins } = await import("@/lib/plugins/loader");
     await loadAllPlugins();
