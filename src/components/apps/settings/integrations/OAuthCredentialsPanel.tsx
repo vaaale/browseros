@@ -2,7 +2,7 @@
 
 import { useCallback, useState } from "react";
 import { Check, Copy, KeyRound, Loader2, Pencil, X } from "lucide-react";
-import { getRedirectUri } from "@/lib/integrations/oauth/origin";
+import { getRedirectUri, resolveClientPublicOrigin } from "@/lib/integrations/oauth/origin";
 
 export interface OAuthCredentials {
   clientId: string;
@@ -76,6 +76,11 @@ export function OAuthCredentialsPanel({
   const [redirectUri] = useState(() =>
     redirectUriPath ? getRedirectUri(redirectUriPath) : "",
   );
+  // The public origin as seen by the browser (the address bar). When
+  // NEXT_PUBLIC_APP_ORIGIN is not inlined this is window.location.origin — i.e.
+  // the real public URL, which the server CANNOT infer behind a reverse proxy
+  // that rewrites Host. We surface it so the user knows exactly what to pin.
+  const [detectedOrigin] = useState(() => resolveClientPublicOrigin());
   const [copied, setCopied] = useState(false);
 
   const copyRedirectUri = useCallback(async () => {
@@ -168,10 +173,18 @@ export function OAuthCredentialsPanel({
       {!hasPublicOrigin && (
         <div className="rounded border border-amber-400/30 bg-amber-500/10 p-2.5">
           <p className="text-[10.5px] leading-relaxed text-white/60">
-            <strong className="font-semibold text-white/80">Note:</strong> Set the{" "}
-            <code className="text-white/80">NEXT_PUBLIC_APP_ORIGIN</code> environment variable to
-            your public URL (e.g. <code className="text-white/80">https://bos.schmopilot.com</code>)
-            so the redirect URI is generated correctly behind a reverse proxy.
+            <strong className="font-semibold text-white/80">Note:</strong>{" "}
+            <code className="text-white/80">NEXT_PUBLIC_APP_ORIGIN</code> is not set at build time.
+            Behind a reverse proxy the server can’t reliably infer the public URL, so set{" "}
+            <code className="text-white/80">NEXT_PUBLIC_APP_ORIGIN</code>{" "}
+            {detectedOrigin ? (
+              <>
+                to <code className="text-white/80">{detectedOrigin}</code>
+              </>
+            ) : (
+              <>to your public URL (e.g. <code className="text-white/80">https://bos.schmopilot.com</code>)</>
+            )}{" "}
+            so the redirect URI above is generated correctly by the OAuth flow.
           </p>
         </div>
       )}

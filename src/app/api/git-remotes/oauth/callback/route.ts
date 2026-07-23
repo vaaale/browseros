@@ -3,8 +3,9 @@ import { takePending } from "@/lib/integrations/oauth/state";
 import { getSecretsStore } from "@/lib/integrations/secrets/store";
 import { readRemoteConfigs, updateRemoteConfig } from "@/lib/gitops/remote-config";
 import { getOAuthProvider, getGitLabAuthUrls } from "@/lib/integrations/oauth/providers";
-import { resolvePublicOrigin, GIT_REMOTE_OAUTH_CALLBACK_PATH } from "@/lib/integrations/oauth/origin";
+import { describePublicOrigin, GIT_REMOTE_OAUTH_CALLBACK_PATH } from "@/lib/integrations/oauth/origin";
 import { gitLogger } from "@/lib/gitops/logging";
+import { logger } from "@/lib/logging";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -126,8 +127,21 @@ export async function GET(req: NextRequest) {
     }
 
     // Must be byte-for-byte identical to the redirect_uri used in the start
-    // route, or the provider rejects the token exchange.
-    const redirectUri = `${resolvePublicOrigin(req)}${GIT_REMOTE_OAUTH_CALLBACK_PATH}`;
+    // route, or the provider rejects the token exchange. Resolve it the same
+    // way and surface the same warning when the public origin had to be guessed
+    // (no NEXT_PUBLIC_APP_ORIGIN) — a wrong origin here fails the exchange.
+    const resolved = describePublicOrigin(req);
+    const redirectUri = `${resolved.origin}${GIT_REMOTE_OAUTH_CALLBACK_PATH}`;
+    if (resolved.warning) {
+      logger().warn("git-remotes.oauth", resolved.warning, {
+        provider: providerId,
+        remote: remoteName,
+        redirectUri,
+        originSource: resolved.source,
+        forwardedHost: resolved.forwardedHost ?? null,
+        host: resolved.host ?? null,
+      });
+    }
     // Self-hosted GitLab exchanges tokens against its own origin; fall back to
     // the manifest URL when no instance URL was configured.
     const tokenUrl =

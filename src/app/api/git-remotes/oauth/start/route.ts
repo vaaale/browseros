@@ -71,14 +71,13 @@ export async function GET(req: NextRequest) {
   const redirectUri = `${resolved.origin}${GIT_REMOTE_OAUTH_CALLBACK_PATH}`;
 
   // Log the resolved origin + inputs so redirect-URI mismatches ("the redirect
-  // URI included is not valid") can be diagnosed without guessing. When the
-  // source is "request-origin" the public origin is NOT configured — the URI
-  // reflects the internal request host and the provider will likely reject it.
+  // URI included is not valid") can be diagnosed without guessing.
   logger().info("git-remotes.oauth", "resolved OAuth redirect URI", {
     provider: providerId,
     remote: remoteName,
     redirectUri,
     originSource: resolved.source,
+    configuredResolved: resolved.configuredResolved,
     configuredOrigin: resolved.configured ?? null,
     configuredRuntime: resolved.configuredRuntime ?? null,
     configuredBuildTime: resolved.configuredBuildTime ?? null,
@@ -86,6 +85,20 @@ export async function GET(req: NextRequest) {
     forwardedHost: resolved.forwardedHost ?? null,
     host: resolved.host ?? null,
   });
+
+  // When the origin is a guess (no NEXT_PUBLIC_APP_ORIGIN at build or run time),
+  // emit a clear, actionable warning — the URI likely reflects an internal
+  // backend host and the provider will reject it.
+  if (resolved.warning) {
+    logger().warn("git-remotes.oauth", resolved.warning, {
+      provider: providerId,
+      remote: remoteName,
+      redirectUri,
+      originSource: resolved.source,
+      forwardedHost: resolved.forwardedHost ?? null,
+      host: resolved.host ?? null,
+    });
+  }
 
   const authUrl = new URL(baseAuthUrl);
   authUrl.searchParams.set("client_id", cs.clientId);

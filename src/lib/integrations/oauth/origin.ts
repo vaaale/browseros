@@ -65,6 +65,13 @@ function readConfiguredOrigin(): ConfiguredOrigin {
 export interface PublicOriginResolution {
   origin: string;
   source: "env" | "forwarded-headers" | "request-origin";
+  /**
+   * True only when the origin came from configured env (NEXT_PUBLIC_APP_ORIGIN /
+   * APP_ORIGIN, build-time or runtime) — i.e. it is deterministic and matches
+   * what the user registered. False when the origin is a best-effort GUESS from
+   * proxy headers / the request URL, which may be an internal backend address.
+   */
+  configuredResolved: boolean;
   configured: string | undefined;
   /** Raw NEXT_PUBLIC_APP_ORIGIN/APP_ORIGIN read from the container's runtime env. */
   configuredRuntime: string | undefined;
@@ -73,6 +80,16 @@ export interface PublicOriginResolution {
   forwardedProto: string | undefined;
   forwardedHost: string | undefined;
   host: string | undefined;
+  /**
+   * Human-readable warning when the public origin could NOT be reliably
+   * determined — NEXT_PUBLIC_APP_ORIGIN was set neither at build time nor at
+   * runtime, so the origin is a guess from proxy headers and may not match what
+   * the OAuth provider expects. undefined when the origin was configured.
+   *
+   * Callers (server routes only) should log this — origin.ts is imported by a
+   * client component, so it cannot pull in the `server-only` logger itself.
+   */
+  warning: string | undefined;
 }
 
 export function describePublicOrigin(req: NextRequest): PublicOriginResolution {
@@ -85,19 +102,42 @@ export function describePublicOrigin(req: NextRequest): PublicOriginResolution {
   const forwardedHost = first(req.headers.get("x-forwarded-host"));
   const host = forwardedHost ?? first(req.headers.get("host"));
 
-  const shared = { configured, configuredRuntime, configuredBuildTime, forwardedProto, forwardedHost, host };
+  const shared = {
+    configured,
+    configuredRuntime,
+    configuredBuildTime,
+    forwardedProto,
+    forwardedHost,
+    host,
+  };
 
+  // Configured env wins — deterministic and matches the registered redirect URI.
   if (configured) {
-    return { origin: configured, source: "env", ...shared };
+    return { origin: configured, source: "env", configuredResolved: true, warning: undefined, ...shared };
   }
 
-  if (host) {
-    const isLocal = /^(localhost|127\.|\[::1\])/i.test(host);
-    const scheme = forwardedProto ?? (isLocal ? "http" : "https");
-    return { origin: `${scheme}://${host}`, source: "forwarded-headers", ...shared };
-  }
+  // No configured origin: everything below is a GUESS. Behind a reverse proxy
+  // that does not preserve the original Host (e.g. it forwards the internal
+  // backend name such as `bos-alex:8090`), this guess is wrong and the provider
+  // rejects the redirect URI. Emit a clear, actionable warning for the caller
+  // to log and surface.
+  const guessed = ((): { origin: string; source: PublicOriginResolution["source"] } => {
+    if (host) {
+      const isLocal = /^(localhost|127\.|\[::1\])/i.test(host);
+      const scheme = forwardedProto ?? (isLocal ? "http" : "https");
+      return { origin: `${scheme}://${host}`, source: "forwarded-headers" };
+    }
+    return { origin: new URL(req.url).origin, source: "request-origin" };
+  })();
 
-  return { origin: new URL(req.url).origin, source: "request-origin", ...shared };
+  const warning =
+    `Could not determine the public origin: NEXT_PUBLIC_APP_ORIGIN is set neither at ` +
+    `build time nor at runtime. Falling back to ${guessed.origin} (from ${guessed.source}), ` +
+    `which may be an internal address behind a reverse proxy and can produce a redirect URI ` +
+    `the OAuth provider rejects. Set NEXT_PUBLIC_APP_ORIGIN to your public URL ` +
+    `(e.g. https://bos.schmopilot.com) so the redirect URI is generated correctly.`;
+
+  return { origin: guessed.origin, source: guessed.source, configuredResolved: false, warning, ...shared };
 }
 
 export function resolvePublicOrigin(req: NextRequest): string {
