@@ -4,7 +4,13 @@ import { useCallback, useEffect, useState } from "react";
 import { ChevronRight, LogOut, Plug, RefreshCw, Zap } from "lucide-react";
 import type { IntegrationSummary } from "./useIntegrations";
 import { ClientSecretUpload } from "./ClientSecretUpload";
+import { OAuthCredentialsPanel } from "./OAuthCredentialsPanel";
 import { TelegramBotAuthSection } from "./TelegramBotAuthSection";
+
+// Providers whose OAuth apps only expose a Client ID + Client Secret (no
+// downloadable client_secrets.json). These use the field-based
+// OAuthCredentialsPanel instead of the Google-style ClientSecretUpload.
+const FIELD_CREDENTIAL_PROVIDERS = new Set(["github", "gitlab"]);
 
 // Small "auth card" showing the connection status + Connect / Reauthorize /
 // Disconnect controls. When connected + Gmail scope granted, the card can
@@ -22,9 +28,11 @@ export interface IntegrationDetailViewProps {
   onOpenService: (serviceId: string) => void;
   onRefresh: () => Promise<void>;
   onDisconnect: (id: string) => Promise<void>;
+  /** Persist field-based OAuth credentials (GitHub / GitLab). */
+  onSetCredentials?: (id: string, credentials: { clientId: string; clientSecret: string }) => Promise<void>;
 }
 
-export function IntegrationDetailView({ item, onOpenService, onRefresh, onDisconnect }: IntegrationDetailViewProps) {
+export function IntegrationDetailView({ item, onOpenService, onRefresh, onDisconnect, onSetCredentials }: IntegrationDetailViewProps) {
   const [whoAmI, setWhoAmI] = useState<WhoAmI | undefined>();
   const [error, setError] = useState<string | undefined>();
   const [busy, setBusy] = useState(false);
@@ -100,9 +108,23 @@ export function IntegrationDetailView({ item, onOpenService, onRefresh, onDiscon
   // The rest of the page (services list) is unchanged.
   const isTelegram = item.manifest.id === "telegram";
 
+  // GitHub / GitLab collect credentials via two text fields; everyone else
+  // (currently GSuite) uploads a client_secrets.json file.
+  const usesFieldCredentials = FIELD_CREDENTIAL_PROVIDERS.has(item.manifest.id);
+
   return (
     <div className="space-y-4">
-      {!isTelegram && !item.hasClientSecret && (
+      {!isTelegram && usesFieldCredentials && (
+        <OAuthCredentialsPanel
+          integrationId={item.manifest.id}
+          providerName={item.manifest.name}
+          hasCredentials={item.hasClientSecret}
+          onSaved={onRefresh}
+          onSubmit={onSetCredentials}
+        />
+      )}
+
+      {!isTelegram && !usesFieldCredentials && !item.hasClientSecret && (
         <ClientSecretUpload integrationId={item.manifest.id} onUploaded={onRefresh} />
       )}
 

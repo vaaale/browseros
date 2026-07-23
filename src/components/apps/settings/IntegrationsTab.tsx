@@ -19,7 +19,7 @@ type View =
   | { name: "config"; integrationId: string; serviceId: string };
 
 export function IntegrationsTab() {
-  const { items, adapters, loading, error, refresh, patch, disconnect } = useIntegrations();
+  const { items, adapters, loading, error, refresh, patch, disconnect, setCredentials } = useIntegrations();
   const [view, setView] = useState<View>({ name: "list" });
 
   const currentItem = useMemo(() => {
@@ -74,6 +74,7 @@ export function IntegrationsTab() {
           }
           onRefresh={refresh}
           onDisconnect={disconnect}
+          onSetCredentials={setCredentials}
         />
       )}
       {view.name === "detail" && !currentItem && !loading && (

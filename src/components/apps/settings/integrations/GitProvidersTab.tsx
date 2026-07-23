@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Loader2, Plug, Unplug } from "lucide-react";
+import { KeyRound, Loader2, Plug, Unplug } from "lucide-react";
+import { OAuthCredentialsPanel } from "./OAuthCredentialsPanel";
 
 interface ProviderStatus {
   id: string;
@@ -34,6 +35,7 @@ export function GitProvidersTab({ onRefresh: _onRefresh }: { onRefresh?: () => P
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyProvider, setBusyProvider] = useState<string | null>(null);
+  const [configuring, setConfiguring] = useState<string | null>(null);
   const [error, setError] = useState<string | undefined>();
 
   const load = useCallback(async () => {
@@ -150,59 +152,88 @@ export function GitProvidersTab({ onRefresh: _onRefresh }: { onRefresh?: () => P
         <div className="overflow-hidden rounded-lg border border-white/10 bg-white/[0.05]">
           {providers.map((provider) => {
             const isBusy = busyProvider === provider.id;
+            const isConfiguring = configuring === provider.id;
             return (
-              <div
-                key={provider.id}
-                className="flex items-center justify-between border-b border-white/5 px-4 py-3 last:border-b-0"
-              >
-                <div className="flex items-center gap-3">
-                  <span
-                    className={`inline-block h-2 w-2 rounded-full ${
-                      provider.connected ? "bg-emerald-400" : "bg-white/25"
-                    }`}
-                  />
-                  <ProviderIcon provider={provider.id} size={16} />
-                  <div>
-                    <div className="text-[13px] font-medium">{provider.name}</div>
-                    <div className="text-[11px] text-white/50">
-                      {provider.connected
-                        ? `● Connected${provider.connectedAs ? ` as ${provider.connectedAs}` : ""}`
-                        : "○ Not connected"}
+              <div key={provider.id} className="border-b border-white/5 last:border-b-0">
+                <div className="flex items-center justify-between px-4 py-3">
+                  <div className="flex items-center gap-3">
+                    <span
+                      className={`inline-block h-2 w-2 rounded-full ${
+                        provider.connected ? "bg-emerald-400" : "bg-white/25"
+                      }`}
+                    />
+                    <ProviderIcon provider={provider.id} size={16} />
+                    <div>
+                      <div className="text-[13px] font-medium">{provider.name}</div>
+                      <div className="text-[11px] text-white/50">
+                        {provider.connected
+                          ? `● Connected${provider.connectedAs ? ` as ${provider.connectedAs}` : ""}`
+                          : provider.hasClientCredentials
+                            ? "○ Not connected"
+                            : "○ Credentials required"}
+                      </div>
                     </div>
                   </div>
-                </div>
-                <div className="flex shrink-0 items-center gap-2">
-                  {!provider.connected && (
+                  <div className="flex shrink-0 items-center gap-2">
                     <button
                       type="button"
-                      onClick={() => connect(provider.id)}
+                      onClick={() => setConfiguring(isConfiguring ? null : provider.id)}
                       disabled={isBusy}
-                      className="inline-flex items-center gap-1.5 rounded bg-violet-500/80 px-2.5 py-1.5 text-[11px] font-medium text-white transition-colors hover:bg-violet-500 disabled:opacity-50"
+                      className={`inline-flex items-center gap-1.5 rounded border px-2.5 py-1.5 text-[11px] font-medium transition-colors disabled:opacity-50 ${
+                        isConfiguring
+                          ? "border-violet-400/60 text-violet-200"
+                          : "border-white/15 text-white/80 hover:bg-white/10"
+                      }`}
                     >
-                      {isBusy ? (
-                        <Loader2 size={10} className="animate-spin" />
-                      ) : (
-                        <Plug size={10} />
-                      )}
-                      Connect
+                      <KeyRound size={10} />
+                      {provider.hasClientCredentials ? "Credentials" : "Add credentials"}
                     </button>
-                  )}
-                  {provider.connected && (
-                    <button
-                      type="button"
-                      onClick={() => void disconnect(provider.id)}
-                      disabled={isBusy}
-                      className="inline-flex items-center gap-1.5 rounded border border-red-400/40 px-2.5 py-1.5 text-[11px] font-medium text-red-300 transition-colors hover:bg-red-500/15 disabled:opacity-50"
-                    >
-                      {isBusy ? (
-                        <Loader2 size={10} className="animate-spin" />
-                      ) : (
-                        <Unplug size={10} />
-                      )}
-                      Disconnect
-                    </button>
-                  )}
+                    {!provider.connected && (
+                      <button
+                        type="button"
+                        onClick={() => connect(provider.id)}
+                        disabled={isBusy || !provider.hasClientCredentials}
+                        title={provider.hasClientCredentials ? undefined : "Configure credentials first"}
+                        className="inline-flex items-center gap-1.5 rounded bg-violet-500/80 px-2.5 py-1.5 text-[11px] font-medium text-white transition-colors hover:bg-violet-500 disabled:opacity-50"
+                      >
+                        {isBusy ? (
+                          <Loader2 size={10} className="animate-spin" />
+                        ) : (
+                          <Plug size={10} />
+                        )}
+                        Connect
+                      </button>
+                    )}
+                    {provider.connected && (
+                      <button
+                        type="button"
+                        onClick={() => void disconnect(provider.id)}
+                        disabled={isBusy}
+                        className="inline-flex items-center gap-1.5 rounded border border-red-400/40 px-2.5 py-1.5 text-[11px] font-medium text-red-300 transition-colors hover:bg-red-500/15 disabled:opacity-50"
+                      >
+                        {isBusy ? (
+                          <Loader2 size={10} className="animate-spin" />
+                        ) : (
+                          <Unplug size={10} />
+                        )}
+                        Disconnect
+                      </button>
+                    )}
+                  </div>
                 </div>
+                {isConfiguring && (
+                  <div className="px-4 pb-4">
+                    <OAuthCredentialsPanel
+                      integrationId={provider.id}
+                      providerName={provider.name}
+                      hasCredentials={provider.hasClientCredentials}
+                      onSaved={async () => {
+                        await load();
+                        setConfiguring(null);
+                      }}
+                    />
+                  </div>
+                )}
               </div>
             );
           })}
