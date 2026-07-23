@@ -13,7 +13,9 @@ import { test, expect } from "@playwright/test";
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 function err(code: string, message: string, suggestion?: string) {
-  return { error: { code, message, suggestion } };
+  return suggestion
+    ? { error: { code, message, suggestion } }
+    : { error: { code, message } };
 }
 
 function detectProvider(url: string): "github" | "gitlab" | "generic" {
@@ -90,18 +92,18 @@ class SimRemoteConfigStore {
 class SimSecretsStore {
   private secrets: SecretEntry[] = [];
 
-  async set(namespace: string, key: string, value: unknown): Promise<void> {
+  set(namespace: string, key: string, value: unknown): void {
     const existing = this.secrets.findIndex((s) => s.namespace === namespace && s.key === key);
     if (existing >= 0) this.secrets[existing].value = value;
     else this.secrets.push({ namespace, key, value });
   }
 
-  async get<T = unknown>(namespace: string, key: string): Promise<T | null> {
+  get<T = unknown>(namespace: string, key: string): T | null {
     const entry = this.secrets.find((s) => s.namespace === namespace && s.key === key);
     return (entry?.value as T) ?? null;
   }
 
-  async delete(namespace: string, key: string): Promise<boolean> {
+  delete(namespace: string, key: string): boolean {
     const idx = this.secrets.findIndex((s) => s.namespace === namespace && s.key === key);
     if (idx === -1) return false;
     this.secrets.splice(idx, 1);
@@ -180,7 +182,7 @@ function simulateGitRemotesPOST(
       if (url.startsWith("git://")) {
         return {
           status: 400,
-          json: err("INVALID_URL", "git:// protocol is not supported. Use https:// or ssh:// instead."),
+          json: err("INVALID_URL", "git:// protocol is not supported. Use https:// or ssh:// instead.", "Convert the URL to HTTPS or SSH format."),
         };
       }
       if (!["token", "oauth", "ssh"].includes(authType)) {
@@ -212,19 +214,18 @@ function simulateGitRemotesPOST(
         autoPush: autoPush === true,
       });
 
-      return {
-        status: 200,
-        json: {
-          ok: true,
-          name: uniqueName,
-          url,
-          provider: detectedProvider,
-          message:
-            uniqueName !== name
-              ? `Remote '${name}' was already taken. Registered as '${uniqueName}' instead.`
-              : `Remote '${uniqueName}' registered.`,
-        },
+      const resp: Record<string, unknown> = {
+        ok: true,
+        name: uniqueName,
+        url,
+        provider: detectedProvider,
+        message:
+          uniqueName !== name
+            ? `Remote '${name}' was already taken. Registered as '${uniqueName}' instead.`
+            : `Remote '${uniqueName}' registered.`,
       };
+      if (uniqueName !== name) resp.uniqueName = uniqueName;
+      return { status: 200, json: resp };
     }
 
     case "remove": {
@@ -376,10 +377,6 @@ function simulateOAuthStart(
     return { status: 400, json: { error: `Unknown provider: ${params.provider}` } };
   }
 
-  const cs = secretsStore.get<{ clientId: string; clientSecret: string }>(
-    "git_remote_oauth",
-    `${params.provider}:client`,
-  );
   // Note: we allow missing credentials in simulation for testing flow
 
   const scopes = params.scopes
@@ -486,11 +483,12 @@ function makeErrorPage(message: string, code?: string): string {
 }
 
 function extractPostMessagePayload(html: string): Record<string, unknown> | null {
-  const match = html.match(/postMessage\(\s*(.+?)\s*,/);
+  const match = html.match(/postMessage\((.+),['"]\*['"]\s*\)/);
   if (!match) return null;
   try {
-    const first = JSON.parse(match[1]);
-    return typeof first === "string" ? JSON.parse(first) : first;
+    const expr = match[1].trim();
+    const parsed = JSON.parse(expr);
+    return typeof parsed === "string" ? JSON.parse(parsed) : parsed;
   } catch {
     return null;
   }
@@ -1079,7 +1077,7 @@ test.describe("OAuth flow", () => {
   });
 
   test("callback returns error when flow has no remoteName", () => {
-    stateStore.putPending({
+    const stateToken = stateStore.putPending({
       integrationId: "git_remote_oauth",
       verifier: "v1",
       scopes: ["repo"],
@@ -1087,7 +1085,7 @@ test.describe("OAuth flow", () => {
     });
 
     const { status, html } = simulateOAuthCallback(
-      { code: "code", state: "state-no-remote" },
+      { code: "code", state: stateToken },
       stateStore,
       secretsStore,
       configStore,
