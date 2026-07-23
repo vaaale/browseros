@@ -80,7 +80,7 @@ export async function GET(req: NextRequest) {
   const providerError = url.searchParams.get("error");
 
   if (providerError) {
-    gitLogger().error({ op: "oauth.callback", error: `Provider error: ${providerError}` });
+    gitLogger().error({ op: "oauth.callback", error: { code: "PROVIDER_ERROR", message: `Provider error: ${providerError}` } });
     return new Response(errorPage(`Provider returned error: ${providerError}`, providerError), {
       status: 400,
       headers: { "Content-Type": "text/html; charset=utf-8" },
@@ -97,7 +97,7 @@ export async function GET(req: NextRequest) {
   try {
     const flow = takePending(state);
     if (!flow) {
-      gitLogger().error({ op: "oauth.callback", error: "OAuth state expired or unknown" });
+      gitLogger().error({ op: "oauth.callback", error: { code: "OAUTH_STATE_EXPIRED", message: "OAuth state expired or unknown" } });
       return new Response(errorPage("OAuth state expired or unknown. Please try connecting again."), {
         status: 400,
         headers: { "Content-Type": "text/html; charset=utf-8" },
@@ -106,7 +106,7 @@ export async function GET(req: NextRequest) {
 
     const remoteName = flow.remoteName;
     if (!remoteName) {
-      gitLogger().error({ op: "oauth.callback", error: "No remoteName in OAuth flow" });
+      gitLogger().error({ op: "oauth.callback", error: { code: "NO_REMOTE_NAME", message: "No remoteName in OAuth flow" } });
       return new Response(errorPage("Invalid OAuth flow: no remote name."), {
         status: 400,
         headers: { "Content-Type": "text/html; charset=utf-8" },
@@ -178,7 +178,7 @@ export async function GET(req: NextRequest) {
     });
   } catch (err) {
     const message = (err as Error).message;
-    gitLogger().error({ op: "oauth.callback", error: message });
+    gitLogger().error({ op: "oauth.callback", error: { code: "OAUTH_CALLBACK_FAILED", message } });
     return new Response(errorPage(message), {
       status: 400,
       headers: { "Content-Type": "text/html; charset=utf-8" },

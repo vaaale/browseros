@@ -22,6 +22,7 @@ export interface GitLogEntry {
   op: string;
   repoPath?: string;
   remote?: string;
+  provider?: string;
   user?: string;
   durationMs?: number;
   success?: boolean;
@@ -34,6 +35,7 @@ interface FullLogRecord {
   op: string;
   repoPath?: string;
   remote?: string;
+  provider?: string;
   user?: string;
   durationMs?: number;
   success?: boolean;
@@ -234,6 +236,7 @@ export class GitLogger {
       op: entry.op,
       ...(entry.repoPath !== undefined ? { repoPath: entry.repoPath } : {}),
       ...(entry.remote !== undefined ? { remote: entry.remote } : {}),
+      ...(entry.provider !== undefined ? { provider: entry.provider } : {}),
       ...(entry.user !== undefined ? { user: entry.user } : {}),
       ...(entry.durationMs !== undefined ? { durationMs: entry.durationMs } : {}),
       ...(entry.success !== undefined ? { success: entry.success } : {}),
@@ -252,6 +255,7 @@ export class GitLogger {
         op: entry.op,
         repoPath: entry.repoPath,
         remote: entry.remote,
+        provider: entry.provider,
         user: entry.user,
         durationMs: entry.durationMs,
         success: entry.success,

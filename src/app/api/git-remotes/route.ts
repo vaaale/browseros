@@ -45,6 +45,9 @@ export async function GET() {
           autoPush: false,
           inGitConfig: true,
           status: "no-config",
+          defaultBranch: undefined,
+          lastFetched: undefined,
+          lastPushed: undefined,
         });
       }
     }
@@ -109,7 +112,7 @@ export async function POST(req: NextRequest) {
                 : `Remote '${uniqueName}' registered.`,
             });
           } catch (e) {
-            gitLogger().error({ op: "api.git_add_remote", remote: name, error: (e as Error).message });
+            gitLogger().error({ op: "api.git_add_remote", remote: name, error: { code: "GIT_ADD_REMOTE_FAILED", message: (e as Error).message } });
             return err("GIT_ADD_REMOTE_FAILED", (e as Error).message);
           } finally {
             await release();
@@ -135,7 +138,7 @@ export async function POST(req: NextRequest) {
             gitLogger().info({ op: "api.git_remove_remote", remote: name, success: true });
             return NextResponse.json({ ok: true, message: `Remote '${name}' removed.` });
           } catch (e) {
-            gitLogger().error({ op: "api.git_remove_remote", remote: name, error: (e as Error).message });
+            gitLogger().error({ op: "api.git_remove_remote", remote: name, error: { code: "GIT_REMOVE_REMOTE_FAILED", message: (e as Error).message } });
             return err("GIT_REMOVE_REMOTE_FAILED", (e as Error).message);
           } finally {
             await release();
@@ -170,7 +173,7 @@ export async function POST(req: NextRequest) {
             gitLogger().info({ op: "api.git_push", remote: name, success: true });
             return NextResponse.json({ ok: true, message: `Pushed to '${name}/${currentBranch}'.` });
           } catch (e) {
-            gitLogger().error({ op: "api.git_push", remote: name, error: (e as Error).message });
+            gitLogger().error({ op: "api.git_push", remote: name, error: { code: "GIT_PUSH_FAILED", message: (e as Error).message } });
             return err("GIT_PUSH_FAILED", (e as Error).message);
           } finally {
             await release();
@@ -196,7 +199,7 @@ export async function POST(req: NextRequest) {
             gitLogger().info({ op: "api.git_fetch", remote: name, success: true });
             return NextResponse.json({ ok: true, ahead: ab.ahead, behind: ab.behind });
           } catch (e) {
-            gitLogger().error({ op: "api.git_fetch", remote: name, error: (e as Error).message });
+            gitLogger().error({ op: "api.git_fetch", remote: name, error: { code: "GIT_FETCH_FAILED", message: (e as Error).message } });
             return err("GIT_FETCH_FAILED", (e as Error).message);
           } finally {
             await release();
