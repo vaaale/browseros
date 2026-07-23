@@ -6,6 +6,31 @@ import { challengeFromVerifier, newVerifier } from "./pkce";
 import { putPending, takePending } from "./state";
 import type { OAuthTokens } from "../types";
 import { IntegrationAuthError, IntegrationConfigError } from "../errors";
+import type { OAuthProviderManifest } from "./providers/github";
+import { OAUTH_PROVIDERS } from "./providers";
+
+// ── OAuth Provider Registry ────────────────────────────────────────────────
+// Lightweight registry of OAuth provider manifests (GitHub, GitLab, …).
+// Providers are registered at module load from the barrel import above.
+// The `getOAuthProvider` helper lets callers look up a manifest by id.
+
+const providerRegistry = new Map<string, OAuthProviderManifest>();
+
+for (const provider of OAUTH_PROVIDERS) {
+  providerRegistry.set(provider.id, provider);
+}
+
+export function registerOAuthProvider(provider: OAuthProviderManifest): void {
+  providerRegistry.set(provider.id, provider);
+}
+
+export function getOAuthProvider(id: string): OAuthProviderManifest | undefined {
+  return providerRegistry.get(id);
+}
+
+export function listOAuthProviders(): OAuthProviderManifest[] {
+  return [...providerRegistry.values()];
+}
 
 // OAuthManager — one instance per process. Implements the PKCE authorisation-
 // code flow: build the auth URL from the manifest + user-uploaded client
