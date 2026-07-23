@@ -296,6 +296,40 @@ export async function removeRemote(
   gitLogger().info({ op, repoPath, remote: name, durationMs, success: true });
 }
 
+export async function setRemoteUrl(
+  repoPath: string,
+  name: string,
+  url: string,
+): Promise<void> {
+  const op = "git.setRemoteUrl";
+  const { stderr, exitCode } = await runGit(
+    ["remote", "set-url", name, url],
+    { cwd: repoPath },
+  );
+  if (exitCode !== 0) {
+    gitLogger().error({ op, repoPath, remote: name, success: false, error: { code: "GIT_REMOTE_SET_URL_FAILED", message: stderr } });
+    throw makeError("GIT_REMOTE_SET_URL_FAILED", stderr);
+  }
+  gitLogger().info({ op, repoPath, remote: name, success: true });
+}
+
+export async function renameRemote(
+  repoPath: string,
+  oldName: string,
+  newName: string,
+): Promise<void> {
+  const op = "git.renameRemote";
+  const { stderr, exitCode } = await runGit(
+    ["remote", "rename", oldName, newName],
+    { cwd: repoPath },
+  );
+  if (exitCode !== 0) {
+    gitLogger().error({ op, repoPath, remote: oldName, success: false, error: { code: "GIT_REMOTE_RENAME_FAILED", message: stderr } });
+    throw makeError("GIT_REMOTE_RENAME_FAILED", stderr);
+  }
+  gitLogger().info({ op, repoPath, remote: newName, success: true });
+}
+
 export async function listRemotes(
   repoPath: string,
 ): Promise<RemoteInfo[]> {

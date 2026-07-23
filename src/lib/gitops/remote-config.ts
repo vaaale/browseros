@@ -13,6 +13,12 @@ export interface GitRemoteConfig {
   lastFetched?: string
   lastPushed?: string
   oauthTokenExpiresAt?: number
+  /** Id of the GitFS instance this remote belongs to (see filesystems.ts).
+   *  Absent on legacy remotes, which belong to the BrowserOS source repo. */
+  filesystem?: string
+  /** Last observed connection state, updated by test/fetch/push. */
+  lastStatus?: "connected" | "error" | "disconnected"
+  lastError?: string
   createdAt: string
   updatedAt: string
 }
@@ -36,7 +42,7 @@ function writeRemoteConfigs(configs: GitRemoteConfig[]): void {
 
 export function addRemoteConfig(config: Omit<GitRemoteConfig, "createdAt" | "updatedAt">): GitRemoteConfig {
   const configs = readRemoteConfigs()
-  const uniqueName = getUniqueRemoteName(config.name)
+  const uniqueName = getUniqueRemoteName(config.name, config.filesystem)
   const now = new Date().toISOString()
   const newConfig: GitRemoteConfig = {
     ...config,
@@ -69,8 +75,13 @@ export function removeRemoteConfig(name: string): boolean {
   return true
 }
 
-export function getUniqueRemoteName(name: string): string {
-  const configs = readRemoteConfigs()
+// Remote names must be unique WITHIN a filesystem (git enforces this per repo).
+// When a filesystem is given, only that filesystem's remotes are considered, so
+// two filesystems may each have an "origin". When omitted, uniqueness is global
+// (legacy behaviour, used by callers that operate on the source repo).
+export function getUniqueRemoteName(name: string, filesystem?: string): string {
+  const all = readRemoteConfigs()
+  const configs = filesystem === undefined ? all : all.filter((c) => (c.filesystem ?? undefined) === filesystem)
   if (!configs.find((c) => c.name === name)) return name
   let counter = 2
   while (configs.find((c) => c.name === `${name}-${counter}`)) {

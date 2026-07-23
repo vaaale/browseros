@@ -53,7 +53,26 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { action, providerId } = body as { action?: string; providerId?: string };
+    const { action, providerId } = body as {
+      action?: string;
+      providerId?: string;
+      clientId?: string;
+      clientSecret?: string;
+    };
+
+    if (action === "set-credentials" && providerId) {
+      if (providerId !== "github" && providerId !== "gitlab") {
+        return NextResponse.json({ error: `Unsupported provider '${providerId}'.` }, { status: 400 });
+      }
+      const clientId = typeof body.clientId === "string" ? body.clientId.trim() : "";
+      const clientSecret = typeof body.clientSecret === "string" ? body.clientSecret.trim() : "";
+      if (!clientId || !clientSecret) {
+        return NextResponse.json({ error: "clientId and clientSecret are required." }, { status: 400 });
+      }
+      const store = getSecretsStore();
+      await store.set("git_remote_oauth", `${providerId}:client`, { clientId, clientSecret });
+      return NextResponse.json({ ok: true });
+    }
 
     if (action === "disconnect" && providerId) {
       const store = getSecretsStore();
