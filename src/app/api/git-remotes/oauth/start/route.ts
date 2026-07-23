@@ -4,8 +4,9 @@ import { getSecretsStore } from "@/lib/integrations/secrets/store";
 import { putPending } from "@/lib/integrations/oauth/state";
 import { challengeFromVerifier } from "@/lib/integrations/oauth/pkce";
 import { getOAuthProvider, getGitLabAuthUrls } from "@/lib/integrations/oauth/providers";
-import { resolvePublicOrigin, GIT_REMOTE_OAUTH_CALLBACK_PATH } from "@/lib/integrations/oauth/origin";
+import { describePublicOrigin, GIT_REMOTE_OAUTH_CALLBACK_PATH } from "@/lib/integrations/oauth/origin";
 import { gitLogger } from "@/lib/gitops/logging";
+import { logger } from "@/lib/logging";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -66,7 +67,23 @@ export async function GET(req: NextRequest) {
 
   // The redirect URI must be the public origin (matching what the user
   // registered with the provider), not the internal request origin.
-  const redirectUri = `${resolvePublicOrigin(req)}${GIT_REMOTE_OAUTH_CALLBACK_PATH}`;
+  const resolved = describePublicOrigin(req);
+  const redirectUri = `${resolved.origin}${GIT_REMOTE_OAUTH_CALLBACK_PATH}`;
+
+  // Log the resolved origin + inputs so redirect-URI mismatches ("the redirect
+  // URI included is not valid") can be diagnosed without guessing. When the
+  // source is "request-origin" the public origin is NOT configured — the URI
+  // reflects the internal request host and the provider will likely reject it.
+  logger().info("git-remotes.oauth", "resolved OAuth redirect URI", {
+    provider: providerId,
+    remote: remoteName,
+    redirectUri,
+    originSource: resolved.source,
+    configuredOrigin: resolved.configured ?? null,
+    forwardedProto: resolved.forwardedProto ?? null,
+    forwardedHost: resolved.forwardedHost ?? null,
+    host: resolved.host ?? null,
+  });
 
   const authUrl = new URL(baseAuthUrl);
   authUrl.searchParams.set("client_id", cs.clientId);
