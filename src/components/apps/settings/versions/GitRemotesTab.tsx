@@ -2,8 +2,10 @@
 
 import { useCallback, useEffect, useState } from "react";
 import {
+  FolderGit2,
   GitBranch,
   Globe,
+  HardDrive,
   Loader2,
   Plus,
   RefreshCw,
@@ -27,6 +29,16 @@ interface GitRemote {
   lastPushed?: string;
   inGitConfig: boolean;
   status: string;
+}
+
+interface GitMount {
+  remoteName: string;
+  mountPath: string;
+  branch: string;
+  status: "synced" | "syncing" | "error";
+  lastSynced?: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 type AuthType = "token" | "oauth" | "ssh";
@@ -345,6 +357,120 @@ function EditRemoteModal({ open, remote, onClose, onSave }: EditRemoteModalProps
   );
 }
 
+interface MountFromRemoteModalProps {
+  open: boolean;
+  remotes: GitRemote[];
+  onMount: (remoteName: string, mountPath: string, branch: string) => Promise<void>;
+  onClose: () => void;
+}
+
+function MountFromRemoteModal({ open, remotes, onMount, onClose }: MountFromRemoteModalProps) {
+  const [selectedRemote, setSelectedRemote] = useState("");
+  const [mountPath, setMountPath] = useState("");
+  const [branch, setBranch] = useState("main");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const eligibleRemotes = remotes.filter((r) => r.name !== "origin");
+
+  useEffect(() => {
+    if (!open) return;
+    setSelectedRemote(eligibleRemotes[0]?.name ?? "");
+    setMountPath("");
+    setBranch("main");
+    setError(null);
+  }, [open, eligibleRemotes]);
+
+  const submit = async () => {
+    if (!selectedRemote || !mountPath.trim()) {
+      setError("Remote and mount path are required.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await onMount(selectedRemote, mountPath.trim(), branch || "main");
+      onClose();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+      <div className="w-full max-w-md rounded-lg border border-white/10 bg-neutral-900 p-4 shadow-xl">
+        <div className="mb-3 flex items-center justify-between">
+          <h4 className="text-sm font-semibold">Mount from Remote</h4>
+          <button onClick={onClose} className="rounded p-1 text-white/50 hover:bg-white/10 hover:text-white">
+            <X size={14} />
+          </button>
+        </div>
+        <div className="space-y-3">
+          <div>
+            <label className="mb-1 block text-[11px] text-white/50">Remote</label>
+            <select
+              value={selectedRemote}
+              onChange={(e) => setSelectedRemote(e.target.value)}
+              className="w-full rounded border border-white/10 bg-black/30 px-2 py-1.5 text-xs text-white outline-none focus:border-white/30"
+            >
+              {eligibleRemotes.length === 0 && (
+                <option value="" className="bg-neutral-900" disabled>No remotes available (origin excluded)</option>
+              )}
+              {eligibleRemotes.map((r) => (
+                <option key={r.name} value={r.name} className="bg-neutral-900">{r.name} — {r.url}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="mb-1 block text-[11px] text-white/50">Mount Path (in VFS)</label>
+            <input
+              value={mountPath}
+              onChange={(e) => setMountPath(e.target.value)}
+              placeholder="Apps/my-repo"
+              className="w-full rounded border border-white/10 bg-black/30 px-2.5 py-1.5 text-xs outline-none focus:border-white/30"
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-[11px] text-white/50">Branch</label>
+            <input
+              value={branch}
+              onChange={(e) => setBranch(e.target.value)}
+              placeholder="main"
+              className="w-full rounded border border-white/10 bg-black/30 px-2.5 py-1.5 text-xs outline-none focus:border-white/30"
+            />
+          </div>
+          {error && (
+            <div className="flex items-start gap-2 rounded border border-red-400/30 bg-red-500/10 p-2 text-[11px] text-red-200">
+              <AlertCircle size={12} className="mt-0.5 shrink-0" />
+              <span>{error}</span>
+            </div>
+          )}
+        </div>
+        <div className="mt-4 flex justify-end gap-2">
+          <button
+            onClick={onClose}
+            className="rounded border border-white/15 px-3 py-1.5 text-[11px] font-medium text-white/70 hover:bg-white/10"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={submit}
+            disabled={busy || !selectedRemote || !mountPath.trim()}
+            className="inline-flex items-center gap-1.5 rounded bg-violet-500/80 px-3 py-1.5 text-[11px] font-medium text-white hover:bg-violet-500 disabled:opacity-50"
+          >
+            {busy ? <Loader2 size={12} className="animate-spin" /> : <FolderGit2 size={12} />}
+            {busy ? "Mounting…" : "Mount"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function GitRemotesTab() {
   const [remotes, setRemotes] = useState<GitRemote[]>([]);
   const [loading, setLoading] = useState(true);
@@ -353,6 +479,11 @@ export function GitRemotesTab() {
   const [editRemote, setEditRemote] = useState<GitRemote | null>(null);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
+  const [mounts, setMounts] = useState<GitMount[]>([]);
+  const [mountsLoading, setMountsLoading] = useState(true);
+  const [mountBusy, setMountBusy] = useState<string | null>(null);
+  const [showMountModal, setShowMountModal] = useState(false);
+  const [mountSyncStatus, setMountSyncStatus] = useState<Record<string, string>>({});
 
   const load = useCallback(async () => {
     try {
@@ -373,6 +504,73 @@ export function GitRemotesTab() {
     const id = setTimeout(() => void load(), 0);
     return () => clearTimeout(id);
   }, [load]);
+
+  const loadMounts = useCallback(async () => {
+    try {
+      setMountsLoading(true);
+      const res = await fetch("/api/git-mounts");
+      if (!res.ok) throw new Error("Failed to load mounts");
+      const data = await res.json();
+      setMounts(data.mounts ?? []);
+    } catch {
+      setMounts([]);
+    } finally {
+      setMountsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const id = setTimeout(() => void loadMounts(), 0);
+    return () => clearTimeout(id);
+  }, [loadMounts]);
+
+  const mountApi = async (action: string, body: Record<string, unknown> = {}) => {
+    setMountBusy(action);
+    setMsg(null);
+    try {
+      const res = await fetch("/api/git-mounts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...sessionHeader() },
+        body: JSON.stringify({ action, ...body }),
+      });
+      const data = await res.json();
+      if (data.error) {
+        setMsg(`Error: ${data.error.message ?? data.error}`);
+      } else {
+        setMsg(data.message ?? "Done.");
+      }
+      await loadMounts();
+    } catch (e) {
+      setMsg(`Error: ${(e as Error).message}`);
+    } finally {
+      setMountBusy(null);
+    }
+  };
+
+  const syncMount = async (remoteName: string) => {
+    setMountBusy(`sync-${remoteName}`);
+    try {
+      const res = await fetch("/api/git-mounts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...sessionHeader() },
+        body: JSON.stringify({ action: "sync", remoteName }),
+      });
+      const data = await res.json();
+      if (data.error) {
+        setMsg(`Error: ${data.error.message ?? data.error}`);
+      } else {
+        setMountSyncStatus((prev) => ({
+          ...prev,
+          [remoteName]: data.status?.conflict ? "error" : "synced",
+        }));
+      }
+      await loadMounts();
+    } catch (e) {
+      setMsg(`Error: ${(e as Error).message}`);
+    } finally {
+      setMountBusy(null);
+    }
+  };
 
   const api = async (action: string, body: Record<string, unknown> = {}) => {
     setBusyAction(action);
@@ -543,6 +741,101 @@ export function GitRemotesTab() {
         </div>
       )}
 
+      <hr className="border-white/10" />
+
+      {/* VFS Mounts Section */}
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <h4 className="text-xs font-semibold uppercase tracking-wide text-white/50">VFS Mounts</h4>
+            <p className="mt-1 text-[11px] text-white/40">
+              Mount external repositories into the virtual filesystem.
+            </p>
+          </div>
+          <button
+            onClick={() => setShowMountModal(true)}
+            disabled={remotes.length <= 1}
+            className="inline-flex items-center gap-1.5 rounded bg-violet-500/80 px-3 py-1.5 text-[11px] font-medium text-white hover:bg-violet-500 disabled:opacity-40"
+          >
+            <FolderGit2 size={12} />
+            Mount from Remote
+          </button>
+        </div>
+
+        {mountsLoading ? (
+          <div className="flex items-center gap-2 text-xs text-white/40">
+            <Loader2 size={14} className="animate-spin" />
+            Loading mounts…
+          </div>
+        ) : mounts.length === 0 ? (
+          <div className="rounded-lg border border-white/10 bg-white/[0.03] p-6 text-center">
+            <HardDrive size={24} className="mx-auto mb-2 text-white/20" />
+            <p className="text-[12px] text-white/40">No VFS mounts configured.</p>
+            <p className="mt-1 text-[11px] text-white/30">
+              Mount a remote to access its files in the VFS.
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {mounts.map((mount) => {
+              const effectiveStatus = mountSyncStatus[mount.remoteName] ?? mount.status;
+              const isSyncing = mountBusy === `sync-${mount.remoteName}` || effectiveStatus === "syncing";
+              const statusColorMap: Record<string, string> = {
+                synced: "text-emerald-400",
+                syncing: "text-sky-400",
+                error: "text-amber-400",
+              };
+              const statusDotMap: Record<string, string> = {
+                synced: "bg-emerald-400",
+                syncing: "bg-sky-400",
+                error: "bg-amber-400",
+              };
+              return (
+                <div
+                  key={mount.remoteName}
+                  className="rounded-lg border border-white/10 bg-white/[0.03] p-3"
+                >
+                  <div className="flex items-start justify-between">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="text-[13px] font-medium">{mount.remoteName}</span>
+                        <span className="text-[11px] text-white/40">{mount.mountPath}</span>
+                        <span className="text-[11px] text-white/30">{mount.branch}</span>
+                        <span className={`inline-flex items-center gap-1 text-[11px] ${statusColorMap[effectiveStatus] ?? "text-white/50"}`}>
+                          <span className={`inline-block h-1.5 w-1.5 rounded-full ${statusDotMap[effectiveStatus] ?? "bg-white/40"}`} />
+                          {effectiveStatus === "synced" ? "Synced" : effectiveStatus === "syncing" ? "Syncing" : "Error"}
+                        </span>
+                      </div>
+                      <div className="mt-1.5 text-[10px] text-white/30">
+                        Last synced: {formatTime(mount.lastSynced)}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="mt-2.5 flex flex-wrap gap-1.5">
+                    <button
+                      disabled={mountBusy !== null}
+                      onClick={() => void syncMount(mount.remoteName)}
+                      className={`${btn} inline-flex items-center gap-1 bg-sky-500/20 hover:bg-sky-500/30`}
+                    >
+                      {isSyncing ? <Loader2 size={10} className="animate-spin" /> : <RefreshCw size={10} />}
+                      Sync Now
+                    </button>
+                    <button
+                      disabled={mountBusy !== null}
+                      onClick={() => void mountApi("unmount", { remoteName: mount.remoteName })}
+                      className={`${btn} inline-flex items-center gap-1 bg-red-500/15 text-red-300/80 hover:bg-red-500/25`}
+                    >
+                      <Trash2 size={10} />
+                      Unmount
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
       {msg && (
         <div className="text-[11px] text-white/50">{msg}</div>
       )}
@@ -557,6 +850,14 @@ export function GitRemotesTab() {
         remote={editRemote}
         onClose={() => setEditRemote(null)}
         onSave={saveRemote}
+      />
+      <MountFromRemoteModal
+        open={showMountModal}
+        remotes={remotes}
+        onClose={() => setShowMountModal(false)}
+        onMount={async (remoteName, mountPath, branch) => {
+          await mountApi("mount", { remoteName, mountPath, branch });
+        }}
       />
     </div>
   );
