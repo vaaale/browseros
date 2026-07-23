@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSecretsStore } from "@/lib/integrations/secrets/store";
-import { readRemoteConfigs } from "@/lib/gitops/remote-config";
+import { getProviderOAuthToken, deleteProviderOAuthToken } from "@/lib/gitops/git-credential-helper";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -18,22 +18,11 @@ async function getProviderStatus(providerId: string, providerName: string): Prom
 
   const hasClientCredentials = !!(await store.get("git_remote_oauth", `${providerId}:client`).catch(() => null));
 
-  const remotes = readRemoteConfigs();
-  const providerRemotes = remotes.filter((r) => r.provider === providerId);
-
-  let connected = false;
-  let connectedAs: string | undefined;
-
-  for (const remote of providerRemotes) {
-    const token = await store.get<{ access_token?: string; token?: string }>(
-      "git_remote",
-      `git_remote:${remote.name}:oauth`,
-    ).catch(() => null);
-    if (token?.access_token || token?.token) {
-      connected = true;
-      break;
-    }
-  }
+  // OAuth is provider-wide, so connection state is a single provider-scoped
+  // token lookup rather than a per-remote scan.
+  const token = await getProviderOAuthToken(providerId).catch(() => null);
+  const connected = !!token?.access_token;
+  const connectedAs: string | undefined = undefined;
 
   return { id: providerId, name: providerName, connected, connectedAs, hasClientCredentials };
 }
@@ -76,14 +65,9 @@ export async function POST(req: NextRequest) {
 
     if (action === "disconnect" && providerId) {
       const store = getSecretsStore();
-      const remotes = readRemoteConfigs();
-      const providerRemotes = remotes.filter((r) => r.provider === providerId);
 
-      for (const remote of providerRemotes) {
-        await store.delete("git_remote", `git_remote:${remote.name}:oauth`).catch(() => {});
-        await store.delete("git_remote", `git_remote:${remote.name}:token`).catch(() => {});
-      }
-
+      // Drop the provider-wide OAuth token and the stored client credentials.
+      await deleteProviderOAuthToken(providerId).catch(() => {});
       await store.delete("git_remote_oauth", `${providerId}:client`).catch(() => {});
 
       return NextResponse.json({ ok: true });

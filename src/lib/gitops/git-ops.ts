@@ -5,6 +5,7 @@ import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { gitLogger } from "./logging";
 import type { GitAuth } from "./auth";
+import { buildCredentialConfig } from "./git-credential-helper";
 
 // Core git operations — thin wrappers around the git CLI. Auth and locking are
 // the caller's responsibility. All functions use `spawn` (not `exec`) for
@@ -49,7 +50,7 @@ function authEnv(auth?: GitAuth): Record<string, string> {
   return env;
 }
 
-function runGit(
+async function runGit(
   args: string[],
   opts: {
     cwd?: string;
@@ -57,10 +58,16 @@ function runGit(
     timeout?: number;
   } = {},
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  // Wire up the credential helper so HTTPS token/OAuth auth works for
+  // named-remote operations (fetch/push) where the token isn't in the URL.
+  // Returns empty for SSH/unauthenticated ops, so this is safe to apply always.
+  const cred = await buildCredentialConfig(opts.auth);
+  const finalArgs = cred.args.length ? [...cred.args, ...args] : args;
+
   return new Promise((resolve, reject) => {
-    const child: ChildProcess = spawn("git", args, {
+    const child: ChildProcess = spawn("git", finalArgs, {
       cwd: opts.cwd,
-      env: { ...process.env, ...authEnv(opts.auth) },
+      env: { ...process.env, ...authEnv(opts.auth), ...cred.env },
       timeout: opts.timeout,
       stdio: ["ignore", "pipe", "pipe"],
     });

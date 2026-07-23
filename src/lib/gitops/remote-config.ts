@@ -7,6 +7,10 @@ export interface GitRemoteConfig {
   name: string
   url: string
   provider: "github" | "gitlab" | "generic"
+  /** How git authenticates to this remote. Derived from the provider at add
+   *  time (github/gitlab → oauth, generic → token) and used to resolve the
+   *  right credential for test/fetch/push. Absent on legacy remotes. */
+  authType?: "oauth" | "token" | "ssh"
   autoPush: boolean
   defaultBranch?: string
   remoteBranch?: string

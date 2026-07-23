@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { takePending } from "@/lib/integrations/oauth/state";
 import { getSecretsStore } from "@/lib/integrations/secrets/store";
+import { setProviderOAuthToken } from "@/lib/gitops/git-credential-helper";
 import { readRemoteConfigs, updateRemoteConfig } from "@/lib/gitops/remote-config";
 import { getOAuthProvider, getGitLabAuthUrls } from "@/lib/integrations/oauth/providers";
 import { describePublicOrigin, GIT_REMOTE_OAUTH_CALLBACK_PATH } from "@/lib/integrations/oauth/origin";
@@ -182,16 +183,20 @@ export async function GET(req: NextRequest) {
 
     const grantedScopes = ((body.scope as string) ?? flow.scopes.join(" ")).split(/\s+/).filter(Boolean);
 
-    await store.set("git_remote", `${remoteName}:oauth`, {
+    const expiresAt = Date.now() + expiresIn * 1000;
+
+    // OAuth is provider-wide (the connect UI uses a fixed pseudo remote name),
+    // so persist the token keyed by provider. Every remote of that provider
+    // resolves auth from this single entry.
+    await setProviderOAuthToken(providerId, {
       access_token: accessToken,
-      expires_at: Date.now() + expiresIn * 1000,
+      expires_at: expiresAt,
     });
 
-    const expiresAt = Date.now() + expiresIn * 1000;
+    // Record token expiry on any remotes already registered for this provider.
     const configs = readRemoteConfigs();
-    const remoteConfig = configs.find((c) => c.name === remoteName);
-    if (remoteConfig) {
-      updateRemoteConfig(remoteName, { oauthTokenExpiresAt: expiresAt });
+    for (const remoteConfig of configs.filter((c) => c.provider === providerId)) {
+      updateRemoteConfig(remoteConfig.name, { oauthTokenExpiresAt: expiresAt });
     }
 
     gitLogger().info({ op: "oauth.callback", remote: remoteName, provider: providerName, success: true });

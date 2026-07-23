@@ -7,6 +7,7 @@ import { getSecretsStore } from "@/lib/integrations/secrets/store";
 import { getOAuthManager } from "@/lib/integrations/oauth/manager";
 import { gitLogger } from "./logging";
 import { testConnection, type GitError } from "./git-ops";
+import { getProviderOAuthToken, getRemoteToken, getRemoteSshKey } from "./git-credential-helper";
 
 // Auth resolution for git operations. Reads credentials from SecretsStore
 // and configures git auth env / URL-embedded tokens.
@@ -37,27 +38,28 @@ const SSH_KEYS_DIR = ".ssh-keys";
 export async function resolveAuth(
   remoteName: string,
   authType: AuthType,
+  provider?: string,
 ): Promise<GitAuth | null> {
   const op = "auth.resolve";
   gitLogger().debug({ op, remote: remoteName });
 
   try {
-    const store = getSecretsStore();
-    const key = `git_remote:${remoteName}:${authType}`;
-
     switch (authType) {
       case "oauth": {
-        const tokens = await store.get<{ access_token: string }>(key, "credential");
+        // OAuth is provider-wide (connected once in Settings → Git Providers),
+        // so the token is keyed by provider, not remote name.
+        if (!provider) return null;
+        const tokens = await getProviderOAuthToken(provider);
         if (!tokens?.access_token) return null;
         return { type: "oauth", accessToken: tokens.access_token };
       }
       case "token": {
-        const data = await store.get<{ token: string }>(key, "credential");
-        if (!data?.token) return null;
-        return { type: "token", pat: data.token };
+        const token = await getRemoteToken(remoteName);
+        if (!token) return null;
+        return { type: "token", pat: token };
       }
       case "ssh": {
-        const data = await store.get<{ keyData: string; passphrase?: string }>(key, "credential");
+        const data = await getRemoteSshKey(remoteName);
         if (!data?.keyData) return null;
         return { type: "ssh", sshKeyData: data.keyData };
       }

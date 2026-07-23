@@ -2,7 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { readRemoteConfigs, addRemoteConfig, updateRemoteConfig, removeRemoteConfig, getUniqueRemoteName } from "@/lib/gitops/remote-config";
 import { addRemote, removeRemote, listRemotes, fetchRepo, pushRepo, testConnection, setRemoteUrl, renameRemote } from "@/lib/gitops/git-ops";
 import { resolveAuth, type AuthType } from "@/lib/gitops/auth";
-import { getSecretsStore } from "@/lib/integrations/secrets/store";
+import {
+  setRemoteToken,
+  setRemoteSshKey,
+  deleteRemoteCredentials,
+  renameRemoteCredentials,
+} from "@/lib/gitops/git-credential-helper";
 import { gitLock } from "@/lib/gitops/lock";
 import { gitLogger } from "@/lib/gitops/logging";
 import { getGitFsInstance, SOURCE_FS_ID } from "@/lib/gitops/filesystems";
@@ -111,15 +116,12 @@ export async function POST(req: NextRequest) {
             const uniqueName = getUniqueRemoteName(name, filesystem ?? SOURCE_FS_ID);
             await addRemote(repoPath, uniqueName, url);
 
+            // OAuth credentials are provider-wide and stored by the OAuth
+            // callback, not here. Only per-remote token/ssh secrets (when the
+            // caller supplied one) are persisted at add time.
             if (token) {
-              const store = getSecretsStore();
-              const secretKey = `git_remote:${uniqueName}:${authType}`;
-              const value = authType === "ssh"
-                ? { keyData: token }
-                : authType === "oauth"
-                  ? { access_token: token }
-                  : { token };
-              await store.set("git_remote", secretKey, value);
+              if (authType === "ssh") await setRemoteSshKey(uniqueName, token);
+              else if (authType === "token") await setRemoteToken(uniqueName, token);
             }
 
             const detectedProvider = provider || detectProvider(url);
@@ -127,6 +129,7 @@ export async function POST(req: NextRequest) {
               name: uniqueName,
               url,
               provider: detectedProvider as "github" | "gitlab" | "generic",
+              authType: authType as AuthType,
               autoPush: autoPush === true,
               defaultBranch: body.defaultBranch ? String(body.defaultBranch) : undefined,
               filesystem: filesystem ?? SOURCE_FS_ID,
@@ -161,10 +164,9 @@ export async function POST(req: NextRequest) {
             await removeRemote(repoPath, name).catch(() => {});
             removeRemoteConfig(name);
 
-            const store = getSecretsStore();
-            for (const authType of ["token", "oauth", "ssh"]) {
-              await store.delete("git_remote", `git_remote:${name}:${authType}`).catch(() => {});
-            }
+            // Provider-wide OAuth tokens are shared, so removing one remote must
+            // not drop them; only per-remote token/ssh secrets are cleared.
+            await deleteRemoteCredentials(name);
 
             gitLogger().info({ op: "api.git_remove_remote", remote: name, success: true });
             return NextResponse.json({ ok: true, message: `Remote '${name}' removed.` });
@@ -207,15 +209,9 @@ export async function POST(req: NextRequest) {
             }
             if (newName !== name) {
               if (inGit) await renameRemote(repoPath, name, newName);
-              // Migrate stored credentials to the new remote name.
-              const store = getSecretsStore();
-              for (const authType of ["token", "oauth", "ssh"]) {
-                const val = await store.get<Record<string, unknown>>("git_remote", `git_remote:${name}:${authType}`).catch(() => null);
-                if (val) {
-                  await store.set("git_remote", `git_remote:${newName}:${authType}`, val);
-                  await store.delete("git_remote", `git_remote:${name}:${authType}`).catch(() => {});
-                }
-              }
+              // Migrate per-remote token/ssh secrets to the new name. OAuth
+              // tokens are provider-scoped and need no migration.
+              await renameRemoteCredentials(name, newName);
             }
 
             const finalPatch: Record<string, unknown> = {
@@ -246,7 +242,7 @@ export async function POST(req: NextRequest) {
         const config = configs.find((c) => c.name === name);
         if (!config) return err("REMOTE_NOT_FOUND", `Remote '${name}' not found.`);
 
-        const auth = await resolveAuth(name, (config as { authType?: string }).authType as AuthType ?? "token");
+        const auth = await resolveAuth(name, authTypeFor(config), config.provider);
         const currentBranch = branch || config.defaultBranch || (await import("@/lib/gitops/git-ops")).getCurrentBranch(repoPath);
 
         const lock = gitLock();
@@ -274,7 +270,7 @@ export async function POST(req: NextRequest) {
         const config = configs.find((c) => c.name === name);
         if (!config) return err("REMOTE_NOT_FOUND", `Remote '${name}' not found.`);
 
-        const auth = await resolveAuth(name, (config as { authType?: string }).authType as AuthType ?? "token");
+        const auth = await resolveAuth(name, authTypeFor(config), config.provider);
 
         const lock = gitLock();
         return await lock.withLock(repoPath, "api.git_fetch", async (release) => {
@@ -301,7 +297,7 @@ export async function POST(req: NextRequest) {
         const config = configs.find((c) => c.name === name);
         if (!config) return err("REMOTE_NOT_FOUND", `Remote '${name}' not found.`);
 
-        const auth = await resolveAuth(name, (config as { authType?: string }).authType as AuthType ?? "token");
+        const auth = await resolveAuth(name, authTypeFor(config), config.provider);
         const result = await testConnection(config.url, auth ?? undefined);
 
         updateRemoteConfig(name, {
@@ -322,6 +318,14 @@ export async function POST(req: NextRequest) {
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 500 });
   }
+}
+
+// The credential a remote uses. Persisted on the config since 018; legacy
+// remotes without it fall back to the provider default (github/gitlab connect
+// via provider-wide OAuth, everything else via a per-remote token).
+function authTypeFor(config: { authType?: string; provider?: string }): AuthType {
+  if (config.authType) return config.authType as AuthType;
+  return config.provider === "github" || config.provider === "gitlab" ? "oauth" : "token";
 }
 
 function detectProvider(url: string): "github" | "gitlab" | "generic" {

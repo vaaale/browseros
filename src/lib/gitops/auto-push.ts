@@ -34,7 +34,8 @@ export async function executeAutoPush(
   for (const remote of remotes) {
     const release = await gitLock().acquire(repoPath, `auto-push:${remote.name}`);
     try {
-      const auth = await resolveAuth(remote.name, remote.provider === "github" || remote.provider === "gitlab" ? "oauth" : "token");
+      const authType = remote.provider === "github" || remote.provider === "gitlab" ? "oauth" : "token";
+      const auth = await resolveAuth(remote.name, authType, remote.provider);
       await pushRepo(repoPath, remote.name, branch, auth ?? undefined);
       results.push({ remoteName: remote.name, status: "success" });
       gitLogger().info({ op, repoPath, remote: remote.name, success: true });

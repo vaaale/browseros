@@ -127,9 +127,11 @@ function parseTokenExchangeBody(bodyStr: string): Record<string, string> {
   return result;
 }
 
-// Simulate SecretsStore key construction for git remote OAuth
-function gitRemoteOAuthSecretKey(remoteName: string): string {
-  return `git_remote:${remoteName}:oauth`;
+// Simulate SecretsStore key construction for git remote OAuth. OAuth is
+// provider-wide (connected once in Settings), so the token is keyed by provider
+// id, not remote name — see src/lib/gitops/git-credential-helper.ts.
+function gitRemoteOAuthSecretKey(providerId: string): string {
+  return `git_remote:oauth:${providerId}`;
 }
 
 // Simulate the complete callback flow
@@ -303,8 +305,9 @@ test.describe("Token exchange success", () => {
     expect(typeof result.storedToken!.expires_at).toBe("number");
     expect(result.storedToken!.expires_at).toBeGreaterThan(Date.now());
 
-    const expectedKey = gitRemoteOAuthSecretKey("origin");
-    expect(expectedKey).toBe("git_remote:origin:oauth");
+    // Token is stored per provider (flow.integrationId), not per remote.
+    const expectedKey = gitRemoteOAuthSecretKey(flow.integrationId);
+    expect(expectedKey).toBe("git_remote:oauth:github");
   });
 
   test("updates remote-config.json with oauthTokenExpiresAt", () => {
@@ -515,16 +518,12 @@ test.describe("HTML escaping", () => {
 });
 
 test.describe("Git remote OAuth secret key construction", () => {
-  test("correct key for origin remote", () => {
-    expect(gitRemoteOAuthSecretKey("origin")).toBe("git_remote:origin:oauth");
+  test("correct key for github provider", () => {
+    expect(gitRemoteOAuthSecretKey("github")).toBe("git_remote:oauth:github");
   });
 
-  test("correct key for upstream remote", () => {
-    expect(gitRemoteOAuthSecretKey("upstream")).toBe("git_remote:upstream:oauth");
-  });
-
-  test("correct key for remote with special characters", () => {
-    expect(gitRemoteOAuthSecretKey("my-remote")).toBe("git_remote:my-remote:oauth");
+  test("correct key for gitlab provider", () => {
+    expect(gitRemoteOAuthSecretKey("gitlab")).toBe("git_remote:oauth:gitlab");
   });
 });
 
