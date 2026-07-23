@@ -75,7 +75,11 @@ export async function GET(req: NextRequest) {
   // Persist the exact origin so the callback rebuilds a byte-for-byte identical
   // redirect_uri for the token exchange (it can't see browserOrigin).
   const stateToken = putPending({
-    integrationId: "git_remote_oauth",
+    // Carry the provider id so the callback can recover which provider's client
+    // credentials to load (it parses this back out via the `git_remote_oauth:`
+    // prefix). Without the suffix the callback resolves providerId to the bare
+    // "git_remote_oauth" and the credential lookup misses.
+    integrationId: `git_remote_oauth:${providerId}`,
     verifier,
     scopes,
     remoteName,
