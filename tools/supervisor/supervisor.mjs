@@ -859,6 +859,7 @@ async function promote(branch) {
     const tag = `bos/v${tagStamp()}`;
     await git([...GIT_IDENTITY, "tag", "-a", tag, "-m", `promote ${cand.branch}`], REPO);
     if (PUSH_MODE === "auto-on-promote") await gitTry(["push", REMOTE, baseBranch, "--follow-tags"], REPO);
+    await runAutoPush(REPO, baseBranch);
     base.commit = newCommit;
     // Regenerate the built-in app registry so a merged built-in app (its generated
     // manifest is gitignored, thus not in the merge) is actually registered on base.
@@ -926,6 +927,7 @@ async function promote(branch) {
   const tag = `bos/v${tagStamp()}`;
   await git([...GIT_IDENTITY, "tag", "-a", tag, "-m", `promote ${cand.branch}`], REPO);
   if (PUSH_MODE === "auto-on-promote") await gitTry(["push", REMOTE, baseBranch, "--follow-tags"], REPO);
+  await runAutoPush(REPO, baseBranch);
 
   // 4) Adopt the swapped server as base. Detach its worktree off the feature branch
   //    (same commit → no file change, server keeps running) so the now-merged branch
@@ -1076,6 +1078,35 @@ async function appDiscard() {
 async function pushNow() {
   await git(["push", REMOTE, baseBranch, "--follow-tags"], REPO);
   return { pushed: baseBranch };
+}
+
+// Auto-push: for each non-origin remote with autoPush enabled in the git-remotes
+// config, push the base branch. Errors are logged but do not stop other pushes.
+async function runAutoPush(repoPath, branch) {
+  const configPath = path.join(CANONICAL_DATA, "config", "git-remotes.json");
+  let configs;
+  try {
+    configs = JSON.parse(await fs.readFile(configPath, "utf8"));
+  } catch {
+    return [];
+  }
+  const remotes = (Array.isArray(configs) ? configs : []).filter(
+    (r) => r.autoPush && r.name !== "origin"
+  );
+  if (!remotes.length) return [];
+  const results = [];
+  for (const remote of remotes) {
+    try {
+      await git(["push", remote.name, branch, "--follow-tags"], repoPath);
+      results.push({ remoteName: remote.name, status: "success" });
+      log(`auto-push to ${remote.name}: success`);
+    } catch (e) {
+      const msg = e.message || String(e);
+      results.push({ remoteName: remote.name, status: "failed", error: msg });
+      slog("warn", "promote", `auto-push to ${remote.name} failed: ${msg}`);
+    }
+  }
+  return results;
 }
 
 // Resume a STOPPED preview: start its server from the existing build output (no
