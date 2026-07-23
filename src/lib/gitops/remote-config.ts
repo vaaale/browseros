@@ -31,7 +31,7 @@ function writeRemoteConfigs(configs: GitRemoteConfig[]): void {
   const tempPath = `${CONFIG_PATH}.tmp`
   writeFileSync(tempPath, JSON.stringify(configs, null, 2))
   renameSync(tempPath, CONFIG_PATH)
-  gitLogger.info({ op: "write_remote_config", message: "Saved remote config" })
+  gitLogger().info({ op: "write_remote_config" })
 }
 
 export function addRemoteConfig(config: Omit<GitRemoteConfig, "createdAt" | "updatedAt">): GitRemoteConfig {
@@ -46,7 +46,7 @@ export function addRemoteConfig(config: Omit<GitRemoteConfig, "createdAt" | "upd
   }
   configs.push(newConfig)
   writeRemoteConfigs(configs)
-  gitLogger.info({ op: "add_remote", name: newConfig.name, url: newConfig.url })
+  gitLogger().info({ op: "add_remote", remote: newConfig.url })
   return newConfig
 }
 
@@ -65,7 +65,7 @@ export function removeRemoteConfig(name: string): boolean {
   if (index === -1) return false
   configs.splice(index, 1)
   writeRemoteConfigs(configs)
-  gitLogger.info({ op: "remove_remote", name })
+  gitLogger().info({ op: "remove_remote", remote: name })
   return true
 }
 
