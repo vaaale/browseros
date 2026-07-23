@@ -128,13 +128,10 @@ export async function cloneRepo(
   auth?: GitAuth,
 ): Promise<void> {
   const op = "git.clone";
-  const authedUrl = auth?.accessToken
-    ? applyTokenToUrl(url, auth.accessToken)
-    : auth?.pat
-      ? applyTokenToUrl(url, auth.pat)
-      : url;
-
-  const args = ["clone", authedUrl, targetPath];
+  // Auth is supplied to git via the credential helper (see runGit), never
+  // embedded in the URL — embedding breaks git's URL parser (the token's `:`
+  // is misread as a port separator) and leaks the token into argv.
+  const args = ["clone", url, targetPath];
   if (branch) args.splice(2, 0, "--branch", branch, "--single-branch");
 
   gitLogger().debug({ op, repoPath: targetPath, remote: url });
@@ -225,17 +222,13 @@ export async function listRemoteBranches(
   auth?: GitAuth,
 ): Promise<string[]> {
   const op = "git.listRemoteBranches";
-  const authedUrl = auth?.accessToken
-    ? applyTokenToUrl(url, auth.accessToken)
-    : auth?.pat
-      ? applyTokenToUrl(url, auth.pat)
-      : url;
 
   gitLogger().debug({ op, remote: url });
   const t0 = Date.now();
 
+  // Auth is supplied via the credential helper (see runGit), not the URL.
   const { stdout, stderr, exitCode } = await runGit(
-    ["ls-remote", "--heads", authedUrl],
+    ["ls-remote", "--heads", url],
     { auth },
   );
   const durationMs = Date.now() - t0;
@@ -374,17 +367,13 @@ export async function getDefaultBranch(
   auth?: GitAuth,
 ): Promise<string> {
   const op = "git.getDefaultBranch";
-  const authedUrl = auth?.accessToken
-    ? applyTokenToUrl(url, auth.accessToken)
-    : auth?.pat
-      ? applyTokenToUrl(url, auth.pat)
-      : url;
 
   gitLogger().debug({ op, remote: url });
   const t0 = Date.now();
 
+  // Auth is supplied via the credential helper (see runGit), not the URL.
   const { stdout, stderr, exitCode } = await runGit(
-    ["ls-remote", "--symref", authedUrl, "HEAD"],
+    ["ls-remote", "--symref", url, "HEAD"],
     { auth },
   );
   const durationMs = Date.now() - t0;
@@ -418,17 +407,13 @@ export async function testConnection(
   auth?: GitAuth,
 ): Promise<TestConnectionResult> {
   const op = "git.testConnection";
-  const authedUrl = auth?.accessToken
-    ? applyTokenToUrl(url, auth.accessToken)
-    : auth?.pat
-      ? applyTokenToUrl(url, auth.pat)
-      : url;
 
   gitLogger().debug({ op, remote: url });
   const t0 = Date.now();
 
   try {
-    const branches = await listRemoteBranches(authedUrl, auth);
+    // Pass the plain URL; auth flows through the credential helper (runGit).
+    const branches = await listRemoteBranches(url, auth);
     const durationMs = Date.now() - t0;
     gitLogger().info({ op, remote: url, durationMs, success: true });
     return { ok: true, branches };
@@ -577,23 +562,12 @@ export async function updateBareCache(
   try {
     await fs.access(cachePath);
   } catch {
-    // Bare cache doesn't exist — create it.
-    const authedUrl = auth?.accessToken
-      ? applyTokenToUrl(url, auth.accessToken)
-      : auth?.pat
-        ? applyTokenToUrl(url, auth.pat)
-        : url;
-
-    await runGit(["clone", "--bare", authedUrl, cachePath], { auth });
+    // Bare cache doesn't exist — create it. Auth flows through the credential
+    // helper (runGit), so the URL stays plain.
+    await runGit(["clone", "--bare", url, cachePath], { auth });
   }
 
   // Fetch latest.
-  const authedUrl = auth?.accessToken
-    ? applyTokenToUrl(url, auth.accessToken)
-    : auth?.pat
-      ? applyTokenToUrl(url, auth.pat)
-      : url;
-
   await runGit(["fetch", "origin", branch], { cwd: cachePath, auth });
 }
 
@@ -629,10 +603,4 @@ export async function scanSymlinkEscapes(dirPath: string): Promise<string[]> {
 
   await walk(resolvedRoot);
   return escapes;
-}
-
-// ── URL Helpers ──────────────────────────────────────────────────────────────
-
-function applyTokenToUrl(url: string, token: string): string {
-  return url.replace(/^(https?:\/\/)/, `$1oauth2:${token}@`);
 }

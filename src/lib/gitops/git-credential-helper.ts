@@ -25,12 +25,13 @@ import { HELPER_SOURCE, buildCredentialArgs, buildCredentialEnv } from "./git-cr
 //
 //   2. A git credential helper. `GIT_TERMINAL_PROMPT=0` (set for headless/
 //      container use) makes git fail instead of prompting when it needs a
-//      username/password. URL-embedded tokens only cover URL-based operations
-//      (clone, ls-remote); named-remote operations (`git fetch origin`,
-//      `git push origin main`) carry no token. The helper closes that gap: git
-//      invokes it whenever it needs HTTPS credentials, and it echoes the token
-//      the BOS git runner passed via environment variables. The token never
-//      touches disk in plaintext and never appears in a process argument list.
+//      username/password. Tokens are NEVER embedded in the remote URL — doing
+//      so breaks git's URL parser (the token's `:` is misread as a port) and
+//      leaks the token into argv. Instead the helper is the single auth path
+//      for every HTTPS operation (clone, ls-remote, fetch, push): git invokes
+//      it whenever it needs HTTPS credentials, and it echoes the token the BOS
+//      git runner passed via environment variables. The token never touches
+//      disk in plaintext and never appears in a process argument list.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const STORE_ID = "git_remote";
@@ -163,8 +164,9 @@ export async function buildCredentialConfig(auth?: GitAuth): Promise<CredentialC
       env: buildCredentialEnv(token),
     };
   } catch (err) {
-    // Never let credential-helper setup failure break a git op; fall back to
-    // whatever URL-embedded auth the caller already applied.
+    // Never let credential-helper setup failure break the whole git op; the op
+    // will proceed unauthenticated and fail with a clear auth error if the
+    // remote requires credentials.
     gitLogger().warn({
       op: "auth.credentialHelper",
       error: { code: "CRED_HELPER_SETUP_FAILED", message: (err as Error).message },

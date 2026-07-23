@@ -73,25 +73,6 @@ export async function resolveAuth(
   }
 }
 
-// ── applyAuthToUrl ───────────────────────────────────────────────────────────
-
-export function applyAuthToUrl(url: string, auth: GitAuth): string | null {
-  const op = "auth.applyToUrl";
-  gitLogger().debug({ op, remote: url });
-
-  // Reject git:// protocol.
-  if (url.startsWith("git://")) {
-    gitLogger().warn({ op, remote: url, error: { code: "AUTH_PROTOCOL_REJECTED", message: "git:// protocol is not supported" } });
-    return null;
-  }
-
-  const token = auth.accessToken ?? auth.pat;
-  if (!token) return url;
-
-  // Embed token in HTTPS URL: https://oauth2:TOKEN@host/...
-  return url.replace(/^(https?:\/\/)/, `$1oauth2:${token}@`);
-}
-
 // ── configureSshAuth ─────────────────────────────────────────────────────────
 
 export async function configureSshAuth(
