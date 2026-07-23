@@ -47,10 +47,11 @@ function parseCallbackUrl(url: string): { code: string | null; state: string | n
 }
 
 function extractPostMessagePayload(html: string): unknown | null {
-  const match = html.match(/postMessage\((.+?),\\?'\*\\?'\)/);
+  const match = html.match(/postMessage\(\s*(.+?)\s*,['\"]\*['\"]\s*\)/);
   if (!match) return null;
   try {
-    return JSON.parse(match[1]);
+    const first = JSON.parse(match[1]);
+    return typeof first === "string" ? JSON.parse(first) : first;
   } catch {
     return null;
   }
@@ -73,7 +74,7 @@ function extractErrorPayload(html: string): { ok: boolean; error?: string; code?
   if (!payload || typeof payload !== "object") return null;
   const p = payload as Record<string, unknown>;
   return {
-    ok: p.ok === false,
+    ok: Boolean(p.ok),
     error: p.error as string | undefined,
     code: p.code as string | undefined,
   };
