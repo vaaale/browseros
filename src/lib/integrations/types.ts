@@ -119,8 +119,9 @@ export interface IntegrationEvent {
 }
 
 /**
- * A pending OAuth flow held in-memory while the user is at the provider's
- * consent screen. Consumed once by the callback handler.
+ * A pending OAuth flow persisted (via the SecretsStore) while the user is at
+ * the provider's consent screen, so it survives a process restart between the
+ * start and callback requests. Consumed once by the callback handler.
  */
 export interface PendingOAuthFlow {
   integrationId: string;

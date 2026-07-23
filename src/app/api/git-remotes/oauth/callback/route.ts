@@ -98,7 +98,7 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const flow = takePending(state);
+    const flow = await takePending(state);
     if (!flow) {
       gitLogger().error({ op: "oauth.callback", error: { code: "OAUTH_STATE_EXPIRED", message: "OAuth state expired or unknown" } });
       return new Response(errorPage("OAuth state expired or unknown. Please try connecting again."), {

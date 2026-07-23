@@ -115,7 +115,7 @@ export class OAuthManager {
     const scopes = input.scopes && input.scopes.length > 0 ? input.scopes : manifest.oauthConfig.supportedScopes;
     const verifier = newVerifier();
     const challenge = challengeFromVerifier(verifier);
-    const state = putPending({ integrationId: input.integrationId, verifier, scopes });
+    const state = await putPending({ integrationId: input.integrationId, verifier, scopes });
     const redirectUri = computeRedirectUri(input.origin);
 
     const url = new URL(manifest.oauthConfig.authorizationUrl);
@@ -143,7 +143,7 @@ export class OAuthManager {
     integrationId: string;
     grantedScopes: string[];
   }> {
-    const flow = takePending(input.state);
+    const flow = await takePending(input.state);
     if (!flow) {
       throw new IntegrationAuthError("OAuth state expired or unknown. Please try connecting again.");
     }
