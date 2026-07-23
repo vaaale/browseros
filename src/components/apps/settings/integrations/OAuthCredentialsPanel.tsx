@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useState } from "react";
-import { Check, KeyRound, Loader2, Pencil, X } from "lucide-react";
+import { Check, Copy, KeyRound, Loader2, Pencil, X } from "lucide-react";
+import { getRedirectUri } from "@/lib/integrations/oauth/origin";
 
 export interface OAuthCredentials {
   clientId: string;
@@ -34,6 +35,13 @@ export interface OAuthCredentialsPanelProps {
    * to `/api/integrations/<id>/credentials` itself, so it works standalone.
    */
   onSubmit?: (integrationId: string, credentials: OAuthCredentials) => Promise<void>;
+  /**
+   * Callback path this provider's OAuth flow redirects back to (e.g.
+   * "/api/git-remotes/oauth/callback"). When supplied the panel shows the
+   * exact, copyable redirect URI the user must register with the provider,
+   * resolved against the public origin. Omit to hide the section.
+   */
+  redirectUriPath?: string;
 }
 
 /**
@@ -50,6 +58,7 @@ export function OAuthCredentialsPanel({
   hasCredentials,
   onSaved,
   onSubmit,
+  redirectUriPath,
 }: OAuthCredentialsPanelProps) {
   const isGitLab = integrationId === "gitlab";
 
@@ -60,6 +69,27 @@ export function OAuthCredentialsPanel({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | undefined>();
   const [saved, setSaved] = useState(false);
+
+  // Resolved once on the client (the window.location fallback needs the
+  // browser); the panel only mounts after user interaction, so there is no SSR
+  // paint to mismatch against.
+  const [redirectUri] = useState(() =>
+    redirectUriPath ? getRedirectUri(redirectUriPath) : "",
+  );
+  const [copied, setCopied] = useState(false);
+
+  const copyRedirectUri = useCallback(async () => {
+    if (!redirectUri) return;
+    try {
+      await navigator.clipboard.writeText(redirectUri);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Clipboard access can be denied (e.g. insecure context); ignore.
+    }
+  }, [redirectUri]);
+
+  const hasPublicOrigin = Boolean(process.env.NEXT_PUBLIC_APP_ORIGIN);
 
   const reset = useCallback(() => {
     setClientId("");
@@ -111,6 +141,43 @@ export function OAuthCredentialsPanel({
     }
   }, [clientId, clientSecret, instanceUrl, isGitLab, integrationId, onSubmit, onSaved, reset]);
 
+  // Shown in both the configured and editing views: the exact redirect URI the
+  // user must register with the provider (rendered only when the caller passes
+  // the flow's callback path).
+  const redirectSection = redirectUriPath ? (
+    <div className="mt-4 space-y-2">
+      <div className="text-[11px] font-medium text-white/60">Redirect URI</div>
+      <p className="text-[10.5px] text-white/40">
+        Add this exact URL to your {providerName} OAuth app’s callback / redirect URI list:
+      </p>
+      <div className="flex items-center gap-2 rounded border border-white/15 bg-white/[0.05] p-2.5">
+        <code className="min-w-0 flex-1 truncate text-[11px] text-white/80">
+          {redirectUri || "…"}
+        </code>
+        <button
+          type="button"
+          onClick={() => void copyRedirectUri()}
+          disabled={!redirectUri}
+          title="Copy redirect URI"
+          className="inline-flex shrink-0 items-center gap-1 rounded border border-white/15 px-2 py-1 text-[10.5px] font-medium text-white/70 transition-colors hover:bg-white/10 disabled:opacity-50"
+        >
+          {copied ? <Check size={12} /> : <Copy size={12} />}
+          {copied ? "Copied" : "Copy"}
+        </button>
+      </div>
+      {!hasPublicOrigin && (
+        <div className="rounded border border-amber-400/30 bg-amber-500/10 p-2.5">
+          <p className="text-[10.5px] leading-relaxed text-white/60">
+            <strong className="font-semibold text-white/80">Note:</strong> Set the{" "}
+            <code className="text-white/80">NEXT_PUBLIC_APP_ORIGIN</code> environment variable to
+            your public URL (e.g. <code className="text-white/80">https://bos.schmopilot.com</code>)
+            so the redirect URI is generated correctly behind a reverse proxy.
+          </p>
+        </div>
+      )}
+    </div>
+  ) : null;
+
   // Compact "already configured" view with an Edit button.
   if (!editing) {
     return (
@@ -137,6 +204,7 @@ export function OAuthCredentialsPanel({
             <Check size={12} /> Saved.
           </div>
         )}
+        {redirectSection}
       </div>
     );
   }
@@ -203,6 +271,8 @@ export function OAuthCredentialsPanel({
           </label>
         )}
       </div>
+
+      {redirectSection}
 
       {error && <div className="mt-2 text-[11px] text-red-300">{error}</div>}
 

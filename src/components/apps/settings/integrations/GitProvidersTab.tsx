@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { KeyRound, Loader2, Plug, Unplug } from "lucide-react";
 import { OAuthCredentialsPanel } from "./OAuthCredentialsPanel";
+import { GIT_REMOTE_OAUTH_CALLBACK_PATH } from "@/lib/integrations/oauth/origin";
 
 interface ProviderStatus {
   id: string;
@@ -227,6 +228,7 @@ export function GitProvidersTab({ onRefresh: _onRefresh }: { onRefresh?: () => P
                       integrationId={provider.id}
                       providerName={provider.name}
                       hasCredentials={provider.hasClientCredentials}
+                      redirectUriPath={GIT_REMOTE_OAUTH_CALLBACK_PATH}
                       onSaved={async () => {
                         await load();
                         setConfiguring(null);

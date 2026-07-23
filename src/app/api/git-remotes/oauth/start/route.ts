@@ -4,7 +4,7 @@ import { getSecretsStore } from "@/lib/integrations/secrets/store";
 import { putPending } from "@/lib/integrations/oauth/state";
 import { challengeFromVerifier } from "@/lib/integrations/oauth/pkce";
 import { getOAuthProvider, getGitLabAuthUrls } from "@/lib/integrations/oauth/providers";
-import { resolvePublicOrigin } from "@/lib/integrations/oauth/origin";
+import { resolvePublicOrigin, GIT_REMOTE_OAUTH_CALLBACK_PATH } from "@/lib/integrations/oauth/origin";
 import { gitLogger } from "@/lib/gitops/logging";
 
 export const dynamic = "force-dynamic";
@@ -66,7 +66,7 @@ export async function GET(req: NextRequest) {
 
   // The redirect URI must be the public origin (matching what the user
   // registered with the provider), not the internal request origin.
-  const redirectUri = `${resolvePublicOrigin(req)}/api/git-remotes/oauth/callback`;
+  const redirectUri = `${resolvePublicOrigin(req)}${GIT_REMOTE_OAUTH_CALLBACK_PATH}`;
 
   const authUrl = new URL(baseAuthUrl);
   authUrl.searchParams.set("client_id", cs.clientId);
