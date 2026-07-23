@@ -6,6 +6,7 @@ import { memoryTools } from "./tools/server/memory";
 import { skillsTools } from "./tools/server/skills";
 import { docsTools } from "./tools/server/docs";
 import { gitTools } from "./tools/server/git";
+import { gitRemotesTools } from "./tools/server/git-remotes";
 import { runCommandTools } from "./tools/server/run-command";
 import { configTools } from "./tools/server/config";
 import { mcpTools } from "./tools/server/mcp";
@@ -51,6 +52,7 @@ export function assistantTools(): Record<string, AssistantTool> {
     ...skillsTools(),
     ...docsTools(),
     ...gitTools(),
+    ...gitRemotesTools(),
     ...runCommandTools(),
     ...configTools(),
     ...mcpTools(),
