@@ -20,6 +20,7 @@ export function putPending(input: {
   integrationId: string;
   verifier: string;
   scopes: string[];
+  remoteName?: string;
 }): string {
   const now = Date.now();
   prune(now);
@@ -29,6 +30,7 @@ export function putPending(input: {
     verifier: input.verifier,
     scopes: input.scopes,
     createdAt: now,
+    remoteName: input.remoteName,
   });
   return state;
 }

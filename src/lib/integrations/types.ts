@@ -130,4 +130,6 @@ export interface PendingOAuthFlow {
   scopes: string[];
   /** Epoch millis when this flow was created. Used for TTL pruning. */
   createdAt: number;
+  /** When present, this flow authenticates a git remote (not an integration). */
+  remoteName?: string;
 }

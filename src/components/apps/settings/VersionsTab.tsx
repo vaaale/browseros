@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { sessionHeader } from "@/lib/logging/client/session";
 import { GitRemotesTab } from "./versions/GitRemotesTab";
+import { OAuthProviderTab } from "./versions/OAuthProviderTab";
 
 interface Ver {
   role: string;
@@ -142,6 +143,8 @@ export function VersionsTab() {
       {msg && <span className="text-white/60">{msg}</span>}
       <hr className="border-white/10" />
       <GitRemotesTab />
+      <hr className="border-white/10" />
+      <OAuthProviderTab />
     </div>
   );
 }
