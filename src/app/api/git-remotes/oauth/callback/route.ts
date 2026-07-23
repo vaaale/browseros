@@ -3,6 +3,7 @@ import { takePending } from "@/lib/integrations/oauth/state";
 import { getSecretsStore } from "@/lib/integrations/secrets/store";
 import { readRemoteConfigs, updateRemoteConfig } from "@/lib/gitops/remote-config";
 import { getOAuthProvider, getGitLabAuthUrls } from "@/lib/integrations/oauth/providers";
+import { resolvePublicOrigin } from "@/lib/integrations/oauth/origin";
 import { gitLogger } from "@/lib/gitops/logging";
 
 export const dynamic = "force-dynamic";
@@ -124,7 +125,9 @@ export async function GET(req: NextRequest) {
       throw new Error(`No client credentials for ${providerId}`);
     }
 
-    const redirectUri = `${url.origin}/api/git-remotes/oauth/callback`;
+    // Must be byte-for-byte identical to the redirect_uri used in the start
+    // route, or the provider rejects the token exchange.
+    const redirectUri = `${resolvePublicOrigin(req)}/api/git-remotes/oauth/callback`;
     // Self-hosted GitLab exchanges tokens against its own origin; fall back to
     // the manifest URL when no instance URL was configured.
     const tokenUrl =

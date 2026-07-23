@@ -13,7 +13,6 @@ import {
   Wifi,
   WifiOff,
   AlertCircle,
-  KeyRound,
   X,
 } from "lucide-react";
 import { sessionHeader } from "@/lib/logging/client/session";
@@ -111,138 +110,6 @@ function formatTime(iso?: string): string {
   }
 }
 
-// ── OAuth credential configuration ─────────────────────────────────────────────
-// GitHub/GitLab remotes need OAuth client credentials before a browser OAuth flow
-// can run. Rather than a standalone settings tab, this panel is shown inline in the
-// add/edit flow whenever an OAuth-capable provider is selected.
-function OAuthCredentialsPanel({ provider }: { provider: Provider }) {
-  const [configured, setConfigured] = useState<boolean | null>(null);
-  const [open, setOpen] = useState(false);
-  const [clientId, setClientId] = useState("");
-  const [clientSecret, setClientSecret] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
-
-  const load = useCallback(async () => {
-    try {
-      const res = await fetch("/api/integrations/git-providers");
-      if (!res.ok) return;
-      const data = await res.json();
-      const p = (data.providers ?? []).find((x: { id: string }) => x.id === provider);
-      setConfigured(p ? Boolean(p.hasClientCredentials) : false);
-    } catch {
-      setConfigured(false);
-    }
-  }, [provider]);
-
-  useEffect(() => {
-    const id = setTimeout(() => void load(), 0);
-    return () => clearTimeout(id);
-  }, [load]);
-
-  const save = async () => {
-    if (!clientId.trim() || !clientSecret.trim()) {
-      setMsg("Client ID and Client Secret are required.");
-      return;
-    }
-    setBusy(true);
-    setMsg(null);
-    try {
-      const res = await fetch("/api/integrations/git-providers", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...sessionHeader() },
-        body: JSON.stringify({ action: "set-credentials", providerId: provider, clientId: clientId.trim(), clientSecret: clientSecret.trim() }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        setMsg(data.error ?? "Failed to save credentials.");
-      } else {
-        setMsg("OAuth credentials saved.");
-        setClientId("");
-        setClientSecret("");
-        setOpen(false);
-        await load();
-      }
-    } catch (e) {
-      setMsg((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const providerName = provider === "github" ? "GitHub" : "GitLab";
-
-  return (
-    <div className="rounded border border-white/10 bg-black/20 p-2.5">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-1.5 text-[11px] text-white/70">
-          <KeyRound size={12} />
-          {providerName} OAuth credentials
-        </div>
-        {configured === null ? (
-          <Loader2 size={12} className="animate-spin text-white/40" />
-        ) : configured ? (
-          <span className="inline-flex items-center gap-1 text-[10px] text-emerald-400">
-            <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-400" />
-            Configured
-          </span>
-        ) : (
-          <span className="text-[10px] text-amber-400">Not configured</span>
-        )}
-      </div>
-      {!open && (
-        <button
-          type="button"
-          onClick={() => setOpen(true)}
-          className="mt-1.5 text-[11px] text-violet-300 hover:text-violet-200"
-        >
-          {configured ? "Update credentials" : "Configure credentials"}
-        </button>
-      )}
-      {open && (
-        <div className="mt-2 space-y-2">
-          <p className="text-[10px] text-white/40">
-            Create an OAuth app on {providerName} with callback{" "}
-            <code className="text-white/60">/api/git-remotes/oauth/callback</code>, then paste its Client ID and Secret.
-          </p>
-          <input
-            value={clientId}
-            onChange={(e) => setClientId(e.target.value)}
-            placeholder="Client ID"
-            className="w-full rounded border border-white/10 bg-black/30 px-2 py-1 text-[11px] outline-none focus:border-white/30"
-          />
-          <input
-            type="password"
-            value={clientSecret}
-            onChange={(e) => setClientSecret(e.target.value)}
-            placeholder="Client Secret"
-            className="w-full rounded border border-white/10 bg-black/30 px-2 py-1 text-[11px] outline-none focus:border-white/30"
-          />
-          <div className="flex justify-end gap-2">
-            <button
-              type="button"
-              onClick={() => { setOpen(false); setMsg(null); }}
-              className="rounded border border-white/15 px-2 py-1 text-[10px] text-white/70 hover:bg-white/10"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              onClick={() => void save()}
-              disabled={busy}
-              className="inline-flex items-center gap-1 rounded bg-violet-500/80 px-2 py-1 text-[10px] font-medium text-white hover:bg-violet-500 disabled:opacity-50"
-            >
-              {busy && <Loader2 size={10} className="animate-spin" />}
-              Save
-            </button>
-          </div>
-        </div>
-      )}
-      {msg && <div className="mt-1.5 text-[10px] text-white/50">{msg}</div>}
-    </div>
-  );
-}
-
 // ── Add remote modal ────────────────────────────────────────────────────────────
 interface AddRemoteModalProps {
   open: boolean;
@@ -253,7 +120,6 @@ interface AddRemoteModalProps {
     url: string;
     provider: Provider;
     authType: AuthType;
-    token?: string;
     defaultBranch?: string;
     autoPush: boolean;
   }) => Promise<void>;
@@ -263,8 +129,6 @@ function AddRemoteModal({ open, filesystem, onClose, onAdd }: AddRemoteModalProp
   const [name, setName] = useState("");
   const [url, setUrl] = useState("");
   const [provider, setProvider] = useState<Provider>("generic");
-  const [authType, setAuthType] = useState<AuthType>("token");
-  const [token, setToken] = useState("");
   const [branch, setBranch] = useState("");
   const [autoPush, setAutoPush] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -275,8 +139,6 @@ function AddRemoteModal({ open, filesystem, onClose, onAdd }: AddRemoteModalProp
       setName("");
       setUrl("");
       setProvider("generic");
-      setAuthType("token");
-      setToken("");
       setBranch("");
       setAutoPush(false);
       setError(null);
@@ -300,8 +162,11 @@ function AddRemoteModal({ open, filesystem, onClose, onAdd }: AddRemoteModalProp
         name: name.trim(),
         url: url.trim(),
         provider,
-        authType,
-        token: token || undefined,
+        // Credentials are configured once in Settings → Integrations. Remotes
+        // only record their identity; GitHub/GitLab authenticate via the OAuth
+        // connection there, generic remotes resolve token auth from stored
+        // secrets. The auth type is derived from the provider, not collected here.
+        authType: provider === "generic" ? "token" : "oauth",
         defaultBranch: branch.trim() || undefined,
         autoPush,
       });
@@ -343,31 +208,17 @@ function AddRemoteModal({ open, filesystem, onClose, onAdd }: AddRemoteModalProp
               className="w-full rounded border border-white/10 bg-black/30 px-2.5 py-1.5 text-xs outline-none focus:border-white/30"
             />
           </div>
-          <div className="flex gap-3">
-            <div className="flex-1">
-              <label className="mb-1 block text-[11px] text-white/50">Provider</label>
-              <select
-                value={provider}
-                onChange={(e) => setProvider(e.target.value as Provider)}
-                className="w-full rounded border border-white/10 bg-black/30 px-2 py-1.5 text-xs text-white outline-none focus:border-white/30"
-              >
-                <option value="github" className="bg-neutral-900">GitHub</option>
-                <option value="gitlab" className="bg-neutral-900">GitLab</option>
-                <option value="generic" className="bg-neutral-900">Generic</option>
-              </select>
-            </div>
-            <div className="flex-1">
-              <label className="mb-1 block text-[11px] text-white/50">Auth Type</label>
-              <select
-                value={authType}
-                onChange={(e) => setAuthType(e.target.value as AuthType)}
-                className="w-full rounded border border-white/10 bg-black/30 px-2 py-1.5 text-xs text-white outline-none focus:border-white/30"
-              >
-                <option value="token" className="bg-neutral-900">Token (PAT)</option>
-                <option value="oauth" className="bg-neutral-900">OAuth</option>
-                <option value="ssh" className="bg-neutral-900">SSH Key</option>
-              </select>
-            </div>
+          <div>
+            <label className="mb-1 block text-[11px] text-white/50">Provider</label>
+            <select
+              value={provider}
+              onChange={(e) => setProvider(e.target.value as Provider)}
+              className="w-full rounded border border-white/10 bg-black/30 px-2 py-1.5 text-xs text-white outline-none focus:border-white/30"
+            >
+              <option value="github" className="bg-neutral-900">GitHub</option>
+              <option value="gitlab" className="bg-neutral-900">GitLab</option>
+              <option value="generic" className="bg-neutral-900">Generic</option>
+            </select>
           </div>
           <div>
             <label className="mb-1 block text-[11px] text-white/50">Branch (for push/pull)</label>
@@ -378,18 +229,12 @@ function AddRemoteModal({ open, filesystem, onClose, onAdd }: AddRemoteModalProp
               className="w-full rounded border border-white/10 bg-black/30 px-2.5 py-1.5 text-xs outline-none focus:border-white/30"
             />
           </div>
-          <div>
-            <label className="mb-1 block text-[11px] text-white/50">Token / Key (optional)</label>
-            <input
-              type="password"
-              value={token}
-              onChange={(e) => setToken(e.target.value)}
-              placeholder="ghp_..."
-              className="w-full rounded border border-white/10 bg-black/30 px-2.5 py-1.5 text-xs outline-none focus:border-white/30"
-            />
-          </div>
-          {(provider === "github" || provider === "gitlab") && authType === "oauth" && (
-            <OAuthCredentialsPanel provider={provider} />
+          {(provider === "github" || provider === "gitlab") && (
+            <p className="rounded border border-white/10 bg-black/20 px-2.5 py-2 text-[10px] text-white/40">
+              Authenticate {provider === "github" ? "GitHub" : "GitLab"} in{" "}
+              <span className="text-white/60">Settings → Integrations → Git Providers</span>. Credentials are
+              configured once there and shared by all remotes.
+            </p>
           )}
           <label className="flex items-center gap-2 text-[12px] text-white/70">
             <input
@@ -529,9 +374,6 @@ function EditRemoteModal({ open, remote, filesystem, onClose, onSave }: EditRemo
               />
             </div>
           </div>
-          {(provider === "github" || provider === "gitlab") && (
-            <OAuthCredentialsPanel provider={provider} />
-          )}
           {error && (
             <div className="flex items-start gap-2 rounded border border-red-400/30 bg-red-500/10 p-2 text-[11px] text-red-200">
               <AlertCircle size={12} className="mt-0.5 shrink-0" />

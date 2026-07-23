@@ -4,6 +4,7 @@ import { getSecretsStore } from "@/lib/integrations/secrets/store";
 import { putPending } from "@/lib/integrations/oauth/state";
 import { challengeFromVerifier } from "@/lib/integrations/oauth/pkce";
 import { getOAuthProvider, getGitLabAuthUrls } from "@/lib/integrations/oauth/providers";
+import { resolvePublicOrigin } from "@/lib/integrations/oauth/origin";
 import { gitLogger } from "@/lib/gitops/logging";
 
 export const dynamic = "force-dynamic";
@@ -63,9 +64,13 @@ export async function GET(req: NextRequest) {
   const baseAuthUrl =
     providerId === "gitlab" ? getGitLabAuthUrls(cs.instanceUrl).authUrl : manifest.authUrl;
 
+  // The redirect URI must be the public origin (matching what the user
+  // registered with the provider), not the internal request origin.
+  const redirectUri = `${resolvePublicOrigin(req)}/api/git-remotes/oauth/callback`;
+
   const authUrl = new URL(baseAuthUrl);
   authUrl.searchParams.set("client_id", cs.clientId);
-  authUrl.searchParams.set("redirect_uri", `${url.origin}/api/git-remotes/oauth/callback`);
+  authUrl.searchParams.set("redirect_uri", redirectUri);
   authUrl.searchParams.set("response_type", "code");
   authUrl.searchParams.set("scope", scopes.join(" "));
   authUrl.searchParams.set("state", stateToken);
