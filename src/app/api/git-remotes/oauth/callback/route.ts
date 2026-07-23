@@ -127,12 +127,15 @@ export async function GET(req: NextRequest) {
     }
 
     // Must be byte-for-byte identical to the redirect_uri used in the start
-    // route, or the provider rejects the token exchange. Resolve it the same
-    // way and surface the same warning when the public origin had to be guessed
-    // (no NEXT_PUBLIC_APP_ORIGIN) — a wrong origin here fails the exchange.
+    // route, or the provider rejects the token exchange. The start route
+    // persisted the exact origin it used (which may be the browser-supplied
+    // public URL that this request — a provider redirect — cannot re-derive),
+    // so prefer that; fall back to re-resolving for flows started before this
+    // field existed. Surface the guess warning only when we had to guess.
     const resolved = describePublicOrigin(req);
-    const redirectUri = `${resolved.origin}${GIT_REMOTE_OAUTH_CALLBACK_PATH}`;
-    if (resolved.warning) {
+    const publicOrigin = flow.publicOrigin || resolved.origin;
+    const redirectUri = `${publicOrigin}${GIT_REMOTE_OAUTH_CALLBACK_PATH}`;
+    if (resolved.warning && !flow.publicOrigin) {
       logger().warn("git-remotes.oauth", resolved.warning, {
         provider: providerId,
         remote: remoteName,

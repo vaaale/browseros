@@ -21,6 +21,7 @@ export function putPending(input: {
   verifier: string;
   scopes: string[];
   remoteName?: string;
+  publicOrigin?: string;
 }): string {
   const now = Date.now();
   prune(now);
@@ -31,6 +32,7 @@ export function putPending(input: {
     scopes: input.scopes,
     createdAt: now,
     remoteName: input.remoteName,
+    publicOrigin: input.publicOrigin,
   });
   return state;
 }

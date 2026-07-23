@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { KeyRound, Loader2, Plug, Unplug } from "lucide-react";
 import { OAuthCredentialsPanel } from "./OAuthCredentialsPanel";
-import { GIT_REMOTE_OAUTH_CALLBACK_PATH } from "@/lib/integrations/oauth/origin";
+import { GIT_REMOTE_OAUTH_CALLBACK_PATH, getBrowserOrigin } from "@/lib/integrations/oauth/origin";
 
 interface ProviderStatus {
   id: string;
@@ -64,8 +64,13 @@ export function GitProvidersTab({ onRefresh: _onRefresh }: { onRefresh?: () => P
       setBusyProvider(providerId);
       setError(undefined);
 
+      // Forward the browser's known public URL (the address bar). Behind a
+      // reverse proxy that rewrites Host, the server can't infer it — but the
+      // browser can, and it's the origin the redirect URI must be built from.
+      const browserOrigin = getBrowserOrigin();
       const popup = window.open(
-        `/api/git-remotes/oauth/start?remoteName=git-oauth&provider=${providerId}`,
+        `/api/git-remotes/oauth/start?remoteName=git-oauth&provider=${encodeURIComponent(providerId)}` +
+          `&browserOrigin=${encodeURIComponent(browserOrigin)}`,
         "git-oauth-connect",
         "width=600,height=700,popup=yes",
       );

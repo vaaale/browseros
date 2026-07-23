@@ -132,4 +132,11 @@ export interface PendingOAuthFlow {
   createdAt: number;
   /** When present, this flow authenticates a git remote (not an integration). */
   remoteName?: string;
+  /**
+   * Exact public origin used to build the redirect URI at flow start. The
+   * callback (token exchange) must send a byte-for-byte identical redirect_uri,
+   * so we persist the resolved origin here — the callback request cannot
+   * re-derive it (the provider redirects back without the browserOrigin hint).
+   */
+  publicOrigin?: string;
 }

@@ -53,12 +53,6 @@ export async function GET(req: NextRequest) {
 
   const verifier = randomBytes(32).toString("base64url");
   const challenge = challengeFromVerifier(verifier);
-  const stateToken = putPending({
-    integrationId: "git_remote_oauth",
-    verifier,
-    scopes,
-    remoteName,
-  });
 
   // Self-hosted GitLab authorizes against its own origin rather than
   // gitlab.com; fall back to the manifest URL when no instance is configured.
@@ -67,8 +61,26 @@ export async function GET(req: NextRequest) {
 
   // The redirect URI must be the public origin (matching what the user
   // registered with the provider), not the internal request origin.
+  //
+  // Resolution: configured NEXT_PUBLIC_APP_ORIGIN/APP_ORIGIN wins (deterministic,
+  // what the admin pinned). Otherwise use the browser-supplied origin — the
+  // actual URL the user accessed BOS from, forwarded by the client as a query
+  // param — which is correct even behind a reverse proxy that rewrites Host.
+  // Only when neither is available do we fall back to the header/request guess.
   const resolved = describePublicOrigin(req);
-  const redirectUri = `${resolved.origin}${GIT_REMOTE_OAUTH_CALLBACK_PATH}`;
+  const browserOrigin = url.searchParams.get("browserOrigin")?.trim().replace(/\/+$/, "") || undefined;
+  const publicOrigin = resolved.configuredResolved ? resolved.origin : browserOrigin || resolved.origin;
+  const redirectUri = `${publicOrigin}${GIT_REMOTE_OAUTH_CALLBACK_PATH}`;
+
+  // Persist the exact origin so the callback rebuilds a byte-for-byte identical
+  // redirect_uri for the token exchange (it can't see browserOrigin).
+  const stateToken = putPending({
+    integrationId: "git_remote_oauth",
+    verifier,
+    scopes,
+    remoteName,
+    publicOrigin,
+  });
 
   // Log the resolved origin + inputs so redirect-URI mismatches ("the redirect
   // URI included is not valid") can be diagnosed without guessing.
@@ -76,7 +88,9 @@ export async function GET(req: NextRequest) {
     provider: providerId,
     remote: remoteName,
     redirectUri,
-    originSource: resolved.source,
+    publicOrigin,
+    browserOrigin: browserOrigin ?? null,
+    originSource: resolved.configuredResolved ? "env" : browserOrigin ? "browser-origin" : resolved.source,
     configuredResolved: resolved.configuredResolved,
     configuredOrigin: resolved.configured ?? null,
     configuredRuntime: resolved.configuredRuntime ?? null,
@@ -86,10 +100,11 @@ export async function GET(req: NextRequest) {
     host: resolved.host ?? null,
   });
 
-  // When the origin is a guess (no NEXT_PUBLIC_APP_ORIGIN at build or run time),
-  // emit a clear, actionable warning — the URI likely reflects an internal
-  // backend host and the provider will reject it.
-  if (resolved.warning) {
+  // When the origin is still a guess — no NEXT_PUBLIC_APP_ORIGIN (build or run
+  // time) AND no browser-supplied origin — emit a clear, actionable warning: the
+  // URI likely reflects an internal backend host and the provider will reject it.
+  // A browserOrigin resolves this, so suppress the warning in that case.
+  if (resolved.warning && !browserOrigin) {
     logger().warn("git-remotes.oauth", resolved.warning, {
       provider: providerId,
       remote: remoteName,

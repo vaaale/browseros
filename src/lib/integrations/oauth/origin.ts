@@ -149,6 +149,25 @@ export function resolvePublicOrigin(req: NextRequest): string {
 // redirect_uri), and the settings UI that shows it to the user.
 export const GIT_REMOTE_OAUTH_CALLBACK_PATH = "/api/git-remotes/oauth/callback";
 
+/**
+ * Returns the public origin as seen by the browser (window.location.origin).
+ * This is the actual URL the user accessed BOS from — the correct value we
+ * want for the redirect URI. Use this as a fallback when NEXT_PUBLIC_APP_ORIGIN
+ * is not configured.
+ *
+ * Behind a reverse proxy that rewrites Host (e.g. forwarding the internal
+ * backend name such as `bos-alex:8090`), the server CANNOT infer this — only
+ * the browser knows it. Callers pass it to server OAuth routes as a query
+ * param so the redirect URI is built from the real public URL. Returns "" when
+ * called outside a browser (SSR).
+ */
+export function getBrowserOrigin(): string {
+  if (typeof window !== "undefined" && window.location) {
+    return window.location.origin;
+  }
+  return "";
+}
+
 // Client-safe counterpart to resolvePublicOrigin. Runs in the browser (no
 // request object / proxy headers available), so it resolves the public origin
 // from NEXT_PUBLIC_APP_ORIGIN (inlined at build time) and falls back to the

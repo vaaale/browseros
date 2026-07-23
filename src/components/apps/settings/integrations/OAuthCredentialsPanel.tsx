@@ -2,7 +2,7 @@
 
 import { useCallback, useState } from "react";
 import { Check, Copy, KeyRound, Loader2, Pencil, X } from "lucide-react";
-import { getRedirectUri, resolveClientPublicOrigin } from "@/lib/integrations/oauth/origin";
+import { getBrowserOrigin, getRedirectUri } from "@/lib/integrations/oauth/origin";
 
 export interface OAuthCredentials {
   clientId: string;
@@ -76,11 +76,12 @@ export function OAuthCredentialsPanel({
   const [redirectUri] = useState(() =>
     redirectUriPath ? getRedirectUri(redirectUriPath) : "",
   );
-  // The public origin as seen by the browser (the address bar). When
-  // NEXT_PUBLIC_APP_ORIGIN is not inlined this is window.location.origin — i.e.
-  // the real public URL, which the server CANNOT infer behind a reverse proxy
-  // that rewrites Host. We surface it so the user knows exactly what to pin.
-  const [detectedOrigin] = useState(() => resolveClientPublicOrigin());
+  // The public origin as seen by the browser (the address bar) —
+  // window.location.origin. This is the real public URL, which the server
+  // CANNOT infer behind a reverse proxy that rewrites Host; the OAuth flow now
+  // forwards it to the server so the redirect URI is built correctly. We also
+  // surface it here so the user knows exactly what to pin as NEXT_PUBLIC_APP_ORIGIN.
+  const [detectedOrigin] = useState(() => getBrowserOrigin());
   const [copied, setCopied] = useState(false);
 
   const copyRedirectUri = useCallback(async () => {
@@ -175,7 +176,16 @@ export function OAuthCredentialsPanel({
           <p className="text-[10.5px] leading-relaxed text-white/60">
             <strong className="font-semibold text-white/80">Note:</strong>{" "}
             <code className="text-white/80">NEXT_PUBLIC_APP_ORIGIN</code> is not set at build time.
-            Behind a reverse proxy the server can’t reliably infer the public URL, so set{" "}
+            The OAuth flow uses{" "}
+            {detectedOrigin ? (
+              <>
+                this browser’s URL (<code className="text-white/80">{detectedOrigin}</code>)
+              </>
+            ) : (
+              <>this browser’s URL</>
+            )}{" "}
+            as the redirect origin, so the redirect URI above should work. For a deterministic value
+            across all flows, pin{" "}
             <code className="text-white/80">NEXT_PUBLIC_APP_ORIGIN</code>{" "}
             {detectedOrigin ? (
               <>
@@ -183,8 +193,7 @@ export function OAuthCredentialsPanel({
               </>
             ) : (
               <>to your public URL (e.g. <code className="text-white/80">https://bos.schmopilot.com</code>)</>
-            )}{" "}
-            so the redirect URI above is generated correctly by the OAuth flow.
+            )}.
           </p>
         </div>
       )}
