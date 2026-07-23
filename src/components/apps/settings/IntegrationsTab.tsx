@@ -7,6 +7,7 @@ import { IntegrationListView } from "./integrations/IntegrationListView";
 import { IntegrationDetailView } from "./integrations/IntegrationDetailView";
 import { ServiceConfigView } from "./integrations/ServiceConfigView";
 import { TelegramDetailView } from "./integrations/TelegramDetailView";
+import { GitProvidersTab } from "./integrations/GitProvidersTab";
 
 // The Integrations settings tab. Drill-down navigation:
 //   list  → detail (per-integration) → service config
@@ -46,12 +47,15 @@ export function IntegrationsTab() {
     <div className="space-y-3">
       <IntegrationsBreadcrumb crumbs={crumbs} />
       {view.name === "list" && (
-        <IntegrationListView
-          items={items}
-          loading={loading}
-          error={error}
-          onSelect={(id) => setView({ name: "detail", integrationId: id })}
-        />
+        <>
+          <IntegrationListView
+            items={items}
+            loading={loading}
+            error={error}
+            onSelect={(id) => setView({ name: "detail", integrationId: id })}
+          />
+          <GitProvidersTab onRefresh={refresh} />
+        </>
       )}
       {view.name === "detail" && currentItem && currentItem.manifest.id === "telegram" && (
         <TelegramDetailView
