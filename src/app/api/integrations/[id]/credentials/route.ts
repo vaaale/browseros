@@ -28,6 +28,17 @@ const MAX_FIELD_LEN = 4096;
 interface CredentialsBody {
   clientId?: unknown;
   clientSecret?: unknown;
+  instanceUrl?: unknown;
+}
+
+/** True when `value` parses as an http(s) URL. */
+function isHttpUrl(value: string): boolean {
+  try {
+    const u = new URL(value);
+    return u.protocol === "http:" || u.protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 /** Resolve which storage strategy applies, or null if the id is unknown. */
@@ -68,17 +79,30 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
   const clientId = typeof body.clientId === "string" ? body.clientId.trim() : "";
   const clientSecret = typeof body.clientSecret === "string" ? body.clientSecret.trim() : "";
+  const instanceUrl = typeof body.instanceUrl === "string" ? body.instanceUrl.trim() : "";
   if (!clientId || !clientSecret) {
     return NextResponse.json({ error: "clientId and clientSecret are required." }, { status: 400 });
   }
   if (clientId.length > MAX_FIELD_LEN || clientSecret.length > MAX_FIELD_LEN) {
     return NextResponse.json({ error: "clientId/clientSecret too long." }, { status: 413 });
   }
+  if (instanceUrl) {
+    if (instanceUrl.length > MAX_FIELD_LEN) {
+      return NextResponse.json({ error: "instanceUrl too long." }, { status: 413 });
+    }
+    if (!isHttpUrl(instanceUrl)) {
+      return NextResponse.json({ error: "instanceUrl must be a valid http(s) URL." }, { status: 400 });
+    }
+  }
 
   try {
     const store = getSecretsStore();
     if (kind === "provider") {
-      await store.setGitProviderCredentials(id, { clientId, clientSecret });
+      await store.setGitProviderCredentials(id, {
+        clientId,
+        clientSecret,
+        ...(instanceUrl ? { instanceUrl } : {}),
+      });
     } else {
       const manifest = getIntegration(id)!;
       const normalized: NormalizedClientSecrets = {

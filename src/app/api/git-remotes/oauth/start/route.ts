@@ -3,7 +3,7 @@ import { randomBytes } from "crypto";
 import { getSecretsStore } from "@/lib/integrations/secrets/store";
 import { putPending } from "@/lib/integrations/oauth/state";
 import { challengeFromVerifier } from "@/lib/integrations/oauth/pkce";
-import { getOAuthProvider } from "@/lib/integrations/oauth/providers";
+import { getOAuthProvider, getGitLabAuthUrls } from "@/lib/integrations/oauth/providers";
 import { gitLogger } from "@/lib/gitops/logging";
 
 export const dynamic = "force-dynamic";
@@ -15,6 +15,7 @@ export const runtime = "nodejs";
 interface GitRemoteClientSecrets {
   clientId: string;
   clientSecret: string;
+  instanceUrl?: string;
 }
 
 export async function GET(req: NextRequest) {
@@ -57,7 +58,12 @@ export async function GET(req: NextRequest) {
     remoteName,
   });
 
-  const authUrl = new URL(manifest.authUrl);
+  // Self-hosted GitLab authorizes against its own origin rather than
+  // gitlab.com; fall back to the manifest URL when no instance is configured.
+  const baseAuthUrl =
+    providerId === "gitlab" ? getGitLabAuthUrls(cs.instanceUrl).authUrl : manifest.authUrl;
+
+  const authUrl = new URL(baseAuthUrl);
   authUrl.searchParams.set("client_id", cs.clientId);
   authUrl.searchParams.set("redirect_uri", `${url.origin}/api/git-remotes/oauth/callback`);
   authUrl.searchParams.set("response_type", "code");

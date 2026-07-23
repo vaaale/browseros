@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { takePending } from "@/lib/integrations/oauth/state";
 import { getSecretsStore } from "@/lib/integrations/secrets/store";
 import { readRemoteConfigs, updateRemoteConfig } from "@/lib/gitops/remote-config";
-import { getOAuthProvider } from "@/lib/integrations/oauth/providers";
+import { getOAuthProvider, getGitLabAuthUrls } from "@/lib/integrations/oauth/providers";
 import { gitLogger } from "@/lib/gitops/logging";
 
 export const dynamic = "force-dynamic";
@@ -16,6 +16,7 @@ export const runtime = "nodejs";
 interface GitRemoteClientSecrets {
   clientId: string;
   clientSecret: string;
+  instanceUrl?: string;
 }
 
 function escapeHtml(s: string): string {
@@ -124,7 +125,10 @@ export async function GET(req: NextRequest) {
     }
 
     const redirectUri = `${url.origin}/api/git-remotes/oauth/callback`;
-    const tokenUrl = provider?.tokenUrl;
+    // Self-hosted GitLab exchanges tokens against its own origin; fall back to
+    // the manifest URL when no instance URL was configured.
+    const tokenUrl =
+      providerId === "gitlab" ? getGitLabAuthUrls(cs.instanceUrl).tokenUrl : provider?.tokenUrl;
     if (!tokenUrl) {
       throw new Error(`No token URL for provider: ${providerId}`);
     }

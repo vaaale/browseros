@@ -11,6 +11,23 @@ export const GITLAB_MANIFEST: OAuthProviderManifest = {
   description: "GitLab — user profile, repositories, and API access.",
 };
 
+/**
+ * Resolve the OAuth authorization/token endpoints for a GitLab instance.
+ * Self-hosted GitLab exposes the same `/oauth/authorize` and `/oauth/token`
+ * paths as gitlab.com, just under the instance's own origin. When no instance
+ * URL is configured (i.e. gitlab.com), the manifest defaults are returned.
+ */
+export function getGitLabAuthUrls(instanceUrl?: string): { authUrl: string; tokenUrl: string } {
+  const base = (instanceUrl ?? "").trim().replace(/\/+$/, "");
+  if (!base) {
+    return { authUrl: GITLAB_MANIFEST.authUrl, tokenUrl: GITLAB_MANIFEST.tokenUrl };
+  }
+  return {
+    authUrl: `${base}/oauth/authorize`,
+    tokenUrl: `${base}/oauth/token`,
+  };
+}
+
 export function createOAuthClient(
   clientId: string,
   clientSecret: string,

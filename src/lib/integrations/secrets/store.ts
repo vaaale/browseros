@@ -29,6 +29,13 @@ type StoredKey = `${string}:${string}`;
 export interface OAuthClientCredentials {
   clientId: string;
   clientSecret: string;
+  /**
+   * Base URL of a self-hosted provider instance (e.g. a private GitLab at
+   * `https://gitlab.example.com`). Optional — omitted for cloud providers
+   * (github.com, gitlab.com), where the authorization/token URLs come from the
+   * provider manifest.
+   */
+  instanceUrl?: string;
 }
 
 interface OnDisk {

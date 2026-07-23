@@ -6,6 +6,18 @@ import { Check, KeyRound, Loader2, Pencil, X } from "lucide-react";
 export interface OAuthCredentials {
   clientId: string;
   clientSecret: string;
+  /** Base URL of a self-hosted GitLab instance, e.g. https://gitlab.example.com. */
+  instanceUrl?: string;
+}
+
+/** True when `value` parses as an http(s) URL. */
+function looksLikeUrl(value: string): boolean {
+  try {
+    const u = new URL(value);
+    return u.protocol === "http:" || u.protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 export interface OAuthCredentialsPanelProps {
@@ -39,9 +51,12 @@ export function OAuthCredentialsPanel({
   onSaved,
   onSubmit,
 }: OAuthCredentialsPanelProps) {
+  const isGitLab = integrationId === "gitlab";
+
   const [editing, setEditing] = useState(!hasCredentials);
   const [clientId, setClientId] = useState("");
   const [clientSecret, setClientSecret] = useState("");
+  const [instanceUrl, setInstanceUrl] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | undefined>();
   const [saved, setSaved] = useState(false);
@@ -49,27 +64,38 @@ export function OAuthCredentialsPanel({
   const reset = useCallback(() => {
     setClientId("");
     setClientSecret("");
+    setInstanceUrl("");
     setError(undefined);
   }, []);
 
   const save = useCallback(async () => {
     const trimmedId = clientId.trim();
     const trimmedSecret = clientSecret.trim();
+    const trimmedUrl = instanceUrl.trim();
     if (!trimmedId || !trimmedSecret) {
       setError("Both Client ID and Client Secret are required.");
       return;
     }
+    if (isGitLab && trimmedUrl && !looksLikeUrl(trimmedUrl)) {
+      setError("GitLab instance URL must be a valid http(s) URL.");
+      return;
+    }
+    const credentials: OAuthCredentials = {
+      clientId: trimmedId,
+      clientSecret: trimmedSecret,
+      ...(isGitLab && trimmedUrl ? { instanceUrl: trimmedUrl } : {}),
+    };
     setBusy(true);
     setError(undefined);
     setSaved(false);
     try {
       if (onSubmit) {
-        await onSubmit(integrationId, { clientId: trimmedId, clientSecret: trimmedSecret });
+        await onSubmit(integrationId, credentials);
       } else {
         const res = await fetch(`/api/integrations/${encodeURIComponent(integrationId)}/credentials`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ clientId: trimmedId, clientSecret: trimmedSecret }),
+          body: JSON.stringify(credentials),
         });
         const payload = (await res.json().catch(() => ({}))) as { error?: string };
         if (!res.ok) throw new Error(payload.error ?? `Save failed: ${res.status}`);
@@ -83,7 +109,7 @@ export function OAuthCredentialsPanel({
     } finally {
       setBusy(false);
     }
-  }, [clientId, clientSecret, integrationId, onSubmit, onSaved, reset]);
+  }, [clientId, clientSecret, instanceUrl, isGitLab, integrationId, onSubmit, onSaved, reset]);
 
   // Compact "already configured" view with an Edit button.
   if (!editing) {
@@ -155,6 +181,27 @@ export function OAuthCredentialsPanel({
             className="w-full rounded border border-white/15 bg-white/[0.05] px-2.5 py-1.5 text-[12px] text-white outline-none transition-colors placeholder:text-white/25 focus:border-violet-400/60 disabled:opacity-50"
           />
         </label>
+        {isGitLab && (
+          <label className="block">
+            <span className="mb-1 block text-[11px] font-medium text-white/60">
+              GitLab instance URL{" "}
+              <span className="font-normal text-white/35">(self-hosted only)</span>
+            </span>
+            <input
+              type="url"
+              value={instanceUrl}
+              onChange={(e) => setInstanceUrl(e.target.value)}
+              disabled={busy}
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="https://gitlab.example.com"
+              className="w-full rounded border border-white/15 bg-white/[0.05] px-2.5 py-1.5 text-[12px] text-white outline-none transition-colors placeholder:text-white/25 focus:border-violet-400/60 disabled:opacity-50"
+            />
+            <span className="mt-1 block text-[10.5px] text-white/35">
+              Leave blank for gitlab.com.
+            </span>
+          </label>
+        )}
       </div>
 
       {error && <div className="mt-2 text-[11px] text-red-300">{error}</div>}
