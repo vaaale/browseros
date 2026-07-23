@@ -96,6 +96,11 @@ export async function POST(req: NextRequest) {
     const action = String(body.action ?? "");
     const filesystem: string | undefined = body.filesystem ? String(body.filesystem) : undefined;
     const repoPath = await resolveRepoPath(filesystem);
+    // Normalised filesystem id used to scope config lookups/mutations. Remote
+    // names collide across filesystems (each may have an "origin"), so every
+    // config match below is scoped to this instance to avoid mutating or reading
+    // a same-named remote that belongs to a different GitFS.
+    const fsId = filesystem ?? SOURCE_FS_ID;
 
     switch (action) {
       case "add": {
@@ -162,7 +167,7 @@ export async function POST(req: NextRequest) {
         return await lock.withLock(repoPath, "api.git_remove_remote", async (release) => {
           try {
             await removeRemote(repoPath, name).catch(() => {});
-            removeRemoteConfig(name);
+            removeRemoteConfig(name, fsId);
 
             // Provider-wide OAuth tokens are shared, so removing one remote must
             // not drop them; only per-remote token/ssh secrets are cleared.
@@ -186,7 +191,7 @@ export async function POST(req: NextRequest) {
         }
 
         const configs = readRemoteConfigs();
-        const existing = configs.find((c) => c.name === name);
+        const existing = configs.find((c) => belongsToFilesystem(c.filesystem, fsId) && c.name === name);
         if (!existing) return err("REMOTE_NOT_FOUND", `Remote '${name}' not found.`);
 
         const newName = typeof patch.name === "string" && patch.name.trim() ? patch.name.trim() : name;
@@ -195,7 +200,7 @@ export async function POST(req: NextRequest) {
         if (newUrl.startsWith("git://")) {
           return err("INVALID_URL", "git:// protocol is not supported. Use https:// or ssh:// instead.");
         }
-        if (newName !== name && configs.some((c) => c.name === newName)) {
+        if (newName !== name && configs.some((c) => belongsToFilesystem(c.filesystem, fsId) && c.name === newName)) {
           return err("NAME_TAKEN", `A remote named '${newName}' already exists.`);
         }
 
@@ -222,7 +227,7 @@ export async function POST(req: NextRequest) {
             if (patch.defaultBranch !== undefined) finalPatch.defaultBranch = patch.defaultBranch || undefined;
             if (patch.autoPush !== undefined) finalPatch.autoPush = patch.autoPush === true;
 
-            const updated = updateRemoteConfig(name, finalPatch);
+            const updated = updateRemoteConfig(name, finalPatch, fsId);
             gitLogger().info({ op: "api.git_update_remote", remote: newName, success: true });
             return NextResponse.json({ ok: true, remote: updated, message: `Remote '${newName}' updated.` });
           } catch (e) {
@@ -239,7 +244,7 @@ export async function POST(req: NextRequest) {
         if (!name) return err("MISSING_PARAMS", "name is required.");
 
         const configs = readRemoteConfigs();
-        const config = configs.find((c) => c.name === name);
+        const config = configs.find((c) => belongsToFilesystem(c.filesystem, fsId) && c.name === name);
         if (!config) return err("REMOTE_NOT_FOUND", `Remote '${name}' not found.`);
 
         const auth = await resolveAuth(name, authTypeFor(config), config.provider);
@@ -249,11 +254,11 @@ export async function POST(req: NextRequest) {
         return await lock.withLock(repoPath, "api.git_push", async (release) => {
           try {
             await pushRepo(repoPath, name, await currentBranch, auth ?? undefined);
-            updateRemoteConfig(name, { lastPushed: new Date().toISOString(), lastStatus: "connected", lastError: undefined });
+            updateRemoteConfig(name, { lastPushed: new Date().toISOString(), lastStatus: "connected", lastError: undefined }, fsId);
             gitLogger().info({ op: "api.git_push", remote: name, success: true });
             return NextResponse.json({ ok: true, message: `Pushed to '${name}/${await currentBranch}'.` });
           } catch (e) {
-            updateRemoteConfig(name, { lastStatus: "error", lastError: (e as Error).message });
+            updateRemoteConfig(name, { lastStatus: "error", lastError: (e as Error).message }, fsId);
             gitLogger().error({ op: "api.git_push", remote: name, error: { code: "GIT_PUSH_FAILED", message: (e as Error).message } });
             return err("GIT_PUSH_FAILED", (e as Error).message);
           } finally {
@@ -267,7 +272,7 @@ export async function POST(req: NextRequest) {
         if (!name) return err("MISSING_PARAMS", "name is required.");
 
         const configs = readRemoteConfigs();
-        const config = configs.find((c) => c.name === name);
+        const config = configs.find((c) => belongsToFilesystem(c.filesystem, fsId) && c.name === name);
         if (!config) return err("REMOTE_NOT_FOUND", `Remote '${name}' not found.`);
 
         const auth = await resolveAuth(name, authTypeFor(config), config.provider);
@@ -276,11 +281,11 @@ export async function POST(req: NextRequest) {
         return await lock.withLock(repoPath, "api.git_fetch", async (release) => {
           try {
             const ab = await fetchRepo(repoPath, name, config.defaultBranch, auth ?? undefined);
-            updateRemoteConfig(name, { lastFetched: new Date().toISOString(), lastStatus: "connected", lastError: undefined });
+            updateRemoteConfig(name, { lastFetched: new Date().toISOString(), lastStatus: "connected", lastError: undefined }, fsId);
             gitLogger().info({ op: "api.git_fetch", remote: name, success: true });
             return NextResponse.json({ ok: true, ahead: ab.ahead, behind: ab.behind });
           } catch (e) {
-            updateRemoteConfig(name, { lastStatus: "error", lastError: (e as Error).message });
+            updateRemoteConfig(name, { lastStatus: "error", lastError: (e as Error).message }, fsId);
             gitLogger().error({ op: "api.git_fetch", remote: name, error: { code: "GIT_FETCH_FAILED", message: (e as Error).message } });
             return err("GIT_FETCH_FAILED", (e as Error).message);
           } finally {
@@ -294,7 +299,7 @@ export async function POST(req: NextRequest) {
         if (!name) return err("MISSING_PARAMS", "name is required.");
 
         const configs = readRemoteConfigs();
-        const config = configs.find((c) => c.name === name);
+        const config = configs.find((c) => belongsToFilesystem(c.filesystem, fsId) && c.name === name);
         if (!config) return err("REMOTE_NOT_FOUND", `Remote '${name}' not found.`);
 
         const auth = await resolveAuth(name, authTypeFor(config), config.provider);
@@ -303,7 +308,7 @@ export async function POST(req: NextRequest) {
         updateRemoteConfig(name, {
           lastStatus: result.ok ? "connected" : "error",
           lastError: result.ok ? undefined : result.error,
-        });
+        }, fsId);
 
         return NextResponse.json({
           ok: result.ok,

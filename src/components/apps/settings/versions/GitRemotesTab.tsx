@@ -469,7 +469,7 @@ function FilesystemCard({ fs, remotes, busyAction, onAdd, onEdit, onAction }: Fi
                     onClick={() => onAction("test", remote)}
                     className={`${btn} inline-flex items-center gap-1 bg-white/10 hover:bg-white/20`}
                   >
-                    {busyAction === `test-${remote.name}` ? <Loader2 size={10} className="animate-spin" /> : <Wifi size={10} />}
+                    {busyAction === `test-${fs.id}-${remote.name}` ? <Loader2 size={10} className="animate-spin" /> : <Wifi size={10} />}
                     Test
                   </button>
                   <button
@@ -477,7 +477,7 @@ function FilesystemCard({ fs, remotes, busyAction, onAdd, onEdit, onAction }: Fi
                     onClick={() => onAction("fetch", remote)}
                     className={`${btn} inline-flex items-center gap-1 bg-white/10 hover:bg-white/20`}
                   >
-                    {busyAction === `fetch-${remote.name}` ? <Loader2 size={10} className="animate-spin" /> : <RefreshCw size={10} />}
+                    {busyAction === `fetch-${fs.id}-${remote.name}` ? <Loader2 size={10} className="animate-spin" /> : <RefreshCw size={10} />}
                     Fetch
                   </button>
                   <button
@@ -485,7 +485,7 @@ function FilesystemCard({ fs, remotes, busyAction, onAdd, onEdit, onAction }: Fi
                     onClick={() => onAction("push", remote)}
                     className={`${btn} inline-flex items-center gap-1 bg-sky-500/20 hover:bg-sky-500/30`}
                   >
-                    {busyAction === `push-${remote.name}` ? <Loader2 size={10} className="animate-spin" /> : <Send size={10} />}
+                    {busyAction === `push-${fs.id}-${remote.name}` ? <Loader2 size={10} className="animate-spin" /> : <Send size={10} />}
                     Push
                   </button>
                   <button
@@ -555,7 +555,10 @@ export function GitRemotesTab() {
   }, [load]);
 
   const api = useCallback(async (action: string, fsId: string, body: Record<string, unknown> = {}) => {
-    setBusyAction(`${action}-${body.name ?? ""}`);
+    // Key the busy indicator by filesystem AND remote name — remote names collide
+    // across filesystems (each may have an "origin"), so a name-only key would
+    // spin the matching button in every card at once.
+    setBusyAction(`${action}-${fsId}-${body.name ?? ""}`);
     setMsg(null);
     try {
       const res = await fetch("/api/git-remotes", {

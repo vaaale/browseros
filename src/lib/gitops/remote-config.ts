@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync, existsSync, renameSync, mkdirSync } from "
 import { join } from "path"
 import { dataDir } from "@/os/data-dir"
 import { gitLogger } from "./logging"
+import { SOURCE_FS_ID } from "./filesystems"
 
 export interface GitRemoteConfig {
   name: string
@@ -60,18 +61,30 @@ export function addRemoteConfig(config: Omit<GitRemoteConfig, "createdAt" | "upd
   return newConfig
 }
 
-export function updateRemoteConfig(name: string, patch: Partial<GitRemoteConfig>): GitRemoteConfig | null {
+// Remote names are only unique WITHIN a filesystem (see getUniqueRemoteName), so
+// two filesystems may each have an "origin". Callers that operate on a specific
+// GitFS instance MUST pass its `filesystem` id, otherwise the first same-named
+// config wins and the wrong remote gets mutated. Legacy configs with no tag
+// belong to the BrowserOS source repo. When `filesystem` is omitted the match is
+// by name only (legacy behaviour for source-repo callers).
+function matchesRemote(c: GitRemoteConfig, name: string, filesystem?: string): boolean {
+  if (c.name !== name) return false
+  if (filesystem === undefined) return true
+  return (c.filesystem ?? SOURCE_FS_ID) === filesystem
+}
+
+export function updateRemoteConfig(name: string, patch: Partial<GitRemoteConfig>, filesystem?: string): GitRemoteConfig | null {
   const configs = readRemoteConfigs()
-  const index = configs.findIndex((c) => c.name === name)
+  const index = configs.findIndex((c) => matchesRemote(c, name, filesystem))
   if (index === -1) return null
   configs[index] = { ...configs[index], ...patch, updatedAt: new Date().toISOString() }
   writeRemoteConfigs(configs)
   return configs[index]
 }
 
-export function removeRemoteConfig(name: string): boolean {
+export function removeRemoteConfig(name: string, filesystem?: string): boolean {
   const configs = readRemoteConfigs()
-  const index = configs.findIndex((c) => c.name === name)
+  const index = configs.findIndex((c) => matchesRemote(c, name, filesystem))
   if (index === -1) return false
   configs.splice(index, 1)
   writeRemoteConfigs(configs)
