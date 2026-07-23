@@ -19,7 +19,7 @@ export interface GitRemoteConfig {
 
 const CONFIG_PATH = join(dataDir(), "config", "git-remotes.json")
 
-function readRemoteConfigs(): GitRemoteConfig[] {
+export function readRemoteConfigs(): GitRemoteConfig[] {
   if (!existsSync(CONFIG_PATH)) return []
   const content = readFileSync(CONFIG_PATH, "utf-8")
   return JSON.parse(content)

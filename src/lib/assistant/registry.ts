@@ -7,6 +7,8 @@ import { skillsTools } from "./tools/server/skills";
 import { docsTools } from "./tools/server/docs";
 import { gitTools } from "./tools/server/git";
 import { gitRemotesTools } from "./tools/server/git-remotes";
+import { gitPushTools } from "./tools/server/git-push";
+import { gitFetchTools } from "./tools/server/git-fetch";
 import { runCommandTools } from "./tools/server/run-command";
 import { configTools } from "./tools/server/config";
 import { mcpTools } from "./tools/server/mcp";
@@ -53,6 +55,8 @@ export function assistantTools(): Record<string, AssistantTool> {
     ...docsTools(),
     ...gitTools(),
     ...gitRemotesTools(),
+    ...gitPushTools(),
+    ...gitFetchTools(),
     ...runCommandTools(),
     ...configTools(),
     ...mcpTools(),
