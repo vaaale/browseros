@@ -80,6 +80,8 @@ export async function GET(req: NextRequest) {
     redirectUri,
     originSource: resolved.source,
     configuredOrigin: resolved.configured ?? null,
+    configuredRuntime: resolved.configuredRuntime ?? null,
+    configuredBuildTime: resolved.configuredBuildTime ?? null,
     forwardedProto: resolved.forwardedProto ?? null,
     forwardedHost: resolved.forwardedHost ?? null,
     host: resolved.host ?? null,

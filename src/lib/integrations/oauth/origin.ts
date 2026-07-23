@@ -17,20 +17,46 @@ import type { NextRequest } from "next/server";
 //   2. X-Forwarded-Proto / X-Forwarded-Host (or Host) — standard proxy headers.
 //   3. The request's own origin — correct for direct local development.
 
-// Read the configured public origin from the RUNTIME environment.
+// Read the configured public origin, tolerating BOTH ways the value can reach a
+// server bundle:
 //
-// Critical: Next.js statically replaces every literal `process.env.NEXT_PUBLIC_*`
-// reference with its build-time value (in server bundles too). In proxied/Docker
-// deployments the origin is only present in the container's env at runtime — not
-// when `next build` ran — so the inlined server-side form is baked in as
-// `undefined`, and the flow silently falls back to the internal request origin
-// (e.g. `https://bos-alex:8090`). Accessing `process.env` through a computed key
-// defers the lookup to runtime so the container's value actually wins. APP_ORIGIN
-// is a non-public alias that is never inlined, for good measure.
-function readConfiguredOrigin(): string | undefined {
+//   • RUNTIME env — accessed through a computed key so Next.js does NOT inline it.
+//     This is the container's live `process.env`, which wins in proxied/Docker
+//     deployments where the origin is injected at run time (not `next build`).
+//
+//   • BUILD-TIME inline — the literal `process.env.NEXT_PUBLIC_APP_ORIGIN` form,
+//     which Next.js statically replaces with the value present when `next build`
+//     ran (in server bundles too, exactly like the client). This is the ONLY
+//     value available when the origin was set at build time but is absent from
+//     the container's runtime env — the case where the client shows the correct
+//     origin (it reads the inlined literal) but the server, reading only the
+//     computed key, saw `undefined` and fell back to the internal request origin
+//     (e.g. `https://bos-alex:8090`), producing a mismatched redirect URI.
+//
+// We prefer the runtime value (deterministic per running container) and fall
+// back to the build-time literal, so whichever mechanism supplied the origin
+// wins. APP_ORIGIN is a non-public runtime alias that is never inlined.
+interface ConfiguredOrigin {
+  /** Chosen origin (runtime preferred, build-time fallback), trailing slash stripped. */
+  origin: string | undefined;
+  /** Raw runtime value (computed-key lookup, not inlined). */
+  runtime: string | undefined;
+  /** Raw build-time inlined literal value. */
+  buildTime: string | undefined;
+}
+
+function readConfiguredOrigin(): ConfiguredOrigin {
   const env = process.env as Record<string, string | undefined>;
-  const raw = env["NEXT_PUBLIC_APP_ORIGIN"]?.trim() || env["APP_ORIGIN"]?.trim();
-  return raw ? raw.replace(/\/+$/, "") : undefined;
+  // Runtime lookups (computed key — not inlined by Next.js).
+  const runtime = env["NEXT_PUBLIC_APP_ORIGIN"]?.trim() || env["APP_ORIGIN"]?.trim();
+  // Build-time inlined literal — baked in by `next build` when set then.
+  const buildTime = process.env.NEXT_PUBLIC_APP_ORIGIN?.trim();
+  const raw = runtime || buildTime;
+  return {
+    origin: raw ? raw.replace(/\/+$/, "") : undefined,
+    runtime: runtime || undefined,
+    buildTime: buildTime || undefined,
+  };
 }
 
 // Structured breakdown of how the public origin was resolved — used both to
@@ -40,6 +66,10 @@ export interface PublicOriginResolution {
   origin: string;
   source: "env" | "forwarded-headers" | "request-origin";
   configured: string | undefined;
+  /** Raw NEXT_PUBLIC_APP_ORIGIN/APP_ORIGIN read from the container's runtime env. */
+  configuredRuntime: string | undefined;
+  /** Raw NEXT_PUBLIC_APP_ORIGIN inlined at `next build` time. */
+  configuredBuildTime: string | undefined;
   forwardedProto: string | undefined;
   forwardedHost: string | undefined;
   host: string | undefined;
@@ -49,36 +79,25 @@ export function describePublicOrigin(req: NextRequest): PublicOriginResolution {
   const first = (value: string | null): string | undefined =>
     value?.split(",")[0]?.trim() || undefined;
 
-  const configured = readConfiguredOrigin();
+  const { origin: configured, runtime: configuredRuntime, buildTime: configuredBuildTime } =
+    readConfiguredOrigin();
   const forwardedProto = first(req.headers.get("x-forwarded-proto"));
   const forwardedHost = first(req.headers.get("x-forwarded-host"));
   const host = forwardedHost ?? first(req.headers.get("host"));
 
+  const shared = { configured, configuredRuntime, configuredBuildTime, forwardedProto, forwardedHost, host };
+
   if (configured) {
-    return { origin: configured, source: "env", configured, forwardedProto, forwardedHost, host };
+    return { origin: configured, source: "env", ...shared };
   }
 
   if (host) {
     const isLocal = /^(localhost|127\.|\[::1\])/i.test(host);
     const scheme = forwardedProto ?? (isLocal ? "http" : "https");
-    return {
-      origin: `${scheme}://${host}`,
-      source: "forwarded-headers",
-      configured,
-      forwardedProto,
-      forwardedHost,
-      host,
-    };
+    return { origin: `${scheme}://${host}`, source: "forwarded-headers", ...shared };
   }
 
-  return {
-    origin: new URL(req.url).origin,
-    source: "request-origin",
-    configured,
-    forwardedProto,
-    forwardedHost,
-    host,
-  };
+  return { origin: new URL(req.url).origin, source: "request-origin", ...shared };
 }
 
 export function resolvePublicOrigin(req: NextRequest): string {
