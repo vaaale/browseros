@@ -16,6 +16,7 @@ import { LogsTab } from "@/components/apps/settings/LogsTab";
 import { BuildStudioTab } from "@/components/apps/settings/BuildStudioTab";
 import { RunCommandTab } from "@/components/apps/settings/RunCommandTab";
 import { VoiceTab } from "@/components/apps/settings/VoiceTab";
+import { PluginsTab } from "@/components/apps/settings/PluginsTab";
 import { ConfigForm } from "@/components/apps/settings/ConfigForm";
 import { ProviderSettings } from "@/components/apps/ProviderSettings";
 
@@ -36,6 +37,7 @@ const CUSTOM_TABS: Record<string, React.ComponentType> = {
   logging: LogsTab,
   "run-command": RunCommandTab,
   voice: VoiceTab,
+  plugins: PluginsTab,
 };
 
 export default function SettingsApp() {

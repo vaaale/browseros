@@ -4,7 +4,7 @@ import type { AppCapability } from "@/os/types";
 
 export const dynamic = "force-dynamic";
 
-const VALID_CAPS = new Set<AppCapability>(["fs:read", "fs:write", "settings:read", "notify", "window:title"]);
+const VALID_CAPS = new Set<AppCapability>(["fs:read", "fs:write", "settings:read", "notify", "window:title", "services:read"]);
 
 type Ctx = { params: Promise<{ id: string }> };
 

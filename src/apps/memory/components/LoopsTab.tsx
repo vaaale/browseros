@@ -16,7 +16,8 @@ import {
   Zap,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import type { ConfigSchemaView } from "@/lib/config/types";
+
+const MEMORY_PLUGIN_ID = "bos-memory";
 
 // Keys used both in the config-registry payload and in the local editor state.
 // The registry stores dotted paths for nested groups (fastLoop.*, slowLoop.*),
@@ -89,7 +90,7 @@ interface FeedbackMsg {
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 export default function LoopsTab({ agentId }: { agentId?: string } = {}) {
-  const [schema, setSchema] = useState<ConfigSchemaView | null>(null);
+  const [loaded, setLoaded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -115,18 +116,18 @@ export default function LoopsTab({ agentId }: { agentId?: string } = {}) {
     setLoading(true);
     setLoadError(null);
     try {
-      const res = await fetch("/api/config");
+      const res = await fetch("/api/plugins");
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = (await res.json()) as { schemas?: ConfigSchemaView[] };
-      const s = (data.schemas || []).find((x) => x.namespace === "memoryLoops") || null;
-      if (!s) throw new Error("memoryLoops namespace not registered");
-      setSchema(s);
+      const data = (await res.json()) as { plugins?: Array<{ id: string; config?: Record<string, unknown> }> };
+      const p = (data.plugins || []).find((x) => x.id === MEMORY_PLUGIN_ID) || null;
+      if (!p) throw new Error("Memory plugin not registered");
       const next = { ...DEFAULTS } as Record<ConfigKey, unknown>;
       for (const k of Object.keys(DEFAULTS) as ConfigKey[]) {
-        if (k in s.values) next[k] = s.values[k];
+        if (p.config && k in p.config) next[k] = p.config[k];
       }
       setValues(next);
       setSavedValues(next);
+      setLoaded(true);
     } catch (err) {
       setLoadError((err as Error).message || "Failed to load configuration");
     } finally {
@@ -167,33 +168,21 @@ export default function LoopsTab({ agentId }: { agentId?: string } = {}) {
   };
 
   const onSave = async () => {
-    if (!schema) return;
+    if (!loaded) return;
     setSaving(true);
     setSaveMsg(null);
     try {
-      const res = await fetch("/api/config", {
+      const res = await fetch("/api/plugins", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ namespace: "memoryLoops", values }),
+        body: JSON.stringify({ pluginId: MEMORY_PLUGIN_ID, config: values }),
       });
-      const data = (await res.json().catch(() => ({}))) as {
-        error?: string;
-        values?: Record<string, unknown>;
-      };
+      const data = (await res.json().catch(() => ({}))) as { error?: string };
       if (!res.ok || data.error) {
         setSaveMsg({ tone: "error", text: data.error || `Failed (HTTP ${res.status})` });
         return;
       }
-      if (data.values) {
-        const next = { ...values };
-        for (const k of Object.keys(DEFAULTS) as ConfigKey[]) {
-          if (k in data.values) next[k] = data.values[k];
-        }
-        setValues(next);
-        setSavedValues(next);
-      } else {
-        setSavedValues({ ...values });
-      }
+      setSavedValues({ ...values });
       setSaveMsg({ tone: "success", text: "Configuration saved." });
     } catch (err) {
       setSaveMsg({ tone: "error", text: (err as Error).message || "Failed to save" });
@@ -282,7 +271,7 @@ export default function LoopsTab({ agentId }: { agentId?: string } = {}) {
     );
   }
 
-  if (loadError || !schema) {
+  if (loadError || !loaded) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3 text-center text-[11px] text-white/60">
         <AlertTriangle className="h-5 w-5 text-red-300" />

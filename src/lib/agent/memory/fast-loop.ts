@@ -4,7 +4,7 @@ import * as vfs from "@/os/vfs";
 import { hostPath } from "@/os/vfs";
 import { logger } from "@/lib/logging";
 import { runToolLoop, type LlmTool } from "@/lib/agent/llm";
-import { hasCredentials } from "@/lib/agent/provider";
+import { hasCredentials, getProviderConfig } from "@/lib/agent/provider";
 import { patchSkill, getSkill } from "@/lib/agent/skills/store";
 import { touchSkill } from "@/lib/agent/skills/usage";
 import { ensureSystemJob, type HandlerRunResult } from "@/lib/scheduler/engine";
@@ -247,6 +247,74 @@ function safeStringify(v: unknown): string {
   } catch {
     return String(v);
   }
+}
+
+// ── Chunking for oversized reviews (context-overflow guard) ─────────────
+// A large unreviewed backlog (e.g. after the fast loop was disabled for a
+// while — watermarks freeze, turns pile up) or a slice with big individual
+// tool outputs can otherwise blow the model's context window in one call,
+// since renderSlice() sends the whole slice (plus full skill bodies)
+// verbatim. Mirrors the chunkCharBudget/chunkSpan pattern already used for
+// conversation compaction (src/lib/agent/compaction/summarize.ts), adapted so
+// a turn (a user message through everything up to the next user message) is
+// never split across chunks — a tool_call must stay paired with its
+// tool_result for the reviewer to make sense of it.
+
+const CHARS_PER_TOKEN = 4; // same heuristic as compaction/estimate.ts
+const OUTPUT_HEADROOM_TOKENS = 65_535; // mirrors DEFAULT_MAX_TOKENS in provider.ts
+// Tokens reserved per chunk for the system prompt, existing episode body, and
+// skill index — all repeated in every chunk's prompt. Intentionally generous.
+const REVIEW_OVERHEAD_TOKENS = 4000;
+// Fallback context window when the provider config doesn't declare one.
+const ASSUMED_CONTEXT_TOKENS = 128_000;
+
+/** Maximum rendered chars to send as "new turns" in a single review call. */
+function reviewCharBudget(maxInputTokens?: number): number {
+  const window = maxInputTokens ?? ASSUMED_CONTEXT_TOKENS;
+  const inputTokens = Math.max(8000, window - OUTPUT_HEADROOM_TOKENS - REVIEW_OVERHEAD_TOKENS);
+  return inputTokens * CHARS_PER_TOKEN;
+}
+
+/** Group a message slice into turns: each turn starts at a user message and
+ *  runs through the assistant/tool messages that follow, up to (not
+ *  including) the next user message. A slice that doesn't start with a user
+ *  message (e.g. resuming mid-turn after a previous chunk) still gets its
+ *  leading messages as their own turn. */
+function segmentIntoTurns(messages: AnyMessage[]): AnyMessage[][] {
+  const turns: AnyMessage[][] = [];
+  let current: AnyMessage[] = [];
+  for (const m of messages) {
+    if (m?.role === "user" && current.length > 0) {
+      turns.push(current);
+      current = [];
+    }
+    current.push(m);
+  }
+  if (current.length > 0) turns.push(current);
+  return turns;
+}
+
+/** Pack turns into chunks whose rendered size stays within charBudget. A
+ *  single turn that exceeds the budget on its own is kept as its own
+ *  (oversized) chunk and still attempted rather than silently dropped — if it
+ *  fails, prior chunks in this run have already had their watermark advanced,
+ *  so at least the rest of the backlog isn't needlessly re-reviewed next run. */
+function chunkTurns(turns: AnyMessage[][], charBudget: number): AnyMessage[][] {
+  const chunks: AnyMessage[][] = [];
+  let current: AnyMessage[] = [];
+  let currentChars = 0;
+  for (const turn of turns) {
+    const turnChars = renderSlice(turn).length;
+    if (current.length > 0 && currentChars + turnChars > charBudget) {
+      chunks.push(current);
+      current = [];
+      currentChars = 0;
+    }
+    current.push(...turn);
+    currentChars += turnChars;
+  }
+  if (current.length > 0) chunks.push(current);
+  return chunks;
 }
 
 /** Extract skill ids referenced in the transcript's tool calls. Mechanical
@@ -550,14 +618,19 @@ async function processConversationFeedback(
   if (localMax > (advancedScan.get(conv.agentId) ?? 0)) advancedScan.set(conv.agentId, localMax);
 }
 
-async function reviewSlice(
+/** Review one chunk of the slice: builds the prompt (fetching the episode's
+ *  CURRENT body, so a chunk always sees what the previous chunk in this same
+ *  run just wrote), runs the LLM tool loop, then persists the episode update
+ *  and advances the watermark to the end of this chunk. Advancing per-chunk
+ *  (rather than once at the end) means a failure partway through a large
+ *  backlog doesn't lose the progress already made — the next scheduled run
+ *  resumes from the failed chunk instead of redoing the whole backlog. */
+async function reviewChunk(
   conv: ConversationRef,
-  slice: AnyMessage[],
-  fromIndex: number,
-  summary: FastLoopRunSummary,
-): Promise<void> {
-  await createEpisode(conv.agentId, conv.id);
-
+  chunk: AnyMessage[],
+  chunkEndIndex: number,
+  chunkLabel: string,
+): Promise<{ patchedSkills: string[] }> {
   const state: FastLoopTools = {
     episodeUpdates: {},
     refusedInjection: 0,
@@ -572,11 +645,11 @@ async function reviewSlice(
         .join("\n\n")
     : "";
 
-  const skillsMechanical = extractSkillsUsed(slice);
-  const transcript = renderSlice(slice);
+  const skillsMechanical = extractSkillsUsed(chunk);
+  const transcript = renderSlice(chunk);
 
-  // Patchable skills = the skills actually loaded in this conversation, shown
-  // WITH their full body. This fixes both skill_patch failure modes: the model
+  // Patchable skills = the skills actually loaded in THIS chunk, shown WITH
+  // their full body. This fixes both skill_patch failure modes: the model
   // can only reference a real, in-session id (no "skill not found"), and it can
   // copy an EXACT `find` substring from the body (no "search text not found").
   const usedSkills = (await Promise.all(skillsMechanical.map((id) => getSkill(id).catch(() => null)))).filter(
@@ -596,7 +669,7 @@ async function reviewSlice(
     "",
     skillIndex,
     "",
-    "New turns since last review:",
+    `New turns since last review:${chunkLabel}`,
     transcript,
   ].join("\n\n");
 
@@ -607,9 +680,8 @@ async function reviewSlice(
     maxSteps: 8,
   });
 
-  // Advance watermark to the last message we reviewed.
-  const lastMessage = conv.messages[conv.messages.length - 1];
-  const lastId = lastMessage ? messageId(lastMessage, conv.messages.length - 1) : String(fromIndex + slice.length - 1);
+  const lastMessage = chunk[chunk.length - 1];
+  const lastId = lastMessage ? messageId(lastMessage, chunkEndIndex) : String(chunkEndIndex);
 
   const updates: EpisodeUpdate = { ...state.episodeUpdates, watermark: lastId };
   if (skillsMechanical.length > 0) updates.skillsUsed = skillsMechanical;
@@ -617,8 +689,50 @@ async function reviewSlice(
   await updateEpisode(conv.agentId, conv.id, updates);
   await setWatermark(conv.agentId, conv.id, lastId);
 
+  return { patchedSkills: state.patchedSkills };
+}
+
+async function reviewSlice(
+  conv: ConversationRef,
+  slice: AnyMessage[],
+  fromIndex: number,
+  summary: FastLoopRunSummary,
+): Promise<void> {
+  await createEpisode(conv.agentId, conv.id);
+
+  const providerCfg = await getProviderConfig().catch(() => undefined);
+  const charBudget = reviewCharBudget(providerCfg?.maxInputTokens);
+  const turns = segmentIntoTurns(slice);
+  const chunks = chunkTurns(turns, charBudget);
+
+  if (chunks.length > 1) {
+    logger().info(LOG, "review chunked (backlog or oversized turns exceed context budget)", {
+      conversationId: conv.id,
+      chunks: chunks.length,
+      sliceMessages: slice.length,
+      charBudget,
+    });
+  }
+
+  let chunkStartIndex = fromIndex;
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i];
+    const chunkEndIndex = chunkStartIndex + chunk.length - 1;
+    const chunkLabel =
+      chunks.length > 1
+        ? ` (part ${i + 1} of ${chunks.length} of a large backlog, split to fit the model's context window — earlier parts already updated the episode body above)`
+        : "";
+
+    const { patchedSkills } = await reviewChunk(conv, chunk, chunkEndIndex, chunkLabel);
+    for (const id of patchedSkills) summary.skillsPatched.push(id);
+
+    if (chunks.length > 1) {
+      logger().info(LOG, "review chunk done", { conversationId: conv.id, chunk: i + 1, of: chunks.length });
+    }
+    chunkStartIndex += chunk.length;
+  }
+
   summary.episodesUpdated.push(conv.id);
-  for (const id of state.patchedSkills) summary.skillsPatched.push(id);
 }
 
 // ── Scheduler wiring ─────────────────────────────────────────────────────

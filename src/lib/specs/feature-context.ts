@@ -2,10 +2,11 @@ import "server-only";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { getConversationActiveFeatureBranch } from "@/lib/agent/conversations-server";
 
-// Feature scope for SpecFS (027-vfs-specfs). The active feature is PER
-// CONVERSATION, not global (matching 020's conversation `activeFeatureBranch`).
-// Because a VFS write (`vfs.writeText('Documents/Specs/…')`) is a generic call
-// with no conversation argument, the current conversation/branch is carried in a
+// Feature scope for branch-coupled VFS mounts — SpecFS (/Specs) and DocsFS
+// (/Docs) (027-vfs-specfs). The active feature is PER CONVERSATION, not global
+// (matching 020's conversation `activeFeatureBranch`). Because a VFS write
+// (`vfs.writeText('/Specs/user-specs/…')`) is a generic call with no
+// conversation argument, the current conversation/branch is carried in a
 // request-scoped AsyncLocalStorage — the same pattern as logging/context.ts.
 //
 // Resolution order for the active user-spec branch:

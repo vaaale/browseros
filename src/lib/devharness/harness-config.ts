@@ -86,7 +86,7 @@ export function harnessCredentialEnv(): Record<string, string> {
 // Supervisor preview worktree by `claude-runner.ts`. The configured namespace does
 // not expose a cwd knob because users must not choose where BOS source edits land.
 export type HarnessConfig =
-  | { mode: "cli"; tool: "claude" | "opencode"; cwd: string }
+  | { mode: "cli"; tool: "claude" | "opencode"; cwd: string; model?: string }
   | { mode: "mcp"; server: McpServerConfig };
 
 export async function getHarnessConfig(): Promise<HarnessConfig> {
@@ -94,9 +94,10 @@ export async function getHarnessConfig(): Promise<HarnessConfig> {
   const v = (reg ? await reg.load() : {}) as Record<string, unknown>;
   const transport = ["cli", "opencode", "stdio", "http", "sse"].includes(v.transport as string) ? (v.transport as string) : "cli";
   const cwd = process.cwd();
+  const model = typeof v.model === "string" && v.model.trim() ? v.model.trim() : undefined;
 
-  if (transport === "cli") return { mode: "cli", tool: "claude", cwd };
-  if (transport === "opencode") return { mode: "cli", tool: "opencode", cwd };
+  if (transport === "cli") return { mode: "cli", tool: "claude", cwd, model };
+  if (transport === "opencode") return { mode: "cli", tool: "opencode", cwd, model };
   if (transport === "stdio") {
     return {
       mode: "mcp",

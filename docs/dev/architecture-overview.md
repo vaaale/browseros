@@ -83,14 +83,44 @@ The VFS is the user's sandbox — an isolated file system backed by `data/vfs/`.
 | `src/components/apps/IframeApp.tsx` | Iframe renderer |
 | `src/app/apps/[...slug]/route.ts` | Static file serving |
 
-**Responsibilities:** Discover and manage installed apps. Built-in apps are React components discovered from `src/apps/`; installed apps are static HTML or esbuild-bundled projects served from GitFS as iframes.
+**Responsibilities:** Discover and manage installed apps. Built-in apps are React components discovered from `src/apps/`; installed apps are the `app/` facet of an ITEM under `dataDir()/user-apps/<id>/` (the user's GitFS repo), installed by symlinking `dataDir()/system/app/<id>` to it and served through that symlink as iframes — the same item-to-system mechanism services use (002).
 
-**Dependencies:** `src/os/apps-dir.ts`, `src/lib/gitfs/store.ts`.
-**Exposed Interfaces:** `listInstalledManifests()`, `installApp()`, `uninstallApp()`, `restoreApp()`, `purgeApp()`, `buildAppDir()`, `toManifest()`, `setAppCapabilities()`.
+**Dependencies:** `src/os/data-dir.ts`, `src/lib/gitfs/store.ts`, `src/system/marketplace/install/symlinkManager.ts`.
+**Exposed Interfaces:** `listInstalledManifests()`, `installApp()`, `installItemApp()`, `uninstallApp()`, `restoreApp()`, `purgeApp()`, `buildAppDir()`, `toManifest()`, `setAppCapabilities()`.
 
 ---
 
-### 6. Configuration System (`src/lib/config/`)
+### 6. Services & Plugin Pipeline (`src/core/service/`, `src/system/marketplace/install/`, `src/lib/plugins/`)
+
+**Stability: MODERATE — backend implemented; UI/marketplace wiring still evolving**
+
+| File | Responsibility |
+|------|---------------|
+| `src/core/service/ServiceRegistry.ts` | Service discovery (source vs. installed state), event stream |
+| `src/core/service/ServiceManager.ts` | Worker-thread lifecycle (start/stop/restart), IPC |
+| `src/core/service/CrashRecovery.ts`, `DependencyResolver.ts`, `PortChecker.ts` | Exponential-backoff restarts, topological startup order, port-conflict detection |
+| `src/system/marketplace/install/symlinkManager.ts`, `serviceInstaller.ts` | Item-to-system symlink mapping, install/uninstall (never touches item source) |
+| `src/lib/plugins/registry.ts`, `loader.ts`, `settings.ts` | Agent-run hook pipeline: registration, composition into `RunHooks`, Settings persistence |
+
+**Responsibilities:** Two related but independent systems that share one Settings
+tab ("Plugins"). **Services** are long-running worker-thread daemons installed
+from `dataDir()/user-apps/` (the user's own GitFS repo — same concept as
+`user-specs/`) or a marketplace clone (e.g. a Terminal WebSocket service).
+**Plugins** hook into the assistant's run loop (`beforeRun`/
+`afterToolCall`/etc.) — `bos-compaction` and `bos-memory` are the two built-ins.
+
+**Dependencies:** `src/os/data-dir.ts`; plugins additionally hook into
+`src/lib/assistant/start-run.ts`.
+
+**Exposed Interfaces:** `serviceRegistry()`, `serviceManager()`, `installService()`/
+`uninstallService()`; `registerPlugin()`, `listPlugins()`,
+`composePluginHooks()`.
+
+→ [Service Daemons](apps/services.md) · [Plugin pipeline](plugins/plugin-pipeline.md)
+
+---
+
+### 7. Configuration System (`src/lib/config/`)
 
 **Stability: MODERATE — namespace model is stable, schemas evolve**
 
@@ -108,13 +138,13 @@ The VFS is the user's sandbox — an isolated file system backed by `data/vfs/`.
 
 ---
 
-### 7. Agent / Assistant System (`src/lib/agent/`)
+### 8. Agent / Assistant System (`src/lib/agent/`)
 
 **Stability: LOW — most rapidly evolving layer**
 
 This is the most complex subsystem, with multiple sub-components:
 
-#### 7.1 Core Agent Runtime
+#### 8.1 Core Agent Runtime
 | File | Responsibility |
 |------|---------------|
 | `config.ts` | CORE_POLICY, DEFAULT_PERSONALITY |
@@ -127,14 +157,14 @@ This is the most complex subsystem, with multiple sub-components:
 | `instructions.ts` | Instruction composition |
 | `tool-manifest.ts` | Tool registration manifest |
 
-#### 7.2 Capabilities Registry
+#### 8.2 Capabilities Registry
 | File | Responsibility |
 |------|---------------|
 | `capabilities-registry.ts` | Unified capability definitions (80+ capabilities, 20+ groups) |
 
 **Capability Groups:** OS, Web, Files, Config, Agents, Memory, Skills, Scratchpad, MCP, Apps, Dev, Docs, Workflows, Specs, Build Studio, Gmail, Google Drive, Google Calendar, Google Contacts, Telegram.
 
-#### 7.3 Sub-agents (Delegation)
+#### 8.3 Sub-agents (Delegation)
 
 Definitions (`subagents/store.ts`, `types.ts`, `markdown.ts`) and the Claude
 dev-harness runner (`subagents/claude-runner.ts`) still live under
@@ -159,7 +189,7 @@ primitive, the depth guard, and the single tool gate that replaced
 | `assistant/tools/server/delegate-common.ts`, `delegate-local.ts`, `dev-delegate.ts` | `agent_delegate`/`dev_delegate` tool implementations |
 | `assistant/client/surface-agents.ts` | Window-scoped surface-agent registry (client-side) |
 
-#### 7.4 Memory System
+#### 8.4 Memory System
 | File | Responsibility |
 |------|---------------|
 | `memory/injection.ts` | Memory injection into instructions |
@@ -171,7 +201,7 @@ primitive, the depth guard, and the single tool gate that replaced
 | `memory/search.ts` | Memory search |
 | `memory/config.ts` | Memory loop configuration |
 
-#### 7.5 Skills System
+#### 8.5 Skills System
 | File | Responsibility |
 |------|---------------|
 | `skills/store.ts` | Skill CRUD |
@@ -179,7 +209,7 @@ primitive, the depth guard, and the single tool gate that replaced
 | `skills/curator.ts` | Skill curation and archiving |
 | `skills/usage.ts` | Skill usage tracking |
 
-#### 7.6 Compaction System
+#### 8.6 Compaction System
 | File | Responsibility |
 |------|---------------|
 | `compaction/middleware.ts` | Context compression middleware |
@@ -193,7 +223,7 @@ primitive, the depth guard, and the single tool gate that replaced
 
 ---
 
-### 8. Specs System (`src/lib/specs/`, `src/lib/dev/spec-fs.ts`)
+### 9. Specs System (`src/lib/specs/`, `src/lib/dev/spec-fs.ts`)
 
 **Stability: LOW-MODERATE — pipeline is evolving**
 
@@ -212,7 +242,7 @@ primitive, the depth guard, and the single tool gate that replaced
 
 ---
 
-### 9. MCP (`src/lib/mcp/`)
+### 10. MCP (`src/lib/mcp/`)
 
 **Stability: MODERATE — protocol is external, integration is stable**
 
@@ -229,7 +259,7 @@ primitive, the depth guard, and the single tool gate that replaced
 
 ---
 
-### 10. Desktop Shell (`src/components/desktop/`)
+### 11. Desktop Shell (`src/components/desktop/`)
 
 **Stability: MODERATE — UI-heavy, refactors are common**
 
@@ -249,7 +279,7 @@ primitive, the depth guard, and the single tool gate that replaced
 
 ---
 
-### 11. API Routes Layer (`src/app/api/`)
+### 12. API Routes Layer (`src/app/api/`)
 
 **Stability: MODERATE-HIGH — routes are thin delegates**
 
@@ -258,6 +288,9 @@ primitive, the depth guard, and the single tool gate that replaced
 | `api/assistant/` | CopilotKit adapter, agent, title generation |
 | `api/agent/` | Agent actions (reflect, discovery, feature branches) |
 | `api/apps/` | Apps system |
+| `api/services/` | Service daemons system |
+| `api/plugins/` | Plugin pipeline |
+| `api/marketplace/` | Marketplace (apps/skills/specs/services/server-plugins) |
 | `api/config/` | Config system |
 | `api/fs/` | VFS |
 | `api/datafs/` | DataFS |
@@ -283,7 +316,7 @@ primitive, the depth guard, and the single tool gate that replaced
 
 ---
 
-### 12. Integrations (`src/lib/integrations/`)
+### 13. Integrations (`src/lib/integrations/`)
 
 **Stability: MODERATE — adapters evolve with upstream APIs**
 
@@ -303,7 +336,7 @@ primitive, the depth guard, and the single tool gate that replaced
 
 ---
 
-### 13. Workflows (`src/lib/workflows/`)
+### 14. Workflows (`src/lib/workflows/`)
 
 **Stability: LOW — execution engine is evolving**
 
@@ -321,7 +354,7 @@ primitive, the depth guard, and the single tool gate that replaced
 
 ---
 
-### 14. Dev Harness (`src/lib/devharness/`)
+### 15. Dev Harness (`src/lib/devharness/`)
 
 **Stability: MODERATE — tooling infrastructure**
 
@@ -336,7 +369,7 @@ primitive, the depth guard, and the single tool gate that replaced
 
 ---
 
-### 15. Deployment Infrastructure (`bastion/`, Dockerfile, docker-compose.yml)
+### 16. Deployment Infrastructure (`bastion/`, Dockerfile, docker-compose.yml)
 
 **Stability: HIGH — infrastructure is stable**
 
@@ -393,6 +426,10 @@ Per-user isolation: each user gets a dedicated Docker container with three volum
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+*(The API Routes row above omits two peers of similar shape for space: **Services
+& Plugin Pipeline** — `src/core/service/`, `src/lib/plugins/` — sits alongside
+Apps System, depending only on the Core OS Layer the same way Apps does.)*
+
 **High-level layering (bottom-up):**
 ```
 1. Core OS       — types, paths, VFS, settings (stable)
@@ -401,6 +438,7 @@ Per-user isolation: each user gets a dedicated Docker container with three volum
 4. Config        — pluggable settings namespaces (moderate)
 5. Infrastructure — MCP, Dev Harness, Integrations (moderate)
 6. Apps          — built-in + installed app management (moderate)
+6b. Services/Plugins — worker-thread daemons + agent-run hook pipeline (moderate)
 7. Agent         — capabilities, memory, skills, sub-agents (evolving)
 8. Workflows     — DAG automation (evolving)
 9. Specs         — spec-kit pipeline (evolving)

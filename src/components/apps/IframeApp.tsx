@@ -36,6 +36,7 @@ const CAP_FOR_METHOD: Record<string, AppCapability> = {
   "storage:set":    "storage",
   "storage:remove": "storage",
   "storage:keys":   "storage",
+  "services:config": "services:read",
 };
 
 async function dispatch(
@@ -64,6 +65,16 @@ async function dispatch(
       }).then((r) => r.json());
     case "settings:get":
       return fetch("/api/settings").then((r) => r.json()).then((d) => d.settings);
+    case "services:config":
+      // Read-only: config values + runtime state (e.g. bound port) for ANY
+      // service, not scoped to "this app's own service" — same coarse-grained
+      // capability model as fs:read (whole VFS) and settings:read (whole OS
+      // settings). This is the ONLY channel an opaque-origin app has to reach
+      // /api/services/* (see docs/dev/apps/services.md) — that route has no
+      // CORS headers on purpose, so a direct fetch() from the sandboxed
+      // iframe fails with a network error; this call runs here, in the
+      // trusted parent frame, and relays the result back over postMessage.
+      return fetch(`/api/services/${encodeURIComponent(String(params.id ?? ""))}/config`).then((r) => r.json());
     case "notify":
       // Lightweight: post a notification message back to the iframe for display.
       // A full notification system would hook into OS-level toasts.
@@ -108,8 +119,12 @@ export function IframeApp({ windowId, appId, params }: AppProps) {
     : "allow-scripts allow-forms allow-popups allow-same-origin";
 
   useEffect(() => {
-    if (!capSet.size) return; // no grants — skip listener entirely
-
+    // Always register the listener, even with zero grants — an app that
+    // calls window.__bos before checking what's granted (Terminal does, to
+    // read its own service's port) needs an immediate "not granted"
+    // rejection. Skipping registration when capSet is empty used to leave
+    // such a call with no responder at all, hanging its promise forever
+    // instead of rejecting (indistinguishable in the UI from "still loading").
     function handleMessage(e: MessageEvent) {
       const iframe = iframeRef.current;
       if (!iframe || e.source !== iframe.contentWindow) return;
@@ -146,7 +161,7 @@ export function IframeApp({ windowId, appId, params }: AppProps) {
     <iframe
       ref={iframeRef}
       src={url}
-      className="h-full w-full border-0 bg-transparent"
+      className="h-full w-full border-0 bg-black"
       sandbox={sandbox}
       title={`App: ${appId}`}
     />

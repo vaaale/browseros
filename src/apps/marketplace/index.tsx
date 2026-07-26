@@ -16,7 +16,11 @@ interface Item {
   app?: { version: string; icon?: string };
   spec?: { version: string };
   skill?: { version: string };
+  services?: { version: string };
 }
+
+/** The local user-apps/ "marketplace" — always present, not a real registration. */
+const LOCAL_MARKETPLACE_ID = "user-apps";
 
 interface Catalog {
   id: string;
@@ -29,6 +33,7 @@ interface Catalog {
 
 const API = "/api/marketplace";
 const SKILLS_API = "/api/skills";
+const SERVICES_API = "/api/services";
 
 async function fetchSkillIds(): Promise<Set<string>> {
   try {
@@ -41,12 +46,24 @@ async function fetchSkillIds(): Promise<Set<string>> {
   }
 }
 
+async function fetchInstalledServiceIds(): Promise<Set<string>> {
+  try {
+    const r = await fetch(SERVICES_API);
+    if (!r.ok) return new Set();
+    const d = (await r.json()) as { services?: Array<{ id: string; installed?: boolean }> };
+    return new Set((d.services ?? []).filter((s) => s.installed).map((s) => s.id));
+  } catch {
+    return new Set();
+  }
+}
+
 export default function MarketplaceApp() {
   const registerApp = useOSStore((s) => s.registerApp);
   const installedApps = useOSStore((s) => s.apps);
 
   const [catalog, setCatalog] = useState<Catalog[]>([]);
   const [installedSkillIds, setInstalledSkillIds] = useState<Set<string>>(new Set());
+  const [installedServiceIds, setInstalledServiceIds] = useState<Set<string>>(new Set());
   const [url, setUrl] = useState("");
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
@@ -54,12 +71,14 @@ export default function MarketplaceApp() {
   const [notice, setNotice] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
-    const [catalogRes, skillIds] = await Promise.all([
+    const [catalogRes, skillIds, serviceIds] = await Promise.all([
       fetch(API).then((r) => r.json() as Promise<{ marketplaces?: Catalog[] }>),
       fetchSkillIds(),
+      fetchInstalledServiceIds(),
     ]);
     setCatalog(catalogRes.marketplaces ?? []);
     setInstalledSkillIds(skillIds);
+    setInstalledServiceIds(serviceIds);
   }, []);
 
   useEffect(() => {
@@ -67,11 +86,13 @@ export default function MarketplaceApp() {
     Promise.all([
       fetch(API).then((r) => r.json() as Promise<{ marketplaces?: Catalog[] }>),
       fetchSkillIds(),
+      fetchInstalledServiceIds(),
     ])
-      .then(([catalogRes, skillIds]) => {
+      .then(([catalogRes, skillIds, serviceIds]) => {
         if (!alive) return;
         setCatalog(catalogRes.marketplaces ?? []);
         setInstalledSkillIds(skillIds);
+        setInstalledServiceIds(serviceIds);
       })
       .catch(() => {});
     return () => { alive = false; };
@@ -99,6 +120,53 @@ export default function MarketplaceApp() {
       }
     },
     [refresh],
+  );
+
+  const rawOp = useCallback(async (body: Record<string, unknown>): Promise<Record<string, unknown>> => {
+    const r = await fetch(API, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const d = (await r.json()) as Record<string, unknown>;
+    if (!r.ok) throw new Error((d.error as string) || "Request failed");
+    return d;
+  }, []);
+
+  /** An item is one thing, even when it bundles several installable facets
+   *  (e.g. the Terminal item ships both an app and a service) — one click
+   *  installs everything the item offers. Adopting a spec stays a separate
+   *  action (it forks a copy for editing, not a running install). */
+  const installItem = useCallback(
+    async (marketplaceId: string, item: Item) => {
+      setBusy(true);
+      setError(null);
+      setNotice(null);
+      const installedKinds: string[] = [];
+      try {
+        if (item.app || item.services) {
+          const d = await rawOp({ op: "install-item", id: marketplaceId, itemId: item.id });
+          const installed = d.installed as { app?: AppManifest; serviceId?: string } | undefined;
+          if (installed?.app) registerApp(installed.app);
+          if (item.app) installedKinds.push("app");
+          if (item.services) installedKinds.push("service");
+        }
+        if (item.skill) {
+          await rawOp({ op: "install-skill", id: marketplaceId, itemId: item.id });
+          installedKinds.push("skill");
+        }
+        await refresh();
+        setNotice(
+          `Installed "${item.name}"${installedKinds.length > 1 ? ` (${installedKinds.join(" + ")})` : ""} — ` +
+            "find it on your desktop, or manage it in Settings → Plugins → Services.",
+        );
+      } catch (e) {
+        setError((e as Error).message);
+      } finally {
+        setBusy(false);
+      }
+    },
+    [rawOp, refresh, registerApp],
   );
 
   return (
@@ -169,15 +237,17 @@ export default function MarketplaceApp() {
                   onClick={() => void op({ op: "sync", id: mk.id }, () => setNotice(`Synced ${mk.name}`))}
                   className="rounded bg-white/10 px-2 py-1 text-xs hover:bg-white/20 disabled:opacity-40"
                 >
-                  Sync
+                  {mk.id === LOCAL_MARKETPLACE_ID ? "Rescan" : "Sync"}
                 </button>
-                <button
-                  disabled={busy}
-                  onClick={() => void op({ op: "remove", id: mk.id })}
-                  className="rounded bg-white/10 px-2 py-1 text-xs hover:bg-red-500/30 disabled:opacity-40"
-                >
-                  Remove
-                </button>
+                {mk.id !== LOCAL_MARKETPLACE_ID && (
+                  <button
+                    disabled={busy}
+                    onClick={() => void op({ op: "remove", id: mk.id })}
+                    className="rounded bg-white/10 px-2 py-1 text-xs hover:bg-red-500/30 disabled:opacity-40"
+                  >
+                    Remove
+                  </button>
+                )}
               </div>
             </header>
 
@@ -186,10 +256,13 @@ export default function MarketplaceApp() {
             <div className="grid grid-cols-1 gap-2 p-3 sm:grid-cols-2">
               {visibleItems.map((item) => {
                 const isSkillInstalled = !!item.skill && installedSkillIds.has(item.id);
-                const isAppInstalled = !!item.app && installedApps.some(
-                  (a) => a.origin === "marketplace" && a.marketplaceId === mk.id && a.name === item.name,
-                );
-                const installed = isSkillInstalled || isAppInstalled;
+                // App ids ARE item ids now (one item = one user-apps/<id>/ folder).
+                const isAppInstalled = !!item.app && installedApps.some((a) => a.id === item.id);
+                const isServiceInstalled = !!item.services && installedServiceIds.has(item.id);
+                const hasInstallableFacet = !!(item.app || item.skill || item.services);
+                const allFacetsInstalled =
+                  (!item.app || isAppInstalled) && (!item.skill || isSkillInstalled) && (!item.services || isServiceInstalled);
+                const installed = hasInstallableFacet && allFacetsInstalled;
 
                 return (
                   <div
@@ -207,6 +280,7 @@ export default function MarketplaceApp() {
                         {item.spec && <span className="rounded bg-purple-500/20 px-1.5 py-0.5 text-[10px] text-purple-300">spec</span>}
                         {item.app && <span className="rounded bg-sky-500/20 px-1.5 py-0.5 text-[10px] text-sky-300">app</span>}
                         {item.skill && <span className="rounded bg-emerald-500/20 px-1.5 py-0.5 text-[10px] text-emerald-300">skill</span>}
+                        {item.services && <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] text-amber-300">service</span>}
                       </div>
                     </div>
                     <div className="mt-1 line-clamp-2 text-xs text-white/50">{item.description}</div>
@@ -225,33 +299,13 @@ export default function MarketplaceApp() {
                           Adopt spec
                         </button>
                       )}
-                      {item.app && (
+                      {hasInstallableFacet && (
                         <button
                           disabled={busy}
-                          onClick={() =>
-                            void op({ op: "install-app", id: mk.id, itemId: item.id }, (d) => {
-                              const installedApp = d.installed as AppManifest | undefined;
-                              if (installedApp) registerApp(installedApp);
-                              setNotice(`Installed "${installedApp?.name ?? item.name}" — find it on your desktop.`);
-                            })
-                          }
+                          onClick={() => void installItem(mk.id, item)}
                           className="rounded bg-sky-600 px-2 py-1 text-xs font-medium hover:bg-sky-500 disabled:opacity-40"
                         >
-                          {isAppInstalled ? "Reinstall app" : "Install app"}
-                        </button>
-                      )}
-                      {item.skill && (
-                        <button
-                          disabled={busy}
-                          onClick={() =>
-                            void op({ op: "install-skill", id: mk.id, itemId: item.id }, (d) => {
-                              const inst = d.installed as { skillId?: string } | undefined;
-                              setNotice(`Installed skill "${item.name}" (${inst?.skillId ?? item.id}) — available to the assistant now.`);
-                            })
-                          }
-                          className="rounded bg-emerald-700 px-2 py-1 text-xs font-medium hover:bg-emerald-600 disabled:opacity-40"
-                        >
-                          {isSkillInstalled ? "Reinstall skill" : "Install skill"}
+                          {allFacetsInstalled ? "Reinstall" : "Install"}
                         </button>
                       )}
                     </div>

@@ -7,7 +7,7 @@ import { runSubAgent } from "@/lib/agent/subagents/runner";
 import { encodeNested } from "@/lib/agent/nested-events";
 import { gateFor } from "../../gate";
 import { runManager, type SurfaceAgentEntry } from "../../run-manager";
-import { defaultMaxSteps } from "../../inner-loop";
+import { getMaxAgentSteps } from "@/lib/config/registry";
 import {
   namedDelegationGate,
   ephemeralDelegationGate,
@@ -68,13 +68,13 @@ export async function delegateToAgent(
       skills: parentAgent?.skills,
       mcp: parentAgent?.mcp,
     });
-    const maxSteps = defaultMaxSteps(gate);
+    const maxSteps = await getMaxAgentSteps();
     return runLocalDelegation(run, ctx, "ephemeral", def.name, { systemPrompt: composeSystem, gate }, maxSteps, task);
   }
 
   const gate = await namedDelegationGate(def.id);
   const composeSystem = namedComposeSystem(def.id);
-  const maxSteps = defaultMaxSteps(gate);
+  const maxSteps = await getMaxAgentSteps();
   return runLocalDelegation(run, ctx, "named", def.name, { systemPrompt: composeSystem, gate, model: def.model }, maxSteps, task);
 }
 
@@ -95,6 +95,6 @@ export async function delegateToSurfaceAgent(
   const parentGate = await gateFor(ctx.agentId);
   const gate = surfaceDelegationGate(surfaceAgent.toolNames, parentGate);
   const composeSystem = surfaceComposeSystem(surfaceAgent.systemPrompt);
-  const maxSteps = defaultMaxSteps(gate);
+  const maxSteps = await getMaxAgentSteps();
   return runLocalDelegation(run, ctx, "surface", surfaceAgent.name, { systemPrompt: composeSystem, gate }, maxSteps, task);
 }

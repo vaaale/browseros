@@ -10,27 +10,33 @@ set -e
 # e.g. when running this image outside the bastion.
 BOS_UID="${BOS_UID:-1000}"
 BOS_GID="${BOS_GID:-1000}"
-groupadd --gid "$BOS_GID" user
-useradd --uid "$BOS_UID" --gid "$BOS_GID" --shell /bin/sh --home /home/user --create-home user
+# Idempotent: a plain `docker start` on an already-provisioned container reuses
+# its existing writable layer — /etc/passwd and /etc/group persist across
+# stop/start, unlike a full destroy+recreate which gets a fresh one — so "user"
+# may already exist from a prior start. Skip re-creating it in that case rather
+# than letting groupadd/useradd's "already exists" exit codes trip `set -e`.
+# Previously this forced every plain restart into the bastion's expensive
+# recreate-container fallback (fresh chown -R + npm install) instead of a cheap
+# start, since the container never got far enough to reuse its existing state.
+if ! getent group user >/dev/null 2>&1; then
+  groupadd --gid "$BOS_GID" user
+fi
+if ! id user >/dev/null 2>&1; then
+  useradd --uid "$BOS_UID" --gid "$BOS_GID" --shell /bin/sh --home /home/user --create-home user
+fi
 
 # Allow "user" to call bos-vfs-link as root without a password (narrow scope) —
 # the Dockerfile's sudoers rule targets "user" by name; it just needs the
 # account to exist by the time anything invokes sudo.
 
 # Fix ownership of writable volumes/directories now that "user" exists.
-# Only do a recursive chown when the top-level owner doesn't already match —
-# avoids an expensive pass over node_modules on every restart.
 #
-# /app itself is the bind-mounted git checkout (owned by whoever the bastion
-# ran `git clone`/`git pull` as on the host side — typically root, not "user").
-# npm needs to write package-lock.json at its top level, so this needs fixing
-# too, not just the node_modules/data volumes. The bastion's own git operations
-# still work afterward regardless of this chown, since they run as root there
-# (root ignores file ownership for read/write).
-APP_OWNER=$(stat -c '%u' /app 2>/dev/null || echo "0")
-if [ "$APP_OWNER" != "$BOS_UID" ]; then
-  chown -R user:user /app
-fi
+# /app is the bind-mounted git checkout. The bastion runs git operations as root
+# (git clone, git reset --hard) between container starts, which rechowns individual
+# files (including package-lock.json) back to root even when the /app directory
+# itself remains owned by "user". Always chown the whole tree — node_modules is a
+# separate Docker volume so this only traverses the source tree and is fast.
+chown -R user:user /app
 
 NM_OWNER=$(stat -c '%u' /app/node_modules 2>/dev/null || echo "0")
 if [ "$NM_OWNER" != "$BOS_UID" ]; then

@@ -1,13 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Loader2, PlugZap, Plug, Save, Check, KeyRound, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Loader2, PlugZap, Plug, Save, Check, KeyRound, Trash2, RefreshCw } from "lucide-react";
 
 type Transport = "cli" | "opencode" | "stdio" | "http" | "sse";
 interface Values {
   transport: Transport;
   command: string;
   url: string;
+  model: string;
 }
 interface TestResult {
   ok: boolean;
@@ -86,12 +87,48 @@ export function DevHarnessTab() {
   const [testing, setTesting] = useState(false);
   const [test, setTest] = useState<TestResult | null>(null);
   const [creds, setCreds] = useState<{ claudeSet: boolean; openCodeSet: boolean }>({ claudeSet: false, openCodeSet: false });
+  const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsError, setModelsError] = useState<string | null>(null);
+  const fetchSeq = useRef(0);
 
   const loadCreds = () =>
     fetch("/api/dev-harness/credentials")
       .then((r) => r.json())
       .then((d) => setCreds({ claudeSet: !!d.claudeSet, openCodeSet: !!d.openCodeSet }))
       .catch(() => {});
+
+  // Claude Code has no API to list models without an Anthropic key (which the
+  // harness doesn't require — it authenticates via its own credential file),
+  // so "cli" serves a maintained static list. "opencode" runs `opencode
+  // models`, which prints every model its configured providers expose.
+  const fetchModels = useCallback(async (transport: Transport) => {
+    if (transport !== "cli" && transport !== "opencode") return;
+    const seq = ++fetchSeq.current;
+    setModelsLoading(true);
+    setModelsError(null);
+    try {
+      const res = await fetch(`/api/dev-harness/models?transport=${transport}`);
+      const data = (await res.json()) as { models?: string[]; error?: string };
+      if (seq !== fetchSeq.current) return; // stale response
+      setAvailableModels(data.models ?? []);
+      setModelsError(data.error ?? null);
+    } catch (err) {
+      if (seq !== fetchSeq.current) return;
+      setAvailableModels([]);
+      setModelsError((err as Error).message);
+    } finally {
+      if (seq === fetchSeq.current) setModelsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!v) return;
+    const handle = setTimeout(() => {
+      void fetchModels(v.transport);
+    }, 0);
+    return () => clearTimeout(handle);
+  }, [v?.transport, fetchModels, v]);
 
   useEffect(() => {
     fetch("/api/config")
@@ -103,6 +140,7 @@ export function DevHarnessTab() {
           transport: (vals.transport as Transport) || "cli",
           command: vals.command || "claude mcp serve",
           url: vals.url || "",
+          model: vals.model || "",
         });
       })
       .catch(() => {});
@@ -212,10 +250,47 @@ export function DevHarnessTab() {
       )}
 
       {(v.transport === "cli" || v.transport === "opencode") && (
-        <p className="rounded border border-amber-400/20 bg-amber-400/10 px-3 py-2 text-amber-100/80">
-          {v.transport === "opencode" ? "OpenCode" : "Claude"} runs with <code>{v.transport === "opencode" ? "--auto" : "--dangerously-skip-permissions"}</code> (no edit/command
-          prompts). Intended to be sandboxed (e.g. Docker). BOS source edits require Supervisor isolation and run only in a feature-branch worktree.
-        </p>
+        <>
+          <label className="grid grid-cols-[120px_1fr] items-center gap-2">
+            <span className="text-white/60">Model</span>
+            <div className="flex items-center gap-1.5">
+              <input
+                list="dev-harness-models"
+                value={v.model}
+                onChange={(e) => set({ model: e.target.value })}
+                placeholder="e.g. claude-opus-4-7 (blank = CLI default)"
+                className="flex-1 rounded border border-white/10 bg-black/30 px-2 py-1.5 outline-none focus:border-white/30"
+              />
+              <datalist id="dev-harness-models">
+                {availableModels.map((m) => (
+                  <option key={m} value={m} />
+                ))}
+              </datalist>
+              <button
+                type="button"
+                onClick={() => void fetchModels(v.transport)}
+                disabled={modelsLoading}
+                title="Refresh model list"
+                className="flex items-center gap-1 rounded border border-white/10 bg-black/20 px-2 py-1.5 hover:bg-white/10 disabled:opacity-40"
+              >
+                {modelsLoading ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+              </button>
+            </div>
+          </label>
+          <p className="text-[11px] text-white/40">
+            {modelsLoading
+              ? "Loading models…"
+              : modelsError
+                ? <span className="text-amber-300/80">Couldn&apos;t fetch models: {modelsError}</span>
+                : availableModels.length > 0
+                  ? `${availableModels.length} model${availableModels.length === 1 ? "" : "s"} available — start typing to filter, or enter a custom name.`
+                  : "No models discovered — you can still type a custom model name."}
+          </p>
+          <p className="rounded border border-amber-400/20 bg-amber-400/10 px-3 py-2 text-amber-100/80">
+            {v.transport === "opencode" ? "OpenCode" : "Claude"} runs with <code>{v.transport === "opencode" ? "--auto" : "--dangerously-skip-permissions"}</code> (no edit/command
+            prompts). Intended to be sandboxed (e.g. Docker). BOS source edits require Supervisor isolation and run only in a feature-branch worktree.
+          </p>
+        </>
       )}
 
       {/* Always shown — credentials are stored independently of the selected mode,

@@ -2,9 +2,9 @@ import "server-only";
 import path from "path";
 
 // Root directory for BrowserOS runtime state (VFS, settings, config, memory,
-// skills, agents, docs, mcp servers, provider config). NOTE: installed apps are
-// NOT here — they are versioned content in their own git repo (GitFS), rooted at
-// BOS_APPS_DIR (see src/os/apps-dir.ts and specs/007-gitfs/spec.md).
+// skills, agents, docs, mcp servers, provider config). Installed items (apps,
+// services, hooks) live here too: their content under user-apps/ (the user's
+// own GitFS repo) and their install symlinks under system/<type>/<id>.
 //
 // Configurable via BOS_DATA_DIR so the live-version-control feature
 // (specs/005-self-modification/) can run multiple BOS versions: the active version

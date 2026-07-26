@@ -16,7 +16,7 @@ import type { ToolDeclaration } from "../tools";
 
 export type FrontendToolHandler = (
   input: Record<string, unknown>,
-  ctx: { signal: AbortSignal },
+  ctx: { signal: AbortSignal; conversationId: string },
 ) => Promise<unknown>;
 
 export interface SurfaceTool {

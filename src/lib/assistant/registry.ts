@@ -4,8 +4,13 @@ import { FRONTEND_TOOL_DECLARATIONS } from "./tools/frontend-declarations";
 import { webSearchTools } from "./tools/server/web-search";
 import { memoryTools } from "./tools/server/memory";
 import { skillsTools } from "./tools/server/skills";
-import { docsTools } from "./tools/server/docs";
+import { fileTools } from "./tools/server/files";
 import { gitTools } from "./tools/server/git";
+import { gitRemotesTools } from "./tools/server/git-remotes";
+import { gitPushTools } from "./tools/server/git-push";
+import { gitFetchTools } from "./tools/server/git-fetch";
+import { gitMergeTools } from "./tools/server/git-merge";
+import { gitMountTools } from "./tools/server/git-mounts";
 import { runCommandTools } from "./tools/server/run-command";
 import { configTools } from "./tools/server/config";
 import { mcpTools } from "./tools/server/mcp";
@@ -16,7 +21,6 @@ import { schedulerTools } from "./tools/server/scheduler";
 import { agentAdminTools } from "./tools/server/agent-admin";
 import { selfImproveTools } from "./tools/server/self-improve";
 import { devSourceTools } from "./tools/server/dev-source";
-import { specTools } from "./tools/server/specs";
 import { scratchpadTools } from "./tools/server/scratchpad";
 import { integrationTools } from "./tools/server/integrations";
 import { discoveryTools } from "./tools/server/discovery";
@@ -49,8 +53,13 @@ export function assistantTools(): Record<string, AssistantTool> {
     ...webSearchTools(),
     ...memoryTools(),
     ...skillsTools(),
-    ...docsTools(),
+    ...fileTools(),
     ...gitTools(),
+    ...gitRemotesTools(),
+    ...gitPushTools(),
+    ...gitFetchTools(),
+    ...gitMergeTools(),
+    ...gitMountTools(),
     ...runCommandTools(),
     ...configTools(),
     ...mcpTools(),
@@ -61,7 +70,6 @@ export function assistantTools(): Record<string, AssistantTool> {
     ...agentAdminTools(),
     ...selfImproveTools(),
     ...devSourceTools(),
-    ...specTools(),
     ...scratchpadTools(),
     ...integrationTools(),
     ...schedulerTools(),

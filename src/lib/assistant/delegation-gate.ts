@@ -2,6 +2,7 @@ import "server-only";
 import type { AssistantTool, ToolGateConfig } from "./tools";
 import { gateFor } from "./gate";
 import { composeInstructions, buildSkillsIndexBlock, buildMcpIndexBlock, currentDateTimeBlock } from "@/lib/agent/instructions";
+import { getDefaultPromptAgent } from "@/lib/agent/subagents/store";
 import { listSkills } from "@/lib/agent/skills/store";
 import { listMcpServers } from "@/lib/mcp/store";
 
@@ -12,9 +13,22 @@ import { listMcpServers } from "@/lib/mcp/store";
 // of-being-empty gates (FR-003/FR-004/FR-007/FR-025), never a separately
 // configured `tools:` field.
 
-/** Named agent: reuse gateFor(agentId) unchanged. */
-export function namedDelegationGate(agentId: string): Promise<ToolGateConfig> {
-  return gateFor(agentId);
+// Tools that orchestrate other agents. Sub-agents never get these — only the
+// top-level agent is the orchestrator; allowing sub-agents to delegate further
+// creates unbounded delegation chains.
+const ORCHESTRATION_TOOLS = new Set(["agent_delegate", "dev_delegate", "agent_list"]);
+
+function stripOrchestrationTools(gate: ToolGateConfig): ToolGateConfig {
+  return {
+    ...gate,
+    allow: new Set([...gate.allow].filter((id) => !ORCHESTRATION_TOOLS.has(id))),
+    deferred: new Set([...gate.deferred].filter((id) => !ORCHESTRATION_TOOLS.has(id))),
+  };
+}
+
+/** Named agent: reuse gateFor(agentId), then strip orchestration tools. */
+export async function namedDelegationGate(agentId: string): Promise<ToolGateConfig> {
+  return stripOrchestrationTools(await gateFor(agentId));
 }
 
 function serverOnlyIds(allow: Set<string>, tools: Record<string, AssistantTool>): Set<string> {
@@ -27,12 +41,12 @@ function serverOnlyIds(allow: Set<string>, tools: Record<string, AssistantTool>)
  *  own. Frontend/Tier-2 tools are deliberately excluded — see spec.md's
  *  Clarifications for why this is a scope line, not a technical limitation. */
 export function ephemeralDelegationGate(parentGate: ToolGateConfig, tools: Record<string, AssistantTool>): ToolGateConfig {
-  return {
+  return stripOrchestrationTools({
     allow: serverOnlyIds(parentGate.allow, tools),
     deferred: new Set(),
     registryIds: parentGate.registryIds,
     descriptions: parentGate.descriptions,
-  };
+  });
 }
 
 /** Surface agent: exactly the app-declared `toolNames`, immediately visible
@@ -42,12 +56,12 @@ export function ephemeralDelegationGate(parentGate: ToolGateConfig, tools: Recor
  *  CAPABILITIES bypasses the allow-check entirely, same as it does today for
  *  the primary personality (FR-025). */
 export function surfaceDelegationGate(toolNames: string[], parentGate: ToolGateConfig): ToolGateConfig {
-  return {
+  return stripOrchestrationTools({
     allow: new Set(toolNames),
     deferred: new Set(),
     registryIds: parentGate.registryIds,
     descriptions: parentGate.descriptions,
-  };
+  });
 }
 
 /** Named agent: identical composition to the primary-personality path — this
@@ -59,27 +73,41 @@ export function namedComposeSystem(agentId: string): () => Promise<string> {
   return () => composeInstructions(agentId);
 }
 
-/** Ephemeral agent: systemPrompt verbatim + the inherited skills/mcp index
- *  blocks (FR-016), filtered against the DELEGATING agent's own `skills`/`mcp`
- *  fields (unset ⇒ inherit everything — `buildSkillsIndexBlock`/
- *  `buildMcpIndexBlock` are already unset-aware). No default-prompt
- *  prepending, no memory snapshot (FR-017 — an ephemeral agent has no
- *  identity to have memory of). */
+/** Ephemeral agent: default prompt + systemPrompt as personality, plus the
+ *  inherited skills/mcp index blocks (FR-016), filtered against the DELEGATING
+ *  agent's own `skills`/`mcp` fields (unset ⇒ inherit everything —
+ *  `buildSkillsIndexBlock`/`buildMcpIndexBlock` are already unset-aware). No
+ *  memory snapshot (FR-017 — an ephemeral agent has no identity to have memory
+ *  of). */
 export function ephemeralComposeSystem(
   systemPrompt: string,
   parentAllowlists: { skills?: string[]; mcp?: string[] },
 ): () => Promise<string> {
   return async () => {
-    const [skills, mcpServers] = await Promise.all([listSkills(), listMcpServers()]);
-    let out = currentDateTimeBlock() + "\n\n" + systemPrompt;
+    const [skills, mcpServers, defaultAgent] = await Promise.all([
+      listSkills(),
+      listMcpServers(),
+      getDefaultPromptAgent(),
+    ]);
+    const defaultBody = defaultAgent?.systemPrompt?.trim() || "";
+    let out = currentDateTimeBlock() + "\n\n";
+    out += defaultBody ? `${defaultBody}\n\n## Personality\n${systemPrompt}` : systemPrompt;
     out += buildSkillsIndexBlock(parentAllowlists.skills, skills);
     out += buildMcpIndexBlock(parentAllowlists.mcp, mcpServers);
     return out;
   };
 }
 
-/** Surface agent: systemPrompt verbatim, nothing appended (FR-017) — the
- *  registering app supplies a complete prompt for its own bounded toolset. */
+/** Surface agent: default prompt + systemPrompt as its personality, nothing
+ *  else appended (FR-017) — the registering app supplies the bounded toolset
+ *  and personality, but still inherits the shared default prompt. */
 export function surfaceComposeSystem(systemPrompt: string): () => Promise<string> {
-  return async () => systemPrompt;
+  return async () => {
+    const defaultAgent = await getDefaultPromptAgent();
+    const defaultBody = defaultAgent?.systemPrompt?.trim() || "";
+    if (defaultBody) {
+      return `${currentDateTimeBlock()}\n\n${defaultBody}\n\n## Personality\n${systemPrompt}`;
+    }
+    return `${currentDateTimeBlock()}\n\n${systemPrompt}`;
+  };
 }

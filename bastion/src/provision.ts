@@ -13,10 +13,25 @@ import {
   startContainer,
   stopContainer,
 } from "./docker";
+import * as logStore from "./log-store";
+import { resolveRemoteToken, buildGitCredential, refreshOAuthToken } from "./secrets-reader";
 
 const execFileAsync = promisify(execFile);
 
 const USERNAME_RE = /^[a-z0-9_-]+$/;
+
+/** The git remote name reserved for the bastion's own source — cannot be
+ *  edited or deleted by the user and serves as the "factory reset" anchor. */
+export const BOS_DEFAULT_REMOTE = "bos-default";
+
+/** chown the src checkout to the container user so npm install can write files. */
+async function chownSrc(src: string, cfg: Config): Promise<void> {
+  const uid = cfg.containerUid ?? 1000;
+  const gid = cfg.containerGid ?? 1000;
+  await execFileAsync("chown", ["-R", `${uid}:${gid}`, src]).catch((err) => {
+    console.warn(`[bastion] chown ${src} failed (non-fatal):`, err);
+  });
+}
 
 export function assertValidUsername(username: string): void {
   if (!USERNAME_RE.test(username)) {
@@ -30,6 +45,14 @@ function srcDir(username: string, cfg: Config): string {
 
 function dataDir(username: string, cfg: Config): string {
   return path.join(cfg.volumeBase, username, "data");
+}
+
+function worktreesDir(username: string, cfg: Config): string {
+  return path.join(cfg.volumeBase, username, "worktrees");
+}
+
+function dataClonesDir(username: string, cfg: Config): string {
+  return path.join(cfg.volumeBase, username, "data-clones");
 }
 
 // ── Full provision ─────────────────────────────────────────────────────────────
@@ -50,11 +73,10 @@ async function isValidGitRepo(dir: string): Promise<boolean> {
 export async function provisionUser(username: string, cfg: Config): Promise<string> {
   assertValidUsername(username);
 
-  const src = srcDir(username, cfg);
   const data = dataDir(username, cfg);
-
   fs.mkdirSync(data, { recursive: true });
 
+  const src = srcDir(username, cfg);
   // Ensure a valid source checkout. Self-heal from a partial/interrupted prior
   // provision: if src exists but isn't a healthy git repo (e.g. a half-finished
   // clone left a non-empty directory), wipe it so `git clone` gets a clean
@@ -62,8 +84,17 @@ export async function provisionUser(username: string, cfg: Config): Promise<stri
   if (!(await isValidGitRepo(src))) {
     fs.rmSync(src, { recursive: true, force: true });
     fs.mkdirSync(path.dirname(src), { recursive: true }); // git clone creates `src` itself
-    await execFileAsync("git", ["clone", "--depth=1", "--branch", cfg.bosBaseRef,
+    await execFileAsync("git", ["clone", "--branch", cfg.bosBaseRef,
       cfg.bosRepoPath, src]);
+    // Rename the default "origin" remote to the reserved name so users can
+    // register their own remotes without losing the bastion's anchor point.
+    await execFileAsync("git", ["-C", src, "remote", "rename", "origin", BOS_DEFAULT_REMOTE]).catch(() => {});
+    // Re-add any remotes already on record (e.g. a retry after data/ survived
+    // a prior partial/interrupted provision attempt).
+    await restoreCustomRemotes(src, data, (msg) => logStore.append(username, `[provision] ${msg}`));
+    // git runs as root; chown so the BOS container's non-root user can write to
+    // the checkout (e.g. npm install writing package-lock.json).
+    await chownSrc(src, cfg);
   }
 
   await createNmVolume(username);
@@ -94,8 +125,16 @@ export async function deprovisionUser(username: string, cfg: Config, opts: Depro
   if (opts.wipeSrc && fs.existsSync(src)) {
     fs.rmSync(src, { recursive: true, force: true });
   }
+  // Worktrees are git worktrees of src — wipe them together with src.
+  if (opts.wipeSrc && fs.existsSync(worktreesDir(username, cfg))) {
+    fs.rmSync(worktreesDir(username, cfg), { recursive: true, force: true });
+  }
   if (opts.wipeData && fs.existsSync(data)) {
     fs.rmSync(data, { recursive: true, force: true });
+  }
+  // Data-clones are snapshots of data — wipe them together with data.
+  if (opts.wipeData && fs.existsSync(dataClonesDir(username, cfg))) {
+    fs.rmSync(dataClonesDir(username, cfg), { recursive: true, force: true });
   }
   if (opts.wipeNm) {
     await removeNmVolume(username);
@@ -119,37 +158,275 @@ export async function reprovisionResetData(username: string, cfg: Config): Promi
   await _reproStart(username, cfg);
 }
 
-/** git fetch + switch to bosBaseRef if needed + pull, then restart. */
+interface UpdateSourceConfig { remote: string; branch?: string; }
+interface GitRemoteEntry { name: string; url: string; authType?: string; provider?: string; filesystem?: string; }
+
+const SOURCE_FS_ID = "bos-src";
+
+function readUpdateSourceConfig(data: string, fallbackBranch: string): UpdateSourceConfig {
+  try {
+    const raw = fs.readFileSync(path.join(data, "bos-update-source.json"), "utf8");
+    return JSON.parse(raw) as UpdateSourceConfig;
+  } catch {
+    return { remote: BOS_DEFAULT_REMOTE, branch: fallbackBranch };
+  }
+}
+
+function readGitRemotes(data: string): GitRemoteEntry[] {
+  try {
+    const raw = fs.readFileSync(path.join(data, "config", "git-remotes.json"), "utf8");
+    return JSON.parse(raw) as GitRemoteEntry[];
+  } catch {
+    return [];
+  }
+}
+
+function readGitRemoteEntry(data: string, remoteName: string): GitRemoteEntry | null {
+  return readGitRemotes(data).find((r) => r.name === remoteName) ?? null;
+}
+
+async function listActualGitRemotes(src: string): Promise<string[]> {
+  try {
+    const { stdout } = await execFileAsync("git", ["-C", src, "remote"]);
+    return stdout.trim().split("\n").map((r) => r.trim()).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Re-add user-registered bos-src remotes into a freshly-cloned checkout.
+ *
+ * git-remotes.json lives in data/ and survives src/ being wiped and re-cloned
+ * (Reset to default, full re-provision), but the actual git remotes live in
+ * src/.git/config and do NOT survive a re-clone. Without this, a user's
+ * custom remote becomes "orphaned" — still selectable in the source
+ * configuration UI, but absent from git, causing fetch to fail with
+ * "does not appear to be a git repository".
+ */
+async function restoreCustomRemotes(src: string, data: string, log: (msg: string) => void): Promise<void> {
+  const configured = readGitRemotes(data).filter(
+    (r) => (r.filesystem ?? SOURCE_FS_ID) === SOURCE_FS_ID && r.name !== BOS_DEFAULT_REMOTE,
+  );
+  if (!configured.length) return;
+  const existing = new Set(await listActualGitRemotes(src));
+  for (const remote of configured) {
+    if (existing.has(remote.name)) continue;
+    try {
+      await execFileAsync("git", ["-C", src, "remote", "add", remote.name, remote.url]);
+      log(`Restored remote '${remote.name}' → ${remote.url}`);
+    } catch (e) {
+      log(`Could not restore remote '${remote.name}' (non-fatal): ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+}
+
+/** git fetch + switch to target branch, then restart.
+ *  Respects the user's update-source preference (remote + branch). */
 export async function reprovisionUpdateSrc(username: string, cfg: Config): Promise<void> {
   const src = srcDir(username, cfg);
-  // Fetch the target branch explicitly — shallow clones only have the branch
-  // they were cloned with, so a generic `fetch origin` won't make other
-  // branches available.
+  const data = dataDir(username, cfg);
+  const log = (msg: string) => logStore.append(username, `[update-src] ${msg}`);
+
+  // Read user's preferred remote + branch (falls back to bos-default / bosBaseRef).
+  const pref = readUpdateSourceConfig(data, cfg.bosBaseRef);
+  const targetRemote = pref.remote || BOS_DEFAULT_REMOTE;
+  const targetBranch = pref.branch || cfg.bosBaseRef;
+
+  log(`Starting source update (remote: ${targetRemote}, branch: ${targetBranch})`);
+
+  // Migrate legacy "origin" remotes to "bos-default" in existing checkouts.
   try {
-    await execFileAsync("git", ["-C", src, "fetch", "--depth=1", "origin", cfg.bosBaseRef]);
+    const currentRemotes = await listActualGitRemotes(src);
+    if (!currentRemotes.includes(BOS_DEFAULT_REMOTE) && currentRemotes.includes("origin")) {
+      log(`Migrating "origin" remote → "${BOS_DEFAULT_REMOTE}" …`);
+      await execFileAsync("git", ["-C", src, "remote", "rename", "origin", BOS_DEFAULT_REMOTE]);
+      log("Migration done");
+    }
+  } catch (e) {
+    log(`Remote migration warning (non-fatal): ${e instanceof Error ? e.message : String(e)}`);
+  }
+
+  // Self-heal: git-remotes.json (in data/) can drift out of sync with the
+  // actual git remotes (in src/.git/config) — e.g. after "Reset to default"
+  // or a fresh redeploy wiped src/ while the JSON metadata survived. Re-add
+  // the target remote to git if it's configured but missing, instead of
+  // letting `git fetch` fail with "does not appear to be a git repository".
+  if (targetRemote !== BOS_DEFAULT_REMOTE) {
+    const currentRemotes = await listActualGitRemotes(src);
+    if (!currentRemotes.includes(targetRemote)) {
+      const entry = readGitRemoteEntry(data, targetRemote);
+      if (!entry) {
+        throw new Error(
+          `Remote '${targetRemote}' is selected as the update source but is not registered in git ` +
+          `and has no matching entry in your BOS Git Remotes settings. Re-add it there, or switch ` +
+          `the source remote in your account settings.`,
+        );
+      }
+      log(`Remote '${targetRemote}' missing from git — re-adding from stored config (${entry.url}) …`);
+      await execFileAsync("git", ["-C", src, "remote", "add", targetRemote, entry.url]);
+      log("Remote re-added");
+    }
+  }
+
+  // Resolve credentials for non-default remotes.
+  let credArgs: string[] = [];
+  let credEnv: Record<string, string> = {};
+  if (targetRemote !== BOS_DEFAULT_REMOTE) {
+    const entry = readGitRemoteEntry(data, targetRemote);
+    if (!entry) {
+      throw new Error(`Remote '${targetRemote}' not found in git-remotes.json. Select a different source remote in your account settings.`);
+    }
+    const authType = entry.authType as "token" | "oauth" | "ssh" | undefined;
+    // Log the exact resolution path (authType, provider, store key) — never the
+    // secret itself — so a rejected credential is diagnosable from the log
+    // instead of guessed at: is this even the credential the user thinks it is?
+    const storeKey = authType === "oauth"
+      ? `git_remote:oauth:${entry.provider ?? "(no provider set)"}`
+      : `git_remote:token:${targetRemote}`;
+    log(`Remote '${targetRemote}' auth: authType=${authType ?? "(none)"}, provider=${entry.provider ?? "(none)"}, credential store key='${storeKey}'`);
+
+    if (authType === "ssh") {
+      throw new Error(`Remote '${targetRemote}' uses SSH authentication which is not supported for Update Source from the bastion. Use token or OAuth auth.`);
+    }
+    const tokenResult = resolveRemoteToken(data, targetRemote, authType, entry.provider);
+    if (tokenResult) {
+      let token = tokenResult.token;
+      // Refresh preemptively if expired or expiring within 2 minutes — same
+      // buffer as BOS's own resolveAuth() in src/lib/gitops/auth.ts, so this
+      // recovers a short-lived GitLab-style token without the user needing to
+      // reconnect. No-op (skipped) for tokens with no recorded expiry, e.g. a
+      // non-expiring GitHub OAuth App token.
+      const expiringSoon = tokenResult.expiresAt !== undefined && tokenResult.expiresAt - Date.now() < 2 * 60_000;
+      if (expiringSoon && authType === "oauth" && entry.provider) {
+        const minutes = Math.round((Date.now() - (tokenResult.expiresAt ?? 0)) / 60_000);
+        log(`Credential at '${storeKey}' is ${minutes > 0 ? `expired ${minutes} min ago` : "about to expire"} — refreshing …`);
+        const refreshed = await refreshOAuthToken(data, entry.provider);
+        if (refreshed.ok && refreshed.accessToken) {
+          log("Refresh succeeded — using the new token");
+          token = refreshed.accessToken;
+        } else {
+          log(`Refresh failed: ${refreshed.error}${refreshed.reconnectRequired ? " — reconnect in Settings → Integrations → Git Providers" : ""}. Falling back to the existing token.`);
+        }
+      } else {
+        const expiryNote = tokenResult.expiresAt ? ` — expires in ${Math.round((tokenResult.expiresAt - Date.now()) / 60_000)} min` : " — no expiry recorded";
+        log(`Credential found at '${storeKey}' (${tokenResult.token.length} chars)${expiryNote}`);
+      }
+      const cred = buildGitCredential(data, token);
+      credArgs = cred.args;
+      credEnv = cred.env;
+    } else {
+      log(`No credential found at '${storeKey}' — attempting unauthenticated fetch (will fail if the remote is private)`);
+    }
+  }
+
+  // Stop the container BEFORE touching the filesystem. The live `next dev`
+  // process keeps its watcher open and actively writes HMR/cache files under
+  // .next/dev/ — deleting that directory while it's still running races the
+  // process's own writes (rmSync lists a dir's contents, then rmdir's it; if
+  // Next.js creates a new file in between, rmdir fails with ENOTEMPTY). git
+  // fetch/checkout/reset on a live-watched worktree is equally unsafe, so the
+  // stop happens before any of that too, not just before the .next/ wipe.
+  log("Stopping container before touching the filesystem …");
+  const preInfo = await inspectContainer(containerName(username));
+  if (preInfo?.State.Running) await stopContainer(preInfo.Id);
+
+  log(`Fetching ${targetRemote}/${targetBranch} …`);
+
+  try {
+    const { stdout, stderr } = await execFileAsync(
+      "git",
+      [...credArgs, "-C", src, "fetch", targetRemote, targetBranch],
+      credEnv ? { env: { ...process.env, ...credEnv } } : undefined,
+    );
+    if (String(stdout).trim()) log(`fetch stdout: ${String(stdout).trim()}`);
+    if (String(stderr).trim()) log(`fetch stderr: ${String(stderr).trim()}`);
   } catch (err) {
     const raw = err instanceof Error ? err.message : String(err);
+    log(`Fetch failed:\n${raw}`);
     if (raw.includes("couldn't find remote ref") || raw.includes("invalid refspec")) {
-      throw new Error(
-        `Branch '${cfg.bosBaseRef}' not found on the remote. ` +
-        `Update BOS_BASE_REF to a valid branch name (e.g. "main").`,
-      );
+      throw new Error(`Branch '${targetBranch}' not found on remote '${targetRemote}'.`);
     }
-    throw new Error(`git fetch failed: ${raw.split("\n").find((l) => l.trim()) ?? raw}`);
+    throw new Error(`git fetch failed:\n${raw}`);
   }
+  log("Fetch succeeded");
+
   const { stdout: currentBranch } = await execFileAsync("git", ["-C", src, "rev-parse", "--abbrev-ref", "HEAD"]);
-  if (currentBranch.trim() !== cfg.bosBaseRef) {
-    await execFileAsync("git", ["-C", src, "checkout", "-B", cfg.bosBaseRef, "FETCH_HEAD"]);
+  log(`Current branch: ${currentBranch.trim()}`);
+
+  if (currentBranch.trim() !== targetBranch) {
+    log(`Switching to ${targetBranch} …`);
+    await execFileAsync("git", ["-C", src, "checkout", "-B", targetBranch, "FETCH_HEAD"]);
   } else {
+    log("Already on target branch — resetting to FETCH_HEAD …");
     await execFileAsync("git", ["-C", src, "reset", "--hard", "FETCH_HEAD"]);
   }
+  log("Checkout/reset done");
+
+  // Wipe the Next.js compilation cache. git reset --hard preserves gitignored
+  // directories like .next/, and a stale Turbopack cache from the previous
+  // installation can cause certain API routes to fail after an update.
+  const nextCacheDir = path.join(src, ".next");
+  if (fs.existsSync(nextCacheDir)) {
+    log("Clearing .next/ cache …");
+    fs.rmSync(nextCacheDir, { recursive: true, force: true });
+    log(".next/ cleared");
+  }
+
+  // git reset --hard recreates files as root; chown so npm install can write them.
+  log("Fixing file ownership …");
+  await chownSrc(src, cfg);
+  log("Ownership fixed");
+
+  log("Starting container …");
+  if (preInfo) {
+    await startContainer(preInfo.Id);
+  } else {
+    await _reproStart(username, cfg);
+  }
+  log("Container started — update complete");
+}
+
+/** Wipe src/ + worktrees, re-clone from bos-default, restart. Data is preserved. */
+export async function reprovisionResetToDefault(username: string, cfg: Config): Promise<void> {
+  const log = (msg: string) => logStore.append(username, `[reset-to-default] ${msg}`);
+  log(`Resetting source to ${cfg.bosBaseRef} from ${cfg.bosRepoPath} …`);
+
+  // Stop container before touching the filesystem.
   const info = await inspectContainer(containerName(username));
+  if (info?.State.Running) await stopContainer(info.Id);
+
+  // Wipe the source checkout and any branch worktrees (data/ is untouched).
+  const src = srcDir(username, cfg);
+  const worktrees = worktreesDir(username, cfg);
+  log("Wiping src/ and worktrees/ …");
+  fs.rmSync(src, { recursive: true, force: true });
+  fs.rmSync(worktrees, { recursive: true, force: true });
+  fs.mkdirSync(path.dirname(src), { recursive: true });
+
+  // Fresh shallow clone from the bastion's source.
+  log(`Cloning ${cfg.bosRepoPath} @ ${cfg.bosBaseRef} …`);
+  await execFileAsync("git", ["clone", "--branch", cfg.bosBaseRef, cfg.bosRepoPath, src]);
+
+  // Rename "origin" to the reserved name for consistency.
+  await execFileAsync("git", ["-C", src, "remote", "rename", "origin", BOS_DEFAULT_REMOTE]).catch(() => {});
+  log(`Clone done — remote set to "${BOS_DEFAULT_REMOTE}"`);
+
+  // Re-add any user-registered remotes lost in the wipe (git-remotes.json
+  // metadata lives in data/ and survives; the actual git remotes did not).
+  const data = dataDir(username, cfg);
+  await restoreCustomRemotes(src, data, log);
+
+  await chownSrc(src, cfg);
+  log("Ownership fixed");
+
+  // Restart (or create) the container.
   if (info) {
-    if (info.State.Running) await stopContainer(info.Id);
     await startContainer(info.Id);
   } else {
     await _reproStart(username, cfg);
   }
+  log("Container restarted — reset complete");
 }
 
 /** Wipe node_modules volume, restart (npm install happens on container start). */

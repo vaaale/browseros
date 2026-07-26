@@ -10,11 +10,9 @@ import { DevActions } from "./DevActions";
 import { ConfigActions } from "./ConfigActions";
 import { SkillsActions } from "./SkillsActions";
 import { SelfImprovementActions } from "./SelfImprovementActions";
-import { DocsActions } from "./DocsActions";
 import { GitActions } from "./GitActions";
 import { RunCommandActions } from "./RunCommandActions";
 import { WorkflowActions } from "./WorkflowActions";
-import { SpecActions } from "./SpecActions";
 import { WebSearchActions } from "./WebSearchActions";
 import { IntegrationActions } from "./IntegrationActions";
 import { ScratchpadActions } from "./ScratchpadActions";
@@ -115,11 +113,9 @@ export function CopilotProvider({
           <ConfigActions />
           <SkillsActions />
           <SelfImprovementActions />
-          <DocsActions />
           <GitActions agentId={agentId} />
           <RunCommandActions />
           <WorkflowActions />
-          <SpecActions agentId={agentId} />
           <IntegrationActions />
           <ScratchpadActions agentId={agentId} />
           <ToolCallRetry />

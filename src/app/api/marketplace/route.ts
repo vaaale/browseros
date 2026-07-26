@@ -5,8 +5,8 @@ import {
   removeMarketplace,
   syncMarketplace,
   adoptSpec,
-  installApp,
   installSkill,
+  installMarketplaceItem,
 } from "@/lib/marketplace/client";
 
 // Marketplace API (028). GET lists registered marketplaces + their items; POST
@@ -43,11 +43,11 @@ export async function POST(req: NextRequest) {
           return NextResponse.json({ error: "id and itemId are required" }, { status: 400 });
         }
         return NextResponse.json({ adopted: await adoptSpec(body.id, body.itemId) });
-      case "install-app":
+      case "install-item":
         if (!body.id || !body.itemId) {
           return NextResponse.json({ error: "id and itemId are required" }, { status: 400 });
         }
-        return NextResponse.json({ installed: await installApp(body.id, body.itemId) });
+        return NextResponse.json({ installed: await installMarketplaceItem(body.id, body.itemId) });
       case "install-skill":
         if (!body.id || !body.itemId) {
           return NextResponse.json({ error: "id and itemId are required" }, { status: 400 });

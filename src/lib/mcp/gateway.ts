@@ -39,8 +39,14 @@ async function allowedServers(agentId?: string): Promise<McpServerConfig[]> {
 // Tools for one server, with a short-TTL cache so repeated find/list/call within a
 // window don't reconnect each time. Resilient: a bad server returns an error, not a throw.
 async function toolsForServer(cfg: McpServerConfig): Promise<{ tools?: McpToolDescriptor[]; error?: string }> {
+  const now = Date.now();
+  // Evict expired entries so servers that are never queried again don't pin
+  // their tool lists in memory forever (the TTL check below is lookup-only).
+  for (const [name, entry] of toolCache) {
+    if (now - entry.at >= CACHE_TTL_MS) toolCache.delete(name);
+  }
   const hit = toolCache.get(cfg.name);
-  if (hit && Date.now() - hit.at < CACHE_TTL_MS) return { tools: hit.tools };
+  if (hit && now - hit.at < CACHE_TTL_MS) return { tools: hit.tools };
   let client;
   try {
     client = await connectMcpClient(cfg);

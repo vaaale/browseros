@@ -16,6 +16,7 @@ Select a tab from the left sidebar; the panel on the right shows its options.
 | **Assistant** | Manage agents and pick the active personality. | [Agents & personalities](../assistant/agents-and-personalities.md) |
 | **Skills** | Browse and edit the assistant's skill library. | [Skills](../self-improvement/skills.md) |
 | **Apps** | Uninstall, restore, or purge installed apps. | [below](#apps) |
+| **Plugins** | Assistant run-hook pipeline, and background services (start/stop/configure/logs). | [Plugins](../settings/plugins.md) |
 | **Appearance** | Wallpaper, fit, and accent color. | [Appearance](../settings/appearance.md) |
 | **AI Provider** | Provider, model, API key, token limits. | [AI Provider](../settings/ai-provider.md) |
 | **Data Isolation** | How a previewed BOS version's data is isolated. | [Data isolation](../settings/data-isolation.md) |

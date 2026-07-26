@@ -135,7 +135,7 @@ export function AgentDetails({ agent, catalog, onSaved, onDeleted }: AgentDetail
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
         {tab === "instructions" && (
-          <div className="flex h-full flex-col">
+          <div className="flex flex-col">
             <div className="shrink-0">
               <DetailsHeader
                 name={agent.name}

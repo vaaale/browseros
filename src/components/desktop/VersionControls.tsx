@@ -3,14 +3,21 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { FileText } from "lucide-react";
 import { sessionHeader } from "@/lib/logging/client/session";
+import { useLogContextMenu } from "@/components/logging/useLogContextMenu";
+import { useOSStore } from "@/store/os-provider";
 
-type PreviewState = "not-built" | "idle" | "building" | "ready" | "failed" | "stopped" | string;
+type PreviewState = "not-built" | "idle" | "building" | "ready" | "failed" | "stopped" | "escalated" | string;
 
 interface Ver {
   role: string;
   branch?: string;
   state: PreviewState;
   buildError?: string;
+  /** Present while state is "escalated" — a promote's reconciliation pipeline
+   *  handed a conflict to the DevOps Agent. Points at the (persisted,
+   *  resumable) conversation so the user can watch/stop/interact with it,
+   *  even after a browser refresh. */
+  devopsConversationId?: string;
 }
 interface SupState {
   base: Ver | null;
@@ -29,6 +36,10 @@ interface PostResult {
   /** Reuse/dev-mode promote: base's `next dev` needs a manual restart (deps/config changed). */
   needsRestart?: boolean;
   message?: string;
+  /** Per-remote push outcome from a promote (origin + any autoPush remotes). A
+   *  "failed" entry means the promote itself succeeded but the push didn't —
+   *  never silent, always surfaced. */
+  pushResults?: { remoteName: string; status: "success" | "failed"; error?: string }[];
 }
 interface LogRecord {
   ts?: number;
@@ -60,6 +71,7 @@ function short(s: string): string {
 function RecentLogPopover({ onClose }: { onClose: () => void }) {
   const [records, setRecords] = useState<LogRecord[]>([]);
   const [errorsOnly, setErrorsOnly] = useState(false);
+  const { openMenu, menuNode } = useLogContextMenu();
 
   useEffect(() => {
     let alive = true;
@@ -83,7 +95,7 @@ function RecentLogPopover({ onClose }: { onClose: () => void }) {
   const rows = [...records].sort((a, b) => (b.ts ?? 0) - (a.ts ?? 0));
 
   return (
-    <div className="absolute right-0 top-7 z-[100001] w-[560px] max-w-[85vw] rounded border border-white/15 bg-neutral-950 p-2 text-[11px] text-white/80 shadow-2xl">
+    <div className="absolute right-0 top-7 z-[100001] w-[900px] max-w-[92vw] rounded border border-white/15 bg-neutral-950 p-2 text-[11px] text-white/80 shadow-2xl">
       <div className="mb-2 flex items-center justify-between">
         <span className="font-medium text-white">Recent log</span>
         <div className="flex items-center gap-2">
@@ -98,7 +110,11 @@ function RecentLogPopover({ onClose }: { onClose: () => void }) {
           <div className="text-white/45">No log records.</div>
         ) : (
           rows.map((r, i) => (
-            <div key={i} className="whitespace-pre-wrap border-b border-white/5 py-1 last:border-b-0">
+            <div
+              key={i}
+              onContextMenu={(e) => openMenu(e, r)}
+              className="cursor-default select-text whitespace-pre-wrap border-b border-white/5 py-1 last:border-b-0"
+            >
               <span className="text-white/35">{r.ts ? new Date(r.ts).toLocaleTimeString() : "--:--:--"}</span>{" "}
               <span className={`uppercase ${LEVEL_COLOR[r.level ?? "info"] ?? "text-white/60"}`}>{r.level ?? "info"}</span>{" "}
               {r.component && <span className="text-white/45">{r.component}</span>}{" "}
@@ -108,6 +124,7 @@ function RecentLogPopover({ onClose }: { onClose: () => void }) {
           ))
         )}
       </div>
+      {menuNode}
     </div>
   );
 }
@@ -120,6 +137,11 @@ export function VersionControls() {
   const [err, setErr] = useState<string | null>(null);
   const [showLogs, setShowLogs] = useState(false);
   const [recentErrors, setRecentErrors] = useState(0);
+  // Epoch ms of the last time the user closed the log popover — errors at or
+  // before this point are considered "seen" and excluded from the badge count,
+  // so closing the viewer resets the notification instead of it reappearing
+  // on the next poll for the same errors within the window.
+  const [clearedAt, setClearedAt] = useState(0);
 
   // Poll the central log for recent errors so the toolbar can flag failures at a
   // glance (red badge on the Log button) without the user opening the popover.
@@ -131,8 +153,8 @@ export function VersionControls() {
         .then((d) => {
           if (!alive) return;
           const recs: LogRecord[] = Array.isArray(d.records) ? d.records : [];
-          const cutoff = Date.now() - RECENT_ERROR_WINDOW_MS;
-          setRecentErrors(recs.filter((r) => (r.ts ?? 0) >= cutoff).length);
+          const cutoff = Math.max(Date.now() - RECENT_ERROR_WINDOW_MS, clearedAt);
+          setRecentErrors(recs.filter((r) => (r.ts ?? 0) > cutoff).length);
         })
         .catch(() => {});
     };
@@ -142,6 +164,14 @@ export function VersionControls() {
       alive = false;
       clearInterval(id);
     };
+  }, [clearedAt]);
+
+  const closeLogs = useCallback(() => {
+    setShowLogs(false);
+    // Reset immediately for a snappy badge instead of waiting for the next
+    // poll tick (up to 12s later) to pick up the new cutoff.
+    setRecentErrors(0);
+    setClearedAt(Date.now());
   }, []);
 
   const load = useCallback(async () => {
@@ -191,6 +221,7 @@ export function VersionControls() {
     () => state?.previews.find((p) => p.branch === selectedBranch) ?? null,
     [selectedBranch, state?.previews],
   );
+  const launch = useOSStore((s) => s.launch);
 
   if (!branches || !state) return null;
 
@@ -204,6 +235,11 @@ export function VersionControls() {
   const stopped = preview?.state === "stopped";
   const failed = preview?.state === "failed";
   const notBuilt = preview?.state === "not-built";
+  // A promote's shared reconciliation pipeline (001-external-repo-integration,
+  // US6) handed a conflict to the DevOps Agent — the conversation is a normal,
+  // persisted, resumable one, visible here even after a browser refresh since
+  // this is polled server state, not the (possibly still-blocked) promote call.
+  const escalated = preview?.state === "escalated";
   const hasFeatureSelection = !isBaseSelection && !!selectedBranch;
   const selectDisabled = busy || building;
   const app = state.appCandidate;
@@ -259,7 +295,13 @@ export function VersionControls() {
     setErr(null);
     const r = await post("promote", { branch: selectedBranch });
     if (r.ok) {
-      if (r.needsRestart) {
+      const pushFailures = (r.pushResults ?? []).filter((p) => p.status === "failed");
+      if (pushFailures.length > 0) {
+        window.alert(
+          `Promoted, but push failed for: ${pushFailures.map((p) => `${p.remoteName} (${p.error || "unknown error"})`).join("; ")}\n\n` +
+            "The promoted code is live on base but NOT pushed to the remote(s) above — push manually from Settings → Versions once resolved.",
+        );
+      } else if (r.needsRestart) {
         window.alert(r.message || "Promoted. Restart your dev server so base picks up the changes.");
       }
       window.location.reload();
@@ -319,6 +361,18 @@ export function VersionControls() {
             </span>
           )}
           {stopped && <span className="text-white/50">stopped</span>}
+          {escalated && (
+            <span className="flex items-center gap-1 text-amber-300/90" title="A merge conflict during promote was handed to the DevOps Agent — the conversation is live, stoppable, and resumable.">
+              escalated to DevOps Agent
+              <button
+                onClick={() => launch("chat")}
+                className={`${btn} bg-amber-500/25 hover:bg-amber-500/40`}
+                title="Open the Assistant app — find the conversation in the list (it's titled after the conflict being resolved)"
+              >
+                Open Assistant
+              </button>
+            </span>
+          )}
           {!previewingSelected && (
             <button disabled={busy || (!ready && !stopped)} onClick={pinPreview} className={`${btn} bg-sky-500/25 hover:bg-sky-500/40`}>Preview</button>
           )}
@@ -344,7 +398,7 @@ export function VersionControls() {
         )}
       </button>
       {err && <span className="ml-1 max-w-[260px] truncate text-red-300/90" title={err}>{short(err)}</span>}
-      {showLogs && <RecentLogPopover onClose={() => setShowLogs(false)} />}
+      {showLogs && <RecentLogPopover onClose={closeLogs} />}
     </div>
   );
 }

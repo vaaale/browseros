@@ -13,6 +13,8 @@ delimited JSON), not a single body.
 |---|---|---|
 | `/api/fs` | GET (`op=list\|read`), POST (`op=write\|mkdir\|delete\|rename`) | VFS operations |
 | `/api/fs/raw` | GET `?path=` | Raw VFS bytes (images, …) |
+| `/api/fs/upload` | POST `multipart/form-data` (`path`, `files`) | Drag‑and‑drop upload target — writes one or more files into a VFS directory |
+| `/api/fs/download` | GET `?path=` | Download a file as an attachment, or a folder as an in‑memory zip (recursive) |
 | `/api/settings` | GET, PATCH | OS settings (`data/settings.json`) |
 | `/api/config` | GET, PATCH | Config namespaces (schemas + values; PATCH a namespace) |
 | `/api/health` | GET | `{ ok: true }` — Supervisor health gate |
@@ -25,7 +27,25 @@ delimited JSON), not a single body.
 |---|---|---|
 | `/api/apps` | GET, POST, DELETE (`?purge=1`), PATCH | Installed apps: list / install / uninstall|purge / restore |
 | `/api/apps/build` | POST | Build & install a project app (`readProjectDir` → esbuild → `installApp`) |
-| `/apps/[[...slug]]` | GET | **Serve** installed‑app files (iframe content; `dist/` if built) |
+| `/apps/[[...slug]]` | GET | **Serve** an installed item's app files through its `data/system/app/<id>` symlink (iframe content; `dist/` if built) |
+
+## Services / plugins / marketplace
+
+| Route | Methods | Purpose |
+|---|---|---|
+| `/api/services` | GET, POST, DELETE | List services (source + installed); install `{ itemPath, serviceId }`; uninstall `{ serviceId }` |
+| `/api/services/[id]` | GET, POST | Detail (incl. `corruptedReason`); lifecycle `{ action: "start"\|"stop"\|"restart", reason?, startupTimeout?, shutdownTimeout? }` |
+| `/api/services/[id]/config` | GET, PATCH | Config files + `runtime.json` + `readOnly`; auto-save `{ file, patch }` |
+| `/api/services/[id]/logs` | GET | Service log file content |
+| `/api/services/[id]/app` | GET | Serves the item's bundled `app/index.html` (404 if none) |
+| `/api/services/events` | GET | NDJSON `ServiceRegistryEvent` stream (`?since=` replay) |
+| `/api/plugins` | GET, PATCH, PUT, DELETE | List; toggle/reconfigure one `{ pluginId, active?, config? }`; reorder `{ orderedIds }`; uninstall `{ pluginId }` |
+| `/api/marketplace` | GET, POST | List registered marketplaces + catalogue; `op` in `{ add, remove, sync, adopt-spec, install-item, install-skill }` (`{ id, itemId }` for item ops; `{ url }` for `add`) |
+
+See [Service Daemons](apps/services.md) and [Plugin pipeline](plugins/plugin-pipeline.md)
+for the underlying architecture.
+
+---
 
 ## Assistant / agents
 delegate

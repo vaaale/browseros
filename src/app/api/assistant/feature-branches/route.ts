@@ -1,13 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { listFeatureBranches } from "@/lib/system/git";
+import { listFeatureBranches, createFeatureBranch } from "@/lib/system/git";
 import { normalizeFeatureBranch } from "@/lib/agent/feature-branch";
 
 export const dynamic = "force-dynamic";
 
 // Feature branches that Assistant conversations target for developer harness
-// work. A branch is just a `bos/<kebab-name>` NAME anchored to the conversation;
-// the actual git worktree is provisioned (or resumed) by the Supervisor at
-// delegate time, so creating a branch here only validates + normalizes the name.
+// work. Under the Supervisor, the git worktree is provisioned by the Supervisor
+// itself at delegate time. In standalone dev mode, the branch is created here.
 
 export async function GET() {
   return NextResponse.json({ featureBranches: await listFeatureBranches() });
@@ -28,7 +27,18 @@ export async function POST(req: NextRequest) {
       { status: 400 },
     );
   }
-  const existing = await listFeatureBranches();
-  const featureBranches = existing.includes(branch) ? existing : [branch, ...existing];
+  try {
+    // Under the Supervisor this throws (worktree provisioned at delegate time);
+    // in standalone dev mode it creates or checks out the branch.
+    await createFeatureBranch(branch);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    // Suppress the expected "Supervisor owns git" guard — the Supervisor handles
+    // branch creation itself, so from the UI's perspective this is still success.
+    if (!msg.includes("Supervisor")) {
+      return NextResponse.json({ ok: false, error: msg }, { status: 500 });
+    }
+  }
+  const featureBranches = await listFeatureBranches();
   return NextResponse.json({ ok: true, branch, featureBranches });
 }

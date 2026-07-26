@@ -66,6 +66,7 @@ interface ClientMessage {
   role: string;
   content?: unknown;
   toolCalls?: unknown[];
+  toolCallId?: string; // role:"tool" only — the assistant toolCall this message answers
 }
 
 interface ClientConversationFile {
@@ -86,6 +87,7 @@ async function loadClientTranscript(convId: string): Promise<ClientMessage[] | n
         role: String(m.role),
         content: m.content,
         toolCalls: Array.isArray(m.toolCalls) ? m.toolCalls : undefined,
+        toolCallId: typeof m.toolCallId === "string" ? m.toolCallId : undefined,
       }));
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
@@ -129,10 +131,57 @@ function chooseClientBoundary(messages: ClientMessage[], keepTailMessages: numbe
 }
 
 // ── Client-side serialization for the summarizer prompt ────────────────────
+//
+// Tool-call OUTPUTS (role:"tool" message content) can be arbitrarily large —
+// file contents, command output, search results — and carry little value for
+// a narrative summary. Rather than send them to the summarizer verbatim (or
+// try to summarize them), we elide the output entirely and show only the
+// originating call's name and a truncated preview of its INPUT arguments.
 
-function renderClientMessages(messages: ClientMessage[]): string {
+const TOOL_ARGS_PREVIEW_CHARS = 300;
+
+function truncate(s: string, max: number): string {
+  if (s.length <= max) return s;
+  return `${s.slice(0, max)}… [truncated ${s.length - max} more chars]`;
+}
+
+interface ToolCallInputInfo {
+  name: string;
+  args: string;
+}
+
+/** Index every assistant toolCall's {name, arguments} by id, so a later
+ *  role:"tool" message can be rendered from its originating input instead of
+ *  its (potentially huge) output. Built once per span/chunk-sizing pass. */
+function buildToolCallIndex(messages: ClientMessage[]): Map<string, ToolCallInputInfo> {
+  const index = new Map<string, ToolCallInputInfo>();
+  for (const m of messages) {
+    if (!Array.isArray(m.toolCalls)) continue;
+    for (const tc of m.toolCalls) {
+      if (!tc || typeof tc !== "object") continue;
+      const id = (tc as { id?: unknown }).id;
+      const fn = (tc as { function?: unknown }).function;
+      if (typeof id !== "string" || !fn || typeof fn !== "object") continue;
+      const fnObj = fn as { name?: unknown; arguments?: unknown };
+      index.set(id, {
+        name: typeof fnObj.name === "string" ? fnObj.name : "unknown",
+        args: typeof fnObj.arguments === "string" ? fnObj.arguments : safeJson(fnObj.arguments),
+      });
+    }
+  }
+  return index;
+}
+
+function renderClientMessages(messages: ClientMessage[], toolCallIndex: Map<string, ToolCallInputInfo>): string {
   const lines: string[] = [];
   for (const m of messages) {
+    if (m.role === "tool") {
+      const info = m.toolCallId ? toolCallIndex.get(m.toolCallId) : undefined;
+      const name = info?.name ?? "unknown";
+      const argsPreview = truncate(info?.args ?? "", TOOL_ARGS_PREVIEW_CHARS);
+      lines.push(`### tool\n[output elided from summarization — originating call: ${name}(${argsPreview})]`);
+      continue;
+    }
     const text = typeof m.content === "string" ? m.content : safeJson(m.content);
     lines.push(`### ${m.role}\n${(text ?? "").trim()}`);
     if (Array.isArray(m.toolCalls) && m.toolCalls.length > 0) {
@@ -142,34 +191,49 @@ function renderClientMessages(messages: ClientMessage[]): string {
   return lines.join("\n\n");
 }
 
-// ── 021 fast-loop hook (soft dependency, FR-014) ───────────────────────────
+// ── Span chunking (context-overflow guard) ────────────────────────────────
+//
+// The summarizer receives the raw client transcript which can be much larger
+// than the model's context window (large tool outputs, hundreds of turns). To
+// avoid provider context-overflow errors we split the span into chunks that
+// fit comfortably, then do rolling summarization: each chunk's output becomes
+// the "previous summary" for the next chunk, so the final summary is a
+// single merged document regardless of how many passes were needed.
 
-let fastLoopSkipLogged = false;
+const CHARS_PER_TOKEN = 4; // same heuristic as estimate.ts
+// Tokens reserved for the system prompt + previous-summary preamble in each
+// summarizer call. Intentionally generous.
+const SUMMARIZER_OVERHEAD_TOKENS = 4000;
+// Mirror of DEFAULT_MAX_TOKENS in estimate.ts / llm.ts.
+const OUTPUT_HEADROOM_TOKENS = 65_535;
 
-async function invokeFastLoop(convId: string): Promise<void> {
-  try {
-    // Feature-detect the module: on absence we log skip once per process.
-    const mod = (await import("@/lib/agent/memory/fast-loop")) as {
-      runFastLoop?: (opts: { onlyConversationId?: string; waiveIdle?: boolean }) => Promise<unknown>;
-    };
-    if (typeof mod.runFastLoop !== "function") {
-      if (!fastLoopSkipLogged) {
-        fastLoopSkipLogged = true;
-        log("info", convId, "fast-loop.skipped", { reason: "module-exports-missing" });
-      }
-      return;
+/** Maximum span chars to send in a single summarizer call, derived from the
+ *  configured context window. The remainder is reserved for the system prompt,
+ *  previous summary, and model output. */
+function chunkCharBudget(assumedContextTokens: number): number {
+  const inputTokens = Math.max(8000, assumedContextTokens - OUTPUT_HEADROOM_TOKENS - SUMMARIZER_OVERHEAD_TOKENS);
+  return inputTokens * CHARS_PER_TOKEN;
+}
+
+/** Split a message span into chunks whose rendered size stays within
+ *  charBudget. A single message that exceeds the budget is kept as its own
+ *  chunk rather than dropped — the provider error path already retries. */
+function chunkSpan(messages: ClientMessage[], charBudget: number, toolCallIndex: Map<string, ToolCallInputInfo>): ClientMessage[][] {
+  const chunks: ClientMessage[][] = [];
+  let current: ClientMessage[] = [];
+  let currentChars = 0;
+  for (const m of messages) {
+    const mChars = renderClientMessages([m], toolCallIndex).length;
+    if (current.length > 0 && currentChars + mChars > charBudget) {
+      chunks.push(current);
+      current = [];
+      currentChars = 0;
     }
-    try {
-      await mod.runFastLoop({ onlyConversationId: convId, waiveIdle: true });
-    } catch (err) {
-      log("warn", convId, "fast-loop.failed", undefined, err);
-    }
-  } catch {
-    if (!fastLoopSkipLogged) {
-      fastLoopSkipLogged = true;
-      log("info", convId, "fast-loop.skipped", { reason: "module-absent" });
-    }
+    current.push(m);
+    currentChars += mChars;
   }
+  if (current.length > 0) chunks.push(current);
+  return chunks;
 }
 
 // ── Summarization core ─────────────────────────────────────────────────────
@@ -250,18 +314,28 @@ export async function summarizeConversation(
       return skip(convId, "already-summarized");
     }
 
-    // FR-014: fast-loop hook FIRST (soft dependency).
-    await invokeFastLoop(convId);
-
     const previousSummary = currentSidecar.summary?.trim() ?? "";
-    const rendered = renderClientMessages(span);
-    const userPrompt = previousSummary
-      ? `Previous summary:\n${previousSummary}\n\nNew span to fold in (oldest first):\n${rendered}`
-      : `Conversation span to compact (oldest first):\n${rendered}`;
+    const toolCallIndex = buildToolCallIndex(span);
+    const charBudget = chunkCharBudget(config.assumedContextTokens);
+    const chunks = chunkSpan(span, charBudget, toolCallIndex);
+    if (chunks.length > 1) {
+      log("info", convId, "summary.chunked", { chunks: chunks.length, spanMessages: span.length, charBudget });
+    }
 
-    let summaryText: string;
+    let summaryText = previousSummary;
+    let totalChars = 0;
     try {
-      summaryText = await callWithRetry(convId, userPrompt);
+      for (let i = 0; i < chunks.length; i++) {
+        const rendered = renderClientMessages(chunks[i], toolCallIndex);
+        totalChars += rendered.length;
+        const userPrompt = summaryText
+          ? `Previous summary:\n${summaryText}\n\nNew span to fold in (oldest first):\n${rendered}`
+          : `Conversation span to compact (oldest first):\n${rendered}`;
+        summaryText = await callWithRetry(convId, userPrompt);
+        if (chunks.length > 1) {
+          log("info", convId, "summary.chunk.done", { chunk: i + 1, of: chunks.length });
+        }
+      }
     } catch (err) {
       log("error", convId, "summary.failed", undefined, err);
       return { skipped: true, reason: "summarizer-failed" };
@@ -278,13 +352,13 @@ export async function summarizeConversation(
       boundary,
       summary: summaryText,
       stats: {
-        estimatedTokens: Math.ceil(rendered.length / 4),
+        estimatedTokens: Math.ceil(totalChars / 4),
         compactedAt: new Date().toISOString(),
         runs: (currentSidecar.stats?.runs ?? 0) + 1,
       },
     };
     await writeSidecar(convId, next);
-    log("info", convId, "summary.applied", { boundaryCount: cut, spanHash });
+    log("info", convId, "summary.applied", { boundaryCount: cut, spanHash, chunks: chunks.length });
     return { boundary, summary: summaryText };
   } finally {
     try {
@@ -303,20 +377,21 @@ export async function summarizeConversation(
 export async function buildCompactedTranscript(convId: string): Promise<string> {
   const client = await loadClientTranscript(convId);
   if (!client || client.length === 0) return "";
+  const toolCallIndex = buildToolCallIndex(client);
   const sidecar = await readSidecar(convId);
   if (sidecar?.summary && sidecar.boundary && sidecar.boundary.count > 0 && sidecar.boundary.count <= client.length) {
     const tail = client.slice(sidecar.boundary.count);
-    return `## Conversation summary (earlier turns, compacted)\n${sidecar.summary}\n\n## Recent turns (verbatim)\n${renderClientMessages(tail)}`;
+    return `## Conversation summary (earlier turns, compacted)\n${sidecar.summary}\n\n## Recent turns (verbatim)\n${renderClientMessages(tail, toolCallIndex)}`;
   }
   // No summary yet — render in full, but cap a very long unsummarized transcript
   // to its most recent turns so the analysis prompt stays bounded.
-  const full = renderClientMessages(client);
+  const full = renderClientMessages(client, toolCallIndex);
   const CAP = 24_000;
   if (full.length <= CAP) return full;
   const config = await readCompactionConfig();
   const keep = Math.max(config.keepTailMessages, 20);
   const tail = client.slice(Math.max(0, client.length - keep));
-  return `## Recent turns (older turns omitted — no summary available)\n${renderClientMessages(tail)}`;
+  return `## Recent turns (older turns omitted — no summary available)\n${renderClientMessages(tail, toolCallIndex)}`;
 }
 
 // ── Helpers exported for the middleware / API route ────────────────────────

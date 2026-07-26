@@ -4,8 +4,7 @@ import { serverTool, schema, p } from "./util";
 import { getWorkflow, saveWorkflow, getStatus } from "@/lib/workflows/store";
 import { generateWorkflowFromTask } from "@/lib/workflows/generate";
 import { validateWorkflow } from "@/lib/workflows/validate";
-import { runWorkflowStream, cancelWorkflow } from "@/lib/workflows/runner";
-import { ensureWorkflowApp } from "@/lib/workflows/install";
+import { runWorkflowStream, cancelWorkflow, isWorkflowsServiceRunning } from "@/lib/workflows/runner";
 import { encodeNested } from "@/lib/agent/nested-events";
 import type { Workflow } from "@/lib/workflows/types";
 
@@ -38,7 +37,6 @@ export function workflowTools(): Record<string, AssistantTool> {
       async (input) => {
         const task = String(input.taskDescription ?? "").trim();
         if (!task) return "Error: workflow_create: taskDescription is required — describe what the workflow should accomplish.";
-        await ensureWorkflowApp().catch(() => {});
         const wf = await generateWorkflowFromTask(task);
         const saved = await saveWorkflow(wf);
         const validation = await validateWorkflow(saved);
@@ -78,6 +76,9 @@ export function workflowTools(): Record<string, AssistantTool> {
         const validation = await validateWorkflow(wf);
         if (!validation.ok) {
           return `Error: workflow_run: validation failed — ${(validation.errors ?? []).join("; ") || "fix the workflow with workflow_modify and retry"}`;
+        }
+        if (!isWorkflowsServiceRunning()) {
+          return "Error: workflow_run: the Workflows service is not running — start it in Settings → Plugins → Services first.";
         }
         const events: { tool: string; input?: unknown }[] = [];
         let final = "";

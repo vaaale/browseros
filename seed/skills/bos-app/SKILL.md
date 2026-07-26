@@ -23,7 +23,7 @@ PHASE 0 — ORIENT & CATEGORIZE
 1. Determine whether this request is a `bos-app` (app with UI), `bos-integration`, `bos-feature`, or `bos-core` change.
 2. If it is clearly `bos-app`, tell the user and proceed.
 3. If it is not `bos-app`, stop and delegate or explain which skill/category applies. Do not reshape a non-app request into an app just to use this skill.
-4. Load the spec template (`.specify/templates/spec-template.md`) and command prompt (`.specify/templates/commands/specify.md`) with `spec_template_read`.
+4. Load the spec template (`.specify/templates/spec-template.md`) and command prompt (`.specify/templates/commands/specify.md`) with `file_read /Templates`.
 
 GATE: The user confirms this is a `bos-app` design session.
 
@@ -43,7 +43,7 @@ Use `references/design-interview-script.md`. Keep asking until you can state cle
 - Out-of-scope items
 - Constitution fit — flag any conflicts with `.specify/memory/constitution.md`
 
-After each confirmed requirement, append it to the spec with `spec_write`/`spec_edit`. If the spec isn't already open in the viewer, call `buildstudio_artifact_open(path)`; then call `buildstudio_artifact_highlight(anchor)` with the new section's heading anchor — the viewer will center on the section and highlight it until the user clicks it away, so keep talking rather than re-highlighting the same section repeatedly.
+After each confirmed requirement, append it to the spec with `file_write`/`file_edit`. If the spec isn't already open in the viewer, call `buildstudio_artifact_open(path)`; then call `buildstudio_artifact_highlight(anchor)` with the new section's heading anchor — the viewer will center on the section and highlight it until the user clicks it away, so keep talking rather than re-highlighting the same section repeatedly.
 
 GATE: The user confirms the requirements are complete enough to start design.
 
@@ -81,7 +81,7 @@ PHASE 4 — SPEC FINALIZATION
 2. Add or update assumptions and dependencies.
 3. Open the full spec with `buildstudio_artifact_open`.
 4. Ask: "Here is the full specification — please review it. Anything to change?"
-5. Use `spec_edit` until the user explicitly approves.
+5. Use `file_edit` until the user explicitly approves.
 
 GATE: User approves the spec.
 

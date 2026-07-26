@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getWorkflow } from "@/lib/workflows/store";
-import { runWorkflowStream } from "@/lib/workflows/runner";
+import { runWorkflowStream, isWorkflowsServiceRunning } from "@/lib/workflows/runner";
 import { validateWorkflow } from "@/lib/workflows/validate";
 
 export const dynamic = "force-dynamic";
@@ -25,6 +25,13 @@ export async function POST(req: NextRequest) {
   const validation = await validateWorkflow(wf);
   if (!validation.ok) {
     return NextResponse.json({ error: "Validation failed", validation }, { status: 400 });
+  }
+
+  if (!isWorkflowsServiceRunning()) {
+    return NextResponse.json(
+      { error: "Workflows service is not running — start it in Settings → Plugins → Services." },
+      { status: 503 },
+    );
   }
 
   const stream = new ReadableStream<Uint8Array>({

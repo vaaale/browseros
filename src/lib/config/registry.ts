@@ -31,6 +31,13 @@ function clampToolTimeout(n: number): number {
   return Math.min(3600, Math.max(10, Math.round(n)));
 }
 
+// Clamps tools.maxAgentSteps into 4..200 (default 32).
+const MAX_AGENT_STEPS_DEFAULT = 32;
+function clampMaxAgentSteps(n: number): number {
+  if (!Number.isFinite(n)) return MAX_AGENT_STEPS_DEFAULT;
+  return Math.min(200, Math.max(4, Math.round(n)));
+}
+
 const REGISTRATIONS: ConfigRegistration[] = [
   {
     schema: {
@@ -109,15 +116,24 @@ const REGISTRATIONS: ConfigRegistration[] = [
           description:
             "Max time a single assistant tool call may run before it is aborted and reported to the agent as an error. Streaming tools (agent_delegate, workflow_run) treat this as an idle timeout instead. 10–3600, default 600.",
         },
+        {
+          key: "maxAgentSteps",
+          label: "Max agent steps",
+          type: "number",
+          description:
+            "Maximum number of model turns per agent run. Each agent (including delegated sub-agents) gets this many steps independently. 4–200, default 32.",
+        },
       ],
     },
     load: async () => {
       const s = await readNamespace("tools");
       const raw = typeof s.maxFindResults === "number" ? s.maxFindResults : 10;
       const rawTimeout = typeof s.toolCallTimeoutSec === "number" ? s.toolCallTimeoutSec : TOOL_TIMEOUT_DEFAULT;
+      const rawSteps = typeof s.maxAgentSteps === "number" ? s.maxAgentSteps : MAX_AGENT_STEPS_DEFAULT;
       return {
         maxFindResults: clampMaxFindResults(raw),
         toolCallTimeoutSec: clampToolTimeout(rawTimeout),
+        maxAgentSteps: clampMaxAgentSteps(rawSteps),
       };
     },
     save: async (patch) => {
@@ -129,6 +145,10 @@ const REGISTRATIONS: ConfigRegistration[] = [
       if (next.toolCallTimeoutSec !== undefined) {
         const n = typeof next.toolCallTimeoutSec === "number" ? next.toolCallTimeoutSec : Number(next.toolCallTimeoutSec);
         next.toolCallTimeoutSec = clampToolTimeout(Number.isFinite(n) ? n : TOOL_TIMEOUT_DEFAULT);
+      }
+      if (next.maxAgentSteps !== undefined) {
+        const n = typeof next.maxAgentSteps === "number" ? next.maxAgentSteps : Number(next.maxAgentSteps);
+        next.maxAgentSteps = clampMaxAgentSteps(Number.isFinite(n) ? n : MAX_AGENT_STEPS_DEFAULT);
       }
       await patchNamespace("tools", next);
     },
@@ -242,6 +262,14 @@ const REGISTRATIONS: ConfigRegistration[] = [
         },
         { key: "command", label: "MCP stdio command", type: "text", placeholder: HARNESS_DEFAULT_COMMAND },
         { key: "url", label: "MCP harness URL", type: "text", placeholder: HARNESS_DEFAULT_URL },
+        {
+          key: "model",
+          label: "Model override",
+          type: "text",
+          placeholder: "e.g. claude-opus-4-7 (blank = CLI default)",
+          description:
+            "Model id passed to the CLI via --model. Only applies to the Claude CLI / OpenCode CLI modes; leave blank to use the CLI's own default model.",
+        },
       ],
     },
     load: async () => {
@@ -250,6 +278,7 @@ const REGISTRATIONS: ConfigRegistration[] = [
         transport: (stored.transport as string) || "cli",
         command: (stored.command as string) || HARNESS_DEFAULT_COMMAND,
         url: (stored.url as string) || HARNESS_DEFAULT_URL,
+        model: (stored.model as string) || "",
       };
     },
     save: async (patch) => {
@@ -396,97 +425,6 @@ const REGISTRATIONS: ConfigRegistration[] = [
   },
   {
     schema: {
-      namespace: "memoryLoops",
-      title: "Memory Loops",
-      description:
-        "Automated memory reflection. The fast loop reviews idle conversations every few minutes and writes episodes; the slow loop consolidates pending episodes into topic-sharded long-term memory hourly. Both are system-category scheduler jobs and produce zero LLM cost when idle.",
-      order: 15,
-      fields: [
-        { key: "fastLoop.enabled", label: "Fast loop enabled", type: "boolean", description: "Automatically review idle conversations and write episodes." },
-        { key: "fastLoop.tickIntervalSec", label: "Fast loop tick (seconds)", type: "number", description: "How often the fast loop wakes up. Default 120." },
-        { key: "fastLoop.idleThresholdSec", label: "Idle threshold (seconds)", type: "number", description: "A conversation must be idle this long before it's eligible for review. Default 300." },
-        { key: "fastLoop.turnCap", label: "Unreviewed turn cap", type: "number", description: "Force a review when this many new turns pile up, even without idle. Default 40." },
-        { key: "fastLoop.minNewTurns", label: "Minimum new turns", type: "number", description: "Skip conversations with fewer new assistant turns than this (trivial-exchange debounce). Default 4." },
-        { key: "slowLoop.enabled", label: "Slow loop enabled", type: "boolean", description: "Consolidate pending episodes into long-term memory topics and skills." },
-        { key: "slowLoop.intervalSec", label: "Slow loop interval (seconds)", type: "number", description: "How often the slow loop runs. Default 3600 (hourly)." },
-        { key: "slowLoop.batchSize", label: "Slow loop batch size", type: "number", description: "Max pending episodes processed per run. Default 10." },
-        { key: "modelOverride", label: "Model override", type: "text", description: "Optional model id to override the default provider for both loops. Leave blank to use the provider default." },
-        { key: "episodeArchiveAgeDays", label: "Archive age (days)", type: "number", description: "Consolidated episodes older than this move to .Archive/ (never deleted). Default 14." },
-        { key: "topicBudget", label: "Topic budget (chars)", type: "number", description: "Per-topic character budget before a new shard is created. Default 4000." },
-      ],
-    },
-    load: async () => {
-      const s = await readNamespace("memoryLoops");
-      return {
-        "fastLoop.enabled": s["fastLoop.enabled"] !== false,
-        "fastLoop.tickIntervalSec": typeof s["fastLoop.tickIntervalSec"] === "number" ? s["fastLoop.tickIntervalSec"] : 120,
-        "fastLoop.idleThresholdSec": typeof s["fastLoop.idleThresholdSec"] === "number" ? s["fastLoop.idleThresholdSec"] : 300,
-        "fastLoop.turnCap": typeof s["fastLoop.turnCap"] === "number" ? s["fastLoop.turnCap"] : 40,
-        "fastLoop.minNewTurns": typeof s["fastLoop.minNewTurns"] === "number" ? s["fastLoop.minNewTurns"] : 4,
-        "slowLoop.enabled": s["slowLoop.enabled"] !== false,
-        "slowLoop.intervalSec": typeof s["slowLoop.intervalSec"] === "number" ? s["slowLoop.intervalSec"] : 3600,
-        "slowLoop.batchSize": typeof s["slowLoop.batchSize"] === "number" ? s["slowLoop.batchSize"] : 10,
-        modelOverride: typeof s.modelOverride === "string" ? s.modelOverride : "",
-        episodeArchiveAgeDays: typeof s.episodeArchiveAgeDays === "number" ? s.episodeArchiveAgeDays : 14,
-        topicBudget: typeof s.topicBudget === "number" ? s.topicBudget : 4000,
-      };
-    },
-    save: async (patch) => {
-      await patchNamespace("memoryLoops", patch);
-    },
-  },
-  {
-    schema: {
-      namespace: "compaction",
-      title: "Context Compaction",
-      description:
-        "Server-side view transformation on what is sent to the model. Layer 1 clears older tool results in stable batches once estimated tokens cross clearThreshold. Layer 2 asynchronously summarizes past summarizeThreshold. Layer 3 (hard-limit) truncates pair-safely as a last resort so the provider never sees a context-length overflow. The client-owned transcript at /Documents/Chats is never rewritten.",
-      order: 16,
-      fields: [
-        { key: "enabled", label: "Enabled", type: "boolean", description: "Master switch. When off, the middleware is a pass-through and every request goes to the provider verbatim." },
-        { key: "assumedContextTokens", label: "Assumed context window (tokens)", type: "number", description: "Used when the provider does not declare a maxInputTokens. Default 128000." },
-        { key: "clearThreshold", label: "Clear threshold (fraction of budget)", type: "number", description: "Estimated tokens above this fraction trigger Layer 1 tool-result clearing. Default 0.50." },
-        { key: "summarizeThreshold", label: "Summarize threshold (fraction of budget)", type: "number", description: "Estimated tokens above this fraction schedule Layer 2 (async summarization). Default 0.75." },
-        { key: "hardLimit", label: "Hard limit (fraction of budget)", type: "number", description: "Estimated tokens above this fraction trigger the synchronous pair-safe truncation fallback. Default 0.92." },
-        { key: "keepToolResults", label: "Keep last N tool-result pairs", type: "number", description: "Tool-results at positions older than the newest N pairs are eligible for clearing. Default 5." },
-        { key: "keepTailMessages", label: "Minimum tail messages", type: "number", description: "The kept tail is at least this many messages, even if they exceed the tail-budget fraction. Default 10." },
-        { key: "tailBudgetFraction", label: "Tail-budget fraction", type: "number", description: "Target size of the kept tail expressed as a fraction of the effective budget. Default 0.20." },
-        { key: "unrecoverableTools", label: "Unrecoverable tools", type: "textarea", description: "Comma or newline separated list of tool names whose results must never be cleared." },
-        { key: "model", label: "Summarizer model override", type: "text", description: "Optional cheaper model id for the summarizer. Leave blank to use the current provider default." },
-        { key: "lockStalenessMs", label: "Lock staleness (ms)", type: "number", description: "How long a summarization lock is honored before another turn is allowed to reclaim it. Default 600000 (10 min)." },
-      ],
-    },
-    load: async () => {
-      const s = await readNamespace("compaction");
-      return {
-        enabled: s.enabled !== false,
-        assumedContextTokens: typeof s.assumedContextTokens === "number" ? s.assumedContextTokens : 128_000,
-        clearThreshold: typeof s.clearThreshold === "number" ? s.clearThreshold : 0.5,
-        summarizeThreshold: typeof s.summarizeThreshold === "number" ? s.summarizeThreshold : 0.75,
-        hardLimit: typeof s.hardLimit === "number" ? s.hardLimit : 0.92,
-        keepToolResults: typeof s.keepToolResults === "number" ? s.keepToolResults : 5,
-        keepTailMessages: typeof s.keepTailMessages === "number" ? s.keepTailMessages : 10,
-        tailBudgetFraction: typeof s.tailBudgetFraction === "number" ? s.tailBudgetFraction : 0.2,
-        unrecoverableTools: Array.isArray(s.unrecoverableTools)
-          ? (s.unrecoverableTools as unknown[]).filter((v): v is string => typeof v === "string").join(", ")
-          : typeof s.unrecoverableTools === "string" ? s.unrecoverableTools : "",
-        model: typeof s.model === "string" ? s.model : "",
-        lockStalenessMs: typeof s.lockStalenessMs === "number" ? s.lockStalenessMs : 600_000,
-      };
-    },
-    save: async (patch) => {
-      const next: Record<string, unknown> = { ...patch };
-      if (typeof next.unrecoverableTools === "string") {
-        next.unrecoverableTools = (next.unrecoverableTools as string)
-          .split(/[,\s;]+/)
-          .map((s) => s.trim())
-          .filter(Boolean);
-      }
-      await patchNamespace("compaction", next);
-    },
-  },
-  {
-    schema: {
       namespace: "logging",
       title: "Logs",
       description:
@@ -525,6 +463,19 @@ const REGISTRATIONS: ConfigRegistration[] = [
       await patchNamespace("logging", patch);
     },
   },
+  {
+    schema: {
+      namespace: "plugins",
+      title: "Plugins",
+      description:
+        "Manage server-side plugins that extend the assistant pipeline. Plugins can provide compaction, memory, telemetry, and other subsystems. Install from Marketplace, reorder the pipeline, and configure individual plugins.",
+      order: 17,
+      customComponent: "plugins",
+      fields: [],
+    },
+    load: async () => ({}),
+    save: async () => {},
+  },
 ];
 
 export function listConfigSchemas(): ConfigSchema[] {
@@ -548,4 +499,12 @@ export async function getMaxFindResults(): Promise<number> {
   const v = await getConfigValue("tools", "maxFindResults");
   const n = typeof v === "number" ? v : 10;
   return clampMaxFindResults(n);
+}
+
+/** Resolve the current tools.maxAgentSteps (used by start-run and inner-loop delegation).
+ *  Always returns a clamped, defaulted number so callers never need to guard. */
+export async function getMaxAgentSteps(): Promise<number> {
+  const v = await getConfigValue("tools", "maxAgentSteps");
+  const n = typeof v === "number" ? v : MAX_AGENT_STEPS_DEFAULT;
+  return clampMaxAgentSteps(n);
 }

@@ -4,17 +4,41 @@ import { ActiveRunError, runManager, type SurfaceAgentEntry } from "@/lib/assist
 import type { ToolDeclaration } from "@/lib/assistant/tools";
 import type { Attachment } from "@/lib/assistant/messages";
 import { registerVoiceModeHook } from "@/lib/voice/voice-hook";
+import { ensureDefaultPlugins } from "@/lib/plugins/settings";
+import { logger } from "@/lib/logging";
 
 export const dynamic = "force-dynamic";
 
 // Register the voice-mode system-prompt hook once at module load time.
 registerVoiceModeHook();
 
+// Register default plugins (compaction, memory) at module load time.
+// The init modules register themselves with the plugin registry.
+import "@/plugins/compaction/init";
+import "@/plugins/memory/init";
+
+// Ensure default plugins are active in config. Plugin loading and
+// initialization now happens at boot in instrumentation.ts before the
+// scheduler daemon starts.
+async function initDefaultPlugins(): Promise<void> {
+  try {
+    await ensureDefaultPlugins();
+  } catch (err) {
+    logger().error("plugins.init", "default plugin initialization failed", undefined, {
+      error: (err as Error).message,
+    });
+  }
+}
+
+// Module-level promise so the first POST handler waits for init.
+const pluginsReady: Promise<void> = initDefaultPlugins();
+
 // POST — start a run (the loop runs detached from this request).
 //   { conversationId, agentId, message, editOfMessageId?, surfaceTools?, surfaceAgents? }
 // 409 when the conversation already has an active run (edit-resubmit instead
 // auto-cancels it) or when editOfMessageId is not the last user message.
 export async function POST(req: NextRequest) {
+  await pluginsReady;
   try {
     const body = (await req.json().catch(() => ({}))) as {
       conversationId?: string;
@@ -55,6 +79,7 @@ export async function POST(req: NextRequest) {
 
 // GET ?conversationId= — the conversation's active run, if any (reconnect path).
 export async function GET(req: NextRequest) {
+  await pluginsReady;
   const conversationId = new URL(req.url).searchParams.get("conversationId")?.trim();
   if (!conversationId) {
     return NextResponse.json({ error: "conversationId is required" }, { status: 400 });

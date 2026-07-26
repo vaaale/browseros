@@ -1,1 +1,0 @@
-Step: clarify. Read specs/<id>/spec.md; find ambiguities and [NEEDS CLARIFICATION] markers; ask the user concrete questions. Then append a '## Clarifications' section containing a '### Session <date>' list of Q→A, and update the affected requirements with edit_spec.

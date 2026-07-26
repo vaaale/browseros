@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ArrowUp,
   RefreshCw,
@@ -14,6 +14,8 @@ import {
   Save,
   X,
   ImagePlus,
+  Download,
+  UploadCloud,
 } from "lucide-react";
 import type { VfsEntry } from "@/os/types";
 import { fsClient } from "@/lib/os-client";
@@ -38,6 +40,10 @@ export default function FileBrowser({ windowId, params }: AppProps) {
   const [open, setOpen] = useState<VfsEntry | null>(null);
   const [text, setText] = useState("");
   const [dirty, setDirty] = useState(false);
+  const [dragActive, setDragActive] = useState(false);
+  const [upload, setUpload] = useState<{ loaded: number; total: number } | null>(null);
+  const [menu, setMenu] = useState<{ x: number; y: number; entry: VfsEntry } | null>(null);
+  const dragDepth = useRef(0);
 
   const setTitle = useOSStore((s) => s.setTitle);
   const applySettings = useOSStore((s) => s.applySettings);
@@ -62,6 +68,71 @@ export default function FileBrowser({ windowId, params }: AppProps) {
     }, 0);
     return () => clearTimeout(id);
   }, [cwd, refresh, setTitle, windowId]);
+
+  // Close the right-click menu on any outside click, a fresh right-click, scroll, or Escape.
+  useEffect(() => {
+    if (!menu) return;
+    const close = () => setMenu(null);
+    const onEsc = (e: KeyboardEvent) => {
+      if (e.key === "Escape") close();
+    };
+    document.addEventListener("click", close);
+    document.addEventListener("contextmenu", close);
+    document.addEventListener("scroll", close, true);
+    document.addEventListener("keydown", onEsc);
+    return () => {
+      document.removeEventListener("click", close);
+      document.removeEventListener("contextmenu", close);
+      document.removeEventListener("scroll", close, true);
+      document.removeEventListener("keydown", onEsc);
+    };
+  }, [menu]);
+
+  const openMenu = (e: React.MouseEvent, entry: VfsEntry) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setMenu({ x: e.clientX, y: e.clientY, entry });
+  };
+
+  const uploadFiles = async (files: FileList | File[]) => {
+    const list = Array.from(files);
+    if (list.length === 0) return;
+    const total = list.reduce((sum, f) => sum + f.size, 0);
+    setUpload({ loaded: 0, total });
+    setError(null);
+    try {
+      await fsClient.upload(cwd, list, (loaded, t) => setUpload({ loaded, total: t }));
+      await refresh(cwd);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setUpload(null);
+    }
+  };
+
+  const onDragOver = (e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes("Files")) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+  };
+  const onDragEnter = (e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes("Files")) return;
+    e.preventDefault();
+    dragDepth.current += 1;
+    setDragActive(true);
+  };
+  const onDragLeave = (e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes("Files")) return;
+    e.preventDefault();
+    dragDepth.current = Math.max(0, dragDepth.current - 1);
+    if (dragDepth.current === 0) setDragActive(false);
+  };
+  const onDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    dragDepth.current = 0;
+    setDragActive(false);
+    void uploadFiles(e.dataTransfer.files);
+  };
 
   const openEntry = async (entry: VfsEntry) => {
     if (entry.type === "dir") {
@@ -167,32 +238,84 @@ export default function FileBrowser({ windowId, params }: AppProps) {
 
       {error && <div className="bg-red-500/20 px-3 py-1 text-xs text-red-200">{error}</div>}
 
-      <div className="grid flex-1 auto-rows-min grid-cols-[repeat(auto-fill,minmax(96px,1fr))] gap-1 overflow-auto p-3">
-        {entries.map((entry) => (
-          <div
-            key={entry.path}
-            onDoubleClick={() => openEntry(entry)}
-            className="group relative flex cursor-default flex-col items-center gap-1 rounded-lg p-2 hover:bg-white/10"
-            title={entry.name}
-          >
-            {entry.type === "dir" ? (
-              <Folder size={36} className="text-sky-300" />
-            ) : IMAGE_RE.test(entry.name) ? (
-              <ImageIcon size={36} className="text-emerald-300" />
-            ) : (
-              <FileText size={36} className="text-white/70" />
-            )}
-            <span className="line-clamp-2 max-w-full break-words text-center text-[11px] text-white/80">{entry.name}</span>
-            <div className="absolute right-0 top-0 hidden gap-0.5 rounded bg-black/60 p-0.5 group-hover:flex">
-              <button onClick={() => renameEntry(entry)} title="Rename" className="rounded p-1 hover:bg-white/20"><Pencil size={12} /></button>
-              <button onClick={() => removeEntry(entry)} title="Delete" className="rounded p-1 hover:bg-white/20"><Trash2 size={12} /></button>
+      {upload && (
+        <div className="flex items-center gap-2 bg-sky-500/20 px-3 py-1 text-xs text-sky-100" data-testid="files-upload-progress">
+          <UploadCloud size={14} className="animate-pulse" />
+          Uploading… {upload.total > 0 ? Math.round((upload.loaded / upload.total) * 100) : 0}%
+        </div>
+      )}
+
+      <div
+        className="relative min-h-0 flex-1"
+        data-testid="files-drop-zone"
+        onDragEnter={onDragEnter}
+        onDragOver={onDragOver}
+        onDragLeave={onDragLeave}
+        onDrop={onDrop}
+      >
+        <div className="grid h-full auto-rows-min grid-cols-[repeat(auto-fill,minmax(96px,1fr))] gap-1 overflow-auto p-3">
+          {entries.map((entry) => (
+            <div
+              key={entry.path}
+              onDoubleClick={() => openEntry(entry)}
+              onContextMenu={(e) => openMenu(e, entry)}
+              className="group relative flex cursor-default flex-col items-center gap-1 rounded-lg p-2 hover:bg-white/10"
+              title={entry.name}
+              data-testid="files-entry"
+              data-name={entry.name}
+            >
+              {entry.type === "dir" ? (
+                <Folder size={36} className="text-sky-300" />
+              ) : IMAGE_RE.test(entry.name) ? (
+                <ImageIcon size={36} className="text-emerald-300" />
+              ) : (
+                <FileText size={36} className="text-white/70" />
+              )}
+              <span className="line-clamp-2 max-w-full break-words text-center text-[11px] text-white/80">{entry.name}</span>
+              <div className="absolute right-0 top-0 hidden gap-0.5 rounded bg-black/60 p-0.5 group-hover:flex">
+                <button onClick={() => renameEntry(entry)} title="Rename" className="rounded p-1 hover:bg-white/20"><Pencil size={12} /></button>
+                <button onClick={() => removeEntry(entry)} title="Delete" className="rounded p-1 hover:bg-white/20"><Trash2 size={12} /></button>
+              </div>
             </div>
+          ))}
+          {!loading && entries.length === 0 && (
+            <div className="col-span-full py-10 text-center text-xs text-white/40">This folder is empty</div>
+          )}
+        </div>
+
+        {dragActive && (
+          <div
+            className="pointer-events-none absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 border-2 border-dashed border-sky-400 bg-sky-500/10 text-sky-100"
+            data-testid="files-drop-overlay"
+          >
+            <UploadCloud size={32} />
+            <span className="text-xs">Drop files to upload to {cwd}</span>
           </div>
-        ))}
-        {!loading && entries.length === 0 && (
-          <div className="col-span-full py-10 text-center text-xs text-white/40">This folder is empty</div>
         )}
       </div>
+
+      {menu && (
+        <div
+          style={{ position: "fixed", left: menu.x, top: menu.y, zIndex: 100002 }}
+          className="min-w-[140px] rounded border border-white/15 bg-neutral-900 py-1 text-xs shadow-2xl"
+          onClick={(e) => e.stopPropagation()}
+          onContextMenu={(e) => e.preventDefault()}
+          data-testid="files-context-menu"
+        >
+          <button
+            type="button"
+            onClick={() => {
+              fsClient.downloadEntry(menu.entry.path);
+              setMenu(null);
+            }}
+            className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-white/80 hover:bg-white/10"
+            data-testid="files-context-menu-download"
+          >
+            <Download size={14} />
+            {menu.entry.type === "dir" ? "Download as zip" : "Download"}
+          </button>
+        </div>
+      )}
 
       {open && (
         <div className="absolute inset-0 z-10 flex flex-col bg-[#0f1117]">

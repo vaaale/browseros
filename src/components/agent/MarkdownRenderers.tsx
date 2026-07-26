@@ -10,20 +10,31 @@ import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { Check, Copy } from "lucide-react";
 import type { ComponentsMap } from "@copilotkit/react-ui";
+import { MermaidDiagram } from "./MermaidDiagram";
 
-// Renders an ```html fenced block as code plus a sandboxed live preview.
+// Renders an ```html fenced block with Code / Preview tabs.
 function HtmlBlock({ code }: { code: string }) {
-  const [show, setShow] = useState(false);
+  const [tab, setTab] = useState<"code" | "preview">("code");
   return (
     <div className="my-1.5 overflow-hidden rounded-md border border-white/10">
       <div className="flex items-center justify-between bg-white/5 px-2 py-1 text-[11px] text-white/50">
-        <span>html</span>
-        <button onClick={() => setShow((s) => !s)} className="rounded px-1.5 hover:bg-white/10">
-          {show ? "Hide preview" : "Preview"}
-        </button>
+        <div className="flex gap-1">
+          {(["code", "preview"] as const).map((t) => (
+            <button
+              key={t}
+              onClick={() => setTab(t)}
+              className={`rounded px-2 py-0.5 capitalize transition-colors ${tab === t ? "bg-white/15 text-white/90" : "hover:bg-white/10"}`}
+            >
+              {t}
+            </button>
+          ))}
+        </div>
       </div>
-      <SyntaxHighlighter {...highlighterProps("markup")}>{code}</SyntaxHighlighter>
-      {show && (
+      {tab === "code" ? (
+        <div className="overflow-x-auto">
+          <SyntaxHighlighter {...highlighterProps("markup")}>{code}</SyntaxHighlighter>
+        </div>
+      ) : (
         <iframe srcDoc={code} sandbox="allow-scripts" className="h-64 w-full border-0 bg-white" title="HTML preview" />
       )}
     </div>
@@ -98,6 +109,7 @@ export const markdownRenderers: ComponentsMap = {
     // Inline code (no language + single line) keeps CopilotKit's default look.
     const isBlock = !!lang || text.includes("\n");
     if (!isBlock) return <code className={className}>{children}</code>;
+    if (lang === "mermaid") return <MermaidDiagram code={text} />;
     if (lang === "html" && /<\w/.test(text)) return <HtmlBlock code={text} />;
     return <CodeBlock language={lang} code={text} />;
   }) as ComponentsMap[string],

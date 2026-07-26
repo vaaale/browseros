@@ -1,1 +1,0 @@
-Step: converge. Compare the implemented code against spec/plan/tasks (delegate investigation to the Developer if needed). Append any remaining work to tasks.md, and record divergences between code and spec in specs/discrepancies.md.

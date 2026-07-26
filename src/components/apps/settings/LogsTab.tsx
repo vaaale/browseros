@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Loader2, RefreshCw, Save } from "lucide-react";
+import { useLogContextMenu } from "@/components/logging/useLogContextMenu";
 
 // Logs viewer (specs/017-central-logging). Reads the central timeline via /api/logs
 // (which, under the Supervisor, proxies to the single sink). The complete picture is
@@ -180,6 +181,7 @@ export function LogsTab() {
   const [auto, setAuto] = useState(true);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [savedAt, setSavedAt] = useState(false);
+  const { openMenu, menuNode } = useLogContextMenu();
 
   // Accumulated sets of known values — grow as records load, never shrink.
   // Stored as sorted arrays for stable rendering.
@@ -214,6 +216,7 @@ export function LogsTab() {
   }, [session, stream, level]);
 
   // Client-side component/conversation filter — instant, no round-trip.
+  // Newest first, regardless of the order the API returns them in.
   const records = useMemo(() => {
     let out = allRecords;
     if (component.trim()) {
@@ -224,7 +227,7 @@ export function LogsTab() {
       const lc = conversation.trim().toLowerCase();
       out = out.filter((r) => r.conversation?.toLowerCase().includes(lc));
     }
-    return out;
+    return out.slice().sort((a, b) => (b.ts ?? 0) - (a.ts ?? 0));
   }, [allRecords, component, conversation]);
 
   // Accumulate unique component/conversation values from each load result.
@@ -355,7 +358,11 @@ export function LogsTab() {
           <p className="p-3 text-white/40">No records.</p>
         ) : (
           records.map((r, i) => (
-            <details key={i} className="border-b border-white/5 px-2 py-1 open:bg-white/[0.03]">
+            <details
+              key={i}
+              onContextMenu={(e) => openMenu(e, r)}
+              className="select-text border-b border-white/5 px-2 py-1 open:bg-white/[0.03]"
+            >
               <summary className="flex cursor-pointer items-center gap-2 whitespace-nowrap">
                 <span className="text-white/35">{fmtTime(r.ts)}</span>
                 <span className={`w-10 shrink-0 uppercase ${LEVEL_COLOR[r.level] ?? "text-white/60"}`}>{r.level}</span>
@@ -409,6 +416,7 @@ export function LogsTab() {
           </button>
         </div>
       )}
+      {menuNode}
     </div>
   );
 }

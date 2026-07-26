@@ -16,7 +16,7 @@ Examples: Files, Settings, Build Studio, Assistant.
 
 ### Installed app
 
-A standalone project or static site living in the GitFS apps repo (`./apps/<id>/`), rendered in a sandboxed iframe at `/apps/<id>`. Use this for user-facing or third-party apps that should be versioned independently and installed without changing BOS source.
+A standalone project or static site — the `app/` facet of an ITEM under `data/user-apps/<id>/` (the user's GitFS repo), installed by symlinking `data/system/app/<id>` to it and rendered in a sandboxed iframe at `/apps/<id>`. Use this for user-facing or third-party apps that should be versioned independently and installed without changing BOS source.
 
 Examples: user-created tools, experimental UIs, content apps.
 
@@ -34,11 +34,19 @@ served from `/api/iframe-sdk` and auto-injected into every app's HTML by the
 `/apps/[...slug]` route. It is a promise-based wrapper over a `postMessage`
 broker (`IframeApp.tsx`); a call succeeds only if the app's manifest **granted**
 that `AppCapability` (`fs:read`/`fs:write`/`settings:read`/`notify`/`window:title`/
-`storage`). `window.__bos.storage.{get,set,remove,keys}` is a per-app KV
+`storage`/`services:read`). `window.__bos.storage.{get,set,remove,keys}` is a per-app KV
 (`/api/app-storage`, namespaced by the app id the *parent* supplies — never the
 iframe). The SDK also shims `localStorage`/`sessionStorage` over `storage`, but
 ONLY when native storage is unavailable (opaque origin); same-origin apps keep
 native storage.
+
+> **Never `fetch()` a BOS API route directly from app code that might run
+> `marketplace`-origin.** It works fine for `local`-origin (same-origin) apps
+> but fails with an opaque, generic `NetworkError` under the opaque-origin
+> sandbox — BOS's API routes intentionally have no CORS headers. Always go
+> through `window.__bos` + a granted capability instead. See
+> [Design heuristics](../design-heuristics.md#opaque-origin-sandboxed-apps-cant-fetch-bos-apis-directly)
+> for the full story and the four files a new capability touches.
 
 Provenance (`AppManifest.origin`) sets the sandbox:
 
@@ -214,3 +222,5 @@ See [Features & components guide](./features-and-components.md) for the registra
 - **Grabbing the whole OS store** → unnecessary re-renders.
 - **Adding a UI dependency** — BOS has no component library; inline Tailwind only.
 - **Confusing installed vs built-in persistence models** — installed apps cannot write to BOS source stores directly.
+- **Direct `fetch()` to a BOS API from app code** — works for `local`-origin apps, silently fails with a `NetworkError` for `marketplace`-origin (opaque-origin sandbox) apps. Use the `window.__bos` broker + a granted capability instead (see [Trust tiers](#trust-tiers-the-sdk--sandbox-028) above).
+- **A multi-facet marketplace item (app + service, app + skill, etc.) getting a separate "Install" button per facet** — an item is installed as a whole; one click should install everything it offers (see `src/apps/marketplace/index.tsx`'s `installItem()`).

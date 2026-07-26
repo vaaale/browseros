@@ -1,6 +1,13 @@
 import Dockerode from "dockerode";
 import http from "http";
+import fs from "fs";
+import os from "os";
+import path from "path";
+import { execFile } from "child_process";
+import { promisify } from "util";
 import type { Config } from "./config";
+
+const execAsync = promisify(execFile);
 
 const docker = new Dockerode({ socketPath: "/var/run/docker.sock" });
 
@@ -12,6 +19,30 @@ export function volumeName(username: string): string {
   return `bos-nm-${username}`;
 }
 
+/**
+ * Discover the HOST-absolute path bind-mounted at `containerPath` inside our
+ * OWN container, by inspecting our own container via the Docker SDK — Docker
+ * sets a container's hostname to its own (short) ID by default, and the API
+ * accepts ID prefixes, so `os.hostname()` reliably resolves to "this
+ * container" without any operator configuration. Returns null when not
+ * running in a container at all (e.g. local dev via `npm run dev` outside
+ * Docker) or when `containerPath` isn't mounted, so callers can fall back
+ * sensibly. This avoids trusting a second, independently-configurable env
+ * var for a value Docker itself already knows authoritatively (024 FR-020) —
+ * the operator-invocation-dependent equivalent of this variable was the
+ * direct cause of a prior incident (a spawned container's bind mount source
+ * silently pointed at the wrong host directory).
+ */
+export async function resolveOwnMountSource(containerPath: string): Promise<string | null> {
+  try {
+    const info = await docker.getContainer(os.hostname()).inspect();
+    const mount = info.Mounts?.find((m) => m.Destination === containerPath);
+    return mount?.Source ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export async function ensureNetwork(networkName: string): Promise<void> {
   try {
     await docker.getNetwork(networkName).inspect();
@@ -20,14 +51,51 @@ export async function ensureNetwork(networkName: string): Promise<void> {
   }
 }
 
+/**
+ * Compare a container's stored network endpoint ID for `networkName` against
+ * the network's current ID and reconnect if they differ. Self-heals
+ * containers whose network reference went stale after `bos-net` was
+ * recreated with a new ID (e.g. by a `docker compose down`/`up` cycle) —
+ * Docker refuses to start a container whose stored reference no longer
+ * exists ("network <id> not found"), even though a network with the same
+ * NAME is present. No-ops if already in sync or not attached to this network
+ * at all. Cheap on the common case (just two inspects). (024 FR-019.)
+ */
+export async function reconcileNetworkAttachment(containerId: string, networkName: string): Promise<void> {
+  const network = docker.getNetwork(networkName);
+  const netInfo = await network.inspect();
+  const containerInfo = await docker.getContainer(containerId).inspect();
+  const attached = containerInfo.NetworkSettings.Networks?.[networkName];
+  if (!attached || attached.NetworkID === netInfo.Id) return;
+  await network.connect({ Container: containerId });
+}
+
 export async function createBosContainer(username: string, cfg: Config): Promise<string> {
   const name = containerName(username);
   // Docker resolves bind mount sources against the HOST filesystem, not the
-  // bastion container's filesystem. Use bosVolumeBaseHost (the host-side path)
-  // for mounts, and cfg.volumeBase (the bastion-internal path) for file ops.
-  const srcPath = `${cfg.bosVolumeBaseHost}/${username}/src`;
-  const dataPath = `${cfg.bosVolumeBaseHost}/${username}/data`;
+  // bastion container's filesystem. Use bosVolumeBaseHost (the host-side path,
+  // self-discovered — see resolveOwnMountSource) for mounts, and cfg.volumeBase
+  // (the bastion-internal path) for file ops. Every user is provisioned via
+  // their own isolated clone — no direct/shared mount of the operator's own
+  // checkout (024 FR-020).
+  const srcPath       = `${cfg.bosVolumeBaseHost}/${username}/src`;
+  const dataPath      = `${cfg.bosVolumeBaseHost}/${username}/data`;
+  const worktreesPath = `${cfg.bosVolumeBaseHost}/${username}/worktrees`;
+  const clonesPath    = `${cfg.bosVolumeBaseHost}/${username}/data-clones`;
   const nmVol = volumeName(username);
+
+  // Worktrees and data-clones must live outside /app (the src bind-mount) so
+  // that chown -R /app never traverses them (worktrees contain a full source
+  // tree + node_modules; clones contain a full copy of /app/data). Create and
+  // chown the host-side directories now — idempotent on re-runs, and cheap
+  // because they're always empty at container-create time.
+  const uid = cfg.containerUid ?? 1000;
+  const gid = cfg.containerGid ?? 1000;
+  for (const subdir of ["worktrees", "data-clones"]) {
+    const dir = path.join(cfg.volumeBase, username, subdir);
+    fs.mkdirSync(dir, { recursive: true });
+    await execAsync("chown", [`${uid}:${gid}`, dir]).catch(() => {});
+  }
 
   // Derive allowed dev origins from PUBLIC_URL so Next.js dev accepts
   // cross-origin HMR/dev requests when BOS is reached via a LAN hostname.
@@ -49,6 +117,8 @@ export async function createBosContainer(username: string, cfg: Config): Promise
     Image: cfg.bosImage,
     Env: [
       `BOS_DATA_DIR=/app/data`,
+      `BOS_WORKTREES=/worktrees`,     // outside /app — not traversed by chownSrc
+      `BOS_DATA_CLONES=/data-clones`, // outside /app — not traversed by chownSrc
       `BOS_PUBLIC_PORT=8090`,   // bastion proxies to this port
       `BOS_PORT_BASE=3000`,     // next dev internal port
       `BOS_BASE_DEV=1`,         // supervisor starts next dev automatically
@@ -64,6 +134,9 @@ export async function createBosContainer(username: string, cfg: Config): Promise
         // inside that clone with their own per-user volumes.
         `${srcPath}:/app`,
         `${dataPath}:/app/data`,
+        // Supervisor ephemeral dirs — separate from /app so chownSrc is fast.
+        `${worktreesPath}:/worktrees`,
+        `${clonesPath}:/data-clones`,
       ],
       Mounts: [
         {
@@ -158,7 +231,7 @@ export async function listBosImages(): Promise<Array<{ id: string; tags: string[
 // .dockerignore — packing data/ or user-data/ (live container state, sockets,
 // concurrently-written files) is what causes "Error in input stream".
 const BUILD_IGNORE_DIRS = new Set([
-  "node_modules", ".next", ".git", "data", "user-data",
+  "node_modules", ".next", ".git", "data", "bos-worktrees", "bos-data-clones", "user-data",
   "apps", "specs", "playwright-report", "test-results", "dist",
 ]);
 const BUILD_IGNORE_FILES = new Set([".env", ".env.local"]);

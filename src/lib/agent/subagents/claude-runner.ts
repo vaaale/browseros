@@ -1,7 +1,7 @@
 import "server-only";
 import { spawn } from "node:child_process";
 import { connectMcpClient, extractText } from "@/lib/mcp/client";
-import { getHarnessConfig, harnessCredentialEnv } from "@/lib/devharness/harness-config";
+import { getHarnessConfig, harnessCredentialEnv, type HarnessConfig } from "@/lib/devharness/harness-config";
 import { supervisorEnabled, supervisorBegin, supervisorBuild } from "@/lib/devharness/supervisor";
 import { stageAll } from "@/lib/system/git";
 import type { McpServerConfig } from "@/lib/mcp/types";
@@ -14,6 +14,15 @@ type OnEvent = (e: { tool: string; input: unknown }) => void;
 
 // Headless Claude can run for a while; cap below the delegate route's budget.
 const CLI_TIMEOUT_MS = 1000_000;
+
+// Applies the Dev Harness's model override (Settings → Dev Harness) on top of
+// the agent's own `model`, if it has one. Only meaningful for the CLI
+// transports — the MCP path drives a remote Agent tool with its own model
+// handling, so a harness model override wouldn't apply there.
+function withHarnessModel(agent: Agent, harness: HarnessConfig): Agent {
+  if (harness.mode !== "cli" || !harness.model) return agent;
+  return { ...agent, model: harness.model };
+}
 
 function envForCwd(cwd: string): NodeJS.ProcessEnv {
   // harnessCredentialEnv() sets HOME to the harness home when the user has
@@ -135,19 +144,21 @@ function runClaudeCli(agent: Agent, task: string, cwd: string, onEvent?: OnEvent
       finish({ ...base, output: "", error: `${HARNESS_UNAVAILABLE} failed to spawn claude (${e.message}). Is the Claude CLI installed and on PATH?` }),
     );
     child.on("close", async (code) => {
-      if (isError || code !== 0) {
-        finish({ ...base, output: resultText, steps, toolCalls, error: resultText || stderr.trim() || `claude exited with code ${code}.` });
-        return;
-      }
       // Deterministic backstop: stage everything the agent created/changed so
-      // new files are never left untracked. Feature-branch + .gitignore make
-      // `git add -A` safe; a staging error must never fail the task.
+      // new files are never left untracked. Runs unconditionally — even on a
+      // non-zero exit the agent may have written partial work that supervisorBuild
+      // should commit and preserve. Feature-branch + .gitignore make `git add -A`
+      // safe; a staging error must never fail the task.
       let note = "";
       try {
         const r = await stageAll(cwd);
         if (r.staged > 0) note = `\n\n[harness] Staged ${r.staged} changed file(s)${r.created ? ` (${r.created} new)` : ""}.`;
       } catch {
         /* ignore staging errors */
+      }
+      if (isError || code !== 0) {
+        finish({ ...base, output: resultText + note, steps, toolCalls, error: resultText || stderr.trim() || `claude exited with code ${code}.` });
+        return;
       }
       finish({ ...base, output: resultText + note, steps, toolCalls });
     });
@@ -252,17 +263,17 @@ function runOpenCodeCli(agent: Agent, task: string, cwd: string, onEvent?: OnEve
       finish({ ...base, output: "", error: `${HARNESS_UNAVAILABLE} failed to spawn opencode (${e.message}). Is the OpenCode CLI installed and on PATH?` }),
     );
     child.on("close", async (code) => {
-      if (errorText || code !== 0) {
-        finish({ ...base, output: finalText(), steps, toolCalls, error: errorText || stderr.trim() || `opencode exited with code ${code}.` });
-        return;
-      }
-      // Same deterministic staging backstop as the Claude path.
+      // Same unconditional staging backstop as the Claude path.
       let note = "";
       try {
         const r = await stageAll(cwd);
         if (r.staged > 0) note = `\n\n[harness] Staged ${r.staged} changed file(s)${r.created ? ` (${r.created} new)` : ""}.`;
       } catch {
         /* ignore staging errors */
+      }
+      if (errorText || code !== 0) {
+        finish({ ...base, output: finalText() + note, steps, toolCalls, error: errorText || stderr.trim() || `opencode exited with code ${code}.` });
+        return;
       }
       finish({ ...base, output: finalText() + note, steps, toolCalls });
     });
@@ -349,7 +360,7 @@ export async function runClaudeAgent(
     }
     if (harness.mode === "mcp") return runViaMcp(agent, task, harness.server, opts?.onEvent);
     const cliRun = harness.tool === "opencode" ? runOpenCodeCli : runClaudeCli;
-    return cliRun(agent, task, harness.cwd, opts?.onEvent);
+    return cliRun(withHarnessModel(agent, harness), task, harness.cwd, opts?.onEvent);
   }
 
   // Source edits must never run in the live checkout. The Supervisor is the only
@@ -445,9 +456,13 @@ export async function runClaudeAgent(
   const result =
     harness.mode === "mcp"
       ? await runViaMcp(runAgent, task, { ...harness.server, cwd, env: { ...(harness.server.env ?? {}), PWD: cwd } }, opts?.onEvent)
-      : await (harness.tool === "opencode" ? runOpenCodeCli : runClaudeCli)(runAgent, task, cwd, opts?.onEvent);
+      : await (harness.tool === "opencode" ? runOpenCodeCli : runClaudeCli)(withHarnessModel(runAgent, harness), task, cwd, opts?.onEvent);
 
-  if (!result.error) {
+  // Always build when a candidate branch exists — even if the agent reported an
+  // error, any staged partial work gets committed and health-gated so it is
+  // inspectable and recoverable rather than silently left uncommitted. Only skip
+  // when the worktree was never provisioned (no branch).
+  if (candidateBranch) {
     opts?.onEvent?.({ tool: "Supervisor: build + health-gate candidate", input: {} });
     const built = await supervisorBuild(candidateBranch).catch(() => null);
     // Tell the caller the change is a CANDIDATE, not the live/active version — the
@@ -455,7 +470,7 @@ export async function runClaudeAgent(
     // doesn't work" confusion (the user was viewing active) and the bad workaround
     // of re-editing the main checkout in place (which then breaks Promote).
     const state = built && typeof built.state === "string" ? (built.state as string) : "";
-    const brand = candidateBranch ? `\`${candidateBranch}\`` : "the next candidate";
+    const brand = `\`${candidateBranch}\``;
     result.output =
       (result.output || "") +
       (state === "ready"

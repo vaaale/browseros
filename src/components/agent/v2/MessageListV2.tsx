@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Brain, ChevronDown, ChevronRight, Pencil, RotateCcw, ThumbsDown, ThumbsUp, Trash2 } from "lucide-react";
 import type { ChatMessage } from "@/lib/assistant/messages";
-import { lastUserIndex } from "@/lib/assistant/messages";
+import { lastUserIndex, buildRetryPrompt } from "@/lib/assistant/messages";
 import { useChatState, setEditing, type ChatState, type ToolCallView } from "@/lib/assistant/client/chat-store";
 import { sendFeedback, sendMessage, deleteLastTurn } from "@/lib/assistant/client/run-client";
 import { registerCard, toggleCard, useCardOpen, useCardScope } from "@/lib/agent/card-collapse";
@@ -89,7 +89,13 @@ function AssistantTurn({
   agentId: string;
   isLast: boolean;
 }) {
-  const { reasoning, answer, live } = splitReasoning(message.content ?? "");
+  // Prefer the explicit reasoning field (set when the model uses reasoning_delta
+  // events). Fall back to extracting <think> tags from content for models that
+  // embed thinking inline (DeepSeek/Qwen style).
+  const fromContent = splitReasoning(message.content ?? "");
+  const reasoning = message.reasoning ?? fromContent.reasoning;
+  const answer = message.reasoning ? (message.content ?? "") : fromContent.answer;
+  const live = message.reasoning ? false : fromContent.live;
   const cards = cardsFor(message, resultsByCall, state.toolCalls);
   const rating = message.feedback?.rating;
 
@@ -134,6 +140,63 @@ function AssistantTurn({
               <RotateCcw size={13} />
             </button>
           )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Error card for a failed model turn (message.error). Shows the provider error
+ *  and — while it's the last message and no run is active — a Retry (edit-resubmit
+ *  the last user turn with a summary of the failed attempt) and a Cancel that
+ *  just dismisses the card. */
+function ErrorCard({
+  message,
+  messages,
+  conversationId,
+  agentId,
+  isLast,
+  running,
+}: {
+  message: ChatMessage;
+  messages: ChatMessage[];
+  conversationId: string;
+  agentId: string;
+  isLast: boolean;
+  running: boolean;
+}) {
+  const [dismissed, setDismissed] = useState(false);
+  if (dismissed) return null;
+  const handleRetry = () => {
+    if (running) return;
+    const lastUser = [...messages].reverse().find((m) => m.role === "user");
+    if (!lastUser) return;
+    void sendMessage(conversationId, agentId, buildRetryPrompt(messages, message.content ?? ""), {
+      editOfMessageId: lastUser.id,
+    });
+  };
+  return (
+    <div className="my-1 rounded-lg border border-rose-500/30 bg-rose-500/10 p-3 text-xs" data-testid="error-card">
+      <div className="mb-1 font-medium text-rose-100">The model returned an error</div>
+      <div className="mb-2 max-h-40 overflow-auto whitespace-pre-wrap break-words text-rose-200/90">{message.content}</div>
+      {isLast && !running && (
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={handleRetry}
+            data-testid="error-retry"
+            className="rounded bg-rose-400/20 px-2.5 py-1 font-medium text-rose-100 hover:bg-rose-400/30"
+          >
+            Retry
+          </button>
+          <button
+            type="button"
+            onClick={() => setDismissed(true)}
+            data-testid="error-cancel"
+            className="rounded bg-white/10 px-2.5 py-1 font-medium hover:bg-white/20"
+          >
+            Cancel
+          </button>
         </div>
       )}
     </div>
@@ -250,6 +313,19 @@ export function MessageListV2({
           );
         }
         if (m.role === "assistant") {
+          if (m.error) {
+            return (
+              <ErrorCard
+                key={m.id}
+                message={m}
+                messages={state.messages}
+                conversationId={conversationId}
+                agentId={agentId}
+                isLast={i === state.messages.length - 1}
+                running={state.running}
+              />
+            );
+          }
           return (
             <AssistantTurn key={m.id} message={m} state={state} resultsByCall={resultsByCall} conversationId={conversationId} agentId={agentId} isLast={i === lastAssistantIdx} />
           );
@@ -267,7 +343,10 @@ export function MessageListV2({
           {(liveSplit?.answer ?? "").trim() && <ChatMarkdown content={liveSplit!.answer} />}
         </div>
       )}
-      {state.finishReason === "error" && state.runError && (
+      {/* Backstop for a failed run that did NOT persist an error message (e.g. the
+          run crashed outside a model turn); the normal model-turn error renders
+          as an ErrorCard from its persisted message above. */}
+      {state.finishReason === "error" && state.runError && !state.messages[state.messages.length - 1]?.error && (
         <div className="rounded-md border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
           The run failed: {state.runError}
         </div>

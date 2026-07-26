@@ -13,10 +13,29 @@ import {
   reprovisionResetData,
   reprovisionRebuildNm,
   reprovisionUpdateSrc,
+  reprovisionResetToDefault,
   reprovisionFull,
+  BOS_DEFAULT_REMOTE,
 } from "../provision";
 import type { SessionPayload } from "../sessions";
 import * as logStore from "../log-store";
+
+// Source filesystem id — matches SOURCE_FS_ID in src/lib/gitops/filesystems.ts
+const SOURCE_FS_ID = "bos-src";
+
+interface GitRemoteConfig {
+  name: string;
+  url: string;
+  provider: string;
+  authType?: "oauth" | "token" | "ssh";
+  filesystem?: string;
+  defaultBranch?: string;
+}
+
+interface UpdateSourceConfig {
+  remote: string;
+  branch?: string;
+}
 
 type AuthenticatedRequest = Request & { user: SessionPayload };
 
@@ -62,6 +81,7 @@ export function createAccountRouter(cfg: Config, provider: AuthProvider): Router
         case "reset-data": await reprovisionResetData(username, cfg); break;
         case "update-src": await reprovisionUpdateSrc(username, cfg); break;
         case "rebuild-nm": await reprovisionRebuildNm(username, cfg); break;
+        case "reset-to-default": await reprovisionResetToDefault(username, cfg); break;
         case "full": await reprovisionFull(username, cfg); break;
         default: res.status(400).json({ error: `Unknown operation: ${operation}` }); return;
       }
@@ -165,6 +185,70 @@ export function createAccountRouter(cfg: Config, provider: AuthProvider): Router
     if (!newPassword) { res.status(400).json({ error: "newPassword required" }); return; }
     try {
       await provider.updatePassword(username, newPassword);
+      res.json({ ok: true });
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // List git remotes registered for the BOS source filesystem.
+  // Reads git-remotes.json directly — works even when the container is down.
+  router.get("/git-remotes", (req, res) => {
+    const { username } = (req as AuthenticatedRequest).user;
+    const data = path.join(cfg.volumeBase, username, "data");
+    const configPath = path.join(data, "config", "git-remotes.json");
+
+    let userRemotes: GitRemoteConfig[] = [];
+    try {
+      if (fs.existsSync(configPath)) {
+        userRemotes = JSON.parse(fs.readFileSync(configPath, "utf8")) as GitRemoteConfig[];
+      }
+    } catch {
+      // Malformed file — return the default only.
+    }
+
+    // Filter to bos-src filesystem (no tag = legacy source-repo remote).
+    const sourceRemotes = userRemotes.filter(
+      (r) => (r.filesystem ?? SOURCE_FS_ID) === SOURCE_FS_ID,
+    );
+
+    // Always include the built-in default first.
+    const names = new Set(sourceRemotes.map((r) => r.name));
+    const remotes = [
+      { name: BOS_DEFAULT_REMOTE, url: cfg.bosRepoPath, provider: "generic", protected: true },
+      ...sourceRemotes
+        .filter((r) => r.name !== BOS_DEFAULT_REMOTE)
+        .map((r) => ({ name: r.name, url: r.url, provider: r.provider, authType: r.authType, defaultBranch: r.defaultBranch, protected: false })),
+    ];
+    void names; // suppress unused warning
+    res.json({ remotes });
+  });
+
+  // Read the user's update-source preference.
+  router.get("/update-source-config", (req, res) => {
+    const { username } = (req as AuthenticatedRequest).user;
+    const configPath = path.join(cfg.volumeBase, username, "data", "bos-update-source.json");
+    try {
+      if (fs.existsSync(configPath)) {
+        res.json(JSON.parse(fs.readFileSync(configPath, "utf8")) as UpdateSourceConfig);
+      } else {
+        res.json({ remote: BOS_DEFAULT_REMOTE, branch: cfg.bosBaseRef });
+      }
+    } catch {
+      res.json({ remote: BOS_DEFAULT_REMOTE, branch: cfg.bosBaseRef });
+    }
+  });
+
+  // Save the user's update-source preference.
+  router.post("/update-source-config", (req, res) => {
+    const { username } = (req as AuthenticatedRequest).user;
+    const { remote, branch } = req.body as { remote?: string; branch?: string };
+    if (!remote) { res.status(400).json({ error: "remote is required" }); return; }
+    const configPath = path.join(cfg.volumeBase, username, "data", "bos-update-source.json");
+    try {
+      fs.mkdirSync(path.dirname(configPath), { recursive: true });
+      const payload: UpdateSourceConfig = { remote, ...(branch ? { branch } : {}) };
+      fs.writeFileSync(configPath, JSON.stringify(payload, null, 2));
       res.json({ ok: true });
     } catch (err) {
       res.status(500).json({ error: String(err) });

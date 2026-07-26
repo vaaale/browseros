@@ -6,7 +6,6 @@ import {
   saveWorkflow,
 } from "@/lib/workflows/store";
 import type { Workflow } from "@/lib/workflows/types";
-import { ensureWorkflowApp } from "@/lib/workflows/install";
 
 export const dynamic = "force-dynamic";
 
@@ -26,7 +25,6 @@ function deepMerge<T>(target: T, patch: unknown): T {
 }
 
 export async function GET(req: NextRequest) {
-  await ensureWorkflowApp().catch(() => {});
   const id = new URL(req.url).searchParams.get("id");
   if (id) {
     const wf = await getWorkflow(id);
@@ -38,7 +36,6 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    await ensureWorkflowApp().catch(() => {});
     const body = (await req.json()) as Workflow;
     if (!body.name) return NextResponse.json({ error: "name is required" }, { status: 400 });
     const wf = await saveWorkflow(body);

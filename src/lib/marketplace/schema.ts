@@ -25,6 +25,20 @@ export interface MarketplaceItemSkill {
   version: string;
 }
 
+export interface MarketplaceItemServerPlugin {
+  /** Path (relative to the marketplace repo root) to the plugin directory (contains plugin.json). */
+  entrypoint: string;
+  version: string;
+}
+
+export interface MarketplaceItemService {
+  /** Path (relative to the marketplace repo root) to the item root — a
+   *  directory containing services/service.json, config/, and optionally
+   *  spec/, doc/, app/, hooks/ (user-specs/002-service-daemons). */
+  entrypoint: string;
+  version: string;
+}
+
 export interface MarketplaceItem {
   id: string;
   name: string;
@@ -33,6 +47,8 @@ export interface MarketplaceItem {
   app?: MarketplaceItemApp;
   spec?: MarketplaceItemSpec;
   skill?: MarketplaceItemSkill;
+  serverPlugin?: MarketplaceItemServerPlugin;
+  services?: MarketplaceItemService;
 }
 
 export interface MarketplaceManifest {
@@ -107,7 +123,21 @@ export function validateManifest(raw: unknown): MarketplaceManifest {
       skill = { path: sk.path as string, version: typeof sk.version === "string" ? sk.version : "0.0.0" };
     }
 
-    if (!app && !spec && !skill) throw new Error(`item ${o.id}: must expose an app, spec, and/or a skill`);
+    let serverPlugin: MarketplaceItemServerPlugin | undefined;
+    if (o.serverPlugin != null) {
+      const sp = o.serverPlugin as Record<string, unknown>;
+      if (!relPathOk(sp.entrypoint)) throw new Error(`item ${o.id}: invalid serverPlugin.entrypoint`);
+      serverPlugin = { entrypoint: sp.entrypoint as string, version: typeof sp.version === "string" ? sp.version : "0.0.0" };
+    }
+
+    let services: MarketplaceItemService | undefined;
+    if (o.services != null) {
+      const sv = o.services as Record<string, unknown>;
+      if (!relPathOk(sv.entrypoint)) throw new Error(`item ${o.id}: invalid services.entrypoint`);
+      services = { entrypoint: sv.entrypoint as string, version: typeof sv.version === "string" ? sv.version : "0.0.0" };
+    }
+
+    if (!app && !spec && !skill && !serverPlugin && !services) throw new Error(`item ${o.id}: must expose an app, spec, skill, serverPlugin, and/or services`);
     return {
       id: o.id as string,
       name: o.name as string,
@@ -116,6 +146,8 @@ export function validateManifest(raw: unknown): MarketplaceManifest {
       app,
       spec,
       skill,
+      serverPlugin,
+      services,
     };
   });
 

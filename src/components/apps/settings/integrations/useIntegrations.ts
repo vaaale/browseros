@@ -31,6 +31,7 @@ interface UseIntegrationsResult {
   refresh: () => Promise<void>;
   patch: (id: string, body: unknown) => Promise<void>;
   disconnect: (id: string) => Promise<void>;
+  setCredentials: (id: string, credentials: { clientId: string; clientSecret: string }) => Promise<void>;
 }
 
 /**
@@ -93,7 +94,23 @@ export function useIntegrations(): UseIntegrationsResult {
     [refresh],
   );
 
-  return { loading, items, adapters, error, refresh, patch, disconnect };
+  const setCredentials = useCallback(
+    async (id: string, credentials: { clientId: string; clientSecret: string }) => {
+      const res = await fetch(`/api/integrations/${encodeURIComponent(id)}/credentials`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(credentials),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { error?: string }).error ?? `Save failed: ${res.status}`);
+      }
+      await refresh();
+    },
+    [refresh],
+  );
+
+  return { loading, items, adapters, error, refresh, patch, disconnect, setCredentials };
 }
 
 /**

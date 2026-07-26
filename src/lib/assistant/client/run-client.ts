@@ -29,8 +29,34 @@ import { getActiveSurfaceAgents, onSurfaceAgentsChanged, type SurfaceAgentEntry 
 
 export type { FrontendToolHandler };
 
-const handlers = new Map<string, FrontendToolHandler>();
+// Handler STACKS, not single slots: several AssistantChatV2 embeds can be
+// mounted at once (Chat app + Build Studio), each registering the same global
+// tool names. With a plain Map the later mount overwrites the earlier one and
+// its unmount deletes the entry outright — leaving the still-mounted chat with
+// NO handler (its elicitation cards never appear). Dispatch uses the most
+// recently registered handler; unregister removes only its own entry.
+const handlers = new Map<string, FrontendToolHandler[]>();
 const attached = new Set<string>(); // runIds with a live reader in THIS page
+
+// Frontend tool_calls that arrived while NO handler was registered — e.g. the
+// only chat window was minimized, which unmounts it (Window.tsx renders null)
+// and unregisters its tools. Without this queue the call is dropped forever
+// and the server waits out the full tool timeout. Entries are retried when a
+// matching handler (re)registers and withdrawn when the run's stream shows
+// the call was answered elsewhere or the run finished.
+const unclaimedCalls = new Map<
+  string,
+  { runId: string; conversationId: string; event: Extract<RunEvent, { type: "tool_call" }> }
+>();
+
+function retryUnclaimedCalls(name?: string): void {
+  for (const [callId, p] of [...unclaimedCalls]) {
+    if (name && p.event.name !== name) continue;
+    if (!handlers.get(p.event.name)?.length && !findSurfaceToolHandler(p.event.name)) continue;
+    unclaimedCalls.delete(callId);
+    dispatchFrontendCall(p.runId, p.conversationId, p.event);
+  }
+}
 
 async function pushSurfaceTools(runId: string, declarations: ToolDeclaration[]): Promise<void> {
   await fetch(`/api/assistant/runs/${encodeURIComponent(runId)}/surface-tools`, {
@@ -101,15 +127,23 @@ async function flushSurfaceAgents(runId: string): Promise<void> {
 // tool call in flight (e.g. the user closes a window by hand mid-run).
 onSurfaceToolsChanged(() => {
   for (const runId of attached) void flushSurfaceTools(runId);
+  retryUnclaimedCalls();
 });
 onSurfaceAgentsChanged(() => {
   for (const runId of attached) void flushSurfaceAgents(runId);
 });
 
 export function registerFrontendTool(name: string, handler: FrontendToolHandler): () => void {
-  handlers.set(name, handler);
+  const stack = handlers.get(name) ?? [];
+  stack.push(handler);
+  handlers.set(name, stack);
+  retryUnclaimedCalls(name);
   return () => {
-    if (handlers.get(name) === handler) handlers.delete(name);
+    const s = handlers.get(name);
+    if (!s) return;
+    const i = s.indexOf(handler);
+    if (i >= 0) s.splice(i, 1);
+    if (s.length === 0) handlers.delete(name);
   };
 }
 
@@ -121,16 +155,22 @@ async function postToolResult(runId: string, callId: string, result: string): Pr
   }).catch(() => undefined);
 }
 
-function dispatchFrontendCall(runId: string, e: Extract<RunEvent, { type: "tool_call" }>) {
-  const handler = handlers.get(e.name) ?? findSurfaceToolHandler(e.name);
-  if (!handler) return; // another surface may claim it; server times out in-band
+function dispatchFrontendCall(runId: string, conversationId: string, e: Extract<RunEvent, { type: "tool_call" }>) {
+  const stack = handlers.get(e.name);
+  const handler = (stack?.length ? stack[stack.length - 1] : undefined) ?? findSurfaceToolHandler(e.name);
+  if (!handler) {
+    // No handler mounted right now (e.g. every chat window is minimized).
+    // Park the call — retried when a matching handler registers.
+    unclaimedCalls.set(e.callId, { runId, conversationId, event: e });
+    return;
+  }
   let input: Record<string, unknown> = {};
   try {
     input = e.args ? (JSON.parse(e.args) as Record<string, unknown>) : {};
   } catch {
     /* tool reports its own validation error */
   }
-  void runToolHandler(e.name, ({ signal }) => handler(input, { signal })).then(async (result) => {
+  void runToolHandler(e.name, ({ signal }) => handler(input, { signal, conversationId })).then(async (result) => {
     // Give a window this call may have just opened a couple of paints to
     // mount and register its surface tools, THEN sync — and post the tool's
     // own result only after that sync lands. Otherwise a tool that opens a
@@ -179,12 +219,20 @@ export async function attachToRun(conversationId: string, runId: string): Promis
               continue;
             }
             sawEvent = true;
+            // Keepalive pings have no seq/runId — skip state application.
+            if ((event as { type: string }).type === "ping") continue;
             applyRunEvent(conversationId, event);
             if (event.type === "tool_call" && event.execution === "frontend") {
-              dispatchFrontendCall(runId, event);
+              dispatchFrontendCall(runId, conversationId, event);
+            }
+            if (event.type === "tool_result" || event.type === "tool_cancelled") {
+              unclaimedCalls.delete(event.callId); // answered elsewhere — stop waiting
             }
             if (event.type === "run_finished") {
               finished = true;
+              for (const [callId, p] of unclaimedCalls) {
+                if (p.runId === runId) unclaimedCalls.delete(callId);
+              }
               // Client-driven auto-titling: on a completed first exchange, name a
               // still-"New conversation" from its transcript. renameConversation
               // updates the sidebar store live (the server is the transcript

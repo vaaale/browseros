@@ -45,9 +45,9 @@ export async function readState(integrationId: string): Promise<IntegrationState
       services: parsed.services ?? {},
       scopeOverrides: parsed.scopeOverrides ?? {},
     };
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return defaultState();
-    throw err;
+  } catch {
+    // Missing file or malformed JSON — treat as no state rather than crashing.
+    return defaultState();
   }
 }
 

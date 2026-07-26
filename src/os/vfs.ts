@@ -79,20 +79,20 @@ async function exists(real: string): Promise<boolean> {
   }
 }
 
-// Register the SpecFS mount exactly once, before any VFS op touches
-// /Documents/Specs. Dynamic import keeps the low-level VFS free of a static
+// Register the system mounts (Specs/Docs/Templates) exactly once, before any
+// VFS op touches them. Dynamic import keeps the low-level VFS free of a static
 // dependency on the spec layer (and avoids an import cycle).
-let specMountReady = false;
+let systemMountsReady = false;
 async function ensureSpecMount(): Promise<void> {
-  if (specMountReady) return;
-  specMountReady = true;
+  if (systemMountsReady) return;
+  systemMountsReady = true;
   try {
     const mod = await import("@/lib/specs/spec-mount");
-    mod.ensureSpecMount();
+    await mod.ensureSystemMounts();
   } catch {
     // If the spec layer fails to load, unmounted VFS behaviour still works;
-    // /Documents/Specs then falls through to the local stub dir.
-    specMountReady = false;
+    // /Specs, /Docs, /Templates then fall through to local stub dirs.
+    systemMountsReady = false;
   }
 }
 
@@ -106,12 +106,18 @@ async function ensureVfs(): Promise<void> {
   await fs.mkdir(path.join(CANONICAL_VFS_ROOT, "Documents", "Chats"), { recursive: true });
   if (seeded) return;
   seeded = true;
-  for (const dir of ["Documents", "Pictures", "Desktop", "Apps"]) {
+  for (const dir of ["Documents", "Pictures", "Desktop"]) {
     await fs.mkdir(path.join(VFS_ROOT, dir), { recursive: true });
   }
-  // Mount-point stub: a real directory so "Specs" appears when listing
-  // /Documents even though reads/writes under it route to SpecFS (Phase 2).
-  await fs.mkdir(path.join(VFS_ROOT, "Documents", "Specs"), { recursive: true });
+  // Mount-point stubs: real directories so "Specs"/"Docs"/"Templates" appear
+  // when listing "/" even though reads/writes under them route to the
+  // registered backends (SpecFS / DocsFS / ReadonlyFS). /Specs itself is NOT a
+  // mount (only /Specs/user-specs and /Specs/bos-system-specs are), so it needs
+  // its own stub children too — otherwise listing /Specs falls through to this
+  // plain (would-be-empty) directory instead of resolving into either mount.
+  for (const dir of ["Specs", "Docs", "Templates", "Specs/user-specs", "Specs/bos-system-specs"]) {
+    await fs.mkdir(path.join(VFS_ROOT, dir), { recursive: true });
+  }
   const welcome = path.join(VFS_ROOT, "Documents", "welcome.txt");
   if (!(await exists(welcome))) {
     await writeFileAtomic(

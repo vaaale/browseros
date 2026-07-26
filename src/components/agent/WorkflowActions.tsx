@@ -4,11 +4,12 @@ import { useCopilotAction } from "@copilotkit/react-core";
 import { useEffect } from "react";
 import { encodeNested } from "@/lib/agent/nested-events";
 
-// Registers the 7 Workflow Manager tools and ensures the iframe app exists.
-// All handlers proxy to /api/workflows/* (server stores live behind the API
-// boundary; client never imports them directly).
+// Registers the 7 Workflow Manager tools. All handlers proxy to
+// /api/workflows/* (server stores live behind the API boundary; client never
+// imports them directly). The Workflow Manager UI is a Service Daemons item
+// (dataDir()/user-apps/workflows/) installed via Settings → Plugins →
+// Services, not auto-installed — see docs/dev/workflows/workflows.md.
 export function WorkflowActions() {
-  // Touch the workflows API once on mount so the server installs the iframe app.
   useEffect(() => {
     void fetch("/api/workflows").catch(() => {});
   }, []);

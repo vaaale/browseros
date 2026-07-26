@@ -15,8 +15,8 @@ import { compactChatMessages } from "@/lib/agent/compaction/v2";
 //     `reasoning_content` deltas (DeepSeek/Qwen), max_tokens vs
 //     max_completion_tokens by provider, jinja "no user message" guard;
 //   - openai-responses: Responses API item shapes (function_call /
-//     function_call_output). Non-streamed for now — the text arrives as a
-//     single delta; acceptable until a Responses streaming pass.
+//     function_call_output). Streamed via SSE: output_text / reasoning_summary
+//     deltas surface live, function_call arguments accumulate per output item.
 // Provider config is resolved per call so Settings changes apply immediately.
 
 export const streamModelTurn: StreamTurn = async (opts) => {
@@ -34,6 +34,68 @@ export const streamModelTurn: StreamTurn = async (opts) => {
 };
 
 type TurnOpts = Parameters<StreamTurn>[0];
+
+// Some OpenAI-compatible local servers answer a STREAMING request that fails
+// (e.g. context overflow) with HTTP 200 + a bare JSON error body served under a
+// `text/event-stream` content-type — instead of a 4xx status or an SSE `error`/
+// `response.failed` event. The SDK's SSE parser then yields zero events and the
+// stream ends silently, producing an empty turn with no error surfaced.
+//
+// Peek the first byte of the body: a valid SSE stream starts with a field line
+// (`event:` / `data:` / `:`) and never with `{`. If we instead see a JSON body
+// carrying a top-level `error`, re-emit it as HTTP 400 so the SDK throws (the
+// agent loop turns that into the error card). Anything else is replayed verbatim
+// through a lazy stream so normal streaming is completely unaffected.
+const errorAwareFetch: typeof fetch = async (input, init) => {
+  const res = await fetch(input, init);
+  if (!res.ok || !res.body) return res;
+  const reader = res.body.getReader();
+  const first = await reader.read();
+  const value = first.value;
+  if (value && value[0] === 0x7b /* '{' */) {
+    const chunks: Uint8Array[] = [value];
+    for (;;) {
+      const r = await reader.read();
+      if (r.done) break;
+      if (r.value) chunks.push(r.value);
+    }
+    const buf = Buffer.concat(chunks.map((c) => Buffer.from(c)));
+    const text = buf.toString("utf8");
+    try {
+      const j = JSON.parse(text) as { error?: unknown };
+      if (j && typeof j === "object" && j.error) {
+        return new Response(text, { status: 400, statusText: "Bad Request", headers: res.headers });
+      }
+    } catch {
+      /* not JSON we recognise — replay verbatim below */
+    }
+    return new Response(buf, { status: res.status, statusText: res.statusText, headers: res.headers });
+  }
+  const replay = new ReadableStream<Uint8Array>({
+    start(controller) {
+      if (value) controller.enqueue(value);
+      if (first.done) controller.close();
+    },
+    async pull(controller) {
+      const r = await reader.read();
+      if (r.done) controller.close();
+      else controller.enqueue(r.value);
+    },
+    cancel(reason) {
+      return reader.cancel(reason);
+    },
+  });
+  return new Response(replay, { status: res.status, statusText: res.statusText, headers: res.headers });
+};
+
+/** OpenAI-family client (chat + responses) with the error-aware fetch installed. */
+function openAIClient(c: ProviderConfig): OpenAI {
+  return new OpenAI({
+    apiKey: c.apiKey || "local",
+    baseURL: c.baseUrl ? normalizeApiBase(c.baseUrl) : undefined,
+    fetch: errorAwareFetch,
+  });
+}
 
 function parseArgs(raw: string): Record<string, unknown> {
   try {
@@ -191,10 +253,7 @@ function toOpenAiMessages(system: string, messages: ChatMessage[]): OpenAI.Chat.
 }
 
 async function openaiChatTurn(c: ProviderConfig, opts: TurnOpts): Promise<TurnResult> {
-  const client = new OpenAI({
-    apiKey: c.apiKey || "local",
-    baseURL: c.baseUrl ? normalizeApiBase(c.baseUrl) : undefined,
-  });
+  const client = openAIClient(c);
   const stream = await client.chat.completions.create(
     {
       model: c.model,
@@ -273,11 +332,8 @@ function toResponsesInput(messages: ChatMessage[]): unknown[] {
 }
 
 async function responsesTurn(c: ProviderConfig, opts: TurnOpts): Promise<TurnResult> {
-  const client = new OpenAI({
-    apiKey: c.apiKey || "local",
-    baseURL: c.baseUrl ? normalizeApiBase(c.baseUrl) : undefined,
-  });
-  const res = await (client.responses.create(
+  const client = openAIClient(c);
+  const stream = (await client.responses.create(
     {
       model: c.model,
       instructions: opts.system,
@@ -288,25 +344,61 @@ async function responsesTurn(c: ProviderConfig, opts: TurnOpts): Promise<TurnRes
         description: t.description,
         parameters: t.parameters,
       })) as never,
+      stream: true,
       ...(c.maxTokens && c.maxTokens > 0 ? { max_output_tokens: c.maxTokens } : {}),
     } as Parameters<typeof client.responses.create>[0],
     { signal: opts.signal, headers: { "X-Correlation-Id": opts.runId } },
-  ) as unknown as Promise<Record<string, unknown>>);
+  )) as unknown as AsyncIterable<OpenAI.Responses.ResponseStreamEvent>;
 
-  const output = ((res.output as unknown[]) ?? []).map((i) => i as Record<string, unknown>);
-  const text = output
-    .filter((item) => item.type === "message")
-    .flatMap((msg) => (msg.content as unknown[]) ?? [])
-    .filter((blk) => (blk as Record<string, unknown>).type === "output_text")
-    .map((blk) => (blk as Record<string, unknown>).text as string)
-    .join("");
-  if (text) opts.onDelta({ kind: "text", messageId: opts.messageId, delta: text });
-  const toolCalls: TurnToolCall[] = output
-    .filter((item) => item.type === "function_call")
-    .map((item) => ({
-      id: (item.call_id as string) || (item.id as string) || `call-${opts.messageId}`,
-      name: item.name as string,
-      arguments: (item.arguments as string) || "{}",
-    }));
-  return { text, toolCalls };
+  let text = "";
+  // function_call items keyed by output-item id; arguments accumulate across
+  // delta events, finalized (authoritatively) on the matching done event.
+  const openCalls = new Map<string, TurnToolCall>();
+  const calls: TurnToolCall[] = [];
+  for await (const ev of stream) {
+    switch (ev.type) {
+      // The Responses stream reports provider failures as in-band events, NOT
+      // as an HTTP error or a top-level `error` field — so the OpenAI SDK does
+      // not throw on them (it only throws for `data.error` / an `error` SSE
+      // event). Local servers use these for context-overflow, bad-model, etc.
+      // Throw so the agent loop settles the run as reason:"error" (→ error card)
+      // instead of finishing an empty turn silently.
+      case "error":
+        throw new Error(ev.message || "the model provider returned an error");
+      case "response.failed":
+        throw new Error(ev.response.error?.message || "the model provider reported a failed response");
+      case "response.output_text.delta":
+        text += ev.delta;
+        opts.onDelta({ kind: "text", messageId: opts.messageId, delta: ev.delta });
+        break;
+      // Some servers/models emit reasoning as a summary, others as raw text.
+      case "response.reasoning_summary_text.delta":
+      case "response.reasoning_text.delta":
+        opts.onDelta({ kind: "reasoning", messageId: opts.messageId, delta: ev.delta });
+        break;
+      case "response.output_item.added":
+        if (ev.item.type === "function_call") {
+          const call: TurnToolCall = {
+            id: ev.item.call_id || ev.item.id || `call-${opts.messageId}`,
+            name: ev.item.name,
+            arguments: "",
+          };
+          openCalls.set(ev.item.id ?? call.id, call);
+          calls.push(call);
+        }
+        break;
+      case "response.function_call_arguments.delta": {
+        const call = openCalls.get(ev.item_id);
+        if (call) call.arguments += ev.delta;
+        break;
+      }
+      case "response.function_call_arguments.done": {
+        const call = openCalls.get(ev.item_id);
+        if (call) call.arguments = ev.arguments;
+        break;
+      }
+    }
+  }
+  for (const call of calls) if (!call.arguments) call.arguments = "{}";
+  return { text, toolCalls: calls };
 }

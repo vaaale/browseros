@@ -77,6 +77,10 @@ export const CAPABILITIES: Capability[] = [
   { id: "file_write", group: "Files", context: "both", description: "Create or overwrite a text file." },
   { id: "file_mkdir", group: "Files", context: "both", description: "Create a directory." },
   { id: "file_delete", group: "Files", context: "action", description: "Delete a file or folder." },
+  { id: "file_edit", group: "Files", context: "both", description: "Find and replace a unique string in a VFS file." },
+  { id: "file_patch", group: "Files", context: "both", description: "Apply multiple find/replace hunks atomically to a VFS file." },
+  { id: "file_search", group: "Files", context: "both", description: "Search file content across a VFS subtree." },
+  { id: "file_glob", group: "Files", context: "both", description: "Find files matching a glob pattern in a VFS subtree." },
 
   // Config
   { id: "config_list", group: "Config", context: "action", description: "List configurable settings." },
@@ -133,11 +137,7 @@ export const CAPABILITIES: Capability[] = [
   { id: "bos_source_list", group: "Dev", context: "both", description: "List BOS source (read-only, sub-agent)." },
   { id: "bos_source_read", group: "Dev", context: "both", description: "Read a BOS source file (read-only, sub-agent)." },
   { id: "bos_source_search", group: "Dev", context: "both", description: "Search BOS source (read-only, sub-agent)." },
-  { id: "run_command", group: "Dev", context: "both", description: "Run a command in a sandboxed environment (bash/python/node)." },
-
-  // Docs
-  { id: "docs_list", group: "Docs", context: "action", description: "List documentation pages." },
-  { id: "docs_read", group: "Docs", context: "action", description: "Read a documentation page by ref." },
+  { id: "run_command", group: "Dev", context: "both", description: "Run a shell command in a sandboxed environment (python3, node, pip3, etc.)." },
 
   // Workflows
   { id: "workflow_create", group: "Workflows", context: "action", description: "Generate a workflow from a description." },
@@ -160,15 +160,6 @@ export const CAPABILITIES: Capability[] = [
   { id: "resume_scheduled_task", group: "Scheduler", context: "tool", description: "Resume a paused job and recalculate its next run time." },
   { id: "delete_scheduled_task", group: "Scheduler", context: "tool", description: "Delete a scheduled job." },
   { id: "run_task_now", group: "Scheduler", context: "tool", description: "Run a scheduled job immediately, regardless of its schedule." },
-
-  // Specs (one id per op, used by the main chat and delegated sub-agents).
-  { id: "spec_list", group: "Specs", context: "both", description: "List spec artifacts under a store." },
-  { id: "spec_read", group: "Specs", context: "both", description: "Read a spec artifact." },
-  { id: "spec_write", group: "Specs", context: "both", description: "Create/overwrite a spec artifact." },
-  { id: "spec_edit", group: "Specs", context: "both", description: "Find/replace within a spec artifact." },
-  { id: "spec_search", group: "Specs", context: "both", description: "Search spec artifacts." },
-  { id: "spec_template_read", group: "Specs", context: "both", description: "Read a spec-kit template/command prompt." },
-  { id: "spec_template_list", group: "Specs", context: "both", description: "List spec-kit templates." },
 
   // Build Studio app control (registered in the BS app's embedded chat).
   { id: "buildstudio_artifact_open", group: "Build Studio", context: "action", description: "Open a spec artifact in the Build Studio viewer." },
@@ -209,7 +200,7 @@ export const CAPABILITIES: Capability[] = [
 export const GROUP_DEFINITIONS: Record<string, { description: string }> = {
   "OS": { description: "BrowserOS shell control: opening and closing application windows, listing installed apps, browsing URLs, and changing the desktop wallpaper." },
   "Web": { description: "Web operations including search, fetching pages, and opening documents or URLs in preview windows." },
-  "Files": { description: "Virtual file system operations including listing, reading, writing, deleting files and creating directories in the user's sandboxed storage." },
+  "Files": { description: "Virtual file system operations including listing, reading, writing, editing, patching, searching, and globbing files, and creating/deleting directories — including mounted paths like /Specs, /Docs, and /Templates." },
   "Config": { description: "Configuration and settings management for BrowserOS: listing configurable settings and updating configuration values." },
   "Agents": { description: "Sub-agent management, creation, and delegation of tasks to specialized agents." },
   "Memory": { description: "Persistent long-term memory: saving durable facts, recalling stored entries, and searching topic shards for past context." },
@@ -218,9 +209,7 @@ export const GROUP_DEFINITIONS: Record<string, { description: string }> = {
   "MCP": { description: "Model Context Protocol server integration: connecting servers, listing and searching their tools, inspecting schemas, and invoking tools." },
   "Apps": { description: "Runtime-installed application management: installing, listing, building, and uninstalling BrowserOS apps." },
   "Dev": { description: "Repo and developer operations: reading and searching BrowserOS source, git status, delegating implementation work, and running sandboxed shell commands." },
-  "Docs": { description: "Documentation browsing: listing and reading BrowserOS documentation pages." },
   "Workflows": { description: "Multi-step workflow authoring and execution: creating, modifying, running, cancelling, validating, and exporting workflows." },
-  "Specs": { description: "Specification artifact management for the spec-kit pipeline: listing, reading, writing, editing, and searching specs across stores." },
   "Build Studio": { description: "Build Studio app control: opening spec artifacts in the viewer and refreshing the spec tree." },
   "UI Preview": { description: "Live A2UI mockup design surface: opening the UI Preview window, generating and pushing A2UI operations, and scrolling the paired spec viewer to a requirement." },
   "Gmail": { description: "Gmail integration: listing, reading, sending, replying, modifying, labeling, searching, and downloading attachments from messages." },

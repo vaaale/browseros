@@ -11,6 +11,7 @@ const ALL_CAPABILITIES: { id: AppCapability; label: string; description: string 
   { id: "settings:read", label: "Read settings",     description: "Read OS settings (theme, accent, etc.)" },
   { id: "notify",        label: "Notifications",     description: "Send desktop notifications" },
   { id: "window:title",  label: "Set window title",  description: "Update the window title bar" },
+  { id: "services:read", label: "Read services",     description: "Read a service's config (e.g. its bound port) — needed by an app bundled with its own service, like Terminal" },
 ];
 
 interface ManagedApp {

@@ -55,7 +55,7 @@ RUN pip install --no-cache-dir \
     "markitdown[all]" \
     Pillow \
     python-pptx \
-    docx
+    python-docx
 
 # pptxgenjs is a Node package (used by run_command skills for pptx generation).
 # Make it resolvable from /workspace scripts via NODE_PATH.
@@ -79,6 +79,7 @@ WORKDIR /app
 COPY . .
 
 # Install Claude Code and OpenCode CLIs globally
+RUN npm install -g --allow-scripts=@anthropic-ai/claude-code,opencode-ai
 RUN npm install -g @anthropic-ai/claude-code opencode-ai
 
 COPY docker-entrypoint.sh /docker-entrypoint.sh

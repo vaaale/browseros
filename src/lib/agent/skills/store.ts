@@ -6,7 +6,11 @@ import { writeFileAtomic } from "@/os/atomic-write";
 import { parseFrontmatter, buildFrontmatter, asString } from "@/lib/agent/subagents/markdown";
 
 const DIR = path.join(dataDir(), "skills");
-const SPEC_SEED_BUNDLE = path.join(process.cwd(), "seed", "spec-store");
+// Root of the seed directory. Each subfolder contains a SKILL.md (+ optional
+// scripts/, references/) copied into data/skills/ on first install (additive —
+// never overwrites edits or later user/agent-created skills of the same id).
+// Mirrors subagents/store.ts's SEED_DIR pattern for agents.
+const SEED_DIR = path.join(process.cwd(), "seed", "skills");
 const SKILL_FILE = "SKILL.md";
 const SCRIPTS_DIR = "scripts";
 const REFERENCES_DIR = "references";
@@ -46,144 +50,6 @@ function safeAssetName(name: string): string {
   return base;
 }
 
-const SEED: Omit<Skill, "id">[] = [
-  {
-    name: "Summarize a web page",
-    description: "Fetch a URL and produce a concise, faithful summary with key points.",
-    whenToUse: "When the user asks what a web page or article says.",
-    content: "1. Use web_fetch to load the URL.\n2. Identify the main thesis and 3-5 key points.\n3. Write a tight summary; do not invent facts; cite the URL.",
-  },
-  {
-    name: "Develop in BrowserOS",
-    description: "Build an app that runs in BOS, or modify BOS itself (built-in apps, Settings, desktop, or server logic). The work is delegated to the Claude developer sub-agent.",
-    whenToUse: "When the user asks to build/create/make an app in BOS, OR to modify/change/edit/redesign/fix/extend BOS itself or any built-in part of it (e.g. a Settings tab, the Skills page, the dock, an existing app's behavior).",
-    content: [
-      "Development in BOS is always done by the Claude developer sub-agent. Never write code yourself, and never use the virtual file system (file_list/file_read/file_write) to find or change code - the VFS is the user's sandboxed data, not BOS source.",
-      "",
-      "First decide which use-case applies, then follow the matching reference:",
-      "- Modifying BOS itself (built-in apps, Settings pages/tabs, the desktop, API routes, or server logic - editing the BOS source under src/): read references/modifying-bos-features.md.",
-      "- Building an app that runs in BOS (a self-contained app installed into BOS and shown in a window, without changing BOS's own code): read references/building-apps.md.",
-      "",
-      "Shared rules (both use-cases):",
-      "1. Do not explore the codebase or VFS yourself and do not try to understand the implementation first - delegate the whole request.",
-      "2. Before modifying BOS source, check whether the Assistant header has an Active feature branch selected. If not, ask the user to select or create one before calling the developer harness.",
-      "3. Delegate to the developer sub-agent: agent_delegate with agent 'developer' (Claude - required for all coding). For a large or vague request, optionally delegate to the planner sub-agent first and hand its plan to the developer.",
-      "4. When the developer reports back, summarize what changed and how to try it; the docs are source files under docs/usage (end users) and docs/dev (developers) and must be updated by the developer as part of the change.",
-      "5. If the developer sub-agent or Claude harness is unavailable, tell the user - never fall back to editing code through the VFS or writing it yourself.",
-    ].join("\n"),
-    references: [
-      {
-        name: "modifying-bos-features.md",
-        content: [
-          "Use this when changing BrowserOS's own built-in functionality - a built-in app, a Settings tab/page, the desktop/dock, an API route, or server logic. This edits the BOS source (a Next.js App Router app under src/), not the VFS.",
-          "",
-          "Delegate the change: first ensure the Assistant conversation has an Active feature branch selected; if not, ask the user to select or create one. Then call agent_delegate with agent 'developer'. Give a clear, complete description of the desired change plus acceptance criteria (what the user should see or be able to do afterward). The developer has repo-scoped access: the harness requires that active feature branch, checks out an isolated worktree for it, finds the right files, edits them, runs typecheck/lint, and stages the changes. Edits under src/ hot-reload in the dev server; some changes (new dependencies, server/config) need a restart.",
-          "",
-          "Tell the developer to read docs/dev/ (start at docs/dev/architecture-overview.md - architecture, repo and data/ layout, API routes, extension recipes) and specs/000-browseros-core/spec.md (requirements) before designing, and to follow BOS conventions: keep the server/client boundary (server-only modules behind /api routes), keep app content text-selectable, keep all source edits on the active feature branch, and update docs/usage + docs/dev (and specs/000-browseros-core/spec.md if the architecture changes).",
-          "",
-          "Design choices to prefer: make user-editable values a config namespace (a Settings tab) instead of hardcoding, which also exposes them to the assistant as tools; prefer a standalone installed app over a new built-in app when a self-contained app would do; keep changes focused and reversible; do not touch secrets, package.json, lockfiles, or build config unless explicitly asked.",
-          "",
-          "Require tests: the developer MUST add or extend Playwright end-to-end tests (and any fixtures they need) under e2e/ that cover the change, and run them (`npm run test:e2e`, or the `e2e` dev command) until green before reporting done. Tests must be deterministic and self-contained (seed their own state); for assistant/chat flows, assert only that the UI mounts/streams, never on the model's exact output.",
-          "",
-          "After it reports: summarize what changed and how to test it, and ensure the developer updated the relevant pages under docs/usage and docs/dev.",
-        ].join("\n"),
-      },
-      {
-        name: "building-apps.md",
-        content: [
-          "Use this when the user wants a new application inside BOS (a tool/utility shown in a window) - not a change to BOS's own code. The result is a self-contained app installed into BOS and rendered as an iframe.",
-          "",
-          "1. Clarify the spec: core features, UI, any data persistence, and whether it should call same-origin BOS APIs (e.g. /api/fs for the virtual file system). For a large or vague request, optionally delegate to the planner sub-agent first.",
-          "2. Delegate the build to the developer sub-agent (agent_delegate, agent 'developer', contentOnly: true - building an app is a content op, not a BOS-source edit, so it must not spin up a BOS-code candidate). Require: a single self-contained index.html with all CSS and JS inline; no external dependencies, CDNs, or network calls (same-origin BOS API calls are allowed); output ONLY the HTML document starting with <!doctype html>, and do not write files.",
-          "3. Extract the HTML from the developer's output; if wrapped in prose or a code fence, keep only the <!doctype html> ... </html> document.",
-          "4. Install it with app_install: pass name, the full html, and an appropriate Lucide icon (e.g. Clock, Calculator, ListTodo, Music; omit to auto-pick). app_install writes the app as a self-contained folder into the apps content repo (GitFS - git-versioned, discovered by directory listing, not the VFS), serves it at /apps/<id>, adds its icon to the dock, and opens it.",
-          "5. Document it: ensure the new app is described under docs/usage/apps (purpose, features, and how to use it) as part of the developer's work.",
-          "",
-          "Notes: this installs a standalone app; it does NOT change BOS's own code (for that, use modifying-bos-features.md). If the developer sub-agent or Claude harness is unavailable, tell the user - do not hand-write the app yourself.",
-        ].join("\n"),
-      },
-    ],
-  },
-  {
-    name: "Build Studio",
-    description:
-      "Drive the spec-kit pipeline to author and refine BOS specifications, then delegate implementation to the Developer.",
-    whenToUse:
-      "When authoring, refining, planning, analyzing, or implementing a BOS feature through specs — i.e. running any spec-kit step (constitution, specify, clarify, plan, tasks, analyze, implement, converge).",
-    pinned: true,
-    content: [
-      "The Build Studio skill drives the spec-kit pipeline. Specs live in external git-backed STORES under BOS_SPECS_ROOT — a BOS-owned system store (id 'bos-system-specs') and your writable 'user-specs' store; discover them with spec_list (empty path). Paths are STORE-PREFIXED `<storeId>/<rel>`. Governing principles live in the system store at bos-system-specs/.specify/memory/constitution.md; per-feature artifacts live in <store>/<NNN-feature>/ (spec.md, plan.md, tasks.md, ...). Blank templates and the authoritative command prompts are the spec-kit ENGINE in BOS source at .specify/templates — read them with spec_template_read / spec_template_list.",
-      "",
-      "Pipeline (run the step the user asks for; each builds on the previous):",
-      "1. constitution — establish/update project principles (bos-system-specs/.specify/memory/constitution.md).",
-      "2. specify — turn an idea into <store>/<NNN-feature>/spec.md (new specs go in user-specs).",
-      "3. clarify — resolve ambiguities; append a '## Clarifications' section to spec.md.",
-      "4. plan — produce plan.md (+ research/data-model/contracts when warranted).",
-      "5. tasks — produce tasks.md (an ordered, dependency-marked checklist).",
-      "6. analyze — cross-artifact consistency check (report only).",
-      "7. implement — delegate to the Developer to build the feature.",
-      "8. converge — assess code vs spec; record drift in bos-system-specs/discrepancies.md.",
-      "",
-      "How to run any step:",
-      "- Load the matching reference (references/<step>.md) and follow it.",
-      "- Read the command prompt and template with spec_template_read (commands/<step>.md and <artifact>-template.md), then author with a STORE-PREFIXED path. Use spec_write ONLY to create a new artifact (or an intentional full rewrite). To MODIFY an existing artifact — adding a section, updating requirements, appending clarifications — read it first, then make targeted changes with spec_edit (one change) or spec_patch (several ordered find/replace hunks in one atomic call). Never rewrite a whole file just to add or tweak content. Your file tools only reach the spec stores (never BOS source).",
-      "",
-      "Golden rules:",
-      "- The spec is the source of truth; never get ahead of an agreed spec.",
-      "- You NEVER write BOS source. The `implement` step is ALWAYS dev_delegate.",
-      "- New specs you author go in the user store (user-specs). Edits commit-on-save to the store's checked-out branch — inside a feature preview that is the feature branch, promoted/discarded together with the code; changing the constitution needs extra care.",
-      "- Keep specs and docs in sync; record drift in bos-system-specs/discrepancies.md.",
-      "- New feature folders are numbered NNN-slug (next = highest existing number + 1 within the store).",
-    ].join("\n"),
-    references: [
-      {
-        name: "constitution.md",
-        content:
-          "Step: constitution. Read commands/constitution.md and constitution-template.md with spec_template_read. Create or update the constitution at bos-system-specs/.specify/memory/constitution.md (spec_write/spec_edit) and bump the version + amended date line. This is global, not per-feature; it is a system-store edit and commits on save — treat constitution changes with extra care.",
-      },
-      {
-        name: "specify.md",
-        content:
-          "Step: specify. Choose a feature id with the NNN-slug convention (spec_list on 'user-specs' to find the highest existing number; next = +1). Read commands/specify.md and spec-template.md with spec_template_read, then write user-specs/<id>/spec.md following the template: prioritized, independently-testable user stories; functional requirements; measurable success criteria. Mark unknowns with [NEEDS CLARIFICATION].",
-      },
-      {
-        name: "clarify.md",
-        content:
-          "Step: clarify. Read <store>/<id>/spec.md; find ambiguities and [NEEDS CLARIFICATION] markers; ask the user concrete questions. Then append a '## Clarifications' section containing a '### Session <date>' list of Q→A, and update the affected requirements with spec_edit.",
-      },
-      {
-        name: "plan.md",
-        content:
-          "Step: plan. Read the spec plus commands/plan.md and plan-template.md via spec_template_read. Write <store>/<id>/plan.md: technical context; a Constitution Check against bos-system-specs/.specify/memory/constitution.md; concrete project structure (real file paths); and design notes. Add research.md / data-model.md / contracts/ only when warranted.",
-      },
-      {
-        name: "tasks.md",
-        content:
-          "Step: tasks. Read the spec and plan plus commands/tasks.md and tasks-template.md via spec_template_read. Write <store>/<id>/tasks.md: tasks grouped by user story, dependency-ordered, [P] for parallelizable, with exact file paths.",
-      },
-      {
-        name: "analyze.md",
-        content:
-          "Step: analyze. Read spec + plan + tasks and report cross-artifact inconsistencies and coverage gaps (e.g. requirements with no task, tasks with no requirement, constitution violations). Report only — do not edit artifacts unless asked.",
-      },
-      {
-        name: "implement.md",
-        content:
-          "Step: implement. Ensure spec.md, plan.md and tasks.md exist, and ensure an Active feature branch is selected for this conversation before delegating. Call dev_delegate with a complete task: tell the Developer to read the spec at `specs/<store>/<id>/` in its worktree (all spec stores are mounted read-only under `specs/` there), plus a summary of the spec and plan, the tasks to execute, and acceptance criteria. Instruct the Developer to keep edits on that feature branch, run typecheck/lint, and update docs. You never write code yourself — relay the Developer's result and reflect updated status.",
-      },
-      {
-        name: "converge.md",
-        content:
-          "Step: converge. Compare the implemented code against spec/plan/tasks (delegate investigation to the Developer if needed). Append any remaining work to tasks.md, and record divergences between code and spec in bos-system-specs/discrepancies.md.",
-      },
-    ],
-  },
-];
-
-// Skills that must exist on EVERY install, including ones upgraded from before
-// the skill shipped. Back-filled only when missing (never clobbering edits).
-const ADDITIVE_SEED = SEED.filter((s) => s.name === "Build Studio");
-
 async function seedFromDiskPath(skillDir: string): Promise<void> {
   const skillFile = path.join(skillDir, SKILL_FILE);
   let raw: string;
@@ -196,7 +62,12 @@ async function seedFromDiskPath(skillDir: string): Promise<void> {
   const name = asString(meta.name) || path.basename(skillDir);
   const id = slugify(name);
   const dirPath = path.join(DIR, id);
-  if (await pathExists(path.join(dirPath, SKILL_FILE))) return; // additive — never overwrite
+  // additive — never overwrite an existing skill of this id, in EITHER on-disk
+  // form: the directory form (dirPath/SKILL.md) or the legacy flat-file form
+  // (DIR/id.md). A skill may have evolved past its seed content (e.g. via
+  // skill_improve's reflective optimizer), so re-seeding must never shadow it.
+  if (await pathExists(path.join(dirPath, SKILL_FILE))) return;
+  if (await pathExists(path.join(DIR, `${id}.md`))) return;
   const scripts = await readAssetsDir(path.join(skillDir, SCRIPTS_DIR));
   const references = await readAssetsDir(path.join(skillDir, REFERENCES_DIR));
   const skill: Skill = {
@@ -218,34 +89,13 @@ async function ensureSeed(): Promise<void> {
   if (seeded) return;
   seeded = true;
   await fs.mkdir(DIR, { recursive: true });
-  const existing = await listSkillIds();
-  if (existing.length === 0) {
-    for (const s of SEED) await writeSkill({ id: slugify(s.name), createdBy: "seed", ...s });
-  } else {
-    for (const s of ADDITIVE_SEED) {
-      if (!existing.includes(slugify(s.name))) await writeSkill({ id: slugify(s.name), createdBy: "seed", ...s });
-    }
-  }
-  // Auto-discover skill folders inside the spec-store seed bundle: any subdirectory
-  // at depth 1 or 2 that contains a SKILL.md is seeded additively into data/skills/.
-  const bundleEntries = await fs.readdir(SPEC_SEED_BUNDLE, { withFileTypes: true }).catch(() => []);
-  for (const entry of bundleEntries) {
-    if (!entry.isDirectory()) continue;
-    const featureDir = path.join(SPEC_SEED_BUNDLE, entry.name);
-    // Check for a top-level SKILL.md (skill folder directly in bundle)
-    if (await pathExists(path.join(featureDir, SKILL_FILE))) {
-      await seedFromDiskPath(featureDir);
-      continue;
-    }
-    // Check one level deeper (e.g. seed/spec-store/013-build-studio-agentic/feature-wizard/)
-    const subEntries = await fs.readdir(featureDir, { withFileTypes: true }).catch(() => []);
-    for (const sub of subEntries) {
-      if (!sub.isDirectory()) continue;
-      const subDir = path.join(featureDir, sub.name);
-      if (await pathExists(path.join(subDir, SKILL_FILE))) {
-        await seedFromDiskPath(subDir);
-      }
-    }
+  // Every subfolder of seed/skills/ is seeded additively into data/skills/ (never
+  // overwrites an existing skill of the same id — whether from a prior seed, or
+  // one a user/agent created independently). Mirrors subagents/store.ts's agent
+  // seeding exactly: no fresh-install-only distinction, just per-id backfill.
+  const entries = await fs.readdir(SEED_DIR, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    if (entry.isDirectory()) await seedFromDiskPath(path.join(SEED_DIR, entry.name));
   }
 }
 
@@ -384,9 +234,16 @@ export async function listSkills(): Promise<Skill[]> {
   return skills;
 }
 
+// LLM tool callers occasionally invent a namespace prefix (e.g. "skill:foo")
+// even when told to copy the id verbatim — strip it defensively so lookups
+// don't fail on an otherwise-correct id.
+function normalizeSkillRef(idOrName: string): string {
+  return idOrName.trim().replace(/^skills?:\s*/i, "");
+}
+
 export async function getSkill(idOrName: string): Promise<Skill | undefined> {
   await ensureSeed();
-  const key = idOrName.toLowerCase();
+  const key = normalizeSkillRef(idOrName).toLowerCase();
   const direct = await readSkillById(key, true);
   if (direct) return direct;
   const ids = await listSkillIds();

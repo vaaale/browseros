@@ -1,7 +1,8 @@
 import "server-only";
 import type { AssistantTool } from "../../tools";
 import { serverTool, schema, p } from "./util";
-import { listSkills, getSkill, saveSkill, readSkillFile, listSkillFiles } from "@/lib/agent/skills/store";
+import { listSkills, getSkill, saveSkill, patchSkill, readSkillFile, listSkillFiles } from "@/lib/agent/skills/store";
+import { touchSkill } from "@/lib/agent/skills/usage";
 import { logger } from "@/lib/logging";
 
 // Skill library tools, ported from SkillsActions.tsx: list skills, load a
@@ -76,6 +77,29 @@ export function skillsTools(): Record<string, AssistantTool> {
         });
         logger().info("skills", "skill created", { id: skill.id, name: skill.name });
         return `Saved skill "${skill.name}".`;
+      },
+    ),
+
+    skill_patch: serverTool(
+      "skill_patch",
+      "Make a contained edit to an EXISTING skill's instructions — replaces the first occurrence of `find` with `replace` in its content. Use this instead of skill_save when only part of a skill needs correcting (e.g. after the user points out a mistake in it). `find` must be an exact substring copied verbatim from the skill's content (load it first with skill_load if you don't already have it verbatim).",
+      schema(
+        {
+          skill: p.str("Skill name or id"),
+          find: p.str("Exact substring to replace (copy verbatim from the skill's content)"),
+          replace: p.str("Replacement text"),
+        },
+        ["skill", "find", "replace"],
+      ),
+      async (input) => {
+        const id = String(input.skill ?? "");
+        const find = String(input.find ?? "");
+        const replace = String(input.replace ?? "");
+        const r = await patchSkill(id, find, replace);
+        if ("error" in r) return `Error: ${r.error}`;
+        await touchSkill(r.id, "patch");
+        logger().info("skills", "skill patched", { id: r.id, name: r.name });
+        return `Patched "${r.name}".`;
       },
     ),
   };

@@ -4,8 +4,12 @@
 multi‑step automations where each step delegates work to a sub‑agent or calls a
 tool, with dependencies between steps.
 
-> Workflow Manager is an *installed* app (it appears once installed), not a
-> built‑in one. If you don't see it, ask the assistant to install or rebuild it.
+> Workflow Manager is a **service** — install it once from Settings →
+> Plugins → Services (or the Marketplace app's "My Apps" section), then click
+> **Start**. Open its UI with the service card's **Open App** button — it
+> doesn't appear as its own desktop/dock icon. See
+> [Settings → Plugins](../settings/plugins.md) for the general Services
+> workflow (install/start/stop/config/logs).
 
 ---
 

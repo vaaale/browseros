@@ -68,6 +68,74 @@ responses. Stream with NDJSON if long‑running.
 
 ---
 
+## Add server boot-time initialization logic
+
+1. Put the logic in `src/instrumentation.node.ts`'s `register()` (or a new
+   Node-only module it imports) — **not** a bare new file that you assume
+   Next.js will discover on its own.
+2. Next only ever calls the `register()` exported from the file literally
+   named `src/instrumentation.ts`. If your logic lives elsewhere, that file
+   MUST `import()` and call it explicitly (gate on
+   `process.env.NEXT_RUNTIME === "nodejs"` if it's Node-only) — this is
+   already wired for `instrumentation.node.ts`, but if you add *another*
+   split-out boot file, it needs the same explicit wiring, not just existing
+   next to the others.
+3. **Verify it actually ran** — check the logs for output your code produces,
+   or check that a file/directory it's supposed to create/read exists on
+   disk. Don't stop at "the code compiles and looks wired up": an entire
+   boot sequence (service seeding, registry init, scheduler start) silently
+   never ran for a while despite looking correct, because the previous
+   `instrumentation.ts` was a no-op stub.
+
+→ [Design heuristics](design-heuristics.md)
+
+---
+
+## Add a service (background daemon)
+
+1. `<item-id>/services/service.json` — manifest (`id` must equal the folder
+   name, `entry` relative to `services/`) + `<item-id>/services/<entry>` — a
+   worker script. Guard every top‑level `parentPort` use with
+   `if (parentPort) { ... }` — the entry is also `import()`ed from the main
+   thread at start time (CH‑011).
+2. `<item-id>/config/` (required, may be empty) — default config file(s).
+   Optional `app/` (bundled iframe UI), `spec/`, `doc/`.
+3. Place it directly under `dataDir()/user-apps/<id>/` — the user's own GitFS
+   repo (the same concept as `user-specs/`; BOS never seeds or deletes from
+   it) — or install it via a marketplace item's `services.entrypoint`.
+   Installing creates symlinks under `dataDir()/system/` — it does not copy
+   or otherwise modify the item's source.
+4. It shows up in Settings → Plugins → Services automatically once installed;
+   no registry edit needed.
+5. If the item bundles its own `app/` and that app needs to reach BOS APIs
+   (e.g. to read its own service's bound port), it must go through the
+   `window.__bos` broker + a granted `AppCapability` once installed as a real
+   app — a direct `fetch()` breaks under the `marketplace`-origin sandbox. See
+   [Apps guide](guides/apps.md#trust-tiers-the-sdk--sandbox-028).
+6. **Start the service through the real API (`npm run dev`) and confirm it
+   reaches `"running"`** — the unit test suite runs in plain Node and won't
+   catch a Turbopack-only failure like a bundler intercepting `new
+   Worker(...)`. Green tests alone are not sufficient here.
+
+→ [Service Daemons](apps/services.md)
+
+---
+
+## Add a hook-based plugin (agent-run pipeline)
+
+1. Implement `PluginDefinition` (`src/lib/plugins/types.ts`) — a manifest plus
+   whichever `BosPluginHooks` you need (`beforeRun`/`extendSystemPrompt`/
+   `beforeToolCall`/`afterToolCall`/`afterRun`/`onRunFinished`/`onError`).
+2. Register it: built-ins do this via a tiny `init.ts` that calls
+   `registerPlugin(def)` at import time (see `src/plugins/compaction/init.ts`);
+   import that `init` module from both `src/instrumentation.node.ts` and
+   `src/app/api/plugins/route.ts`.
+3. It appears in Settings → Plugins automatically (toggle, reorder, configure).
+
+→ [Plugin pipeline](plugins/plugin-pipeline.md)
+
+---
+
 ## Add a skill (seed)
 
 Add to the seed list in `src/lib/agent/skills/store.ts` (or create at runtime via

@@ -12,9 +12,23 @@ import { createSetupRouter } from "./routers/setup";
 import { createBosProxy } from "./proxy";
 import { initLifecycle, reconcileOnStartup, getAllInstances, stopInstance } from "./lifecycle";
 import { initLogStore } from "./log-store";
+import { resolveOwnMountSource } from "./docker";
 
 async function main(): Promise<void> {
   const cfg = loadConfig();
+
+  // Self-discover the HOST-absolute path for our own /user-data mount (024
+  // FR-020) instead of trusting an operator-supplied, invocation-dependent
+  // env var. Falls back to the cwd-relative placeholder set by loadConfig()
+  // when not running in a container at all (e.g. local dev).
+  const discoveredVolumeBase = await resolveOwnMountSource("/user-data");
+  if (discoveredVolumeBase) {
+    cfg.bosVolumeBaseHost = discoveredVolumeBase;
+    console.log(`[bastion] Resolved host path for /user-data: ${discoveredVolumeBase}`);
+  } else {
+    console.log(`[bastion] Not running in a container (or /user-data isn't mounted) — using ${cfg.bosVolumeBaseHost} for host-side paths.`);
+  }
+
   const provider = await loadProvider(cfg);
 
   initLifecycle(cfg);

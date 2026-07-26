@@ -39,8 +39,13 @@ export async function DELETE(req: NextRequest) {
   const id = url.searchParams.get("id");
   if (!id) return NextResponse.json({ error: "id query param required" }, { status: 400 });
   const purge = url.searchParams.get("purge") === "1" || url.searchParams.get("purge") === "true";
-  const apps = purge ? await purgeApp(id) : await uninstallApp(id);
-  return NextResponse.json({ apps });
+  try {
+    const apps = purge ? await purgeApp(id) : await uninstallApp(id);
+    return NextResponse.json({ apps });
+  } catch (err) {
+    // e.g. purging an item whose service is still installed
+    return NextResponse.json({ error: (err as Error).message }, { status: 400 });
+  }
 }
 
 // Restore a previously uninstalled app.

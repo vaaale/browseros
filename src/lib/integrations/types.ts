@@ -119,8 +119,9 @@ export interface IntegrationEvent {
 }
 
 /**
- * A pending OAuth flow held in-memory while the user is at the provider's
- * consent screen. Consumed once by the callback handler.
+ * A pending OAuth flow persisted (via the SecretsStore) while the user is at
+ * the provider's consent screen, so it survives a process restart between the
+ * start and callback requests. Consumed once by the callback handler.
  */
 export interface PendingOAuthFlow {
   integrationId: string;
@@ -130,4 +131,13 @@ export interface PendingOAuthFlow {
   scopes: string[];
   /** Epoch millis when this flow was created. Used for TTL pruning. */
   createdAt: number;
+  /** When present, this flow authenticates a git remote (not an integration). */
+  remoteName?: string;
+  /**
+   * Exact public origin used to build the redirect URI at flow start. The
+   * callback (token exchange) must send a byte-for-byte identical redirect_uri,
+   * so we persist the resolved origin here — the callback request cannot
+   * re-derive it (the provider redirects back without the browserOrigin hint).
+   */
+  publicOrigin?: string;
 }

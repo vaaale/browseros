@@ -18,6 +18,10 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ runId: stri
   const since = Number(new URL(req.url).searchParams.get("since") ?? "0") || 0;
 
   const encoder = new TextEncoder();
+  // Keepalive interval: send a comment-only NDJSON line every 25 s so reverse
+  // proxies (Traefik, nginx) don't kill an idle connection while the model is
+  // thinking. 25 s is safely below Traefik's default 30 s idle timeout.
+  const KEEPALIVE_MS = 25_000;
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
       let closed = false;
@@ -32,6 +36,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ runId: stri
       const close = () => {
         if (closed) return;
         closed = true;
+        clearInterval(keepalive);
         unsubscribe();
         try {
           controller.close();
@@ -50,6 +55,16 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ runId: stri
         }
         if (e.type === "run_finished") close();
       };
+      // Send a no-op ping line so the proxy doesn't consider the connection idle.
+      const keepalive = setInterval(() => {
+        if (closed) return;
+        try {
+          controller.enqueue(encoder.encode("{\"type\":\"ping\"}\n"));
+        } catch {
+          closed = true;
+          clearInterval(keepalive);
+        }
+      }, KEEPALIVE_MS);
       unsubscribe = runManager().subscribe(run, since, send);
       // A finished run has already replayed everything subscribe() had.
       if (run.status !== "running") close();
@@ -61,6 +76,9 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ runId: stri
     headers: {
       "content-type": "application/x-ndjson; charset=utf-8",
       "cache-control": "no-cache, no-transform",
+      // Disable proxy buffering (Nginx, Traefik, etc.) so events are forwarded
+      // to the browser immediately instead of being held until the buffer fills.
+      "x-accel-buffering": "no",
     },
   });
 }

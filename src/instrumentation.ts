@@ -1,16 +1,11 @@
-// Next.js server-boot hook. Runs once per server process (dev + prod, and once
-// per user container under the bastion). We use it to start the unified
-// scheduler daemon so scheduled jobs — notably the fast/slow memory loops —
-// actually fire on their interval without a UI being open. Before this, nothing
-// called startDaemon(), so scheduled jobs only ran when triggered manually.
+// Next.js only ever calls the register() exported from THIS exact file — it
+// does not also load instrumentation.node.ts on its own. All Node.js-specific
+// startup logic (user-apps/ seeding, service registry + scheduler daemon
+// start) lives there instead, kept out of the Edge runtime bundle by gating
+// the import behind NEXT_RUNTIME.
 export async function register(): Promise<void> {
-  // Only the Node.js runtime can run the daemon (fs, timers, server-only libs).
-  if (process.env.NEXT_RUNTIME !== "nodejs") return;
-  try {
-    const { startDaemon } = await import("@/lib/scheduler/daemon");
-    startDaemon();
-  } catch (err) {
-    // Never let a scheduler-start failure crash server boot.
-    console.error("[instrumentation] failed to start scheduler daemon:", err);
+  if (process.env.NEXT_RUNTIME === "nodejs") {
+    const { register: registerNode } = await import("./instrumentation.node");
+    await registerNode();
   }
 }

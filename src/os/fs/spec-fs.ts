@@ -20,8 +20,9 @@ import { logger } from "@/lib/logging/server-logger";
 import type { FSBackend } from "../fs-types";
 import type { VfsEntry } from "../types";
 
-// SpecFS (027-vfs-specfs): the FSBackend mounted at Documents/Specs, backing the
-// user spec store. It ADOPTS the 020 branch-coupled worktree model rather than
+// SpecFS (027-vfs-specfs): the FSBackend mounted at /Specs/<store-id> (one
+// instance per spec store — user-specs and bos-system-specs). It ADOPTS the
+// 020 branch-coupled worktree model rather than
 // forking it — NO base `git checkout`, ever:
 //   * Writes require an active Feature Context and land in a WORKTREE on that
 //     feature's branch (Supervisor-provisioned when a preview exists, else a
@@ -40,7 +41,7 @@ const DEBOUNCE_MS = 2_000;
 export class SpecFSNoContextError extends Error {
   constructor() {
     super(
-      "No active feature context — start or resume a feature before writing to Documents/Specs.",
+      "No active feature context — start or resume a feature before writing to /Specs.",
     );
     this.name = "SpecFSNoContextError";
   }

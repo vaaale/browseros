@@ -14,6 +14,7 @@
 
 # testing
 /coverage
+tests/**/.tmp*/
 
 # playwright
 /test-results/
@@ -52,6 +53,11 @@ next-env.d.ts
 
 # browseros runtime data (VFS, settings, memory, mcp/provider config)
 /data
+# supervisor preview isolation: code worktrees and data-clone snapshots.
+# These live OUTSIDE /data so that copying /data never recurses into them.
+# Default locations; override with BOS_WORKTREES / BOS_DATA_CLONES.
+/bos-worktrees
+/bos-data-clones
 # per-user data volumes created by the bastion Docker deployment
 /user-data
 

@@ -30,6 +30,10 @@ const TOOL_TIMEOUT_MIN = 10;
 const TOOL_TIMEOUT_MAX = 3600;
 const TOOL_TIMEOUT_DEFAULT = 600;
 
+const MAX_AGENT_STEPS_MIN = 4;
+const MAX_AGENT_STEPS_MAX = 200;
+const MAX_AGENT_STEPS_DEFAULT = 32;
+
 // Mirrors the server-side clamping in src/lib/config/registry.ts so the UI
 // never shows a value the server would reject or rewrite.
 function clampInt(n: number, min: number, max: number, fallback: number): number {
@@ -49,6 +53,7 @@ export function ToolsTab() {
   const [overrides, setOverrides] = useState<Record<string, string>>({});
   const [maxFindResults, setMaxFindResults] = useState<number>(MAX_FIND_RESULTS_DEFAULT);
   const [toolCallTimeoutSec, setToolCallTimeoutSec] = useState<number>(TOOL_TIMEOUT_DEFAULT);
+  const [maxAgentSteps, setMaxAgentSteps] = useState<number>(MAX_AGENT_STEPS_DEFAULT);
 
   const load = useCallback(async () => {
     try {
@@ -68,6 +73,10 @@ export function ToolsTab() {
       const t = tools?.values?.toolCallTimeoutSec;
       if (typeof t === "number" && Number.isFinite(t)) {
         setToolCallTimeoutSec(clampInt(t, TOOL_TIMEOUT_MIN, TOOL_TIMEOUT_MAX, TOOL_TIMEOUT_DEFAULT));
+      }
+      const s = tools?.values?.maxAgentSteps;
+      if (typeof s === "number" && Number.isFinite(s)) {
+        setMaxAgentSteps(clampInt(s, MAX_AGENT_STEPS_MIN, MAX_AGENT_STEPS_MAX, MAX_AGENT_STEPS_DEFAULT));
       }
     } catch { /* keep previous value */ }
   }, []);
@@ -102,6 +111,12 @@ export function ToolsTab() {
     const clamped = clampInt(value, TOOL_TIMEOUT_MIN, TOOL_TIMEOUT_MAX, TOOL_TIMEOUT_DEFAULT);
     setToolCallTimeoutSec(clamped);
     await saveToolsValue({ toolCallTimeoutSec: clamped });
+  }, [saveToolsValue]);
+
+  const saveMaxAgentSteps = useCallback(async (value: number) => {
+    const clamped = clampInt(value, MAX_AGENT_STEPS_MIN, MAX_AGENT_STEPS_MAX, MAX_AGENT_STEPS_DEFAULT);
+    setMaxAgentSteps(clamped);
+    await saveToolsValue({ maxAgentSteps: clamped });
   }, [saveToolsValue]);
 
   const patchServer = useCallback(async (patch: { id: string; description: string }) => {
@@ -178,6 +193,25 @@ export function ToolsTab() {
               value={toolCallTimeoutSec}
               onChange={(e) => setToolCallTimeoutSec(Number(e.target.value))}
               onBlur={(e) => void saveToolCallTimeout(Number(e.target.value))}
+              className="w-20 rounded border border-white/10 bg-black/30 px-2 py-1 text-right text-[11px] text-white outline-none focus:border-white/30"
+            />
+          </label>
+          <label className="flex items-center gap-2 text-[11px] text-white/80">
+            <span className="min-w-0 flex-1">
+              <span className="font-semibold text-white/90">Max agent steps</span>
+              <span className="block text-[10px] text-white/50">
+                Maximum model turns per agent run. Each agent (including delegated sub-agents) gets this
+                many steps independently, so a run with one delegation may use up to 2× this value.
+                Range {MAX_AGENT_STEPS_MIN}–{MAX_AGENT_STEPS_MAX}, default {MAX_AGENT_STEPS_DEFAULT}.
+              </span>
+            </span>
+            <input
+              type="number"
+              min={MAX_AGENT_STEPS_MIN}
+              max={MAX_AGENT_STEPS_MAX}
+              value={maxAgentSteps}
+              onChange={(e) => setMaxAgentSteps(Number(e.target.value))}
+              onBlur={(e) => void saveMaxAgentSteps(Number(e.target.value))}
               className="w-20 rounded border border-white/10 bg-black/30 px-2 py-1 text-right text-[11px] text-white outline-none focus:border-white/30"
             />
           </label>

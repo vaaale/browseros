@@ -40,19 +40,6 @@ export interface InnerLoopResult {
  *  `dev_delegate` tool call site. */
 export const MAX_DELEGATE_DEPTH = 2;
 
-const DEV_MAX_STEPS = 40;
-const DEFAULT_MAX_STEPS = 12;
-
-/** A local agent wielding repo-scoped/spec-scoped tools (or able to delegate
- *  to the Developer) is doing multi-step dev/spec work; give it a much larger
- *  step budget than a quick ephemeral helper. Ports runner.ts's `isExtended`
- *  heuristic, now driven by the delegate's own resolved allowlist. */
-export function defaultMaxSteps(gate: ToolGateConfig): number {
-  const isExtended = [...gate.allow].some(
-    (id) => id.startsWith("bos_source_") || id.startsWith("spec_") || id === "dev_delegate",
-  );
-  return isExtended ? DEV_MAX_STEPS : DEFAULT_MAX_STEPS;
-}
 
 /** Depth-guard check (FR-024(b)). Callers pass the CURRENT ctx's
  *  `delegationDepth` (0 for a top-level call); `runInnerLoop` itself

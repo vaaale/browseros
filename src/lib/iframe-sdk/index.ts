@@ -29,6 +29,10 @@ interface BosApi {
   settings: { get: () => Promise<unknown> };
   window: { setTitle: (title: string) => Promise<unknown> };
   notify: (message: string, opts?: Record<string, unknown>) => Promise<unknown>;
+  /** Requires the "services:read" capability — a service's config files +
+   *  runtime state (e.g. its bound port), for apps bundled with their own
+   *  service (e.g. Terminal) that need to find where it's listening. */
+  services: { getConfig: (id: string) => Promise<unknown> };
   /** Per-app persistent key/value store (requires the "storage" capability).
    *  Also backs the localStorage/sessionStorage shim. */
   storage: {
@@ -76,6 +80,7 @@ type BosWindow = Window & { __bos?: BosApi };
     settings: { get: () => call("settings:get", {}) },
     window: { setTitle: (title) => call("window:title", { title }) },
     notify: (message, opts) => call("notify", { message, ...(opts ?? {}) }),
+    services: { getConfig: (id) => call("services:config", { id }) },
     storage: {
       get: (key) => call("storage:get", { key }) as Promise<string | null>,
       set: (key, value) => call("storage:set", { key, value }),

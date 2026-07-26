@@ -146,8 +146,12 @@ async function openaiResponsesToolLoop(
       results.push({ type: "function_call_output", call_id: call.call_id as string, output: out });
     }
 
-    // Next input: previous response output items + tool results
-    input = [...output, ...results];
+    // Next input: full history so far + this response's output items + tool
+    // results. Some OpenAI-compatible endpoints (e.g. Qwen-style tool-calling
+    // chat templates) reject any request whose message list has no role:"user"
+    // entry — replacing `input` instead of appending would drop the original
+    // user prompt after the first tool call.
+    input = [...input, ...output, ...results];
   }
 
   return {

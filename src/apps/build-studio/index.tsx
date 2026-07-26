@@ -3,6 +3,7 @@
 import { Children, isValidElement, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Markdown } from "@copilotkit/react-ui";
 import "@copilotkit/react-ui/styles.css";
+import { markdownRenderers } from "@/components/agent/MarkdownRenderers";
 import {
   ChevronDown,
   ChevronRight,
@@ -175,6 +176,8 @@ export default function BuildStudioApp({ windowId }: AppProps) {
   const highlightedElsRef = useRef<HTMLElement[]>([]);
   const specsRef = useRef(specs);
   useEffect(() => { specsRef.current = specs; }, [specs]);
+  const treeRef = useRef(tree);
+  useEffect(() => { treeRef.current = tree; }, [tree]);
 
   useEffect(() => {
     try {
@@ -275,6 +278,21 @@ export default function BuildStudioApp({ windowId }: AppProps) {
   }, []);
 
   const openFile = useCallback((path: string, branch = "") => {
+    // When called from the tool (no branch arg), look up the draft branch from
+    // the tree so specs that only exist in a worktree are fetched correctly.
+    let resolvedBranch = branch;
+    if (!resolvedBranch) {
+      outer: for (const group of treeRef.current) {
+        for (const featureNode of group.children ?? []) {
+          for (const child of featureNode.children ?? []) {
+            if (child.path === path && child.branch) {
+              resolvedBranch = child.branch;
+              break outer;
+            }
+          }
+        }
+      }
+    }
     // Set synchronously, not just via the mirroring effects below: a real
     // agent calls buildstudio_artifact_open then buildstudio_artifact_highlight
     // back-to-back, and both can be dispatched to this window in the same
@@ -283,7 +301,7 @@ export default function BuildStudioApp({ windowId }: AppProps) {
     activePathRef.current = path;
     loadingRef.current = true;
     setActivePath(path);
-    setActiveBranch(branch);
+    setActiveBranch(resolvedBranch);
     // Force a fresh fetch even when re-opening the SAME path (e.g. the agent
     // edits a spec then re-opens it) — activePath/activeBranch alone wouldn't
     // change value in that case, so the content-fetch effect wouldn't re-run.
@@ -336,7 +354,12 @@ export default function BuildStudioApp({ windowId }: AppProps) {
       let el: Element | null = null;
       const domDeadline = Date.now() + 3000;
       while (!el && Date.now() < domDeadline) {
-        await new Promise((r) => requestAnimationFrame(r));
+        // Race rAF against a 100 ms timeout so the loop always makes progress
+        // even when rAF is suspended (minimized window, hidden tab).
+        await Promise.race([
+          new Promise<void>((r) => requestAnimationFrame(() => r())),
+          new Promise<void>((r) => setTimeout(r, 100)),
+        ]);
         el = viewerRef.current?.querySelector(`#${CSS.escape(anchor)}`) ?? null;
       }
       if (!el) {
@@ -429,6 +452,7 @@ export default function BuildStudioApp({ windowId }: AppProps) {
         return <Tag id={slugify(plainText(children))}>{children}</Tag>;
       };
     return {
+      ...markdownRenderers,
       h1: heading(1),
       h2: heading(2),
       h3: heading(3),

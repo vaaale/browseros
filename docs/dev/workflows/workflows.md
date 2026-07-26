@@ -1,8 +1,17 @@
 # Workflows
 
 Multi‑step automations that orchestrate sub‑agents and tools. Modules:
-`src/lib/workflows/`. User‑facing: `docs/usage/apps/workflow-manager.md`. Surfaced
-by the **Workflow Manager** installed app.
+`src/lib/workflows/`. User‑facing: `docs/usage/apps/workflow-manager.md`.
+
+Surfaced as a [Service Daemon](../apps/services.md) item —
+`dataDir()/user-apps/workflows/` (the user's own GitFS repo — BOS doesn't ship
+or seed this item; the user places it there themselves) — installed via
+Settings → Plugins → Services (or the Marketplace's "My Apps" section), then
+reached via the service card's "Open App" button (`GET
+/api/services/workflows/app`, same-origin `window.open()`, not a sandboxed
+installed app). This item predates the Service Daemons architecture; it was
+migrated from a bespoke silently-auto-installed GitFS app
+(`ensureWorkflowApp()` — since removed) onto the standard item shape.
 
 ---
 
@@ -45,10 +54,28 @@ live progress. Supports **cancellation**.
 - `tool` steps → the agent calls exactly the one named BOS/MCP tool.
 - `ag-ui` steps → emit a UI/data payload.
 
-## Generate / install (`generate.ts`, `install.ts`, `template.ts`)
+**Execution stays on the main thread — deliberately not a worker_thread.**
+`delegate`/`tool` steps call `runSubAgent()`, the full assistant/LLM stack,
+which can't reasonably run isolated in a worker (would mean bundling that
+entire stack into a standalone script, or a full IPC/RPC bridge back to the
+main thread, for no real isolation benefit — see
+[Design heuristics](../design-heuristics.md)). The `workflows` service
+(`dataDir()/user-apps/workflows/services/index.js`) is a lifecycle-only shell
+instead: `isWorkflowsServiceRunning()` checks `serviceRegistry().getService("workflows")?.state === "running"`,
+and both `POST /api/workflows/run` and the `workflow_run` assistant tool
+refuse (503 / an error string, respectively) unless it's `true`. This is what
+gives Settings → Plugins → Services' Start/Stop toggle real meaning here.
+`readDefaultMaxConcurrentSteps()` also reads the service's
+`dataDir()/config/workflows/workflows.json` (`defaultMaxConcurrentSteps`,
+default `5`) as the fallback when a workflow doesn't set its own
+`config.maxConcurrentSteps`.
 
-`generate.ts` builds a workflow from a natural‑language description (LLM). `template.ts`
-provides scaffolding; `install.ts` installs the **Workflow Manager** app content.
+## Generate (`generate.ts`)
+
+Builds a workflow from a natural‑language description via a direct LLM call
+(`@/lib/agent/llm`'s `complete()`) — not `runSubAgent()`, so unlike `run` it
+is **not** gated on the `workflows` service running; drafting/saving a
+workflow definition doesn't need anything installed.
 
 ---
 
@@ -58,13 +85,14 @@ provides scaffolding; `install.ts` installs the **Workflow Manager** app content
 |---|---|
 | `/api/workflows` | list / get / create / update / delete |
 | `/api/workflows/validate` | validate a workflow |
-| `/api/workflows/run` | execute (**NDJSON** event stream) |
+| `/api/workflows/run` | execute (**NDJSON** event stream); 503 if the `workflows` service isn't running |
 | `/api/workflows/status` | runtime status of a run |
 | `/api/workflows/cancel` | cancel a run |
 | `/api/workflows/generate` | generate from a description |
 
-Client actions (`WorkflowActions.tsx`): `createWorkflow`, `modifyWorkflow`,
-`runWorkflow`, `getStatus`, `cancelWorkflow`, `exportWorkflow`, `validateWorkflow`.
+Assistant-facing tools (`src/lib/assistant/tools/server/workflows.ts`):
+`workflow_create`, `workflow_modify`, `workflow_run`, `workflow_status`,
+`workflow_cancel`, `workflow_export`, `workflow_validate`.
 
 ---
 

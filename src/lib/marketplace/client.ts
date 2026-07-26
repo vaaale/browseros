@@ -7,16 +7,18 @@ import { dataDir } from "@/os/data-dir";
 import { writeFileAtomic } from "@/os/atomic-write";
 import { commitAll } from "@/lib/gitfs/store";
 import { userSpecRoot } from "@/lib/specs/spec-mount";
-import { installApp as storeInstallApp } from "@/lib/apps/store";
-import { readProjectDir } from "@/lib/apps/build";
+import { installItemApp } from "@/lib/apps/store";
 import { logger } from "@/lib/logging/server-logger";
 import { saveSkill, type SkillAsset } from "@/lib/agent/skills/store";
+import { installService } from "@/system/marketplace/install/serviceInstaller";
 import type { AppManifest } from "@/os/types";
 import {
   validateManifest,
   validateMarketplaceUrl,
   type MarketplaceManifest,
   type MarketplaceItem,
+  type MarketplaceItemApp,
+  type MarketplaceItemSpec,
   type RegisteredMarketplace,
 } from "./schema";
 
@@ -29,9 +31,18 @@ import {
 const exec = promisify(execFile);
 const COMPONENT = "marketplace";
 
+// dataDir()/user-apps/ (user-specs/002-service-daemons's "local marketplace")
+// is exposed as an always-present, auto-scanned marketplace under this
+// reserved id — same manifest shape, same install ops, no git clone involved.
+// cloneDir()/readManifest() special-case it below; every install* function
+// downstream (adoptSpec/installSkill/installMarketplaceItem)
+// works against it unmodified because they only ever go through those two.
+export const LOCAL_MARKETPLACE_ID = "user-apps";
+
 const clonesDir = () => path.join(dataDir(), "marketplace");
 const configFile = () => path.join(dataDir(), "config", "marketplaces.json");
-const cloneDir = (id: string) => path.join(clonesDir(), id);
+const userAppsDir = () => path.join(dataDir(), "user-apps");
+const cloneDir = (id: string) => (id === LOCAL_MARKETPLACE_ID ? userAppsDir() : path.join(clonesDir(), id));
 const MANIFEST = "marketplace.json";
 
 // Claude plugin format constants (US-6).
@@ -215,7 +226,77 @@ async function writeConfig(list: RegisteredMarketplace[]): Promise<void> {
   await writeFileAtomic(configFile(), JSON.stringify(list, null, 2));
 }
 
+/**
+ * Scan dataDir()/user-apps/ and build a MarketplaceManifest from whatever's
+ * actually there — a `services/service.json` makes an item a `services`
+ * entry, an `app/index.html` makes it an `app` entry (same item can be both,
+ * e.g. the Terminal reference item), a non-empty `spec/` makes it a `spec`
+ * entry. This is what makes user-apps/ "the user's local marketplace" (per
+ * user-specs/002-service-daemons) actually auto-discovered rather than
+ * requiring a hand-maintained manifest.
+ */
+async function scanUserAppsManifest(): Promise<MarketplaceManifest> {
+  const root = userAppsDir();
+  const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => [] as import("node:fs").Dirent[]);
+  const items: MarketplaceItem[] = [];
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const id = entry.name;
+    const itemDir = path.join(root, id);
+
+    let name = toDisplayName(id);
+    let description = "";
+    let version = "0.0.0";
+
+    let services: MarketplaceItem["services"];
+    const serviceManifestPath = path.join(itemDir, "services", "service.json");
+    if (await pathExists(serviceManifestPath)) {
+      try {
+        const raw = JSON.parse(await fs.readFile(serviceManifestPath, "utf8")) as Record<string, unknown>;
+        if (typeof raw.name === "string" && raw.name.trim()) name = raw.name;
+        if (typeof raw.description === "string") description = raw.description;
+        if (typeof raw.version === "string") version = raw.version;
+        services = { entrypoint: id, version };
+      } catch {
+        // Malformed service.json — skip the services entry, still consider app/spec below.
+      }
+    }
+
+    // Local items install with origin "local" (same-origin iframe), so an
+    // app/ facet is always exposable — no opaque-origin caveats apply here.
+    let app: MarketplaceItemApp | undefined;
+    if (await pathExists(path.join(itemDir, "app", "index.html"))) {
+      app = { entrypoint: `${id}/app`, runtime: "iframe", version };
+    }
+
+    let spec: MarketplaceItemSpec | undefined;
+    const specDir = path.join(itemDir, "spec");
+    if ((await fs.readdir(specDir).catch(() => [])).length > 0) {
+      spec = { path: `${id}/spec`, version };
+    }
+
+    if (!services && !app && !spec) continue; // not a recognised item shape
+
+    items.push({ id, name, description, app, spec, services });
+  }
+
+  return {
+    id: LOCAL_MARKETPLACE_ID,
+    name: "My Apps",
+    version: "1.0.0",
+    description: "Items in your dataDir()/user-apps/ — install them the same way as a remote marketplace.",
+    items,
+  };
+}
+
 async function readManifest(id: string): Promise<MarketplaceManifest> {
+  // The local user-apps/ marketplace is always freshly scanned, in-memory
+  // only — never written to disk. That directory is the user's own GitFS
+  // repo (dataDir()/user-apps/, the same concept as user-specs/, possibly
+  // pushed to a real remote), so BOS must never write a generated artifact
+  // into it.
+  if (id === LOCAL_MARKETPLACE_ID) return scanUserAppsManifest();
   const raw = await fs.readFile(path.join(cloneDir(id), MANIFEST), "utf8");
   return validateManifest(JSON.parse(raw));
 }
@@ -247,6 +328,9 @@ export async function addMarketplace(url: string): Promise<RegisteredMarketplace
       );
     }
 
+    if (manifest.id === LOCAL_MARKETPLACE_ID) {
+      throw new Error(`"${LOCAL_MARKETPLACE_ID}" is a reserved marketplace id — it already names your local user-apps/ folder.`);
+    }
     if ((await readConfig()).some((m) => m.id === manifest.id) || (await pathExists(cloneDir(manifest.id)))) {
       throw new Error(`Marketplace "${manifest.id}" is already registered.`);
     }
@@ -269,13 +353,20 @@ export async function addMarketplace(url: string): Promise<RegisteredMarketplace
 /** Unregister a marketplace and delete its clone. Adopted specs are unaffected
  *  (adoption is a fork) — this only removes the read-only source + its apps. */
 export async function removeMarketplace(id: string): Promise<void> {
+  if (id === LOCAL_MARKETPLACE_ID) {
+    throw new Error(`"${LOCAL_MARKETPLACE_ID}" mirrors your local user-apps/ folder, not a registered marketplace — there's nothing to remove.`);
+  }
   await writeConfig((await readConfig()).filter((m) => m.id !== id));
   await fs.rm(cloneDir(id), { recursive: true, force: true }).catch(() => {});
   logger().info(COMPONENT, "marketplace removed", { id });
 }
 
-/** Pull the latest for a registered marketplace. */
+/** Pull the latest for a registered marketplace. The local user-apps/
+ *  "marketplace" is always freshly scanned on every read (see readManifest),
+ *  so there's nothing to do here for it — BOS doesn't manage that repo's git
+ *  remote; the user does, the same way they manage user-specs/. */
 export async function syncMarketplace(id: string): Promise<void> {
+  if (id === LOCAL_MARKETPLACE_ID) return;
   if (!(await pathExists(cloneDir(id)))) throw new Error(`Marketplace "${id}" is not registered.`);
   await git(["pull", "--ff-only"], cloneDir(id));
   // Regenerate the synthesized marketplace.json for converted plugin repos (US-6).
@@ -302,10 +393,12 @@ export interface MarketplaceCatalogEntry extends RegisteredMarketplace {
   error?: string;
 }
 
-/** All registered marketplaces with their (validated) items — for the app UI. */
+/** All registered marketplaces with their (validated) items — for the app UI.
+ *  Prepends the always-present local user-apps/ "marketplace" (not stored in
+ *  marketplaces.json — it exists whenever dataDir()/user-apps/ does). */
 export async function listCatalog(): Promise<MarketplaceCatalogEntry[]> {
   const registered = await readConfig();
-  return Promise.all(
+  const entries = await Promise.all(
     registered.map(async (m) => {
       try {
         return { ...m, items: (await readManifest(m.id)).items };
@@ -314,6 +407,23 @@ export async function listCatalog(): Promise<MarketplaceCatalogEntry[]> {
       }
     }),
   );
+
+  if (await pathExists(userAppsDir())) {
+    const local: RegisteredMarketplace = {
+      id: LOCAL_MARKETPLACE_ID,
+      url: "(local) dataDir()/user-apps/",
+      name: "My Apps",
+      addedAt: "",
+      lastSynced: null,
+    };
+    try {
+      entries.unshift({ ...local, items: (await readManifest(LOCAL_MARKETPLACE_ID)).items });
+    } catch (err) {
+      entries.unshift({ ...local, items: [], error: (err as Error).message });
+    }
+  }
+
+  return entries;
 }
 
 function findItem(manifest: MarketplaceManifest, itemId: string): MarketplaceItem {
@@ -390,29 +500,152 @@ export async function installSkill(marketplaceId: string, itemId: string): Promi
 }
 
 /**
- * Install an item's app: copy its pre-built (static) files into the local app
- * store, tagged with `origin: "marketplace"` so it runs in the opaque-origin
- * sandbox. The app must ship an index.html (built output), not source.
+ * Install a marketplace ITEM — the unit of installation. An item is a
+ * self-contained folder that may bundle an app/ (UI), services/, hooks/,
+ * config/, spec/, doc/; installing it lands it under dataDir()/user-apps/<id>/
+ * (the user's local marketplace, a GitFS repo) and symlinks each facet into
+ * dataDir()/system/<type>/<id> — ONE mechanism for every item shape, whether
+ * UI-only, service-only, or both.
  */
-export async function installApp(marketplaceId: string, itemId: string): Promise<AppManifest> {
+export async function installMarketplaceItem(
+  marketplaceId: string,
+  itemId: string,
+): Promise<{ app?: AppManifest; serviceId?: string }> {
   const manifest = await readManifest(marketplaceId);
   const item = findItem(manifest, itemId);
-  if (!item.app) throw new Error(`Item "${itemId}" has no app to install.`);
-  const src = path.join(cloneDir(marketplaceId), item.app.entrypoint);
-  if (!(await pathExists(src))) {
-    throw new Error(`App folder missing in marketplace clone: ${item.app.entrypoint}`);
+  if (!item.app && !item.services) {
+    throw new Error(`Item "${itemId}" has nothing installable (no app or services).`);
   }
-  const files = await readProjectDir(src);
-  if (!files["index.html"]) {
-    throw new Error("Marketplace app has no index.html (it must ship pre-built static files).");
+
+  // Service facet first: it copies the FULL item directory (app/ included)
+  // into user-apps/<id>/ and creates all its symlinks.
+  let serviceId: string | undefined;
+  if (item.services) {
+    ({ serviceId } = await installMarketplaceService(marketplaceId, itemId));
   }
-  const installed = await storeInstallApp({
-    name: item.name,
-    icon: item.app.icon,
-    files,
-    origin: "marketplace",
-    marketplaceId,
+
+  let app: AppManifest | undefined;
+  if (item.app) {
+    // App-only remote items: copy just their app folder into user-apps/<id>/app/.
+    // (Local items already live in user-apps/; service items were copied above.)
+    if (!item.services && marketplaceId !== LOCAL_MARKETPLACE_ID) {
+      const src = path.join(cloneDir(marketplaceId), item.app.entrypoint);
+      if (!(await pathExists(src))) {
+        throw new Error(`App folder missing in marketplace clone: ${item.app.entrypoint}`);
+      }
+      const dest = path.join(userAppsDir(), item.id, "app");
+      await fs.cp(src, dest, { recursive: true });
+      await fs.rm(path.join(dest, ".git"), { recursive: true, force: true }).catch(() => undefined);
+      await commitAll(userAppsDir(), `adopt ${item.name} from ${manifest.name}`);
+    }
+    // Local items are the user's own content → same-origin iframe; remote
+    // marketplace items are untrusted → tagged for the opaque-origin sandbox.
+    app = await installItemApp(item.id, {
+      name: item.name,
+      icon: item.app.icon,
+      origin: marketplaceId === LOCAL_MARKETPLACE_ID ? "local" : "marketplace",
+      marketplaceId: marketplaceId === LOCAL_MARKETPLACE_ID ? undefined : marketplaceId,
+    });
+  }
+
+  logger().info(COMPONENT, "item installed", { marketplaceId, itemId, app: !!app, serviceId });
+  return { app, serviceId };
+}
+
+/**
+ * Install a server plugin from a marketplace. Validates the plugin manifest,
+ * copies files to dataDir()/plugins/<id>/, and registers it.
+ */
+export async function installServerPlugin(
+  marketplaceId: string,
+  itemId: string,
+): Promise<{ pluginId: string }> {
+  const manifest = await readManifest(marketplaceId);
+  const item = findItem(manifest, itemId);
+
+  // Use item.serverPlugin.entrypoint if available, falling back to item.app?.entrypoint.
+  const pluginEntrypoint = item.serverPlugin?.entrypoint ?? item.app?.entrypoint;
+  if (!pluginEntrypoint) {
+    throw new Error(`Item "${itemId}" has no serverPlugin or app entrypoint — not a server plugin.`);
+  }
+
+  // Read the plugin.json from the marketplace item's directory.
+  const itemDir = path.join(cloneDir(marketplaceId), pluginEntrypoint);
+  const pluginJsonPath = path.join(itemDir, "plugin.json");
+
+  if (!(await pathExists(pluginJsonPath))) {
+    throw new Error(`Item "${itemId}" has no plugin.json — not a server plugin.`);
+  }
+
+  const pluginJsonContent = await fs.readFile(pluginJsonPath, "utf8");
+  const pluginManifest = JSON.parse(pluginJsonContent) as {
+    id?: string;
+    name?: string;
+    version?: string;
+    type?: string;
+    provides?: string[];
+  };
+
+  if (!pluginManifest.id) throw new Error("plugin.json missing required 'id' field");
+  if (pluginManifest.type !== "server-plugin") throw new Error("plugin.json type must be 'server-plugin'");
+
+  // Install the plugin files to dataDir()/plugins/<id>/.
+  const { installPlugin } = await import("@/lib/plugins/loader");
+  await installPlugin(itemDir, {
+    id: pluginManifest.id,
+    name: pluginManifest.name ?? item.name,
+    version: pluginManifest.version ?? "0.0.0",
+    type: "server-plugin",
+    provides: (pluginManifest.provides as never[]) ?? [],
+    description: item.description,
   });
-  logger().info(COMPONENT, "app installed", { marketplaceId, itemId, appId: installed.id });
-  return installed;
+
+  // Auto-activate the plugin.
+  const { activatePlugin } = await import("@/lib/plugins/registry");
+  await activatePlugin(pluginManifest.id);
+
+  logger().info(COMPONENT, "server plugin installed", {
+    marketplaceId,
+    itemId,
+    pluginId: pluginManifest.id,
+  });
+  return { pluginId: pluginManifest.id };
+}
+
+/**
+ * Install a service daemon item from a marketplace (user-specs/002-service-daemons).
+ * Copies the item's full directory (services/, config/, and any of spec/, doc/,
+ * app/, hooks/) into dataDir()/user-apps/<id>/ — the user's local marketplace —
+ * then creates the dataDir()/system/ symlinks via installService(), exactly the
+ * same division of labor as installServerPlugin: this function does
+ * "Step 1" (get the item onto disk somewhere durable); serviceInstaller.ts does
+ * the rest (validate + symlink + register).
+ */
+export async function installMarketplaceService(marketplaceId: string, itemId: string): Promise<{ serviceId: string }> {
+  const manifest = await readManifest(marketplaceId);
+  const item = findItem(manifest, itemId);
+  if (!item.services) throw new Error(`Item "${itemId}" has no services entrypoint.`);
+
+  const src = path.join(cloneDir(marketplaceId), item.services.entrypoint);
+  if (!(await pathExists(src))) throw new Error(`Service folder missing in marketplace clone: ${item.services.entrypoint}`);
+  if (!(await pathExists(path.join(src, "services", "service.json")))) {
+    throw new Error(`Item "${itemId}" has no services/service.json — not a service item.`);
+  }
+
+  const dest = path.join(dataDir(), "user-apps", item.id);
+  // Item already lives in user-apps/ (src === dest) when installing from the
+  // local marketplace — fs.cp refuses to copy a directory onto itself, and
+  // there's nothing to copy anyway.
+  if (marketplaceId !== LOCAL_MARKETPLACE_ID) {
+    await fs.cp(src, dest, { recursive: true });
+    await fs.rm(path.join(dest, ".git"), { recursive: true, force: true }).catch(() => undefined);
+    // user-apps/ is the user's own GitFS repo (same concept as user-specs/) —
+    // commit the copy so it shows up in that repo's history, same as adoptSpec().
+    await commitAll(path.join(dataDir(), "user-apps"), `adopt ${item.name} from ${manifest.name}`);
+  }
+
+  await installService(dest, item.id);
+
+  logger().info(COMPONENT, "service installed", { marketplaceId, itemId, serviceId: item.id });
+  return { serviceId: item.id };
 }

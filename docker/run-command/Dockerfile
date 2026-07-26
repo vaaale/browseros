@@ -39,8 +39,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ENV VIRTUAL_ENV=/opt/venv
 RUN python3 -m venv "$VIRTUAL_ENV"
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
-RUN pip install --no-cache-dir ipython "markitdown[all]" Pillow python-pptx docx \
- && chmod -R a+rwX "$VIRTUAL_ENV"
+RUN pip install --no-cache-dir \
+    ipython \
+    "markitdown[all]" \
+    Pillow \
+    python-pptx \
+    python-docx
+
+RUN echo "Skipping chmod"
+#RUN chmod -R a+rwX "$VIRTUAL_ENV"
 
 RUN npm install -g pptxgenjs docx xlsx-populate
 

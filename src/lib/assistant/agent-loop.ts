@@ -115,9 +115,11 @@ function toolError(tool: string, detail: string, hint?: string): string {
 async function runServerTool(
   tool: AssistantTool,
   input: Record<string, unknown>,
-  ctx: Omit<ToolContext, "onEvent">,
+  ctx: Omit<ToolContext, "onEvent" | "elicit">,
   timeoutMs: number,
   onProgress: (event: unknown) => void,
+  awaitFrontendResult: (callId: string, timeout: number) => Promise<FrontendOutcome>,
+  emitEvent: (e: RunEventInput) => void,
 ): Promise<string> {
   if (!tool.execute) return toolError(tool.name, "tool has no server executor", "this is a BOS bug");
   const callAbort = new AbortController();
@@ -167,8 +169,20 @@ async function runServerTool(
       armTimer();
       onProgress(event);
     };
+    // Inline elicitation: emits a frontend tool_call to the NDJSON stream,
+    // then waits for the user's response exactly like the loop does for a
+    // real frontend tool. Re-arms the idle timer so a slow user response
+    // does not trigger the server-tool timeout.
+    const elicit = async (toolName: string, args: Record<string, unknown>): Promise<string> => {
+      const elicitCallId = newMessageId();
+      onEvent({ type: "elicitation_started", tool: toolName }); // re-arm timer
+      emitEvent({ type: "tool_call", callId: elicitCallId, name: toolName, args: JSON.stringify(args), execution: "frontend" });
+      const outcome = await awaitFrontendResult(elicitCallId, timeoutMs);
+      if (outcome.kind === "result") return outcome.result;
+      throw new Error(outcome.kind === "timeout" ? "elicitation timed out" : "cancelled by user");
+    };
     tool
-      .execute!(input, { ...ctx, signal: callAbort.signal, onEvent })
+      .execute!(input, { ...ctx, signal: callAbort.signal, onEvent, elicit })
       .then((out) => settle(typeof out === "string" ? out : JSON.stringify(out)))
       .catch((e) => settle(toolError(tool.name, (e as Error).message)));
   });
@@ -203,6 +217,13 @@ export async function runAgentLoop(deps: AgentLoopDeps, input: AgentLoopInput): 
     await io.saveMessages(messages);
     emit({ type: "message", message: userMessage });
 
+    // Plugin hook: beforeRun — plugins may add ephemeral context (e.g. memory
+    // injection) for the model. The return value becomes the model context for
+    // this run but is NEVER persisted — `messages` stays as the canonical
+    // transcript for every io.saveMessages call.
+    const hookModified = await hooks?.beforeRun?.(messages, hookCtx);
+    let contextMessages = hookModified ?? messages;
+
     let system = await deps.composeSystem();
     const extra = await hooks?.extendSystemPrompt?.(hookCtx);
     if (extra?.trim()) system += `\n\n${extra.trim()}`;
@@ -220,26 +241,39 @@ export async function runAgentLoop(deps: AgentLoopDeps, input: AgentLoopInput): 
 
       // ── Model turn (streamed). A stop here discards the partial turn. ──
       const messageId = newMessageId();
+      let reasoningBuf = "";
       let turn: TurnResult;
       try {
         turn = await deps.streamTurn({
           system,
-          messages,
+          messages: contextMessages,
           tools: declarations,
           signal,
           messageId,
           conversationId: deps.conversationId,
           runId: deps.runId,
-          onDelta: (d) =>
+          onDelta: (d) => {
+            if (d.kind === "reasoning") reasoningBuf += d.delta;
             emit({
               type: d.kind === "reasoning" ? "reasoning_delta" : "text_delta",
               messageId: d.messageId,
               delta: d.delta,
-            }),
+            });
+          },
         });
       } catch (e) {
         if (signal.aborted) return finish({ reason: "cancelled" });
-        return finish({ reason: "error", error: (e as Error).message });
+        await hooks?.onError?.(e as Error, hookCtx);
+        // Persist the failure AS the assistant message (not an empty/dropped
+        // turn) so the transcript stays truthful and the UI can render an error
+        // card with retry. The message carries no tool calls, so the transcript
+        // stays settled.
+        const errorText = (e as Error).message || "The model provider returned an error.";
+        const errorMessage: ChatMessage = { id: messageId, role: "assistant", content: errorText, error: true };
+        messages = [...messages, errorMessage];
+        await io.saveMessages(messages);
+        emit({ type: "message", message: errorMessage });
+        return finish({ reason: "error", error: errorText });
       }
       if (signal.aborted) return finish({ reason: "cancelled" });
 
@@ -260,13 +294,19 @@ export async function runAgentLoop(deps: AgentLoopDeps, input: AgentLoopInput): 
         id: messageId,
         role: "assistant",
         content: turn.text,
+        ...(reasoningBuf ? { reasoning: reasoningBuf } : {}),
         ...(toolCallRefs.length ? { toolCalls: toolCallRefs } : {}),
       };
       messages = [...messages, assistantMessage];
+      contextMessages = [...contextMessages, assistantMessage];
       await io.saveMessages(messages);
       emit({ type: "message", message: assistantMessage });
 
-      if (toolCallRefs.length === 0) return finish({ reason: "completed" });
+      if (toolCallRefs.length === 0) {
+        // Plugin hook: afterRun — plugins may inspect/modify the final response.
+        await hooks?.afterRun?.({ text: turn.text, toolCalls: turn.toolCalls }, hookCtx);
+        return finish({ reason: "completed" });
+      }
 
       // ── Execute tool calls sequentially. Once the assistant message is
       // persisted, EVERY call gets an answer — execution, in-band error, or
@@ -307,6 +347,8 @@ export async function runAgentLoop(deps: AgentLoopDeps, input: AgentLoopInput): 
               },
               deps.toolTimeoutMs,
               (event) => emit({ type: "tool_progress", callId: call.id, event }),
+              deps.awaitFrontendResult,
+              emit,
             );
           } else {
             const outcome = await deps.awaitFrontendResult(call.id, deps.toolTimeoutMs);
@@ -333,6 +375,7 @@ export async function runAgentLoop(deps: AgentLoopDeps, input: AgentLoopInput): 
           toolCallId: call.id,
         };
         messages = [...messages, toolMessage];
+        contextMessages = [...contextMessages, toolMessage];
         await io.saveMessages(messages);
         emit({ type: "tool_result", callId: call.id, result });
         emit({ type: "message", message: toolMessage });
@@ -351,6 +394,7 @@ export async function runAgentLoop(deps: AgentLoopDeps, input: AgentLoopInput): 
     emit({ type: "message", message: limitMessage });
     return finish({ reason: "max_steps" });
   } catch (e) {
+    await hooks?.onError?.(e as Error, hookCtx);
     return finish({ reason: "error", error: (e as Error).message });
   }
 }

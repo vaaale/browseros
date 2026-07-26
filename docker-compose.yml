@@ -4,16 +4,20 @@ services:
     build:
       context: ./docker/run-command
       dockerfile: Dockerfile
-    profiles:
-      - build-only
+    entrypoint:
+      - /bin/ls
+    restart:
+      no
 
   browseros:
     image: browseros:latest
     build:
       context: .
       dockerfile: Dockerfile
-    profiles:
-      - build-only
+    entrypoint:
+      - /bin/ls
+    restart:
+      no
 
   bastion:
     image: bos-bastion:latest
@@ -26,20 +30,13 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - bastion-data:/data
       - ${VOLUME_BASE:-./user-data}:/user-data
-      - .:/bos-src:ro        # BOS source repo — cloned into each new user's src/ on first login
+      - .:/bos-src        # BOS source repo — cloned into each new user's src/ on first login
     environment:
       - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required}
       - CONTAINER_UID=${CONTAINER_UID:-1000}
       - CONTAINER_GID=${CONTAINER_GID:-1000}
       - AUTH_PROVIDER=${AUTH_PROVIDER:-simple}
       - BOS_IMAGE=${BOS_IMAGE:-browseros:latest}
-      # VOLUME_BASE: bastion's own internal path (for mkdir, git clone, file ops)
-      - VOLUME_BASE=/user-data
-      # VOLUME_BASE_HOST: absolute path on the Docker HOST — used when creating
-      # bind mounts for user containers. Docker always resolves bind mount sources
-      # against the host filesystem, not the bastion container's filesystem.
-      # Defaults to $PWD/user-data (i.e. the project directory + /user-data).
-      - VOLUME_BASE_HOST=${VOLUME_BASE_HOST:-${PWD}/user-data}
       - BOS_REPO_PATH=/bos-src
       - IDLE_TIMEOUT_MS=${IDLE_TIMEOUT_MS:-1800000}
       - MAX_CONCURRENT_INSTANCES=${MAX_CONCURRENT_INSTANCES:-50}
@@ -53,6 +50,67 @@ services:
       - bos-net
     restart: unless-stopped
 
+  omnivoice:
+    image: hangrylabs/omnivoicetts:latest
+    hostname: omnivoice
+    profiles:
+      - voice
+    environment:
+      - HF_HUB_OFFLINE=0
+      - HF_TOKEN=${HF_TOKEN}
+    volumes:
+      - openai_voice_profiles:/app/openai_voice_profiles
+      - ${HOME}/.cache/huggingface:/app/.cache/huggingface
+    ports:
+      - "7861:7861"
+    networks: [ 'bos-net' ]
+    # GPU support (enabled by default for this compose file)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: [ "0" ]
+              capabilities: [ gpu ]
+
+  speaches:
+    hostname: speaches
+    profiles:
+      - voice
+    image: ghcr.io/speaches-ai/speaches:latest-cuda
+    restart: unless-stopped
+    networks:
+      - bos-net
+    volumes:
+      - speaches-huggingface:/home/ubuntu/.cache/huggingface/hub
+    develop:
+      watch:
+        - action: rebuild
+          path: ./uv.lock
+        - action: sync+restart
+          path: ./src
+          target: /home/ubuntu/speaches/src
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      UVICORN_PORT: 8082
+    healthcheck:
+      test: [ "CMD", "curl", "--fail", "http://0.0.0.0:8082/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+    deploy: 
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: [ "0" ]
+              capabilities: [ gpu ]
+
+
+
 # BOS user containers are spawned at runtime by the bastion.
 # They are NOT defined here — the bastion creates them via the Docker API.
 
@@ -63,3 +121,6 @@ networks:
 
 volumes:
   bastion-data:
+  user-data:
+  openai_voice_profiles:
+  speaches-huggingface:

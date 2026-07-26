@@ -109,8 +109,9 @@ everyone else stays on `base`.
 ### App-content candidate (GitFS, no extra port)
 
 Apps are previewed differently — there's no second server. `appBegin/appPromote/
-appDiscard` check out an `app-candidate` **branch** in the apps repo so the base
-server serves it; promote merges to base, discard drops it. See
+appDiscard` check out an `app-candidate` **branch** in the user-apps repo
+(`<canonicalData>/user-apps` — the ONE install target for items, apps included)
+so the base server serves it; promote merges to base, discard drops it. See
 [Installed apps](../apps/installed-apps.md).
 
 ### Control endpoints (`/__supervisor/...`)

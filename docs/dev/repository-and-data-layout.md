@@ -27,17 +27,23 @@ tools/
 src/
   app/                          Next.js App Router
     layout.tsx, page.tsx        Root layout; SSR entry — seeds the OS store
-    apps/[...slug]/route.ts     Serves installed-app files from GitFS (/apps/<id>/…)
+    apps/[...slug]/route.ts     Serves installed items' app files through their
+                                data/system/app/<id> symlink (/apps/<id>/…)
     api/**/route.ts             All server endpoints (see api-reference.md)
   apps/                         Built-in apps — one self-describing folder each:
     <id>/manifest.ts            App metadata (AppManifest; folder name = id)
     <id>/index.tsx              Entry component (default export; "use client")
     _*.generated.ts             Auto-discovery output (gitignored; tools/gen-apps.mjs)
+  core/service/                  Service daemons: ServiceRegistry, ServiceManager,
+                                 CrashRecovery, DependencyResolver, PortChecker,
+                                 manifestValidator, workerIpc, types
+  system/marketplace/install/    Item-to-system symlink mapping (symlinkManager.ts),
+                                 install/uninstall (serviceInstaller.ts)
   os/                           Framework-free OS core
     types.ts                    AppManifest, OSSettings, WindowInstance, VfsEntry …
     apps.ts                     BUILTIN_APPS (sorted) + getApp()
-    apps-dir.ts                 appsDir(): BOS_APPS_DIR or <cwd>/apps  (GitFS root)
-    data-dir.ts                 dataDir(): BOS_DATA_DIR or <cwd>/data  (runtime state)
+    data-dir.ts                 dataDir(): BOS_DATA_DIR or <cwd>/data  (runtime state
+                                + installed items: user-apps/ content, system/ symlinks)
     atomic-write.ts             writeFileAtomic() (temp + rename)
     vfs.ts                      Virtual file system (jailed to data/vfs)
     settings.ts                 OS settings (data/settings.json)
@@ -58,6 +64,10 @@ src/
     net.ts                      fetchText(), isBlockedHost() (SSRF guard)
     mime.ts, proxy-path.ts, proxy-rewrite.ts   Web-browser proxy helpers
     config/                     Pluggable config system: types, registry, store
+    plugins/                    Agent-run hook pipeline: registry.ts, loader.ts, settings.ts,
+                                types.ts, monitor.ts, validator.ts
+    marketplace/                 schema.ts, client.ts — marketplace manifest + install glue
+                                (apps, skills, specs, services, server plugins)
     apps/                       store.ts (install/uninstall/restore/purge), build.ts (esbuild)
     gitfs/store.ts              Thin git layer for the content repo
     datafs/                     clone.ts (preview clone backends), probe.ts (fs capabilities)
@@ -89,7 +99,6 @@ src/
       skills/store.ts, improve.ts, curator.ts, usage.ts   Skill library + GEPA + Curator
       subagents/store.ts, types.ts, runner.ts, claude-runner.ts, tools.ts, markdown.ts
 data/                           ALL runtime state (gitignored) — see below
-apps/                           Installed apps — standalone git repo (GitFS), gitignored
 ```
 
 ---
@@ -101,7 +110,12 @@ apps/                           Installed apps — standalone git repo (GitFS), 
 | `data/vfs/` | The user VFS (Documents, Pictures, Desktop). Chat history at `data/vfs/Documents/Chats/<id>.json` — each file carries `agentId` (the sole partition key), `title`, `createdAt`, optional `activeFeatureBranch`, and the message array. Old files with a `group` field are migrated to `agentId` on first read. Active conversation per agent is tracked in `localStorage` as `bos.activeConversation.<agentId>`. Workflows at `data/vfs/Workflows/`. |
 | `data/specs/` | External spec stores (`BOS_SPECS_ROOT`, 027). `bos-system-specs/` (read-only, seeded from `seed/spec-store/`) + `user-specs/` (writable, backs the `Documents/Specs` SpecFS mount). `.worktrees/` holds SpecFS self-provisioned feature-branch worktrees. |
 | `data/settings.json` | OS settings (wallpaper, accent, theme). |
-| `data/config/<ns>.json` | Generic per‑namespace config (e.g. `dev-harness`, `browser-automation`, `datafs`, `assistant`, `build-studio`). |
+| `data/config/<ns>.json` | Generic per‑namespace config (e.g. `dev-harness`, `browser-automation`, `datafs`, `assistant`, `build-studio`). `plugins.json` holds the hook-pipeline's active set + order + per-plugin config. |
+| `data/user-apps/` | The user's own GitFS repo (002-service-daemons) — the exact same concept as `user-specs/`: BOS only ensures it's a git repo (`ensureRepo()` at boot, a no-op if the user has already cloned their own remote there), never populates or deletes from it. Each `<id>/` subdirectory is a service/app item source (`services/`, `config/`, optional `app/`/`spec/`/`doc/`/`hooks/`); `dataDir()/system/*` symlinks point here once installed. Also the always-present "local marketplace" (`LOCAL_MARKETPLACE_ID = "user-apps"`) and its own "User Apps" entry in Settings → Versions. |
+| `data/system/services/<id>`, `data/system/app/<id>`, `data/system/hooks/<id>` | Installed-state symlinks into a `user-apps/<id>/` (or marketplace clone) subdirectory — see [Service Daemons](apps/services.md). |
+| `data/config/<id>/` | Symlink to a service item's `config/` dir; holds its user-editable config file(s) plus a manager-owned `runtime.json` (actual bound port/host). |
+| `data/marketplace/<mktId>/items/<itemId>/` | Marketplace item clones (source for `installMarketplaceItem`/`installServerPlugin`, left in place after uninstall for re-install). |
+| `data/logs/services/<id>.log` | Service worker stdout/stderr, tailed by the Settings log viewer. |
 | `data/provider.json` | AI provider config incl. the API key — **masked** in API responses. |
 | `data/mcp-servers.json` | Chat MCP servers. |
 | `data/memory/USER.md`, `data/memory/MEMORY.md` | Curated memory surfaces. |
@@ -114,12 +128,22 @@ apps/                           Installed apps — standalone git repo (GitFS), 
 
 ---
 
-## Installed apps (`./apps`, gitignored, `BOS_APPS_DIR`)
+## User apps (`data/user-apps/`, 002-service-daemons)
 
-A **standalone git repo** (GitFS), independent of the BOS source repo. Each app is
-`<appsDir>/<id>/` with its files + an `app.json` manifest. No central registry —
-apps are discovered by listing the directory. See
-[Installed apps](./apps/installed-apps.md).
+The user's **own** GitFS repo — the same concept as `user-specs/`, but for
+services/apps/hooks the user develops themselves, not spec-kit features. BOS
+only runs `ensureRepo()` on it at boot (a no-op if the user has already cloned
+their own remote there); it never populates or deletes content in it, and
+never writes generated artifacts into it. Each `<id>/` subdirectory is a
+self-describing item (`services/`, `config/`, optional `app/`/`spec/`/`doc/`/
+`hooks/`) — installing one only ever creates symlinks under
+`dataDir()/system/`, uninstalling only ever removes them. This is the ONE
+install target for every item, **apps included** (assistant-built apps land
+here too, as `<id>/app/`; there is no separate apps repo — see
+[Installed apps](./apps/installed-apps.md)). It's also the always-present
+"local marketplace" (`LOCAL_MARKETPLACE_ID = "user-apps"`) and shows up as its
+own "User Apps" entry in Settings → Versions. See
+[Service Daemons](./apps/services.md).
 
 ---
 
@@ -127,8 +151,7 @@ apps are discovered by listing the directory. See
 
 | Var | Effect | Default |
 |---|---|---|
-| `BOS_DATA_DIR` | Runtime‑state root | `<cwd>/data` |
-| `BOS_APPS_DIR` | Installed‑apps (GitFS) root | `<cwd>/apps` |
+| `BOS_DATA_DIR` | Runtime‑state root (includes installed items under `user-apps/` + `system/`) | `<cwd>/data` |
 | `BOS_SPECS_ROOT` | Spec-store container root. The Supervisor sets it explicitly per version (020): previews → `<worktree>/specs` (store worktrees on the feature branch), base → the canonical root | `<dataDir>/specs` |
 | `BOS_SPECS_SEED` | `0` disables store seeding (set by the Supervisor for previews — seeding is base's job) | — |
 | `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` | Seed the default provider | — |

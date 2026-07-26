@@ -1,4 +1,8 @@
 import "server-only";
+import { promises as fs } from "fs";
+import path from "path";
+import { dataDir } from "@/os/data-dir";
+import { serviceRegistry } from "@/core/service/ServiceRegistry";
 import { getConversationActiveFeatureBranch, validateFeatureBranch } from "@/lib/agent/conversations-server";
 import { runSubAgent } from "@/lib/agent/subagents/runner";
 import { getAgent } from "@/lib/agent/subagents/store";
@@ -31,6 +35,26 @@ export function cancelWorkflow(id: string): boolean {
 
 export function isRunning(id: string): boolean {
   return RUNNING.has(id);
+}
+
+// Workflow execution stays on the main thread (runSubAgent() needs the full
+// assistant stack — see docs/dev/design-heuristics.md), so the "workflows"
+// service is a lifecycle-only worker whose Start/Stop state is otherwise
+// meaningless. This is what makes it mean something: new runs are refused
+// while the service isn't "running".
+export function isWorkflowsServiceRunning(): boolean {
+  return serviceRegistry().getService("workflows")?.state === "running";
+}
+
+async function readDefaultMaxConcurrentSteps(): Promise<number> {
+  try {
+    const raw = await fs.readFile(path.join(dataDir(), "config", "workflows", "workflows.json"), "utf8");
+    const config = JSON.parse(raw) as Record<string, unknown>;
+    if (typeof config.defaultMaxConcurrentSteps === "number") return config.defaultMaxConcurrentSteps;
+  } catch {
+    // No config yet (service not installed), or malformed — fall back below.
+  }
+  return 5;
 }
 
 interface RunContext {
@@ -260,7 +284,7 @@ export async function* runWorkflowStream(
   const ctx: RunContext = { workflow: wf, abortSignal: abort.signal, outputs: new Map(), featureBranch };
   const { remainingDeps, dependents } = buildAdjacency(wf);
   const stepsById = new Map(wf.steps.map((s) => [s.id, s]));
-  const maxConcurrency = Math.max(1, wf.config?.maxConcurrentSteps ?? 5);
+  const maxConcurrency = Math.max(1, wf.config?.maxConcurrentSteps ?? (await readDefaultMaxConcurrentSteps()));
 
   const pending = new Set(wf.steps.map((s) => s.id));
   const inFlight = new Set<string>();

@@ -24,6 +24,8 @@ const s = {
   sep:     { borderTop: "1px solid #2a2a2a", margin: "14px 0" },
 };
 
+interface GitRemote { name: string; url: string; provider: string; protected?: boolean; defaultBranch?: string; }
+
 export default function Account() {
   const [me, setMe] = useState<Me | null>(null);
   const [state, setState] = useState<InstanceState | null>(null);
@@ -39,6 +41,12 @@ export default function Account() {
   const [pwConfirm, setPwConfirm] = useState("");
   const [pwError, setPwError] = useState("");
   const [pwOk, setPwOk] = useState(false);
+  // Source configuration
+  const [remotes, setRemotes] = useState<GitRemote[]>([]);
+  const [srcRemote, setSrcRemote] = useState("bos-default");
+  const [srcBranch, setSrcBranch] = useState("");
+  const [srcConfigOk, setSrcConfigOk] = useState(false);
+  const [srcConfigErr, setSrcConfigErr] = useState("");
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -51,6 +59,15 @@ export default function Account() {
       fetch("/account/instance").then(r => r.json()).then(d => setState(d as InstanceState)),
       fetch("/setup/state").then(r => r.ok ? r.json() : null).then(d => {
         if (d) setIsKeycloak((d as { authProvider: string }).authProvider === "keycloak");
+      }),
+      fetch("/account/git-remotes").then(r => r.ok ? r.json() : null).then(d => {
+        if (d) setRemotes((d as { remotes: GitRemote[] }).remotes);
+      }),
+      fetch("/account/update-source-config").then(r => r.ok ? r.json() : null).then(d => {
+        if (d) {
+          setSrcRemote((d as { remote: string; branch?: string }).remote ?? "bos-default");
+          setSrcBranch((d as { remote: string; branch?: string }).branch ?? "");
+        }
       }),
     ]);
   }, [navigate]);
@@ -85,6 +102,17 @@ export default function Account() {
   async function loadLog() {
     const res = await fetch("/account/log");
     if (res.ok) { const d = await res.json() as { log: string }; setLog(d.log); setShowLog(true); }
+  }
+
+  async function saveSrcConfig() {
+    setSrcConfigOk(false); setSrcConfigErr("");
+    const res = await fetch("/account/update-source-config", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ remote: srcRemote, ...(srcBranch.trim() ? { branch: srcBranch.trim() } : {}) }),
+    });
+    if (!res.ok) { const d = await res.json() as { error: string }; setSrcConfigErr(d.error); return; }
+    setSrcConfigOk(true);
+    setTimeout(() => setSrcConfigOk(false), 3000);
   }
 
   async function changePassword(e: FormEvent) {
@@ -162,7 +190,7 @@ export default function Account() {
               Open BrowserOS ↗
             </a>
           </div>
-          {opError && <div style={s.err}>{opError}</div>}
+          {opError && <pre style={{ ...s.err, whiteSpace: "pre-wrap", wordBreak: "break-word", fontFamily: "inherit", margin: 0 }}>{opError}</pre>}
         </div>
 
         {/* Profile image */}
@@ -197,6 +225,42 @@ export default function Account() {
           </div>
         )}
 
+        {/* Source configuration */}
+        <div style={s.card}>
+          <div style={s.section}>Source configuration</div>
+          <div style={s.opDesc}>Choose which remote and branch "Update source" pulls from. Works even when your instance is offline.</div>
+          <div style={{ display: "flex", flexDirection: "column" as const, gap: 10, marginTop: 10 }}>
+            <div>
+              <label style={s.label}>Remote</label>
+              <select
+                value={srcRemote}
+                onChange={e => setSrcRemote(e.target.value)}
+                style={{ ...s.input, maxWidth: 320, cursor: "pointer" }}
+              >
+                {remotes.map(r => (
+                  <option key={r.name} value={r.name}>
+                    {r.name}{r.protected ? " (default)" : ""}{r.url ? ` — ${r.url}` : ""}
+                  </option>
+                ))}
+                {remotes.length === 0 && <option value="bos-default">bos-default (default)</option>}
+              </select>
+            </div>
+            <div>
+              <label style={s.label}>Branch override <span style={{ color: "#555" }}>(leave blank to use the system default)</span></label>
+              <input
+                type="text"
+                style={s.input}
+                value={srcBranch}
+                placeholder="e.g. main, claude, develop"
+                onChange={e => setSrcBranch(e.target.value)}
+              />
+            </div>
+            {srcConfigErr && <div style={s.err}>{srcConfigErr}</div>}
+            {srcConfigOk && <div style={s.ok}>Saved.</div>}
+            <div><Button size="sm" onClick={saveSrcConfig}>Save configuration</Button></div>
+          </div>
+        </div>
+
         {/* Log */}
         <div style={s.card}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: showLog ? 12 : 0 }}>
@@ -209,6 +273,11 @@ export default function Account() {
         {/* Danger zone */}
         <div style={{ ...s.card, borderColor: "#3a1a1a" }}>
           <div style={s.dangerTitle}>Danger zone</div>
+          <div style={s.opDesc}>Reset to default — wipes the source checkout and re-clones from the built-in default remote. Data and dependencies are preserved.</div>
+          <Button size="sm" variant="danger" loading={loadingOp === "reset-to-default"} disabled={loadingOp !== null} onClick={() => doOp("reset-to-default")}>
+            Reset to default
+          </Button>
+          <div style={s.sep} />
           <div style={s.opDesc}>Full re-provision — wipes source, data, and dependencies.</div>
           <Button size="sm" variant="danger" loading={loadingOp === "full"} disabled={loadingOp !== null} onClick={() => doOp("full")}>
             Full re-provision

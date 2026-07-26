@@ -5,9 +5,9 @@ import { withFeatureScope, scopeFromHeaders } from "@/lib/specs/feature-context"
 export const dynamic = "force-dynamic";
 
 // Every VFS request runs inside the caller's feature scope (027-vfs-specfs): a
-// write under a SpecFS mount (Documents/Specs) resolves the conversation/branch
-// from the request headers so it lands on the right feature branch. Unmounted
-// paths ignore the scope entirely.
+// write under a branch-coupled mount (/Specs, /Docs) resolves the
+// conversation/branch from the request headers so it lands on the right
+// feature branch. Unmounted paths ignore the scope entirely.
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const op = searchParams.get("op") ?? "list";

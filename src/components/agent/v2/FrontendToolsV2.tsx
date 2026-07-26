@@ -12,13 +12,9 @@ import { elicit } from "@/lib/assistant/client/elicitations";
 // server registry offers to the model). The server loop dispatches these calls
 // to an attached page; the kernel executes them; the result is posted back.
 // Mounted once inside AssistantChatV2.
-export function FrontendToolsV2({ conversationId }: { conversationId: string }) {
+export function FrontendToolsV2(_: { conversationId: string }) {
   const store = useOSStoreApi();
   const htmlViewerIdRef = useRef<string | null>(null);
-  const conversationIdRef = useRef(conversationId);
-  useEffect(() => {
-    conversationIdRef.current = conversationId;
-  }, [conversationId]);
 
   useEffect(() => {
     const handlers: Record<string, FrontendToolHandler> = {
@@ -68,21 +64,24 @@ export function FrontendToolsV2({ conversationId }: { conversationId: string }) 
         if (id) htmlViewerIdRef.current = id;
         return id ? `Opened HTML preview (window ${id}).` : "Could not open the preview.";
       },
-      file_list: async ({ path }) => {
-        const entries = await fsClient.list(String(path ?? "") || "/");
+      // Scoped to the dispatching conversation so a write under a branch-coupled
+      // mount (/Specs, /Docs) resolves that conversation's active feature branch
+      // server-side (see fsClient.scoped in os-client.ts).
+      file_list: async ({ path }, { conversationId }) => {
+        const entries = await fsClient.scoped(conversationId).list(String(path ?? "") || "/");
         return JSON.stringify(entries.map((e) => ({ name: e.name, path: e.path, type: e.type, size: e.size })));
       },
-      file_read: ({ path }) => fsClient.read(String(path ?? "")),
-      file_write: async ({ path, content }) => {
-        await fsClient.write(String(path ?? ""), String(content ?? ""));
+      file_read: ({ path }, { conversationId }) => fsClient.scoped(conversationId).read(String(path ?? "")),
+      file_write: async ({ path, content }, { conversationId }) => {
+        await fsClient.scoped(conversationId).write(String(path ?? ""), String(content ?? ""));
         return `Wrote ${path}.`;
       },
-      file_mkdir: async ({ path }) => {
-        await fsClient.mkdir(String(path ?? ""));
+      file_mkdir: async ({ path }, { conversationId }) => {
+        await fsClient.scoped(conversationId).mkdir(String(path ?? ""));
         return `Created folder ${path}.`;
       },
-      file_delete: async ({ path }) => {
-        await fsClient.remove(String(path ?? ""));
+      file_delete: async ({ path }, { conversationId }) => {
+        await fsClient.scoped(conversationId).remove(String(path ?? ""));
         return `Deleted ${path}.`;
       },
       // App management: the install/build happen server-side, but the desktop
@@ -124,8 +123,11 @@ export function FrontendToolsV2({ conversationId }: { conversationId: string }) 
       },
       // Elicitations: push a blocking card into the transcript and await the
       // user's choice (the kernel's signal withdraws the card on stop).
-      agent_request_claude: (input, { signal }) => elicit("agent_request_claude", input, conversationIdRef.current, signal),
-      dev_branch_request: (input, { signal }) => elicit("dev_branch_request", input, conversationIdRef.current, signal),
+      // conversationId comes from the dispatch context (run-client.ts), not a
+      // ref, so the card always appears in the correct chat even when multiple
+      // AssistantChatV2 instances are mounted simultaneously (e.g. Chat + Build Studio).
+      agent_request_claude: (input, { signal, conversationId }) => elicit("agent_request_claude", input, conversationId, signal),
+      dev_branch_request: (input, { signal, conversationId }) => elicit("dev_branch_request", input, conversationId, signal),
     };
     const unbind = Object.entries(handlers).map(([name, h]) => registerFrontendTool(name, h));
     return () => unbind.forEach((u) => u());

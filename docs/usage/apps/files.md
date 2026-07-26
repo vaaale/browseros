@@ -31,6 +31,23 @@ Folders, text files, and images each show a distinct icon.
 
 ---
 
+## Uploading files from your computer
+
+Drag one or more files from your desktop (or another app/window) and drop them
+anywhere in the folder view — they upload into the **currently open folder**. A
+banner shows upload progress; the listing refreshes automatically once the
+upload finishes.
+
+## Downloading files and folders
+
+**Right‑click** an item to open its context menu:
+
+- **Files** — **Download** saves the file to your computer.
+- **Folders** — **Download as zip** bundles the folder's entire contents
+  (including nested subfolders) into a `.zip` and downloads that instead.
+
+---
+
 ## Viewing and editing files
 
 Double‑click a file to open it:

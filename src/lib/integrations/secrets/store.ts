@@ -17,6 +17,27 @@ import { decrypt, encrypt, type Sealed } from "./crypto";
 
 type StoredKey = `${string}:${string}`;
 
+/**
+ * Minimal OAuth "app" credentials — the client id + secret a user copies from
+ * a provider's developer console (GitHub OAuth App, GitLab application, …).
+ * Unlike Google's `client_secrets.json` (see gsuite/client-secrets.ts), most
+ * providers only hand out these two fields; the authorization/token URLs come
+ * from the provider manifest, not the user. Persisted under the
+ * `git_remote_oauth:<providerId>:client` key so the git-remote OAuth flow can
+ * read the same record (see src/app/api/git-remotes/oauth/*).
+ */
+export interface OAuthClientCredentials {
+  clientId: string;
+  clientSecret: string;
+  /**
+   * Base URL of a self-hosted provider instance (e.g. a private GitLab at
+   * `https://gitlab.example.com`). Optional — omitted for cloud providers
+   * (github.com, gitlab.com), where the authorization/token URLs come from the
+   * provider manifest.
+   */
+  instanceUrl?: string;
+}
+
 interface OnDisk {
   version: 1;
   entries: Record<StoredKey, Sealed>;
@@ -73,9 +94,9 @@ export class SecretsStore {
         return emptyOnDisk();
       }
       return parsed;
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") return emptyOnDisk();
-      throw err;
+    } catch {
+      // Missing file or malformed JSON — treat as empty rather than crashing.
+      return emptyOnDisk();
     }
   }
 
@@ -113,6 +134,21 @@ export class SecretsStore {
         await this.writeAll(disk);
       }
     });
+  }
+
+  /**
+   * Persist an OAuth provider's client credentials (client id + secret) under
+   * the canonical `git_remote_oauth:<providerId>:client` key. Shared by the
+   * integrations credentials route and the git-remote OAuth start/callback
+   * routes so there is a single source of truth for the on-disk shape.
+   */
+  async setGitProviderCredentials(providerId: string, creds: OAuthClientCredentials): Promise<void> {
+    await this.set("git_remote_oauth", `${providerId}:client`, creds);
+  }
+
+  /** Read the OAuth client credentials for a provider, or `null` if unset. */
+  async getGitProviderCredentials(providerId: string): Promise<OAuthClientCredentials | null> {
+    return this.get<OAuthClientCredentials>("git_remote_oauth", `${providerId}:client`);
   }
 
   /** Return the `name` portion of every key owned by `integrationId`. */

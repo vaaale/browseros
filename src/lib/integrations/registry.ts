@@ -8,11 +8,23 @@
 
 import type { IntegrationManifest, ServiceDefinition } from "./types";
 
-const registry: IntegrationManifest[] = [];
+// Use globalThis as the backing store so the registry survives Next.js dev-mode
+// HMR module re-evaluations. Without this, each hot-reload re-runs the
+// registerIntegration side-effects in services/*/index.ts while the registry
+// array from the previous evaluation still holds the old entries, causing a
+// spurious "Duplicate integration id" throw.
+const REGISTRY_KEY = "__bos_integration_registry__";
+const g = globalThis as Record<string, unknown>;
+if (!Array.isArray(g[REGISTRY_KEY])) g[REGISTRY_KEY] = [];
+const registry = g[REGISTRY_KEY] as IntegrationManifest[];
 
 export function registerIntegration(manifest: IntegrationManifest): void {
-  if (registry.some((m) => m.id === manifest.id)) {
-    throw new Error(`Duplicate integration id: ${manifest.id}`);
+  const idx = registry.findIndex((m) => m.id === manifest.id);
+  if (idx !== -1) {
+    // Replace on re-registration (HMR re-evaluated the module). A true
+    // collision between two *different* integrations is caught at build time.
+    registry[idx] = manifest;
+    return;
   }
   registry.push(manifest);
 }

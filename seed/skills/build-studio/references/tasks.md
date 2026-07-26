@@ -1,1 +1,1 @@
-Step: tasks. Read the spec and plan plus .specify/templates/commands/tasks.md and .specify/templates/tasks-template.md. Write specs/<id>/tasks.md: tasks grouped by user story, dependency-ordered, [P] for parallelizable, with exact file paths.
+Step: tasks. Read the spec and plan plus /Templates/commands/tasks.md and /Templates/tasks-template.md via file_read. Write /Specs/<store>/<id>/tasks.md: tasks grouped by user story, dependency-ordered, [P] for parallelizable, with exact file paths.

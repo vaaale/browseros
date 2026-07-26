@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { sessionHeader } from "@/lib/logging/client/session";
+import { GitRemotesTab } from "./versions/GitRemotesTab";
 
 interface Ver {
   role: string;
@@ -139,6 +140,8 @@ export function VersionsTab() {
         <button disabled={busy} onClick={() => void load()} className={`${btn} bg-white/10 hover:bg-white/20`}>Refresh</button>
       </div>
       {msg && <span className="text-white/60">{msg}</span>}
+      <hr className="border-white/10" />
+      <GitRemotesTab />
     </div>
   );
 }

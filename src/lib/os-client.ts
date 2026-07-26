@@ -3,46 +3,96 @@
 import type { OSSettings, VfsEntry } from "@/os/types";
 import { sessionHeader } from "@/lib/logging/client/session";
 
+// Must match FEATURE_CONVERSATION_HEADER in @/lib/specs/feature-context (a
+// server-only module, so the client can't import the constant directly).
+const CONVERSATION_HEADER = "x-bos-conversation";
+
 async function jsonOrThrow<T>(res: Response): Promise<T> {
   const data = await res.json();
   if (!res.ok) throw new Error((data as { error?: string }).error ?? `Request failed (${res.status})`);
   return data as T;
 }
 
+function fsOps(extraHeaders: Record<string, string>) {
+  const headers = { "Content-Type": "application/json", ...sessionHeader(), ...extraHeaders };
+  return {
+    list: (path: string) =>
+      fetch(`/api/fs?op=list&path=${encodeURIComponent(path)}`, { headers: extraHeaders }).then((r) =>
+        jsonOrThrow<{ entries: VfsEntry[] }>(r).then((d) => d.entries),
+      ),
+    read: (path: string) =>
+      fetch(`/api/fs?op=read&path=${encodeURIComponent(path)}`, { headers: extraHeaders }).then((r) =>
+        jsonOrThrow<{ content: string }>(r).then((d) => d.content),
+      ),
+    write: (path: string, content: string) =>
+      fetch("/api/fs", { method: "POST", headers, body: JSON.stringify({ op: "write", path, content }) }).then((r) =>
+        jsonOrThrow<{ ok: true }>(r),
+      ),
+    mkdir: (path: string) =>
+      fetch("/api/fs", { method: "POST", headers, body: JSON.stringify({ op: "mkdir", path }) }).then((r) =>
+        jsonOrThrow<{ ok: true }>(r),
+      ),
+    remove: (path: string) =>
+      fetch("/api/fs", { method: "POST", headers, body: JSON.stringify({ op: "delete", path }) }).then((r) =>
+        jsonOrThrow<{ ok: true }>(r),
+      ),
+    rename: (path: string, to: string) =>
+      fetch("/api/fs", { method: "POST", headers, body: JSON.stringify({ op: "rename", path, to }) }).then((r) =>
+        jsonOrThrow<{ ok: true }>(r),
+      ),
+  };
+}
+
 export const fsClient = {
-  list: (path: string) =>
-    fetch(`/api/fs?op=list&path=${encodeURIComponent(path)}`).then((r) =>
-      jsonOrThrow<{ entries: VfsEntry[] }>(r).then((d) => d.entries),
-    ),
-  read: (path: string) =>
-    fetch(`/api/fs?op=read&path=${encodeURIComponent(path)}`).then((r) =>
-      jsonOrThrow<{ content: string }>(r).then((d) => d.content),
-    ),
-  write: (path: string, content: string) =>
-    fetch("/api/fs", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...sessionHeader() },
-      body: JSON.stringify({ op: "write", path, content }),
-    }).then((r) => jsonOrThrow<{ ok: true }>(r)),
-  mkdir: (path: string) =>
-    fetch("/api/fs", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...sessionHeader() },
-      body: JSON.stringify({ op: "mkdir", path }),
-    }).then((r) => jsonOrThrow<{ ok: true }>(r)),
-  remove: (path: string) =>
-    fetch("/api/fs", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...sessionHeader() },
-      body: JSON.stringify({ op: "delete", path }),
-    }).then((r) => jsonOrThrow<{ ok: true }>(r)),
-  rename: (path: string, to: string) =>
-    fetch("/api/fs", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...sessionHeader() },
-      body: JSON.stringify({ op: "rename", path, to }),
-    }).then((r) => jsonOrThrow<{ ok: true }>(r)),
+  ...fsOps({}),
+  /** A conversation-scoped client: carries the active conversation id so a
+   *  write under a branch-coupled mount (/Specs, /Docs) resolves the
+   *  conversation's active feature branch server-side. Use this from agent
+   *  tool handlers (FrontendToolsV2) instead of the bare fsClient. */
+  scoped: (conversationId: string) => ({
+    ...fsClient,
+    ...fsOps({ [CONVERSATION_HEADER]: conversationId }),
+  }),
   rawUrl: (path: string) => `/api/fs/raw?path=${encodeURIComponent(path)}`,
+  downloadUrl: (path: string) => `/api/fs/download?path=${encodeURIComponent(path)}`,
+  /** Trigger a browser download of a file or a zipped folder without navigating away. */
+  downloadEntry: (path: string) => {
+    const a = document.createElement("a");
+    a.href = fsClient.downloadUrl(path);
+    a.rel = "noopener";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  },
+  /** Upload one or more OS files into a VFS directory, reporting byte progress via XHR (fetch has no upload progress event). */
+  upload: (dirPath: string, files: File[] | FileList, onProgress?: (loaded: number, total: number) => void) =>
+    new Promise<{ ok: true; uploaded: string[] }>((resolve, reject) => {
+      const body = new FormData();
+      body.append("path", dirPath);
+      Array.from(files).forEach((f) => body.append("files", f));
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", "/api/fs/upload");
+      for (const [k, v] of Object.entries(sessionHeader())) xhr.setRequestHeader(k, v);
+      xhr.upload.onprogress = (e) => {
+        if (onProgress && e.lengthComputable) onProgress(e.loaded, e.total);
+      };
+      xhr.onload = () => {
+        let data: { ok?: true; uploaded?: string[]; error?: string } = {};
+        try {
+          data = JSON.parse(xhr.responseText);
+        } catch {
+          reject(new Error(`Upload failed (${xhr.status})`));
+          return;
+        }
+        if (xhr.status >= 200 && xhr.status < 300 && data.ok) {
+          resolve({ ok: true, uploaded: data.uploaded ?? [] });
+        } else {
+          reject(new Error(data.error ?? `Upload failed (${xhr.status})`));
+        }
+      };
+      xhr.onerror = () => reject(new Error("Upload failed"));
+      xhr.send(body);
+    }),
 };
 
 export const settingsClient = {

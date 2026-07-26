@@ -8,9 +8,12 @@ import { STORE_MANIFEST, type StoreManifest } from "@/lib/specs/stores";
 // Seed the built-in spec stores under specsRoot() (018-external-spec-store;
 // relocated to <dataDir>/specs by 027). The system store is seeded ADDITIVELY
 // from a tracked bundle (add missing specs on updates, never clobber in-flight
-// edits) and is READ-ONLY at runtime (Option B: system specs are source, edited
-// via the Developer agent). The user store is writable and backs the
-// Documents/Specs mount. Idempotent: safe to call on every startup.
+// edits). The `writable` manifest flag still governs the Build Studio pipeline
+// UI (src/lib/specs/pipeline.ts + src/lib/dev/spec-fs.ts), but agent file_* tools
+// no longer consult it — both stores are mounted writable in the VFS
+// (/Specs/bos-system-specs, /Specs/user-specs) via the newer os/fs/spec-fs.ts
+// backend, gated only by whether a feature branch is active. Idempotent: safe
+// to call on every startup.
 //
 // Migration (027 Phase 3): specsRoot() moved from <cwd>/specs to <dataDir>/specs.
 // On first boot in the new location we COPY legacy store content across
@@ -26,7 +29,7 @@ const STRAY_IDS = ["user", "system"];
 const SYSTEM_MANIFEST: StoreManifest = {
   label: "System specs",
   owner: "system",
-  writable: false, // Option B: read-only at runtime; edited as source via the Developer agent.
+  writable: false, // Governs the Build Studio pipeline UI only; agent file_* tools ignore this (see comment above).
   requiresPromote: true,
 };
 const USER_MANIFEST: StoreManifest = {

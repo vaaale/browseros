@@ -35,12 +35,16 @@ export interface AppManifest {
 
 /** A BOS SDK capability that can be granted to a user-installed iframe app. */
 export type AppCapability =
-  | "fs:read"       // Read files from the user's VFS
-  | "fs:write"      // Write files to the user's VFS
-  | "settings:read" // Read OS settings
-  | "notify"        // Show desktop notifications via postMessage response
-  | "window:title"  // Set the window title
-  | "storage";      // Per-app persistent key/value store (backs the localStorage shim, 028)
+  | "fs:read"        // Read files from the user's VFS
+  | "fs:write"       // Write files to the user's VFS
+  | "settings:read"  // Read OS settings
+  | "notify"         // Show desktop notifications via postMessage response
+  | "window:title"   // Set the window title
+  | "storage"        // Per-app persistent key/value store (backs the localStorage shim, 028)
+  | "services:read"; // Read a service's config/runtime state (e.g. its bound port) — an
+                      // opaque-origin app can't reach /api/services/* directly (no CORS,
+                      // by design — see docs/dev/apps/services.md); this is the broker path
+                      // a service's own bundled app (e.g. Terminal) needs to find its port.
 
 export type WallpaperFit = "cover" | "contain";
 

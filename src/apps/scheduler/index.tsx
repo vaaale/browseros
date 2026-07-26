@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   AlertTriangle,
   CalendarClock,
@@ -1152,7 +1153,7 @@ function ModalShell({
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose]);
-  return (
+  return createPortal(
     <div
       className="fixed inset-0 z-[200000] flex items-center justify-center bg-black/60 backdrop-blur-sm"
       onClick={(e) => {
@@ -1165,7 +1166,8 @@ function ModalShell({
       >
         {children}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
