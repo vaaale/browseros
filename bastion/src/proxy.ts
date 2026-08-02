@@ -66,14 +66,6 @@ function parseBasicAuthSecret(req: Request): string | null {
   return decoded.slice(sep + 1);
 }
 
-// Per-request stash for a rolling-session refresh cookie. Set in the middleware
-// when the token crosses its refresh threshold; consumed either by the proxyRes
-// hook (proxied responses) or set directly on bastion-generated responses.
-const REFRESH_COOKIE = Symbol("bosRefreshCookie");
-interface RefreshReq {
-  [REFRESH_COOKIE]?: string;
-}
-
 // ── Status page ───────────────────────────────────────────────────────────────
 // Shown while the container is provisioning or starting. Polls /account/instance
 // and auto-redirects to / when status becomes "running".

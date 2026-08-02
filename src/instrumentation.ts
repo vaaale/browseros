@@ -54,8 +54,11 @@ export async function register(): Promise<void> {
     // the others or boot itself (CH-007).
     const { dataDir } = await import("@/os/data-dir");
     const { ensureRepo } = await import("@/lib/gitfs/store");
-    const path = await import("path");
-    await ensureRepo(path.join(dataDir(), "user-apps")).catch((err) => {
+    // String join, not path.join(), so this file never imports the "path"
+    // builtin directly — Next.js statically flags any Node module imported
+    // right in instrumentation.ts as Edge-incompatible, even though the
+    // NEXT_RUNTIME guard above means this line never runs on Edge.
+    await ensureRepo(`${dataDir()}/user-apps`).catch((err) => {
       console.error("[instrumentation] failed to ensure user-apps repo:", err);
     });
 

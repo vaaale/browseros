@@ -210,63 +210,6 @@ const ErrorCard = memo(function ErrorCard({
   );
 });
 
-/** Error card for a failed model turn (message.error). Shows the provider error
- *  and — while it's the last message and no run is active — a Retry (edit-resubmit
- *  the last user turn with a summary of the failed attempt) and a Cancel that
- *  just dismisses the card. */
-function ErrorCard({
-  message,
-  messages,
-  conversationId,
-  agentId,
-  isLast,
-  running,
-}: {
-  message: ChatMessage;
-  messages: ChatMessage[];
-  conversationId: string;
-  agentId: string;
-  isLast: boolean;
-  running: boolean;
-}) {
-  const [dismissed, setDismissed] = useState(false);
-  if (dismissed) return null;
-  const handleRetry = () => {
-    if (running) return;
-    const lastUser = [...messages].reverse().find((m) => m.role === "user");
-    if (!lastUser) return;
-    void sendMessage(conversationId, agentId, buildRetryPrompt(messages, message.content ?? ""), {
-      editOfMessageId: lastUser.id,
-    });
-  };
-  return (
-    <div className="my-1 rounded-lg border border-rose-500/30 bg-rose-500/10 p-3 text-xs" data-testid="error-card">
-      <div className="mb-1 font-medium text-rose-100">The model returned an error</div>
-      <div className="mb-2 max-h-40 overflow-auto whitespace-pre-wrap break-words text-rose-200/90">{message.content}</div>
-      {isLast && !running && (
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={handleRetry}
-            data-testid="error-retry"
-            className="rounded bg-rose-400/20 px-2.5 py-1 font-medium text-rose-100 hover:bg-rose-400/30"
-          >
-            Retry
-          </button>
-          <button
-            type="button"
-            onClick={() => setDismissed(true)}
-            data-testid="error-cancel"
-            className="rounded bg-white/10 px-2.5 py-1 font-medium hover:bg-white/20"
-          >
-            Cancel
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
 export function MessageListV2({
   conversationId,
   agentId,
