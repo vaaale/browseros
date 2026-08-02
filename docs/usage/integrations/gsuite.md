@@ -364,6 +364,28 @@ Unread notifications increment the Dock badge. Ask the assistant *"what came
 in?"* or *"anything new in Gmail?"* and it will read the inbox and mark items
 read once you've dealt with them.
 
+### From the command line (`gws`)
+
+The Google Workspace CLI is installed in BOS and **shares this connection** — no
+separate login, no second consent. Once GSuite is connected, the assistant (or
+you, in a command) can call any Workspace API directly:
+
+```
+gws gmail users labels list --params '{"userId":"me"}'
+gws calendar events list --params '{"calendarId":"primary"}'
+gws drive files list --params '{"pageSize": 10}'
+```
+
+Useful when there is no BOS tool for what you need — the CLI covers the whole API
+surface, not just the methods the assistant exposes.
+
+**It is limited to the scopes you granted here.** Commands for Sheets, Docs,
+Slides or the Admin SDK return **403** because GSuite never asked for those
+scopes; to use them, add the scopes and reconnect. Drive is also partial: `gws`
+can read your files but only modify files it created itself.
+
+If GSuite isn't connected, `gws` simply reports that it has no credentials.
+
 ---
 
 ## Security notes

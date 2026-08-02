@@ -2,12 +2,16 @@ import "server-only";
 import { promises as fs } from "fs";
 import path from "path";
 import { dataDir } from "@/os/data-dir";
+import { listInstalledItems, getInstalledItem, itemLinkPath } from "@/system/items/installed";
+import type { InstalledItem } from "@/system/items/installed";
+import { resolveCapabilities, writeCapabilities } from "@/system/items/capabilities";
 import { writeFileAtomic } from "@/os/atomic-write";
 import { ensureRepo, commitAll } from "@/lib/gitfs/store";
 import { buildAppDir } from "@/lib/apps/build";
 import { supervisorEnabled, supervisorAppBegin } from "@/lib/devharness/supervisor";
 import { createAppSymlink, removeAppSymlink } from "@/system/marketplace/install/symlinkManager";
 import type { AppManifest, AppCapability } from "@/os/types";
+import type { ServiceManifest } from "@/core/service/types";
 
 // Installed apps are the `app/` facet of an ITEM (user-specs/002-service-daemons):
 // a self-contained folder `dataDir()/user-apps/<id>/` — the user's own GitFS
@@ -44,11 +48,33 @@ export interface InstalledApp {
   origin?: "local" | "marketplace";
   /** For marketplace apps: the source marketplace id. */
   marketplaceId?: string;
+  /**
+   * URL override for plugin-served apps. When set, the app opens at this URL
+   * instead of the default /apps/<id>/ path. Used by voiceEngine / integration
+   * plugins that serve their app via /api/plugin/<id>/app.
+   */
+  appUrl?: string;
 }
 
-const itemsRoot = () => path.join(dataDir(), "user-apps");
-const sysAppRoot = () => path.join(dataDir(), "system", "app");
-const itemAppDir = (id: string) => path.join(itemsRoot(), id, "app");
+/** The ONE gitfs repo root for the user's local marketplace (034/035) — every
+ *  writer must ensureRepo/commitAll HERE, never at itemsRoot(), or git init
+ *  silently creates a second, disconnected repo nested inside the first. */
+const userAppsDir = () => path.join(dataDir(), "user-apps");
+// Items live under user-apps/items/, the same shape as any marketplace clone
+// (034 FR-001). This is also where Build Studio's new apps land (034 FR-009).
+const itemsRoot = () => path.join(userAppsDir(), "items");
+/** Installed items live as one symlink each under dataDir()/system/ (035). */
+const sysAppRoot = () => path.join(dataDir(), "system");
+/** Where an item the USER authors is written — inside their own marketplace. */
+const authoredItemDir = (id: string) => path.join(itemsRoot(), id);
+/** Where an item's app facet is written — inside their own marketplace. */
+const authoredAppDir = (id: string) => path.join(authoredItemDir(id), "app");
+/**
+ * Where an INSTALLED app is read from: through its item symlink, so a
+ * marketplace-sourced app resolves into that marketplace's clone rather than
+ * being expected under user-apps (035 FR-002).
+ */
+const itemAppDir = (id: string) => path.join(itemLinkPath(id), "app");
 const linkPath = (id: string) => path.join(sysAppRoot(), id);
 
 function slugify(name: string): string {
@@ -112,7 +138,8 @@ async function fallbackName(id: string): Promise<string> {
   return toDisplayName(id);
 }
 
-export async function readApp(id: string): Promise<InstalledApp | null> {
+export async function readApp(id: string, knownItem?: InstalledItem | null): Promise<InstalledApp | null> {
+  const item = knownItem ?? (await getInstalledItem(id));
   const appDir = itemAppDir(id);
   // The app facet exists if the item ships a servable UI: a manifest, a static
   // index.html, or a built dist/.
@@ -139,29 +166,31 @@ export async function readApp(id: string): Promise<InstalledApp | null> {
     dir: `/${id}/app`,
     status: (await isAppInstalled(id)) ? "installed" : "uninstalled",
     entry: typeof m.entry === "string" ? m.entry : undefined,
-    capabilities: Array.isArray(m.capabilities) ? (m.capabilities as AppCapability[]) : undefined,
-    origin: m.origin === "marketplace" ? "marketplace" : undefined,
-    marketplaceId: typeof m.marketplaceId === "string" ? m.marketplaceId : undefined,
+    capabilities: await resolveCapabilities(id, Array.isArray(m.capabilities) ? (m.capabilities as AppCapability[]) : undefined),
+    // Provenance is DERIVED from where the install symlink resolves (035 FR-009),
+    // never read back from a file the marketplace controls.
+    origin: item ? item.origin : (m.origin === "marketplace" ? "marketplace" : undefined),
+    marketplaceId: item ? item.marketplaceId : (typeof m.marketplaceId === "string" ? m.marketplaceId : undefined),
+    appUrl: typeof m.appUrl === "string" ? m.appUrl : undefined,
   };
 }
 
 /** Discover all app-carrying items by listing user-apps/. */
 async function readAll(): Promise<InstalledApp[]> {
-  let entries: import("fs").Dirent[];
-  try {
-    entries = await fs.readdir(itemsRoot(), { withFileTypes: true });
-  } catch {
-    return [];
-  }
-  const ids = entries.filter((e) => e.isDirectory() && !e.name.startsWith(".")).map((e) => e.name);
-  const apps = await Promise.all(ids.map(readApp));
+  // The ONE shared installed-item scan (035 FR-007): an item is an installed app
+  // when it carries an app/ facet. Never scan user-apps here — "present in my
+  // marketplace" and "installed" are different questions, and conflating them is
+  // the misconception this whole change removes.
+  const items = (await listInstalledItems()).filter((i) => i.facets.app && !i.broken);
+  const apps = await Promise.all(items.map((i) => readApp(i.id, i)));
   return apps.filter((a): a is InstalledApp => a !== null).sort((a, b) => a.createdAt - b.createdAt);
 }
 
 async function writeManifest(app: InstalledApp): Promise<void> {
   const { dir: _dir, status: _status, ...rest } = app;
   void _dir; void _status;
-  await writeFileAtomic(path.join(itemAppDir(app.id), MANIFEST), JSON.stringify(rest, null, 2));
+  // Only ever called for apps the user authored (see setAppCapabilities/installItem).
+  await writeFileAtomic(path.join(authoredAppDir(app.id), MANIFEST), JSON.stringify(rest, null, 2));
 }
 
 /** Convert an installed app into an OS app manifest (rendered as an iframe). */
@@ -174,7 +203,7 @@ export function toManifest(app: InstalledApp): AppManifest {
     defaultHeight: 700,
     builtin: false,
     kind: "iframe",
-    url: `/apps/${app.id}`,
+    url: app.appUrl ?? `/apps/${app.id}`,
     source: app.dir,
     capabilities: app.capabilities,
     origin: app.origin ?? "local",
@@ -195,100 +224,177 @@ async function ensureBuilt(app: InstalledApp): Promise<void> {
   }
 }
 
-/** Manifests for the desktop — only currently-installed apps, discovered by
- *  listing the system/app/ symlinks (dangling links are skipped). */
+/** Manifests for the desktop — only currently-installed apps (broken item
+ *  symlinks are skipped). */
 export async function listInstalledManifests(): Promise<AppManifest[]> {
-  let entries: string[];
-  try {
-    entries = await fs.readdir(sysAppRoot());
-  } catch {
-    return [];
-  }
-  const apps = await Promise.all(entries.map(readApp));
+  const items = (await listInstalledItems()).filter((i) => i.facets.app && !i.broken);
+  const apps = await Promise.all(items.map((i) => readApp(i.id, i)));
   const installed = apps.filter((a): a is InstalledApp => a !== null && a.status === "installed");
   await Promise.allSettled(installed.map(ensureBuilt));
   return installed.sort((a, b) => a.createdAt - b.createdAt).map(toManifest);
 }
 
+/** True when `files` (item-root-relative paths, e.g. "app/index.html",
+ *  "services/service.json") contain at least one facet the shared installed-item
+ *  scanner (`src/system/items/installed.ts`) recognizes, OR an app build `entry`
+ *  is supplied (which produces an app facet). Mirrors `readFacets()` there. */
+function filesHaveARecognizedFacet(files: Record<string, string>, entry?: string): boolean {
+  if (entry) return true;
+  const keys = Object.keys(files);
+  return (
+    !!files["app/index.html"] ||
+    !!files["app/app.json"] ||
+    !!files["services/service.json"] ||
+    !!files["plugin/bos-plugin.json"] ||
+    keys.some((k) => k.startsWith("hooks/")) ||
+    keys.some((k) => k.startsWith("spec/"))
+  );
+}
+
+export interface InstallItemResult {
+  /** Manifest for the item's `app/` facet, if it has one. */
+  app?: AppManifest;
+  /** Manifest for the item's `services/` facet, if it has one — installed and
+   *  auto-started the same way a Marketplace-triggered service install is. */
+  service?: ServiceManifest;
+}
+
 /**
- * Install an app from a set of files (the assistant's buildApp / POST
- * /api/apps). The files become the `app/` facet of a NEW item under
- * user-apps/<id>/ — committed to that GitFS repo — and the item is installed
- * by symlinking dataDir()/system/app/<id> to it (served at /apps/<id>/).
- * `index.html` is required unless `entry` makes it a built project.
+ * Install an ITEM from a set of files (the assistant's buildApp / POST
+ * /api/apps, /api/apps/build). `files` keys are paths relative to the ITEM
+ * ROOT — e.g. "app/index.html", "app/src/main.tsx", "services/service.json",
+ * "services/index.js", "config/default.json" — mirroring the on-disk item
+ * layout exactly (user-specs/002-service-daemons): an item may bundle any mix
+ * of app/, services/, plugin/, hooks/, spec/, config/. The files become that
+ * mix of facets under user-apps/<id>/ — committed to that GitFS repo — and the
+ * item is installed by ONE symlink at dataDir()/system/<id> (035-install-by-
+ * symlink), which the shared scanner then reads to discover every facet.
+ *
+ * At least one recognized facet (or a build `entry`, which implies an app
+ * facet) is required — this is not app-only: a services-only item (a
+ * background daemon with no UI) is a fully valid install.
  */
-export async function installApp(
+export async function installItem(
   input: {
     name: string;
     icon?: string;
+    /** Item-root-relative paths — see the facet examples above. */
     files: Record<string, string>;
-    /** Built project: source entry (e.g. "src/main.tsx") esbuild bundles into dist/. If set, an index.html is generated and not required in files. */
+    /** Built project: source entry relative to the app facet (e.g. "src/main.tsx") esbuild bundles into app/dist/. Only meaningful when the item has an app facet. */
     entry?: string;
-    /** BOS SDK capability grants. Absent = no BOS SDK access. */
+    /** BOS SDK capability grants for the app facet. Absent = no BOS SDK access. */
     capabilities?: AppCapability[];
-    /** Provenance (028): "marketplace" → opaque-origin sandbox. */
+    /** Provenance (028): "marketplace" → opaque-origin sandbox (app facet only). */
     origin?: "local" | "marketplace";
     marketplaceId?: string;
     /** Explicit item id (marketplace installs use the item's id); default slugified name. */
     id?: string;
   },
   opts?: { draft?: boolean },
-): Promise<AppManifest> {
-  if (!input.entry && !input.files["index.html"]) {
-    throw new Error("Provide either an index.html (static app) or an entry (built project)");
+): Promise<InstallItemResult> {
+  if (!filesHaveARecognizedFacet(input.files, input.entry)) {
+    throw new Error(
+      "Provide at least one recognized facet: app/index.html (or entry, for a built app), services/service.json, plugin/bos-plugin.json, hooks/*, or spec/*.",
+    );
   }
-  const root = itemsRoot();
+  // ensureRepo/commitAll must run at userAppsDir() — the same root the
+  // Supervisor's app-candidate branch checks out — not at itemsRoot(), or the
+  // commit lands in a repo the candidate branch can never see (034/035).
+  const root = userAppsDir();
   await ensureRepo(root);
   // Draft install (under the Supervisor): check out the app-candidate branch
   // of the user-apps repo first, so this install lands on it (previewable)
   // instead of going live. The user then promotes or discards via the version
   // controls. Outside the Supervisor this is a no-op and the app installs live.
-  if (opts?.draft && supervisorEnabled()) {
+  //
+  // Only when this process IS base — never inside a preview. A preview's own
+  // dataDir()/user-apps is already a git worktree checked out on that preview's
+  // feature branch (mounted by the Supervisor alongside its data clone), so a
+  // commit here already lands on a previewable, promotable branch with no extra
+  // step. Calling supervisorAppBegin() from inside a preview would instead
+  // check out app-candidate on BASE's own unrelated, live-served user-apps
+  // directory — the exact mismatch that once let a marketplace app get written
+  // to a branch nothing was actually reading from.
+  const isPreview = process.env.BOS_VERSION_LABEL === "preview";
+  if (opts?.draft && supervisorEnabled() && !isPreview) {
     await supervisorAppBegin();
   }
   const id = input.id ?? slugify(input.name);
-  const appDir = itemAppDir(id);
+  // Write through the item's REAL location (user-apps/items/<id>/), never
+  // through itemAppDir()/itemLinkPath() — those resolve via dataDir()/system/<id>,
+  // which for a BRAND-NEW id doesn't exist yet. Writing there first creates a
+  // real directory instead of following a (nonexistent) symlink, and the later
+  // createAppSymlink() then fails trying to `rm` a non-empty real directory to
+  // replace it — this was a real, live bug for any never-before-installed id.
+  const itemDir = authoredItemDir(id);
 
   for (const [rel, content] of Object.entries(input.files)) {
-    await writeFileAtomic(path.join(appDir, rel), content);
+    await writeFileAtomic(path.join(itemDir, rel), content);
   }
 
-  // Built project: bundle the source entry into dist/ (served instead of the raw files).
+  const hasApp = !!input.files["app/index.html"] || !!input.files["app/app.json"] || !!input.entry;
+  const hasService = !!input.files["services/service.json"];
+
+  // Built project: bundle the source entry into app/dist/ (served instead of the raw files).
   if (input.entry) {
-    await buildAppDir(appDir, input.entry, input.name);
+    await buildAppDir(path.join(itemDir, "app"), input.entry, input.name);
   }
 
-  const app: InstalledApp = {
-    id,
-    name: input.name,
-    icon: input.icon || pickIcon(input.name),
-    createdAt: Date.now(),
-    dir: `/${id}/app`,
-    status: "installed",
-    entry: input.entry,
-    capabilities: input.capabilities,
-    origin: input.origin,
-    marketplaceId: input.marketplaceId,
-  };
-  await writeManifest(app);
-  await commitAll(root, `install app ${id}${opts?.draft ? " (draft)" : ""}`);
-  await createAppSymlink(path.join(root, id), id);
-  return toManifest(app);
+  let app: InstalledApp | undefined;
+  if (hasApp) {
+    app = {
+      id,
+      name: input.name,
+      icon: input.icon || pickIcon(input.name),
+      createdAt: Date.now(),
+      dir: `/${id}/app`,
+      status: "installed",
+      entry: input.entry,
+      capabilities: input.capabilities,
+      origin: input.origin,
+      marketplaceId: input.marketplaceId,
+    };
+    await writeManifest(app);
+  }
+
+  await commitAll(root, `install item ${id}${opts?.draft ? " (draft)" : ""}`);
+  await createAppSymlink(itemDir, id);
+
+  let service: ServiceManifest | undefined;
+  if (hasService) {
+    // Reuses the exact same validate/register/auto-start flow a Marketplace
+    // service install goes through. installItemLink() inside is idempotent, so
+    // re-symlinking here (already done via createAppSymlink above) is harmless.
+    const { installService } = await import("@/system/marketplace/install/serviceInstaller");
+    service = await installService(itemDir, id);
+  }
+
+  return { app: app ? toManifest(app) : undefined, service };
 }
 
 /**
- * Install the app facet of an EXISTING item under user-apps/<id>/ (marketplace
- * installs — the item was already copied/committed there). Writes provenance
- * metadata into its app.json (created if the item didn't ship one) and creates
- * the system/app/<id> symlink.
+ * Register the app facet of an ALREADY-INSTALLED item and return its manifest.
+ *
+ * Writes nothing and creates no symlink (035 FR-001/FR-009): the caller has
+ * already linked the item at `dataDir()/system/<id>`, wherever it actually lives,
+ * and `app.json` belongs to whoever authored the item. Provenance is derived from
+ * the link, so there is nothing for BOS to persist.
+ *
+ * An earlier revision wrote `app.json` into `user-apps/items/<id>/app/` and
+ * linked THERE — which both created content in the user's own marketplace for
+ * someone else's app, and collided with the correct link pointing at the
+ * marketplace clone.
  */
 export async function installItemApp(
   id: string,
-  meta?: { name?: string; icon?: string; origin?: "local" | "marketplace"; marketplaceId?: string },
+  meta?: { name?: string; icon?: string; origin?: "local" | "marketplace"; marketplaceId?: string; appUrl?: string },
 ): Promise<AppManifest> {
-  const appDir = itemAppDir(id);
-  if (!(await pathExists(path.join(appDir, "index.html"))) && !(await pathExists(path.join(appDir, "dist", "index.html")))) {
-    throw new Error(`Item "${id}" has no app/index.html to install.`);
+  const isPluginServed = !!meta?.appUrl;
+  if (!isPluginServed) {
+    const appDir = itemAppDir(id);
+    if (!(await pathExists(path.join(appDir, "index.html"))) && !(await pathExists(path.join(appDir, "dist", "index.html")))) {
+      throw new Error(`Item "${id}" has no app/index.html to install.`);
+    }
   }
   const existing = await readApp(id);
   const app: InstalledApp = {
@@ -302,47 +408,68 @@ export async function installItemApp(
     capabilities: existing?.capabilities,
     origin: meta?.origin === "marketplace" ? "marketplace" : existing?.origin,
     marketplaceId: meta?.marketplaceId ?? existing?.marketplaceId,
+    appUrl: meta?.appUrl ?? existing?.appUrl,
   };
-  await writeManifest(app);
-  await commitAll(itemsRoot(), `install app ${id}`);
-  await createAppSymlink(path.join(itemsRoot(), id), id);
+  // No write, no symlink — see the note above.
   return toManifest(app);
 }
 
-/** Soft uninstall: remove the system/app/<id> symlink so the app leaves the
- *  desktop; the item's files stay under user-apps/<id>/ for restore. */
+/**
+ * Uninstall: the app is gone. Removes the item's install symlink, so it leaves
+ * the desktop AND the registry — there is no "uninstalled but still listed"
+ * state under 035, because installed state IS the symlink. Reinstalling is a
+ * Marketplace action.
+ *
+ * If the item also has a service installed, cascade to uninstallService() first
+ * so a stranded worker doesn't outlive the entry. Cascade failures are logged,
+ * not raised: removing the entry must always succeed.
+ */
 export async function uninstallApp(id: string): Promise<InstalledApp[]> {
+  if ((await getInstalledItem(id))?.facets.service) {
+    const { uninstallService } = await import("@/system/marketplace/install/serviceInstaller");
+    await uninstallService(id).catch((err) => {
+      console.error(`[apps.store] cascade uninstallService(${id}) failed:`, err);
+    });
+  }
   await removeAppSymlink(id);
   return readAll();
 }
 
-/** Restore a previously uninstalled app (its item files were kept). */
-export async function restoreApp(id: string): Promise<AppManifest | undefined> {
-  const app = await readApp(id);
-  if (!app) return undefined;
-  await createAppSymlink(path.join(itemsRoot(), id), id);
-  return toManifest({ ...app, status: "installed" });
-}
-
-/** Update the capability grants for an installed app. */
+/**
+ * Update the capability grants for an installed app.
+ *
+ * Grants are BOS-owned state at `system/config/<id>/capabilities.json` (035),
+ * never the item's `app.json`. A grant is something BOS gives, not something an
+ * item claims — and for a marketplace item `app.json` sits in a read-only clone
+ * where a grant could silently widen itself on the next `git pull`. Storing them
+ * BOS-side also means this works identically for marketplace and authored apps.
+ */
 export async function setAppCapabilities(id: string, capabilities: AppCapability[]): Promise<AppManifest | undefined> {
   const app = await readApp(id);
   if (!app) return undefined;
-  const updated: InstalledApp = { ...app, capabilities };
-  await writeManifest(updated);
-  await commitAll(itemsRoot(), `update capabilities for app ${id}`);
-  return toManifest(updated);
+  await writeCapabilities(id, capabilities);
+  return toManifest({ ...app, capabilities });
 }
 
-/** Permanently delete the item's folder from user-apps/ and commit the
- *  removal. Refuses while the item's service is still installed — uninstall
- *  the service first (Settings → Plugins → Services). */
+/**
+ * Permanently delete the item's content. Only meaningful for items the user
+ * OWNS — i.e. whose install resolves into user-apps/items/ (035 FR-013). For a
+ * marketplace item there is nothing to purge: its content belongs to the
+ * marketplace, and removing that marketplace is the equivalent operation.
+ */
 export async function purgeApp(id: string): Promise<InstalledApp[]> {
-  if (await pathExists(path.join(dataDir(), "system", "services", id))) {
+  const item = await getInstalledItem(id);
+  if (item?.facets.service) {
     throw new Error(`Item "${id}" still has an installed service — uninstall the service first.`);
+  }
+  if (item && item.origin !== "local") {
+    throw new Error(
+      `"${id}" comes from marketplace "${item.marketplaceId ?? "unknown"}" — there is nothing to purge. ` +
+      `Uninstall it, or remove the marketplace.`,
+    );
   }
   await removeAppSymlink(id);
   await fs.rm(path.join(itemsRoot(), id), { recursive: true, force: true }).catch(() => {});
-  await commitAll(itemsRoot(), `purge app ${id}`);
+  await commitAll(userAppsDir(), `purge app ${id}`);
   return readAll();
 }

@@ -94,6 +94,13 @@ export const CAPABILITIES: Capability[] = [
   { id: "agent_request_claude", group: "Agents", context: "action", description: "Ask to use a Claude agent for a non-dev task." },
   { id: "agent_prompt_get", group: "Agents", context: "action", description: "Read the active agent's editable personality." },
   { id: "agent_prompt_set", group: "Agents", context: "action", description: "Rewrite the active agent's personality." },
+  { id: "agent_definition_get", group: "Agents", context: "action", description: "Read ANY named agent's current live definition (id, tools, skills, systemPrompt) — read-only, for auditing a different agent than the caller's own." },
+
+  // Conversation review (auditing a past conversation's behavior — see the
+  // conversation-reviewer agent)
+  { id: "conversation_overview", group: "Conversation Review", context: "action", description: "Get a past conversation's shape (title, agents involved, total pages) before reviewing it." },
+  { id: "conversation_page", group: "Conversation Review", context: "action", description: "Fetch one page of a past conversation's transcript, condensed for review." },
+  { id: "submit_review_report", group: "Conversation Review", context: "action", description: "Save a conversation-behavior review report — refuses unless every page was actually reviewed." },
 
   // Memory
   { id: "memory_save", group: "Memory", context: "action", description: "Save to persistent memory." },
@@ -203,6 +210,7 @@ export const GROUP_DEFINITIONS: Record<string, { description: string }> = {
   "Files": { description: "Virtual file system operations including listing, reading, writing, editing, patching, searching, and globbing files, and creating/deleting directories — including mounted paths like /Specs, /Docs, and /Templates." },
   "Config": { description: "Configuration and settings management for BrowserOS: listing configurable settings and updating configuration values." },
   "Agents": { description: "Sub-agent management, creation, and delegation of tasks to specialized agents." },
+  "Conversation Review": { description: "Auditing a past conversation's behavior: reading it in verifiable pages and submitting a findings report proposing agent/skill/doc improvements." },
   "Memory": { description: "Persistent long-term memory: saving durable facts, recalling stored entries, and searching topic shards for past context." },
   "Skills": { description: "Reusable skill library management: listing, loading, saving, and self-improving skills for the assistant." },
   "Scratchpad": { description: "Conversation-scoped notes and scratchpad: creating, reading, editing, and deleting temporary notes tied to the current conversation." },
@@ -242,11 +250,41 @@ export function getDangerousToolNames(): readonly string[] {
   return DANGEROUS_TOOL_NAMES;
 }
 
-const ACTION_IDS = new Set(CAPABILITIES.filter((c) => c.context !== "tool").map((c) => c.id));
+// Dynamic extension point — plugins call registerAdditionalCapabilities() from
+// their activate() hook. Backed by globalThis so it survives HMR re-evaluations.
+const DYNAMIC_CAPS_KEY = "__bos_dynamic_capabilities__" as const;
 
-/** Is this id a main-chat action? */
+function getDynamicCapabilities(): Capability[] {
+  const g = globalThis as Record<string, unknown>;
+  if (!Array.isArray(g[DYNAMIC_CAPS_KEY])) g[DYNAMIC_CAPS_KEY] = [];
+  return g[DYNAMIC_CAPS_KEY] as Capability[];
+}
+
+export function registerAdditionalCapabilities(caps: Capability[]): void {
+  const dynamic = getDynamicCapabilities();
+  for (const cap of caps) {
+    const idx = dynamic.findIndex((c) => c.id === cap.id);
+    if (idx !== -1) dynamic[idx] = cap;
+    else dynamic.push(cap);
+  }
+}
+
+export function unregisterCapabilities(ids: string[]): void {
+  const dynamic = getDynamicCapabilities();
+  const toRemove = new Set(ids);
+  const keep = dynamic.filter((c) => !toRemove.has(c.id));
+  dynamic.length = 0;
+  dynamic.push(...keep);
+}
+
+/** Full capability list: static built-ins + dynamically registered plugin caps. */
+export function listCapabilities(): Capability[] {
+  return [...CAPABILITIES, ...getDynamicCapabilities()];
+}
+
+/** Is this id a main-chat action (static or dynamically registered)? */
 export function isActionId(id: string): boolean {
-  return ACTION_IDS.has(id);
+  return listCapabilities().some((c) => c.context !== "tool" && c.id === id);
 }
 
 // The per-agent action gate (016 + Phase B strict allowlist). Contract:

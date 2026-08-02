@@ -5,7 +5,7 @@
 // SERVER owns the transcript; this store is a projection of (persisted
 // messages) + (live run events), rebuilt losslessly on reconnect/replay.
 
-import { useSyncExternalStore } from "react";
+import { useRef, useSyncExternalStore } from "react";
 import type { ChatMessage } from "../messages";
 import type { RunEvent, RunFinishReason } from "../run-events";
 
@@ -87,6 +87,42 @@ export function useChatState(conversationId: string): ChatState {
     (cb) => subscribeChat(conversationId, cb),
     () => getChatState(conversationId),
     () => getChatState(conversationId),
+  );
+}
+
+/**
+ * Selector-based subscription: re-renders only when the SELECTED slice
+ * actually changes, not on every store update. Plain `useChatState` hands
+ * back the single mutable `ChatState` object, which gets a new identity on
+ * every run event — including one `text_delta` per streamed token — so a
+ * component that only reads e.g. `running` would otherwise re-render dozens
+ * of times per second during a streaming reply. Caches the last selected
+ * value per conversation (in a ref, so it survives across renders but not
+ * across unmounts) and only recomputes/returns a new reference when the
+ * underlying `ChatState` object has actually changed AND the selected value
+ * differs from the cached one under `isEqual` (default `Object.is`).
+ */
+export function useChatSelector<T>(
+  conversationId: string,
+  selector: (s: ChatState) => T,
+  isEqual: (a: T, b: T) => boolean = Object.is,
+): T {
+  const cacheRef = useRef<{ input: ChatState; value: T } | null>(null);
+
+  const getSnapshot = () => {
+    const s = getChatState(conversationId);
+    const cached = cacheRef.current;
+    if (cached && cached.input === s) return cached.value;
+    const value = selector(s);
+    const next = cached && isEqual(cached.value, value) ? cached.value : value;
+    cacheRef.current = { input: s, value: next };
+    return next;
+  };
+
+  return useSyncExternalStore(
+    (cb) => subscribeChat(conversationId, cb),
+    getSnapshot,
+    getSnapshot,
   );
 }
 

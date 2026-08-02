@@ -1,10 +1,70 @@
 import { createProxyMiddleware } from "http-proxy-middleware";
-import type { RequestHandler } from "express";
+import type { Request, Response, NextFunction, RequestHandler } from "express";
 import type { Server } from "http";
 import type { Config } from "./config";
-import { verifySession, clearSession, shouldRefreshSession, sessionSetCookie, SESSION_TTL_MS } from "./sessions";
-import { getOrProvision, resetIdleTimer, getInstanceState } from "./lifecycle";
+import { verifySession, clearSession, shouldRefreshSession, sessionSetCookie } from "./sessions";
+import { getOrProvision, touchInstance, getInstanceState } from "./lifecycle";
 import { containerName } from "./docker";
+import { resolveCredential } from "./credential-routing";
+
+// Per-request stash for a rolling-session refresh cookie. Set in the middleware
+// when the token crosses its refresh threshold; consumed either by the proxyRes
+// hook (proxied responses) or set directly on bastion-generated responses.
+const REFRESH_COOKIE = Symbol("bosRefreshCookie");
+interface RefreshReq {
+  [REFRESH_COOKIE]?: string;
+}
+
+// ── Trusted claim propagation ──────────────────────────────────────────────
+// Bastion is the ONLY place that ever verifies a raw credential (the session
+// JWT's signature, or a presented secret's hash against credentials-index.json)
+// — everything downstream, inside a user's own container, must NEVER
+// re-verify a raw credential itself, only trust an already-verified claim
+// Bastion asserts. This is the same "gateway verifies, origin trusts an
+// injected header" pattern any JWT-terminating reverse proxy uses (e.g. an
+// Envoy/Istio JWT filter injecting `X-User-*` downstream) — it's what lets
+// this generalize to future per-role requirements (Bastion already carries a
+// real `isAdmin` claim in SessionPayload, see sessions.ts, currently checked
+// only inside Bastion's own admin router; propagating it further is the same
+// mechanism, just one more header) without changing the shape of the design.
+//
+// `x-bos-auth-scope` is exactly one of:
+//   "session"        — a verified browser session (SessionPayload.username)
+//   "secret:<service>" — a headless request routed by a per-service secret
+//                        that was never validated as a session at all
+// `x-bos-auth-role` is currently only ever "admin" (from SessionPayload's
+// isAdmin), set alongside "session" — never set for the secret path, since
+// per-service secrets carry no role claim today (see service-secrets.ts).
+//
+// Both are STRIPPED from every inbound request before this middleware makes
+// its own routing decision, then set authoritatively below — a client can
+// never forge either by sending them directly, since whatever it sends is
+// discarded first.
+const AUTH_SCOPE_HEADER = "x-bos-auth-scope";
+const AUTH_ROLE_HEADER = "x-bos-auth-role";
+
+function stripClaimHeaders(req: Request): void {
+  delete req.headers[AUTH_SCOPE_HEADER];
+  delete req.headers[AUTH_ROLE_HEADER];
+}
+
+// ── Headless Basic-auth credential routing (034-secrets-authentication) ───────
+// Extracts the password half of a parseable `Authorization: Basic <b64>`
+// header — the presented secret. The username half is never used for
+// anything; only the secret determines routing (see credential-routing.ts).
+function parseBasicAuthSecret(req: Request): string | null {
+  const header = req.headers.authorization;
+  if (!header || !header.startsWith("Basic ")) return null;
+  let decoded: string;
+  try {
+    decoded = Buffer.from(header.slice("Basic ".length), "base64").toString("utf8");
+  } catch {
+    return null;
+  }
+  const sep = decoded.indexOf(":");
+  if (sep === -1) return null;
+  return decoded.slice(sep + 1);
+}
 
 // Per-request stash for a rolling-session refresh cookie. Set in the middleware
 // when the token crosses its refresh threshold; consumed either by the proxyRes
@@ -208,39 +268,29 @@ export function createBosProxy(cfg: Config): RequestHandler & { upgrade?: (serve
     return proxyMap.get(username)!;
   }
 
-  const middleware: RequestHandler = (req, res, next) => {
-    const session = verifySession(req, cfg);
-    if (!session) {
-      clearSession(res);
-      // Route through the auth /login endpoint so it can check bootstrap state
-      // and redirect to /app/setup (first run) or /app/login as appropriate.
-      res.redirect("/login");
-      return;
-    }
-
-    // Rolling session: any authenticated request past the refresh threshold
-    // re-issues the cookie, so an active user is never logged out mid-work.
-    // Stash it for the proxyRes hook (the reliable path for proxied responses);
-    // bastion-generated responses below set it directly on res.
-    const refreshCookie = shouldRefreshSession(session) ? sessionSetCookie(session, cfg) : undefined;
+  // Shared tail of the routing decision, once a target username is known —
+  // reached either via an authenticated session or via a resolved headless
+  // credential (034-secrets-authentication). `refreshCookie` only applies to
+  // the session path.
+  function routeToUser(username: string, req: Request, res: Response, next: NextFunction, refreshCookie?: string): void {
     if (refreshCookie) (req as unknown as RefreshReq)[REFRESH_COOKIE] = refreshCookie;
 
-    // Keep the container alive for as long as the user is logged in: the idle
-    // stop tracks the session's expiry (+ grace), so it only elapses once the
-    // rolling auth session has lapsed. If we just refreshed, the effective
-    // expiry is now + TTL; otherwise it's the token's own exp.
-    const sessionExpMs = refreshCookie
-      ? Date.now() + SESSION_TTL_MS
-      : session.exp ? session.exp * 1000 : Date.now() + SESSION_TTL_MS;
-    const stopAtMs = sessionExpMs + cfg.idleTimeoutMs;
-
-    const { username } = session;
     const state = getInstanceState(username);
 
-    // Fast path: already running — proxy immediately (proxyRes injects the
-    // refresh cookie into the upstream response).
-    if (state?.status === "running") {
-      resetIdleTimer(username, cfg, stopAtMs);
+    // Fast path: the container is up — proxy immediately (proxyRes injects the
+    // refresh cookie into the upstream response). A container's lifetime does
+    // NOT depend on request activity; it runs until explicitly stopped, so this
+    // only records the timestamp for the admin UI.
+    //
+    // "unhealthy" proxies too, deliberately. The health verdict exists for
+    // OBSERVABILITY (admin → System Monitor), not as a traffic gate: gating on
+    // it turns one failed probe — or a legitimate cold-start `next build` window
+    // — into a total outage where every API call returns 503 "BOS instance not
+    // ready" and the whole desktop appears broken. When base really is down the
+    // Supervisor answers with its own diagnostic page and is already restarting
+    // it, which is strictly more useful than a bastion-level 503.
+    if (state?.status === "running" || state?.status === "unhealthy") {
+      touchInstance(username);
       getProxy(username)(req, res, next);
       return;
     }
@@ -262,6 +312,97 @@ export function createBosProxy(cfg: Config): RequestHandler & { upgrade?: (serve
     // redirects to / when status flips to "running".
     if (refreshCookie) res.setHeader("Set-Cookie", refreshCookie);
     res.status(200).send(STATUS_PAGE);
+  }
+
+  // Headless, cookie-less requests carrying a parseable Basic-auth header are
+  // routed by resolving the presented secret against every provisioned user's
+  // credentials-index companion file — never by asking the identity provider
+  // to resolve a username (FR-005/FR-006/FR-007). The Basic-auth *username*
+  // is never used for anything, only the secret. On no match: 401 with
+  // WWW-Authenticate, never a redirect to /login (spec.md User Story 3 AS2).
+  function routeHeadlessCredential(secret: string, req: Request, res: Response, next: NextFunction): void {
+    resolveCredential(secret, cfg.volumeBase)
+      .then((resolved) => {
+        if (!resolved) {
+          res.setHeader("WWW-Authenticate", 'Basic realm="BrowserOS"');
+          res.status(401).end();
+          return;
+        }
+        // Rewrite so the target container's own authoritative service-secrets
+        // check (unchanged — FR-007) sees a Bearer credential; Bastion itself
+        // never authenticates the request, only routes it.
+        req.headers.authorization = `Bearer ${secret}`;
+        // Assert the verified scope claim — never "session": a per-service
+        // secret is not a login, regardless of which service minted it. This
+        // is what lets a container-side admin surface (mint/list/revoke a
+        // secret) refuse ANY secret-scoped request outright, rather than
+        // trusting "some valid credential got routed here" as equivalent to
+        // "the container's owner is logged in."
+        req.headers[AUTH_SCOPE_HEADER] = `secret:${resolved.service}`;
+        routeToUser(resolved.username, req, res, next);
+      })
+      .catch((err: Error) => {
+        console.error("[bastion] credential routing failed:", err.stack ?? err.message);
+        res.setHeader("WWW-Authenticate", 'Basic realm="BrowserOS"');
+        res.status(401).end();
+      });
+  }
+
+  const middleware: RequestHandler = (req, res, next) => {
+    stripClaimHeaders(req);
+    const session = verifySession(req, cfg);
+    if (!session) {
+      const basicSecret = parseBasicAuthSecret(req);
+      if (basicSecret) {
+        routeHeadlessCredential(basicSecret, req, res, next);
+        return;
+      }
+
+      // A genuinely credential-less request (no session, no Authorization
+      // header at all) is not necessarily "a browser that isn't logged in
+      // yet" — it's also exactly what RFC 7617's non-preemptive Basic auth
+      // looks like on the wire: a compliant headless client (davfs2, curl,
+      // any WebDAV/API consumer) deliberately withholds credentials on its
+      // first request and only attaches them after being challenged with a
+      // 401. Redirecting that first probe to /login is a 302 no such client
+      // can follow, so it fails outright and never gets the chance to retry
+      // with Basic auth attached — reproducing identically whether or not
+      // the caller actually has valid credentials configured. Distinguish
+      // the two cases the same way routeToUser already does for its own
+      // "is this a browser" check: only a request that Accepts HTML is
+      // treated as browser navigation and sent to /login; anything else gets
+      // the same 401 + WWW-Authenticate challenge routeHeadlessCredential's
+      // own "no match" branch already issues, so a compliant client retries
+      // and reaches that branch above instead of dying here.
+      const acceptsHtml = (req.headers.accept ?? "").includes("text/html");
+      if (!acceptsHtml) {
+        res.setHeader("WWW-Authenticate", 'Basic realm="BrowserOS"');
+        res.status(401).end();
+        return;
+      }
+
+      clearSession(res);
+      // Route through the auth /login endpoint so it can check bootstrap state
+      // and redirect to /app/setup (first run) or /app/login as appropriate.
+      res.redirect("/login");
+      return;
+    }
+
+    // Rolling session: any authenticated request past the refresh threshold
+    // re-issues the cookie, so an active user is never logged out mid-work.
+    // Stash it for the proxyRes hook (the reliable path for proxied responses);
+    // bastion-generated responses below set it directly on res.
+    const refreshCookie = shouldRefreshSession(session) ? sessionSetCookie(session, cfg) : undefined;
+
+    // A verified session — assert the "session" scope claim, plus "admin" if
+    // SessionPayload.isAdmin is set (already a real, working claim inside
+    // Bastion's own admin router, sessions.ts/routers/admin.ts — this is the
+    // same claim, propagated one hop further for any container-side surface
+    // that needs it later).
+    req.headers[AUTH_SCOPE_HEADER] = "session";
+    if (session.isAdmin) req.headers[AUTH_ROLE_HEADER] = "admin";
+
+    routeToUser(session.username, req, res, next, refreshCookie);
   };
 
   return middleware;

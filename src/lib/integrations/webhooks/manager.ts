@@ -29,23 +29,23 @@ export interface WebhookSnapshot {
   origin: string;
 }
 
-function computeOrigin(): string {
-  return (process.env.NEXT_PUBLIC_APP_ORIGIN ?? "http://localhost:3000").replace(/\/$/, "");
+function computeOrigin(origin?: string): string {
+  return (origin ?? process.env.NEXT_PUBLIC_APP_ORIGIN ?? "http://localhost:3000").replace(/\/$/, "");
 }
 
 /** Absolute URL the provider should POST to for this service. */
-export function webhookUrl(integrationId: string, serviceId: string): string {
-  return `${computeOrigin()}/api/integrations/webhooks/${encodeURIComponent(integrationId)}/${encodeURIComponent(serviceId)}`;
+export function webhookUrl(integrationId: string, serviceId: string, origin?: string): string {
+  return `${computeOrigin(origin)}/api/integrations/webhooks/${encodeURIComponent(integrationId)}/${encodeURIComponent(serviceId)}`;
 }
 
-export async function getSnapshot(integrationId: string, serviceId: string): Promise<WebhookSnapshot> {
+export async function getSnapshot(integrationId: string, serviceId: string, origin?: string): Promise<WebhookSnapshot> {
   const config = await readWebhookConfig(integrationId, serviceId);
   const secrets = await readWebhookSecrets(integrationId, serviceId);
   return {
     config,
     hasSecret: secrets !== null,
-    url: webhookUrl(integrationId, serviceId),
-    origin: computeOrigin(),
+    url: webhookUrl(integrationId, serviceId, origin),
+    origin: computeOrigin(origin),
   };
 }
 
@@ -53,6 +53,7 @@ export async function enableWebhook(input: {
   integrationId: string;
   serviceId: string;
   patch?: Partial<WebhookConfig>;
+  origin?: string;
 }): Promise<WebhookSnapshot> {
   const handler = getWebhookHandler(input.integrationId, input.serviceId);
   const config = await writeWebhookConfig(input.integrationId, input.serviceId, {
@@ -65,14 +66,16 @@ export async function enableWebhook(input: {
       integrationId: input.integrationId,
       serviceId: input.serviceId,
       config,
+      origin: input.origin,
     });
   }
-  return getSnapshot(input.integrationId, input.serviceId);
+  return getSnapshot(input.integrationId, input.serviceId, input.origin);
 }
 
 export async function disableWebhook(input: {
   integrationId: string;
   serviceId: string;
+  origin?: string;
 }): Promise<WebhookSnapshot> {
   const handler = getWebhookHandler(input.integrationId, input.serviceId);
   await writeWebhookConfig(input.integrationId, input.serviceId, { enabled: false });
@@ -83,7 +86,7 @@ export async function disableWebhook(input: {
       serviceId: input.serviceId,
     }).catch(() => {});
   }
-  return getSnapshot(input.integrationId, input.serviceId);
+  return getSnapshot(input.integrationId, input.serviceId, input.origin);
 }
 
 export async function rotateSecret(input: {

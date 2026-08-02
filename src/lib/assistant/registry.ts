@@ -25,6 +25,7 @@ import { scratchpadTools } from "./tools/server/scratchpad";
 import { integrationTools } from "./tools/server/integrations";
 import { discoveryTools } from "./tools/server/discovery";
 import { claudeCodeTools } from "./tools/server/claude-code-tools";
+import { conversationReviewTools } from "./tools/server/conversation-review";
 
 // The assistant tool registry (Milestone C). Server tools call their lib
 // functions in-process; frontend tools are declared here (single source of
@@ -73,6 +74,7 @@ export function assistantTools(): Record<string, AssistantTool> {
     ...scratchpadTools(),
     ...integrationTools(),
     ...schedulerTools(),
+    ...conversationReviewTools(),
   };
   cache = { ...combined, ...discoveryTools((id) => combined[id]) };
   return cache;

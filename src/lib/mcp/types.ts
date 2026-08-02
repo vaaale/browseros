@@ -22,6 +22,11 @@ export interface McpServerConfig {
   cwd?: string;
   /** stdio: extra environment variables for the spawned process. */
   env?: Record<string, string>;
+  /** Fold this server into the Dev Harness's own generated config
+   *  (029-settings-dev-harness) so the headless Claude/OpenCode CLIs can use it
+   *  too. Default/absent = false — most assistant MCP servers are not meant for
+   *  a headless coding agent's HOME. */
+  includeInDevHarness?: boolean;
 }
 
 export interface McpProbeResult {

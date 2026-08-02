@@ -17,5 +17,6 @@ import "./adapters/gmail";
 import "./adapters/drive";
 import "./adapters/calendar";
 import "./adapters/contacts";
+import "./adapters/photos";
 
-export { GSUITE_MANIFEST, GMAIL_SCOPES, DRIVE_SCOPES, CALENDAR_SCOPES, CONTACTS_SCOPES } from "./manifest";
+export { GSUITE_MANIFEST, GMAIL_SCOPES, DRIVE_SCOPES, CALENDAR_SCOPES, CONTACTS_SCOPES, PHOTOS_SCOPES } from "./manifest";

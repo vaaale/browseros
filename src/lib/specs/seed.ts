@@ -69,10 +69,22 @@ async function copyMissing(src: string, dst: string): Promise<void> {
   }
 }
 
+async function hasRemote(dir: string): Promise<boolean> {
+  try {
+    const cfg = await fs.readFile(path.join(dir, ".git", "config"), "utf8");
+    return cfg.includes("[remote ");
+  } catch { return false; }
+}
+
 async function ensureSystemStore(dir: string): Promise<void> {
   const fresh = !(await pathExists(path.join(dir, ".git")));
   await ensureRepo(dir);
-  if (await pathExists(SEED_BUNDLE)) await copyMissing(SEED_BUNDLE, dir);
+  // Skip seeding when the store was cloned from a real remote (wizard set up
+  // bos-specs from a URL). The remote's content is authoritative; overlaying the
+  // seed bundle would pollute it with local-only files.
+  if (!await hasRemote(dir) && await pathExists(SEED_BUNDLE)) {
+    await copyMissing(SEED_BUNDLE, dir);
+  }
   await writeManifest(dir, SYSTEM_MANIFEST); // read-only manifest (single source of truth)
   await commitAll(dir, fresh ? "seed system spec store" : "sync system specs");
 }

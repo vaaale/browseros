@@ -30,6 +30,12 @@ The app opens empty, ready to accept its first marketplace URL.
 
 ![Marketplace app — empty state](../../assets/marketplace/01-marketplace-open.png)
 
+The window has two panes. On the left is a **Sources** sidebar listing everywhere
+your content can come from: an **All** entry, **My Apps** (your own private
+marketplace — anything you or the assistant builds lands there), and one entry per
+marketplace you add, each with the number of items it currently offers. On the
+right is the catalogue itself, grouped into one section per source.
+
 ---
 
 ## 2. Add the BOS Marketplace
@@ -75,15 +81,27 @@ Items already installed in your BOS instance are highlighted with a green **✓ 
 
 ---
 
-## 4. Search and filter
+## 4. Narrow things down
 
-With many items across multiple marketplaces, the **Filter items…** field narrows the list in real time. It matches against item names, descriptions, and tags.
+There are two ways to cut down what you're looking at, and they work together.
+
+**Pick a source.** Click any entry in the left sidebar to show only that source's
+items — handy once you've added a skill collection with dozens of them. Click
+**All** to go back to everything. The number beside each entry tells you how many
+items it currently has, so you can see where something is before you click.
+
+**Collapse what you're not using.** Click a section's header in the right pane to
+fold its items away; click again to unfold. The header stays put, so its **Sync**
+and **Remove** buttons are always within reach. Sections start expanded, and
+picking a source in the sidebar always expands it.
+
+**Filter by text.** The **Filter items…** field narrows the list in real time. It matches against item names, descriptions, and tags.
 
 For example, type `timer` to instantly find Pomodoro:
 
 ![Search filter showing only the Pomodoro app](../../assets/marketplace/06-search-filter.png)
 
-The filter hides entire marketplace sections when none of their items match — clear the field to return to the full catalogue.
+The filter hides entire sections when none of their items match, and the sidebar counts follow it — clear the field to return to the full catalogue. Text filtering and source selection combine, so you can search within one source.
 
 Some useful searches to try:
 

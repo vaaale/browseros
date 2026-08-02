@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { memo, useEffect, useMemo } from "react";
 import { ChevronDown, ChevronRight, Wrench, Loader2, Ban } from "lucide-react";
 import { parseMcpUi } from "@/lib/mcp/ui";
 import { parseNested, type NestedEvent } from "@/lib/agent/nested-events";
@@ -63,7 +63,7 @@ function NestedEventList({ events, output, running }: { events: NestedEvent[]; o
   );
 }
 
-export function ToolCallCard({ call }: { call: ToolCardData }) {
+export const ToolCallCard = memo(function ToolCallCard({ call }: { call: ToolCardData }) {
   const cardId = `tool:${call.callId}`;
   const scope = useCardScope();
   const open = useCardOpen(scope, cardId);
@@ -74,7 +74,9 @@ export function ToolCallCard({ call }: { call: ToolCardData }) {
     registerCard(scope, cardId);
   }, [scope, cardId]);
 
-  const argText = pretty(call.args);
+  // pretty() re-parses/re-serializes JSON — memoize so it isn't redone on every
+  // render of an unrelated re-render (e.g. a sibling card's status changing).
+  const argText = useMemo(() => pretty(call.args), [call.args]);
   const showArgs = argText && argText !== "{}";
   const resultText = call.result ?? "";
   const mcpUi = call.status === "done" ? parseMcpUi(resultText) : null;
@@ -149,4 +151,4 @@ export function ToolCallCard({ call }: { call: ToolCardData }) {
       </div>
     </div>
   );
-}
+});

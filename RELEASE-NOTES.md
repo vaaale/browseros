@@ -1,3 +1,144 @@
+# BrowserOS v2.0 Release Notes
+
+## Overview
+
+This release focuses on making BrowserOS easier to set up and safer to run for real: a guided first-run Setup Wizard, a rebuilt Dev Harness that lets you bring your own coding-agent backend and credentials, a video "presence" avatar for voice conversations, a reworked Marketplace, a fix for a serious production memory-leak/OOM issue, and a new secrets model for headless/service-to-service authentication.
+
+---
+
+## New Features
+
+### Guided Setup Wizard
+
+First-time setup is now a proper 6-step wizard instead of a single form.
+
+- **Step-by-step onboarding** — AI Provider → Dev Harness → Data Isolation → Git Repos → Marketplace sources → live "Setting Up" progress screen.
+- **AI Provider step** — pick your provider/model, enter an API key or base URL, with a live model list fetched from the provider.
+- **Git Repos step** — pre-filled defaults for the BOS source repo, spec store, and your personal user-apps repo, all editable.
+- **Marketplace step** — choose which app marketplaces to add on first boot (e.g. BOS Central, Claude Superskills, Anthropic Skills).
+- **Live progress** — the final step runs the actual provisioning steps and reports success/failure for each one as it happens.
+
+### Bring-Your-Own Coding Agent (Dev Harness)
+
+Settings → Dev Harness has been rebuilt so you can choose and authenticate your own coding-agent backend for BOS's self-modification/Build Studio flows.
+
+- **Claude Code or OpenCode** — pick the harness, then configure it independently of the other.
+- **Multiple auth methods for Claude Code** — credential-file login (default), API key + base URL, AWS Bedrock, or Google Vertex AI.
+- **New: OAuth setup-token auth** — authenticate the headless Claude Code CLI running inside BOS via `claude setup-token`, a dedicated long-lived token that won't conflict with your own local `claude` login.
+- **Multiple auth methods for OpenCode** — credential-file, a named provider (Anthropic, OpenAI, OpenRouter, Groq, DeepSeek, etc.), Bedrock, Vertex, Azure, or a fully custom provider (npm package + model id).
+- **Per-CLI model selection**, now with auto-complete.
+- **MCP servers in the harness** — any server configured in Settings → MCP Servers can be flagged "Include in Dev Harness" to be folded automatically into the generated harness config.
+
+**Documentation:** [docs/usage/settings/dev-harness.md](docs/usage/settings/dev-harness.md)
+
+### Video Presence for Voice Mode
+
+Voice conversations can now show an animated video "face" for the assistant, not just play audio.
+
+- **Video toggle** — a new button next to the mic opens a small window showing the assistant's face while it talks (only shown if you have an avatar plugin installed).
+- **Audio/video linked correctly** — turning off the speaker turns off the face too; closing the face window reverts to audio-only.
+- **Plugin-based** — the underlying surface is provided by a BOS plugin (e.g. a "Live Avatar" plugin), so third parties can supply their own avatar engine.
+- **More reliable voice output** — voice output is now a single three-state setting (off / audio / avatar) instead of two overlapping toggles, fixing bugs where replies could be spoken after voice was turned off, or spoken twice.
+
+**Documentation:** [docs/dev/features/voice-mode.md](docs/dev/features/voice-mode.md), [docs/usage/assistant/using-the-assistant.md](docs/usage/assistant/using-the-assistant.md)
+
+### Marketplace: Sources Sidebar
+
+The Marketplace app has a new master-detail layout.
+
+- **Sources sidebar** — an "All" entry plus one entry per marketplace (including "My Apps", your own private marketplace), each showing a live item count and a warning icon if its manifest fails to parse.
+- **Filter by source or search** — click a source to filter the catalogue, or use the search box across all sources; both can be combined.
+- **Fixed missing install buttons** — items that are plugins rather than apps (e.g. a voice engine like "Live Avatar") previously had no install/uninstall control at all; every installable item type (app, service, voice engine, integration, server plugin) is now recognized correctly.
+
+**Documentation:** [docs/dev/apps/marketplace-app.md](docs/dev/apps/marketplace-app.md), [docs/usage/tutorials/marketplace.md](docs/usage/tutorials/marketplace.md)
+
+### Build Studio: Rendered Web Views + Conversation Reviewer
+
+- **HTML rendering** — Build Studio's viewer now renders HTML artifacts (e.g. UI mockups) live in a sandboxed frame instead of showing raw markup as text.
+- **Branch-aware previews** — the rendered web view now correctly follows whichever feature branch you're currently working on.
+- **New Conversation Reviewer agent** — a read-only sub-agent you can invoke to audit a past BOS conversation for problems (wrong tool calls, ignored instructions, false success claims, misdirected delegation) and produce a written report with concrete fixes. It never applies changes itself.
+
+**Documentation:** [docs/dev/build-studio.md](docs/dev/build-studio.md)
+
+### Google Workspace CLI for the Assistant
+
+The assistant's run-command tool can now invoke a Google Workspace CLI (`gws`) directly, giving it a scriptable way to work with Gmail, Drive, and Calendar from a terminal-style command in addition to the existing browser-based GSuite OAuth integration.
+
+**Documentation:** [docs/usage/integrations/gsuite.md](docs/usage/integrations/gsuite.md), [docs/dev/run-command/run-command.md](docs/dev/run-command/run-command.md)
+
+### Headless & Service-to-Service Authentication
+
+A new secrets model lets non-browser clients (filesystem-mount clients, sync agents, marketplace service workers) authenticate through Bastion's reverse proxy using per-service credentials, without requiring a Bastion code change for every new service.
+
+**Documentation:** [docs/dev/features/headless-client-auth.md](docs/dev/features/headless-client-auth.md)
+
+---
+
+## Improvements
+
+### Deployment & Bastion (Multi-User Docker)
+
+- **Fixed a serious out-of-memory issue** — user containers were unintentionally serving BOS in `next dev` (development) mode instead of production mode, causing unbounded memory growth over time. Containers now build and serve via `next start`.
+- **New: Pull without discarding local changes** — re-provisioning now offers `pull-and-update-src` (fetch + merge, keeps your local commits) alongside the existing `update-src` (fetch + hard reset). Both now clear the stale `.next` build cache automatically.
+- **New System Monitor page** — surfaces whether BOS is actually serving requests (not just "container Up"), restart counts, and OOM-kill detection.
+- **No more idle auto-stop** — containers no longer stop themselves after an idle timeout.
+- **Fixed a shallow-clone bug** — source updates/pushes could silently fail after a platform redeploy (e.g. Dokploy re-cloning); this is now detected and auto-repaired at startup and on push.
+- **Fixed WebSocket proxying for voice** — the supervisor was reading service config from the wrong path, silently dropping `wss://` voice connections with no visible error.
+
+**Documentation:** [docs/dev/deployment.md](docs/dev/deployment.md), [docs/dev/self-modification/live-version-control.md](docs/dev/self-modification/live-version-control.md)
+
+### Assistant
+
+- **Improved context compaction** — reduced cases where important context was dropped too aggressively during long conversations.
+- **Faster chat input** — fixed UI sluggishness while typing in the assistant chat box.
+- **Streaming tool calls** — tool call output now streams incrementally instead of appearing all at once.
+
+### Build Studio & Agents
+
+- **Strengthened architect agents** — improved reliability of the "architect" agents used for planning and reviewing specs.
+- **Updated Build Studio agent and skills** — refined seeded agent/skill definitions for spec authoring, and fixed tools that referenced non-existent capabilities.
+
+---
+
+## Bug Fixes
+
+- Fixed GSuite OAuth redirect URL and client-secret upload handling.
+- Fixed Telegram webhook URL construction.
+- Fixed the "top tools" list in Settings → Versions.
+- Fixed linking of `user-data` in the supervisor.
+- Fixed a stale marketplace/user-apps path mismatch after aligning `user-apps/` with the marketplace layout.
+- Fixed the `install_app` tool and updated related agent/skill definitions.
+
+---
+
+## Breaking Changes
+
+None. Existing BOS installs upgrade in place; the Setup Wizard only runs for new installs.
+
+---
+
+## Migration Guide
+
+### For Users
+
+- **Re-run onboarding not required** — existing installs keep their current configuration; the new Setup Wizard only appears for fresh installs.
+- **Dev Harness** — if you previously relied on interactive credential-file login for Claude Code, consider switching to the new OAuth setup-token option in Settings → Dev Harness to avoid conflicts with your local `claude` CLI session.
+- **Voice + Video** — install an avatar plugin (e.g. "Live Avatar") from the Marketplace to enable the new video presence window in voice mode.
+
+### For Bastion Admins
+
+- **Update your deployment** — pull the latest `bastion/` image; containers will now serve in production mode (`next start`), resolving the OOM issue present in earlier builds.
+- **Use `pull-and-update-src`** when you want to update a user's BOS source while preserving their local commits; use `update-src` only when you intentionally want to discard local changes.
+- **Check the new System Monitor page** after upgrading to confirm containers are serving correctly.
+
+---
+
+## Support
+
+- **Documentation** — [docs/](docs/)
+- **Issue Reports** — GitHub Issues
+- **Architecture Guide** — [docs/dev/architecture-overview.md](docs/dev/architecture-overview.md)
+
 # BrowserOS v1.7 Release Notes
 
 ## Overview

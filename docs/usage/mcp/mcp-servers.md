@@ -43,15 +43,20 @@ JSON**.
 Per‑agent access (which agents may use which servers) is set under
 **Settings → Assistant**.
 
+Each server also has an **"Include in Dev Harness"** checkbox. Checking it hands
+that same server to the headless Claude/OpenCode CLI (the coding agent used for
+development tasks), so you don't have to configure it twice — see
+[Settings → Dev Harness](../settings/dev-harness.md).
+
 ## How the assistant uses them
 
 You don't pick tools — just ask for what you want (e.g. *"Use gitlab and list my
 projects"*). Behind the scenes the assistant:
 
 1. reads the server **descriptions** to pick the right server,
-2. **discovers** the tool — `findTools` (search across all servers) or
-   `listMcpServerTools` (one server), which return each tool's arguments, then
-3. **calls** it with `callMcpServerTool`.
+2. **discovers** the tool — search across all servers or list one server's tools,
+   which return each tool's arguments, then
+3. **calls** it.
 
 It can also **add / remove / list** servers on request (e.g. *"Add an MCP server
 at `https://my-tools.example.com/mcp`"*). Connections are **resilient**: an

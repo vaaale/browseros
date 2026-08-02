@@ -50,12 +50,14 @@ Supervisor, apps install live immediately. See
 
 From **Settings → Apps** (or by asking the assistant):
 
-- **Uninstall** — hide the app but keep its files (restorable).
-- **Restore** — bring it back.
-- **Purge** — delete its files permanently.
+- **Uninstall** — remove the app; reinstall it from the Marketplace to get it back.
+- **Purge** — delete its files permanently (only for apps you authored).
 
-Installed apps are **versioned**: every install/uninstall/restore/purge is recorded,
-so apps are durable, portable content separate from the OS itself.
+Apps you build are **versioned** in your own marketplace repository, so they are
+durable, portable content separate from the OS itself. Installing an app never
+copies it: BOS records the install as a single link to wherever the app already
+lives, so an app from a marketplace stays owned by that marketplace and updates
+when you sync it.
 
 ---
 

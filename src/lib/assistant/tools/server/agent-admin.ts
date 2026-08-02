@@ -7,6 +7,8 @@ import { getAgent, setAgentSystemPrompt } from "@/lib/agent/subagents/store";
 // THIS conversation's agent's editable personality (its base systemPrompt). The
 // composed prompt (core policy + memory + skills) is added at runtime and must
 // never be written back — agent_prompt_get returns only the editable text.
+// Plus agent_definition_get: read-only introspection of an ARBITRARY OTHER
+// named agent, for a reviewer auditing a different agent's live prompt.
 
 export function agentAdminTools(): Record<string, AssistantTool> {
   return {
@@ -29,6 +31,38 @@ export function agentAdminTools(): Record<string, AssistantTool> {
         if (!ctx.agentId) return "No agent is associated with this conversation.";
         await setAgentSystemPrompt(ctx.agentId, String(input.instructions ?? ""));
         return "Updated this conversation's agent. It takes effect in the next chat session.";
+      },
+    ),
+
+    // Read-only introspection of an ARBITRARY named agent — for a reviewer
+    // auditing a DIFFERENT agent's live behavior-governing prompt, not the
+    // calling conversation's own. Deliberately has no write counterpart:
+    // agent_prompt_set above only ever edits the caller's own agent, and
+    // there is no tool anywhere that writes another agent's definition — a
+    // reviewer using this tool can inspect, never modify, what it finds.
+    agent_definition_get: serverTool(
+      "agent_definition_get",
+      "Read ANY named agent's current live definition (id, type, description, tools, skills, systemPrompt) from data/agents/<id>/AGENT.md — for auditing what an agent's actual current prompt says, not just the calling conversation's own agent. Read-only: there is no tool to write another agent's definition.",
+      schema({ agentId: p.str('The agent id or name to look up, e.g. "build-studio", "architect".') }, ["agentId"]),
+      async (input) => {
+        const id = String(input.agentId ?? "").trim();
+        if (!id) return "No agentId provided.";
+        const agent = await getAgent(id);
+        if (!agent) return `No agent named "${id}" found in data/agents.`;
+        return JSON.stringify(
+          {
+            id: agent.id,
+            name: agent.name,
+            description: agent.description,
+            type: agent.type,
+            tools: agent.tools ?? [],
+            skills: agent.skills ?? [],
+            useDefaultPrompt: agent.useDefaultPrompt ?? true,
+            systemPrompt: agent.systemPrompt,
+          },
+          null,
+          2,
+        );
       },
     ),
   };

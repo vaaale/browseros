@@ -9,9 +9,14 @@ server's tools into the request. Modules: `src/lib/mcp/`. See `specs/014-mcp-too
 ## Types & transports (`src/lib/mcp/types.ts`)
 
 `McpServerConfig` is keyed by **`name`** (unique). Fields:
-`{ name, description?, transport?, endpoint?, apiKey?, headers?, command?, args?, env?, cwd? }`.
-`description` is the index shown to the agent (see Gateway). `McpToolDescriptor`
-(`{ server, name, description?, schema? }`) is one tool as surfaced by discovery.
+`{ name, description?, transport?, endpoint?, apiKey?, headers?, command?, args?, env?, cwd?, includeInDevHarness? }`.
+`description` is the index shown to the agent (see Gateway). `includeInDevHarness`
+(default `false`) opts the server into the Dev Harness's own generated config —
+see [Sub-agents & delegation § How the dev agent runs](../assistant/sub-agents-and-delegation.md)
+and `specs/029-settings-dev-harness/`; this module owns only the flag/field, not
+what happens when it's read.
+`McpToolDescriptor` (`{ server, name, description?, schema? }`) is one tool as
+surfaced by discovery.
 Three transports:
 
 - **`http`** — streamable‑HTTP. `endpoint` (URL); optional `apiKey` (sent as

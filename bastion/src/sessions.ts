@@ -33,7 +33,7 @@ function signToken(payload: SessionPayload, cfg: Config): string {
 export function issueSession(res: Response, payload: SessionPayload, cfg: Config): void {
   res.cookie(COOKIE_NAME, signToken(payload, cfg), {
     httpOnly: true,
-    sameSite: "strict",
+    sameSite: "lax",
     maxAge: SESSION_TTL_SECONDS * 1000,
     path: "/",
   });
@@ -44,7 +44,7 @@ export function issueSession(res: Response, payload: SessionPayload, cfg: Config
  *  response — the value is injected into the upstream response's Set-Cookie
  *  headers instead. Attributes match issueSession(). */
 export function sessionSetCookie(payload: SessionPayload, cfg: Config): string {
-  return `${COOKIE_NAME}=${signToken(payload, cfg)}; Max-Age=${SESSION_TTL_SECONDS}; Path=/; HttpOnly; SameSite=Strict`;
+  return `${COOKIE_NAME}=${signToken(payload, cfg)}; Max-Age=${SESSION_TTL_SECONDS}; Path=/; HttpOnly; SameSite=Lax`;
 }
 
 /** True once the token is past SESSION_REFRESH_AFTER of its lifetime, i.e. it

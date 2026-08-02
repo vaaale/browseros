@@ -75,11 +75,11 @@ export const FRONTEND_TOOL_DECLARATIONS: ToolDeclaration[] = [
   ),
   decl(
     "app_build",
-    "Install a multi-file app PROJECT (TypeScript/TSX, may import React) that a Claude developer sub-agent authored into a staging directory. First delegate to the developer (contentOnly) to WRITE the project into a fresh staging dir with a src/main.tsx (or src/main.ts) entry; then call app_build with the app name and that directory.",
+    "Install a multi-facet marketplace ITEM (not just an app) that a Claude developer sub-agent authored into a staging directory — an app (TypeScript/TSX, may import React), a background service, or both together. The staging directory root IS the item root: put an app under dir/app/ (e.g. dir/app/src/main.tsx), a background service under dir/services/ (service.json + entry script — see the service-daemon item model), and any default config under dir/config/. First delegate to the developer (contentOnly) to WRITE that layout into a fresh staging dir; then call app_build with the item name and that directory. A services-only item (no app/ at all) is valid — nothing needs to be 'an app' for this tool to install it.",
     {
-      name: str("App name"),
-      dir: str("Absolute path of the staging directory the developer wrote the project into (must contain src/main.tsx or src/main.ts)"),
-      entry: str("Build entry relative to dir; defaults to src/main.tsx or src/main.ts"),
+      name: str("Item name"),
+      dir: str("Absolute path of the staging directory the developer wrote the item into (top-level layout: app/, services/, config/ as applicable)"),
+      entry: str("App build entry relative to dir/app/; defaults to src/main.tsx or src/main.ts if the item has an app facet"),
       icon: str("Optional lucide icon name; auto-chosen if omitted"),
     },
     ["name", "dir"],

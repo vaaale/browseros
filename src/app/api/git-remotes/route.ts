@@ -15,6 +15,9 @@ import {
   fastForwardMerge,
   adoptRemote,
   rebaseOntoRemote,
+  isShallowRepo,
+  unshallowRepo,
+  type GitError,
 } from "@/lib/gitops/git-ops";
 import { resolveAuth, type AuthType } from "@/lib/gitops/auth";
 import {
@@ -281,19 +284,70 @@ export async function POST(req: NextRequest) {
         if (!config) return err("REMOTE_NOT_FOUND", `Remote '${name}' not found.`);
 
         const auth = await resolveAuth(name, authTypeFor(config), config.provider);
-        const currentBranch = branch || config.defaultBranch || (await import("@/lib/gitops/git-ops")).getCurrentBranch(repoPath);
+        const targetBranch = branch || config.defaultBranch || (await getCurrentBranch(repoPath));
 
         const lock = gitLock();
         return await lock.withLock(repoPath, "api.git_push", async (release) => {
           try {
-            await pushRepo(repoPath, name, await currentBranch, auth ?? undefined, { force: force === true });
+            await pushRepo(repoPath, name, targetBranch, auth ?? undefined, { force: force === true });
             updateRemoteConfig(name, { lastPushed: new Date().toISOString(), lastStatus: "connected", lastError: undefined }, fsId);
             gitLogger().info({ op: force === true ? "api.git_push.force" : "api.git_push", remote: name, success: true });
-            return NextResponse.json({ ok: true, message: `${force === true ? "Force-p" : "P"}ushed to '${name}/${await currentBranch}'.` });
+            return NextResponse.json({ ok: true, message: `${force === true ? "Force-p" : "P"}ushed to '${name}/${targetBranch}'.` });
           } catch (e) {
-            updateRemoteConfig(name, { lastStatus: "error", lastError: (e as Error).message }, fsId);
-            gitLogger().error({ op: "api.git_push", remote: name, error: { code: "GIT_PUSH_FAILED", message: (e as Error).message } });
-            return err("GIT_PUSH_FAILED", (e as Error).message);
+            const pushError = e as GitError;
+
+            // A plain push can be rejected as non-fast-forward even when
+            // nothing truly conflicts: BrowserOS's own checkout is
+            // periodically re-cloned shallow by the deployment platform
+            // (Dokploy re-clones `code/` with `--depth 1` on every redeploy —
+            // see docs/dev/deployment.md), which leaves git unable to prove
+            // the local branch descends from the remote's. Recover the same
+            // way "Pull" already does — unshallow if needed, fetch, rebase —
+            // and retry once before surfacing an error.
+            if (force !== true && pushError.code !== "GIT_AUTH_FAILURE") {
+              try {
+                if (await isShallowRepo(repoPath)) {
+                  await unshallowRepo(repoPath, name, auth ?? undefined);
+                }
+                const ab = await fetchRepo(repoPath, name, targetBranch, auth ?? undefined);
+                const mergeBase = await getMergeBase(repoPath, name, targetBranch);
+                if (mergeBase === null) {
+                  gitLogger().info({ op: "api.git_push.recover", remote: name, success: true });
+                  return NextResponse.json({
+                    ok: true,
+                    unrelatedHistory: true,
+                    ahead: ab.ahead,
+                    behind: ab.behind,
+                    message: `'${name}' has no shared history with this store.`,
+                  });
+                }
+
+                const rebaseResult = await rebaseOntoRemote(repoPath, name, targetBranch);
+                if (rebaseResult.status === "success") {
+                  await pushRepo(repoPath, name, targetBranch, auth ?? undefined);
+                  updateRemoteConfig(name, { lastPushed: new Date().toISOString(), lastStatus: "connected", lastError: undefined }, fsId);
+                  gitLogger().info({ op: "api.git_push.recover", remote: name, success: true });
+                  return NextResponse.json({ ok: true, rebased: true, message: `Rebased local commit(s) onto '${name}/${targetBranch}' and pushed.` });
+                }
+
+                gitLogger().warn({ op: "api.git_push.recover", remote: name, error: { code: "REBASE_CONFLICT", message: "automatic rebase hit conflicts" } });
+                return NextResponse.json({
+                  ok: true,
+                  merged: false,
+                  rebaseConflict: true,
+                  ahead: ab.ahead,
+                  behind: ab.behind,
+                  message: `Local and '${name}/${targetBranch}' have diverged (${ab.ahead} ahead, ${ab.behind} behind). Automatic rebase hit conflicts — resolve manually, or force-push to make local win.`,
+                });
+              } catch {
+                // Recovery itself failed (e.g. remote unreachable) — fall
+                // through to reporting the original push error below.
+              }
+            }
+
+            updateRemoteConfig(name, { lastStatus: "error", lastError: pushError.message }, fsId);
+            gitLogger().error({ op: "api.git_push", remote: name, error: { code: "GIT_PUSH_FAILED", message: pushError.message } });
+            return err("GIT_PUSH_FAILED", pushError.message);
           } finally {
             await release();
           }

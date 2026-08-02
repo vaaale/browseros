@@ -1,0 +1,30 @@
+Step: design. A structural pass between `clarify` and `plan`, delegated to the `architect` agent — which now writes a real `design.md` into the spec directory itself, unlike `plan`/`tasks` this is not a file YOU write.
+
+## When to run it
+
+Mandatory whenever the feature has any of:
+- a background service/daemon or anything with its own network port,
+- a component that touches more than one existing BOS subsystem,
+- a target classification (`bos-core`/`builtin-app`/`marketplace-item`) that isn't obvious from the spec alone.
+
+Skippable only for a small, obviously-scoped feature (a config tweak, a one-file Settings tab, a copy change) where there's nothing to design. When in doubt, run it — the cost of a wasted `architect` call is far lower than the cost of `plan`/`implement` building on a wrong classification or a fabricated mechanism.
+
+## How to run it
+
+1. `file_read` the current `spec.md` (it must exist — `design` runs after `specify`/`clarify`, never before).
+2. **If the feature has any user-facing UI** (a window app, a Settings tab, a marketplace item's own config page — anything a user looks at, not a headless service), delegate to `ui-designer` FIRST: `agent_delegate(agent: "ui-designer", task: "Build a UI mockup for <feature> — context: <spec.md path and/or a short summary>")`. It writes and iterates on a real HTML file (`/mockups/<feature-id>.html`, previewed live via `web_view`) — that file is its own concern, not yours, you never write or edit it. It returns the mockup's path plus a summary and open questions. Run this before `architect` so Architect can read the mockup as a real design input, not receive it secondhand.
+3. Delegate: `agent_delegate(agent: "architect", task: "Write design.md for the spec at <path to the spec directory>" + (mockup path, if one exists, and a short summary — not a re-paraphrase of the whole spec))`. Architect reads the spec directory itself (spec.md, the mockup if referenced, any existing plan.md) and WRITES `design.md` into that same directory — it is not read-only anymore, but it writes only that one file. It returns a short pointer response (the path, classification, a one-paragraph summary, biggest risks) — the actual design content lives in the file, not the response.
+4. **Reconcile classification with spec.md before moving on.** Architect's classification (`bos-core`/`builtin-app`/`marketplace-item`), stated in `design.md` and its response, must agree with spec.md's own `App Target` field. If they disagree, resolve it now — update spec.md's `App Target` with `file_edit` — not later at `implement` time, when disagreement becomes a much more expensive mistake to unwind.
+5. **Review cycle — one round, not a loop.** Delegate to `agent_delegate(agent: "architect-reviewer", task: "Review design.md for the spec at <path to the spec directory>")`. It reads spec.md + design.md (+ the mockup, if any) and independently verifies the design's claims against real source/docs — it does not just re-read design.md and agree with it. It returns a verdict (`Ready for plan` / `Needs one revision round` / `Needs significant rework`) plus categorized findings.
+   - `Ready for plan` — proceed to `plan`, nothing further needed.
+   - `Needs one revision round` or `Needs significant rework` — delegate back to `architect` with the review's findings verbatim (`agent_delegate(agent: "architect", task: "Revise design.md at <path> — address this review feedback: <findings>")`); it reads the existing `design.md`, addresses each point (or explains why it disagrees), and updates the file.
+   - **After that one revision, move on regardless of a second review's outcome.** Do not run `architect-reviewer` a second time and do not send a design back for a third pass — if real issues remain after one revision round, surface them to the user directly and let them decide whether to iterate further, rather than you looping the two agents indefinitely. Neither `architect` nor `architect-reviewer` can delegate to anything (including each other or themselves) — this loop only exists at all because you (Build Studio) are driving it one step at a time; keeping it capped is your job, not a safety net either agent provides on its own.
+6. Once `design.md` is in its final state, move to `plan` — reference `design.md` from `plan.md` (a link/pointer plus the key decisions relevant to task breakdown), don't transcribe the whole document into `plan.md`.
+
+## What this step writes
+
+`design.md`, but not by you — `architect` writes it, into the SAME spec directory you're already working in. You may still `file_edit` spec.md's `App Target` field (step 4) if it needs correcting. You do not create, edit, or review `design.md` yourself at any point — that division (architect writes, architect-reviewer verifies, you sequence and decide when to stop) is the whole point of running this as two separate agents. `ui-designer` writes its own mockup file under `/mockups/`, outside `/Specs` entirely — also not yours.
+
+## What this step is not
+
+It is not implementation. Architect's file/module plan in `design.md` lists real paths as a DESIGN artifact (what should exist), not something anyone writes yet — those files get created only during `implement`, by the Developer. If `design.md` includes example code, treat it as illustrative, not something to transcribe into a real file now.

@@ -1,5 +1,5 @@
 import { join } from "path";
-import { mkdirSync, writeFileSync } from "fs";
+import { mkdirSync, writeFileSync, symlinkSync, rmSync } from "fs";
 
 // Real worker_threads fixtures rather than mocked Workers — `new Worker(entryPath,
 // ...)` in ServiceManager.start() takes a real file path, and validateManifestAtStart
@@ -39,11 +39,33 @@ export function installFixtureService(
   opts: { entrySource: string; dependencies?: string[]; entry?: string } = { entrySource: RESPONSIVE_WORKER },
 ): void {
   const entry = opts.entry ?? "index.js";
-  const servicesDir = join(dataDir, "system", "services", id);
+  // 035-install-by-symlink: installed state is ONE symlink, dataDir()/system/<id>,
+  // pointing at the item. ServiceManager resolves the entrypoint through it, so a
+  // fixture has to be a real item plus that link — not a `system/services/<id>`
+  // directory, which is the pre-035 shape and no longer resolves.
+  const itemDir = join(dataDir, "user-apps", "items", id);
+  const servicesDir = join(itemDir, "services");
   mkdirSync(servicesDir, { recursive: true });
   writeFileSync(
     join(servicesDir, "service.json"),
     JSON.stringify({ id, name: id, version: "1.0.0", entry, ...(opts.dependencies ? { dependencies: opts.dependencies } : {}) }),
   );
   writeFileSync(join(servicesDir, entry), opts.entrySource);
+
+  const link = join(dataDir, "system", id);
+  mkdirSync(join(dataDir, "system"), { recursive: true });
+  rmSync(link, { force: true });
+  symlinkSync(itemDir, link, "dir");
+}
+
+/** An installed item whose service.json exists but whose entry file does NOT —
+ *  for testing that manifest validation refuses to start it. */
+export function installBrokenFixtureService(dataDir: string, id: string, manifest: object): void {
+  const itemDir = join(dataDir, "user-apps", "items", id);
+  mkdirSync(join(itemDir, "services"), { recursive: true });
+  writeFileSync(join(itemDir, "services", "service.json"), JSON.stringify(manifest));
+  const link = join(dataDir, "system", id);
+  mkdirSync(join(dataDir, "system"), { recursive: true });
+  rmSync(link, { force: true });
+  symlinkSync(itemDir, link, "dir");
 }

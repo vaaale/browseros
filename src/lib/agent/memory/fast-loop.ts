@@ -23,6 +23,12 @@ import { getMemoryLoopsConfig } from "./config";
 import { nudgeSkillScore } from "@/lib/agent/skills/improve";
 import { startSelfImprove } from "@/lib/agent/self-improve";
 import { DEFAULT_AGENT_ID } from "@/lib/agent/agent-ids";
+import {
+  type AnyMessage,
+  renderMessages as renderSlice,
+  segmentIntoTurns,
+  chunkTurns,
+} from "@/lib/agent/conversation-chunking";
 
 // Thumbs-up score reinforcement per skill used in a well-rated turn.
 const THUMBS_UP_NUDGE = 0.5;
@@ -90,17 +96,10 @@ const DEFAULTS = {
 };
 
 // ── Conversation scanning ────────────────────────────────────────────────
-
-interface AnyMessage {
-  id?: string;
-  role?: string;
-  content?: unknown;
-  toolCalls?: unknown[];
-  createdAt?: number | string;
-  timestamp?: number | string;
-  /** Thumbs up/down feedback stamped onto the message by the chat UI. */
-  feedback?: { rating?: string; at?: number };
-}
+// AnyMessage/segmentIntoTurns/chunkTurns/renderSlice now live in
+// @/lib/agent/conversation-chunking (imported above) — shared with the
+// conversation-review tools so both this loop and a reviewer agent chunk a
+// transcript into turns exactly the same way.
 
 interface ConversationFileShape {
   id?: string;
@@ -224,22 +223,7 @@ function evaluateEligibility(
 }
 
 // ── Transcript slice → LLM input ─────────────────────────────────────────
-
-function renderSlice(messages: AnyMessage[]): string {
-  const lines: string[] = [];
-  for (const m of messages) {
-    const role = String(m?.role ?? "unknown");
-    let content: string;
-    if (typeof m?.content === "string") content = m.content;
-    else if (m?.content == null) content = "";
-    else content = safeStringify(m.content);
-    lines.push(`### ${role}\n${content.trim()}`);
-    if (Array.isArray(m?.toolCalls) && m.toolCalls.length > 0) {
-      lines.push(`_tool calls_: ${safeStringify(m.toolCalls)}`);
-    }
-  }
-  return lines.join("\n\n");
-}
+// renderSlice is conversation-chunking's renderMessages, imported above.
 
 function safeStringify(v: unknown): string {
   try {
@@ -273,48 +257,6 @@ function reviewCharBudget(maxInputTokens?: number): number {
   const window = maxInputTokens ?? ASSUMED_CONTEXT_TOKENS;
   const inputTokens = Math.max(8000, window - OUTPUT_HEADROOM_TOKENS - REVIEW_OVERHEAD_TOKENS);
   return inputTokens * CHARS_PER_TOKEN;
-}
-
-/** Group a message slice into turns: each turn starts at a user message and
- *  runs through the assistant/tool messages that follow, up to (not
- *  including) the next user message. A slice that doesn't start with a user
- *  message (e.g. resuming mid-turn after a previous chunk) still gets its
- *  leading messages as their own turn. */
-function segmentIntoTurns(messages: AnyMessage[]): AnyMessage[][] {
-  const turns: AnyMessage[][] = [];
-  let current: AnyMessage[] = [];
-  for (const m of messages) {
-    if (m?.role === "user" && current.length > 0) {
-      turns.push(current);
-      current = [];
-    }
-    current.push(m);
-  }
-  if (current.length > 0) turns.push(current);
-  return turns;
-}
-
-/** Pack turns into chunks whose rendered size stays within charBudget. A
- *  single turn that exceeds the budget on its own is kept as its own
- *  (oversized) chunk and still attempted rather than silently dropped — if it
- *  fails, prior chunks in this run have already had their watermark advanced,
- *  so at least the rest of the backlog isn't needlessly re-reviewed next run. */
-function chunkTurns(turns: AnyMessage[][], charBudget: number): AnyMessage[][] {
-  const chunks: AnyMessage[][] = [];
-  let current: AnyMessage[] = [];
-  let currentChars = 0;
-  for (const turn of turns) {
-    const turnChars = renderSlice(turn).length;
-    if (current.length > 0 && currentChars + turnChars > charBudget) {
-      chunks.push(current);
-      current = [];
-      currentChars = 0;
-    }
-    current.push(...turn);
-    currentChars += turnChars;
-  }
-  if (current.length > 0) chunks.push(current);
-  return chunks;
 }
 
 /** Extract skill ids referenced in the transcript's tool calls. Mechanical

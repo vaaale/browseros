@@ -50,7 +50,7 @@ export interface WebhookHandler {
    * enables (or re-enables) the webhook. Handlers can use this to register
    * with the provider (e.g. call gmail.users.watch). Idempotent.
    */
-  onEnable?(input: { integrationId: string; serviceId: string; config: WebhookConfig }): Promise<void>;
+  onEnable?(input: { integrationId: string; serviceId: string; config: WebhookConfig; origin?: string }): Promise<void>;
 
   /**
    * Optional lifecycle hook called on disable / delete. Handlers can use this

@@ -1,5 +1,5 @@
 import { createStore } from "zustand/vanilla";
-import type { AppManifest, OSSettings, WindowBounds, WindowInstance } from "@/os/types";
+import type { AppManifest, OSSettings, WindowBounds, WindowInstance, WindowPlacement } from "@/os/types";
 
 export interface OSState {
   windows: WindowInstance[];
@@ -8,13 +8,16 @@ export interface OSState {
   settings: OSSettings;
   apps: AppManifest[];
 
-  launch: (appId: string, params?: Record<string, unknown>) => string | null;
+  launch: (appId: string, params?: Record<string, unknown>, placement?: WindowPlacement) => string | null;
   close: (id: string) => void;
   focus: (id: string) => void;
   move: (id: string, x: number, y: number) => void;
-  resize: (id: string, bounds: Partial<WindowBounds>) => void;
+  /** `exact` skips the minimum a person could drag a window down to — for sizing
+   *  driven by content (an aspect ratio), which may legitimately be tiny. */
+  resize: (id: string, bounds: Partial<WindowBounds>, opts?: { exact?: boolean }) => void;
   toggleMaximize: (id: string) => void;
   minimize: (id: string) => void;
+  togglePin: (id: string) => void;
   setTitle: (id: string, title: string) => void;
 
   applySettings: (patch: Partial<OSSettings>) => void;
@@ -60,7 +63,7 @@ export function createOSStore(init: OSInit) {
     settings: init.settings,
     apps: init.apps,
 
-    launch: (appId, params) => {
+    launch: (appId, params, placement) => {
       const app = get().apps.find((a) => a.id === appId);
       if (!app) return null;
 
@@ -80,8 +83,14 @@ export function createOSStore(init: OSInit) {
       }
 
       const id = `${appId}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
-      const { width, height } = launchSize(app.defaultWidth, app.defaultHeight);
-      const origin = nextLaunchOrigin(get().windows.length, width, height);
+      const defaults = launchSize(app.defaultWidth, app.defaultHeight);
+      const width = placement?.width ?? defaults.width;
+      const height = placement?.height ?? defaults.height;
+      const centred = nextLaunchOrigin(get().windows.length, width, height);
+      const origin = {
+        x: placement?.x ?? centred.x,
+        y: placement?.y ?? centred.y,
+      };
       const z = get().zCounter + 1;
       const win: WindowInstance = {
         id,
@@ -125,15 +134,15 @@ export function createOSStore(init: OSInit) {
         ),
       })),
 
-    resize: (id, bounds) =>
+    resize: (id, bounds, opts) =>
       set((s) => ({
         windows: s.windows.map((w) =>
           w.id === id
             ? {
                 ...w,
                 ...bounds,
-                width: Math.max(280, bounds.width ?? w.width),
-                height: Math.max(180, bounds.height ?? w.height),
+                width: Math.max(opts?.exact ? 1 : 280, bounds.width ?? w.width),
+                height: Math.max(opts?.exact ? 1 : 180, bounds.height ?? w.height),
               }
             : w,
         ),
@@ -160,6 +169,11 @@ export function createOSStore(init: OSInit) {
       set((s) => ({
         windows: s.windows.map((w) => (w.id === id ? { ...w, minimized: true } : w)),
         focusedId: s.focusedId === id ? null : s.focusedId,
+      })),
+
+    togglePin: (id) =>
+      set((s) => ({
+        windows: s.windows.map((w) => (w.id === id ? { ...w, alwaysOnTop: !w.alwaysOnTop } : w)),
       })),
 
     setTitle: (id, title) =>

@@ -52,6 +52,36 @@ base the canonical `BOS_SPECS_ROOT`. Base renders in-progress drafts from the
 store refs (Build Studio draft nodes), so spec work is visible without
 previewing the branch.
 
+### user-apps/ is branch-coupled too
+
+`dataDir()/user-apps` (the user's local marketplace — a real GitFS repo,
+`src/lib/gitfs/store.ts`) is the one part of `data/` that is **not** just
+cloned with everything else (`docs/dev/self-modification/data-isolation-datafs.md`).
+A plain clone would leave it a disconnected, un-branched snapshot — anything
+installed into it during a preview would silently vanish on promote (Promote is
+code-only for the data clone). Instead it's mounted the same way a spec store
+is: a git worktree of `APPS_REPO`, checked out on the same `bos/<feature>`
+branch, placed at `<dataDir>/user-apps` — inside the data **clone**, not the
+code worktree, since (unlike specs) nothing overrides where `user-apps` lives;
+`dataDir()/user-apps` already always resolves there. `mountUserApps` mounts on
+provision/restore; `promoteUserApps`/`discardUserApps` merge/drop the branch
+right alongside the spec stores, before the clone itself is discarded. A
+`merge-tree` pre-check (`userAppsConflicts`) runs before the code promote's
+point of no return, same as specs.
+
+One wrinkle unique to `user-apps`: its own primary checkout
+(`CANONICAL_DATA/user-apps`, what BASE actually serves from) is not always on
+its default branch — the separate, older `appBegin`/`appPromote`/`appDiscard`
+mechanism (for installing a draft app straight on BASE, with no code preview at
+all) checks it out onto `app-candidate` **in place**. When a preview's promote
+runs while that's active, merging the preview's branch would otherwise mean
+flipping branches on the exact directory BASE is live-serving from mid-request
+— so `promoteUserApps` merges via plumbing instead (`merge-tree` write-tree +
+`commit-tree` + `update-ref`), which advances the ref without ever touching
+that working tree. BASE keeps showing the app-candidate draft until it
+resolves; `appPromote`/`appDiscard`'s own later checkout of the base branch
+then picks up the already-advanced tip transparently.
+
 ### Per-session routing (pin cookie)
 
 `pinnedVersion(req)` reads the `bos_pin` cookie — `preview` or a **branch name**. A

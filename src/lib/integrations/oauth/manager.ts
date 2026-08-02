@@ -115,7 +115,7 @@ export class OAuthManager {
     const scopes = input.scopes && input.scopes.length > 0 ? input.scopes : manifest.oauthConfig.supportedScopes;
     const verifier = newVerifier();
     const challenge = challengeFromVerifier(verifier);
-    const state = await putPending({ integrationId: input.integrationId, verifier, scopes });
+    const state = await putPending({ integrationId: input.integrationId, verifier, scopes, publicOrigin: input.origin });
     const redirectUri = computeRedirectUri(input.origin);
 
     const url = new URL(manifest.oauthConfig.authorizationUrl);
@@ -152,7 +152,7 @@ export class OAuthManager {
       throw new IntegrationConfigError(`Unknown integration: ${flow.integrationId}`, { integrationId: flow.integrationId });
     }
     const cs = ensureClientSecrets(flow.integrationId, await loadClientSecrets(flow.integrationId));
-    const redirectUri = computeRedirectUri(input.origin);
+    const redirectUri = computeRedirectUri(flow.publicOrigin ?? input.origin);
 
     let res: Response;
     let body: unknown;

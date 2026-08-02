@@ -86,7 +86,7 @@ and a one-time legacy-config migration (`data/config/compaction.json` /
 marker so it only runs once). Built-in plugins instead register themselves at
 import time via a tiny `init.ts` (`import "@/plugins/compaction/init"` calls
 `registerPlugin(compactionPlugin)` as a side effect) — both
-`src/app/api/plugins/route.ts` and `src/instrumentation.node.ts` import these
+`src/app/api/plugins/route.ts` and `src/instrumentation.ts` import these
 `init` modules so the registry is populated regardless of which loads first.
 
 Where hooks actually run: `src/lib/assistant/start-run.ts` calls

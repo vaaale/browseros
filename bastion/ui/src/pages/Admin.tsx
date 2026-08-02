@@ -4,12 +4,13 @@ import { Button } from "../components/Button";
 import { Badge } from "../components/Badge";
 import { Dialog } from "../components/Dialog";
 import { LogView } from "../components/LogView";
+import Monitor from "./Monitor";
 
 interface User { username: string; isAdmin: boolean; }
 interface Instance { username: string; status: string; lastActive: number; error?: string; }
 interface ImageInfo { id: string; tags: string[]; sizeMb: number; created: number; }
 
-type Tab = "users" | "images" | "containers" | "logs";
+type Tab = "monitor" | "users" | "images" | "containers" | "logs";
 
 const s = {
   page:    { minHeight: "100vh", background: "#0f0f0f", color: "#eee" },
@@ -23,13 +24,14 @@ const s = {
   th:      { textAlign: "left" as const, padding: "8px 12px", borderBottom: "1px solid #2a2a2a", color: "#777", fontWeight: 500, fontSize: 11 },
   td:      { padding: "8px 12px", borderBottom: "1px solid #1f1f1f", color: "#ccc" },
   input:   { padding: "6px 10px", background: "#0f0f0f", border: "1px solid #444", borderRadius: 4, color: "#eee", fontSize: 12, outline: "none" },
+  row:     { display: "flex", gap: 8, alignItems: "center" },
   err:     { color: "#f87171", fontSize: 12, marginBottom: 10 },
   label:   { fontSize: 11, color: "#777", display: "block", marginBottom: 4 },
   sectionTitle: { fontSize: 13, fontWeight: 600, color: "#ccc", marginBottom: 12 },
 };
 
 export default function Admin() {
-  const [tab, setTab] = useState<Tab>("users");
+  const [tab, setTab] = useState<Tab>("monitor");
   const [users, setUsers] = useState<User[]>([]);
   const [instances, setInstances] = useState<Instance[]>([]);
   const [images, setImages] = useState<ImageInfo[]>([]);
@@ -74,6 +76,7 @@ export default function Admin() {
     setActiveImageTag(active);
   }
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- mount-time fetch of external state
   useEffect(() => { void loadAll(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function createUser(e: FormEvent) {
@@ -156,6 +159,7 @@ export default function Admin() {
   }
 
   const TABS: { id: Tab; label: string }[] = [
+    { id: "monitor", label: "System Monitor" },
     { id: "users", label: "Users" },
     { id: "images", label: "Images" },
     { id: "containers", label: "Containers" },
@@ -180,6 +184,9 @@ export default function Admin() {
             <button key={t.id} style={s.tab(tab === t.id)} onClick={() => setTab(t.id)}>{t.label}</button>
           ))}
         </div>
+
+        {/* ── System Monitor ─────────────────────────────────────────────── */}
+        {tab === "monitor" && <Monitor />}
 
         {/* ── Users ──────────────────────────────────────────────────────── */}
         {tab === "users" && (
@@ -312,7 +319,7 @@ export default function Admin() {
                     <td style={s.td}><Badge status={inst.status} /></td>
                     <td style={{ ...s.td, color: "#666", fontSize: 12 }}>{inst.lastActive > 0 ? new Date(inst.lastActive).toLocaleString() : "—"}</td>
                     <td style={{ ...s.td, display: "flex", gap: 6 }}>
-                      {inst.status === "running"
+                      {inst.status === "running" || inst.status === "unhealthy"
                         ? <Button size="sm" variant="secondary" onClick={() => stopInstance(inst.username)}>Stop</Button>
                         : <Button size="sm" onClick={() => startInstance(inst.username)}>Start</Button>}
                       <Button size="sm" variant="danger" onClick={() => setKillDialog(inst.username)}>Kill</Button>

@@ -1,8 +1,9 @@
 import "server-only";
-import { promises as fs } from "fs";
+import { promises as fs, createReadStream, createWriteStream } from "fs";
+import { Readable, PassThrough } from "stream";
 import path from "path";
 import { dataDir } from "./data-dir";
-import { writeFileAtomic } from "./atomic-write";
+import { writeFileAtomic, tempPathFor } from "./atomic-write";
 import type { VfsEntry } from "./types";
 import type { FSBackend } from "./fs-types";
 import { resolveMountPath, normalizeMountPrefix } from "./mount-table";
@@ -198,6 +199,76 @@ export async function writeBuffer(vfsPath: string, data: Buffer): Promise<void> 
   const m = findMount(normalizeVfsPath(vfsPath));
   if (m) return m.backend.writeBuffer(m.rel, data);
   await writeFileAtomic(resolveSafe(vfsPath), data);
+}
+
+/**
+ * Stream a file's bytes without buffering the whole thing in memory — for large
+ * files (e.g. a WebDAV mount service's GET). `FSBackend` has no streaming
+ * surface (027-vfs-specfs never needed one; its stores are small text/config
+ * files), so a mounted path (`/Specs`, `/Docs`, `/Templates`) falls back to a
+ * buffered read wrapped in a one-shot stream — fine for those, which are never
+ * huge. The common, large-file case (plain `/Documents`, etc., unmounted) gets
+ * a real `fs.createReadStream`.
+ */
+export async function readStream(vfsPath: string): Promise<NodeJS.ReadableStream> {
+  await ensureVfs();
+  const m = findMount(normalizeVfsPath(vfsPath));
+  if (m) return Readable.from(await m.backend.readBuffer(m.rel));
+  return createReadStream(resolveSafe(vfsPath));
+}
+
+/**
+ * A stream to write into, plus `done` — resolve/reject on ACTUAL persistence,
+ * separate from the stream's own `finish` event. This matters: for the
+ * unmounted case below, `stream`'s `finish` fires once the temp file is fully
+ * written, which is BEFORE the atomic rename over the real target — a caller
+ * that stopped at `finish` would report success before the write is actually
+ * durable at `vfsPath`. Always await `done`, never just `stream`'s `finish`.
+ */
+export interface VfsWriteStream {
+  stream: NodeJS.WritableStream;
+  done: Promise<void>;
+}
+
+/**
+ * Stream bytes INTO a file without buffering the whole thing in memory — for
+ * large files (e.g. a WebDAV mount service's PUT). Same mount-fallback
+ * reasoning as `readStream`: a mounted path buffers the incoming stream (fine,
+ * those stores are never huge) then delegates to the backend's own `writeBuffer`
+ * — still the single source of truth for how that backend persists a write.
+ * The unmounted case keeps the SAME write-temp-then-rename discipline as
+ * `writeFileAtomic`, just spread across a stream instead of one call.
+ */
+export async function writeStream(vfsPath: string): Promise<VfsWriteStream> {
+  await ensureVfs();
+  const m = findMount(normalizeVfsPath(vfsPath));
+  if (m) {
+    const chunks: Buffer[] = [];
+    const pass = new PassThrough();
+    pass.on("data", (chunk: Buffer) => chunks.push(chunk));
+    const done = new Promise<void>((resolve, reject) => {
+      pass.on("error", reject);
+      pass.on("end", () => {
+        m.backend.writeBuffer(m.rel, Buffer.concat(chunks)).then(resolve, reject);
+      });
+    });
+    return { stream: pass, done };
+  }
+
+  const real = resolveSafe(vfsPath);
+  await fs.mkdir(path.dirname(real), { recursive: true });
+  const tmp = tempPathFor(real);
+  const fileStream = createWriteStream(tmp);
+  const done = new Promise<void>((resolve, reject) => {
+    fileStream.on("error", (err) => {
+      fs.rm(tmp, { force: true }).catch(() => {});
+      reject(err);
+    });
+    fileStream.on("finish", () => {
+      fs.rename(tmp, real).then(resolve, reject);
+    });
+  });
+  return { stream: fileStream, done };
 }
 
 export async function mkdir(vfsPath: string): Promise<void> {

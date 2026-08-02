@@ -2,6 +2,7 @@ import "server-only";
 import { spawn } from "node:child_process";
 import { connectMcpClient, extractText } from "@/lib/mcp/client";
 import { getHarnessConfig, harnessCredentialEnv, type HarnessConfig } from "@/lib/devharness/harness-config";
+import { getOpenCodeProviderEnv } from "@/lib/devharness/generate-config";
 import { supervisorEnabled, supervisorBegin, supervisorBuild } from "@/lib/devharness/supervisor";
 import { stageAll } from "@/lib/system/git";
 import type { McpServerConfig } from "@/lib/mcp/types";
@@ -188,7 +189,7 @@ interface OcEvent {
 // we prepend the agent's prompt to the task message (avoids writing an opencode.json
 // into the worktree, which the Supervisor would commit). `--auto` runs it
 // non-interactively, matching the Claude CLI path.
-function runOpenCodeCli(agent: Agent, task: string, cwd: string, onEvent?: OnEvent): Promise<AgentRunResult> {
+async function runOpenCodeCli(agent: Agent, task: string, cwd: string, onEvent?: OnEvent): Promise<AgentRunResult> {
   const base = { agent: agent.name, type: "claude" as const, task, steps: 0, toolCalls: [] as { tool: string; input: unknown }[] };
   onEvent?.({ tool: "OpenCode (headless)", input: { task } });
 
@@ -200,12 +201,18 @@ function runOpenCodeCli(agent: Agent, task: string, cwd: string, onEvent?: OnEve
   ];
   if (agent.model) args.push("--model", agent.model);
 
+  // Some OpenCode auth methods (Vertex, Azure) have no opencode.json config
+  // surface at all — their required parameters are environment-variable-only
+  // per OpenCode's own docs — so they're injected here rather than generated
+  // into a file (029-settings-dev-harness US5).
+  const providerEnv = await getOpenCodeProviderEnv();
+
   return new Promise<AgentRunResult>((resolve) => {
     // stdio[0]="ignore" is REQUIRED: `opencode run` reads stdin and blocks on its
     // EOF when stdin is a non-TTY pipe (Node's spawn default), which would hang the
     // harness forever. Closing stdin lets it proceed immediately. (Claude Code's
     // `claude -p` doesn't read stdin, so runClaudeCli doesn't need this.)
-    const child = spawn("opencode", args, { cwd, env: envForCwd(cwd), stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn("opencode", args, { cwd, env: { ...envForCwd(cwd), ...providerEnv }, stdio: ["ignore", "pipe", "pipe"] });
     const toolCalls: { tool: string; input: unknown }[] = [];
     const seenCalls = new Set<string>();
     // Text parts arrive as cumulative updates keyed by part id; last-write-wins per
@@ -355,7 +362,8 @@ export async function runClaudeAgent(
         steps: 0,
         toolCalls: [],
         error:
-          "Refusing contentOnly developer harness run. `contentOnly:true` is only for standalone app content generation; BrowserOS source analysis or implementation must run through the Supervisor feature-branch worktree with contentOnly omitted/false.",
+          "Refusing contentOnly developer harness run. `contentOnly:true` is only for standalone app content generation; BrowserOS source analysis or implementation must run through the Supervisor feature-branch worktree with contentOnly omitted/false. " +
+          "If this IS standalone content (e.g. a marketplace item), do not switch to dev_delegate — that forces an unrelated BOS-source feature branch onto a plain item build. Instead rephrase this SAME task: include a trigger phrase like \"staging directory\"/\"write a bos app project\", and remove any spec-path references or BOS-source-sounding wording (\"api route\", \"server logic\", \"src/...\", etc.) — see the Build Studio skill's target-marketplace-item.md, Step 1, for the exact rule.",
       };
     }
     if (harness.mode === "mcp") return runViaMcp(agent, task, harness.server, opts?.onEvent);

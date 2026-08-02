@@ -13,6 +13,7 @@ import {
 } from "./sidecar";
 import {
   applyView,
+  applyLayer1Clearing,
   findTailStart,
   shouldAdvanceClearWatermark,
   truncateToTail,
@@ -212,14 +213,32 @@ async function transformCall(convId: string, params: { prompt: unknown; maxOutpu
   // provider see a prompt over budget (SC-005).
   if (layerOneEst >= hardLimitTokens) {
     const target = Math.max(1, Math.floor(budget * viewConfig.summarizeThreshold));
-    const truncated = truncateToTail(finalRest, viewConfig, target);
-    const afterEst = estimateTokens(truncated);
-    log("warn", convId, "fallback.applied", {
+    let truncated = truncateToTail(finalRest, viewConfig, target);
+    let afterEst = estimateTokens(truncated);
+
+    // Second-pass: truncation alone may still exceed the budget when a single
+    // recent tool result is larger than the window (e.g. a massive read_file
+    // output in the keepToolResults zone). Force-clear ALL tool results —
+    // including the normally-protected recent pairs — to recover headroom.
+    let secondPassCleared = 0;
+    if (afterEst >= hardLimitTokens) {
+      const { messages: cleared, clearedResults } = applyLayer1Clearing(
+        truncated,
+        emptySidecar(),
+        { ...viewConfig, keepToolResults: 0 },
+      );
+      secondPassCleared = clearedResults;
+      truncated = cleared;
+      afterEst = estimateTokens(truncated);
+    }
+
+    log(afterEst >= hardLimitTokens ? "error" : "warn", convId, "fallback.applied", {
       est: layerOneEst,
       afterEst,
       budget,
       messagesBefore: finalRest.length,
       messagesAfter: truncated.length,
+      ...(secondPassCleared > 0 ? { secondPassCleared, overBudget: afterEst >= hardLimitTokens } : {}),
     });
     finalRest = truncated;
     // The hard-limit truncation fundamentally changes the message array, making

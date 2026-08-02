@@ -45,6 +45,9 @@ export interface Specification {
   artifacts: Artifact[];
   phases: PipelinePhase[];
   taskProgress?: { done: number; total: number };
+  /** Set when this specification only reflects a draft `bos/*` branch (020) —
+   *  mirrors SpecTreeNode's `branch`. Absent for a base-store specification. */
+  branch?: string;
 }
 
 export type StoreOwner = "system" | "user" | "marketplace";

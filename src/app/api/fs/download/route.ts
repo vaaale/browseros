@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import * as vfs from "@/os/vfs";
 import { createZip, type ZipEntryInput } from "@/lib/files/zip";
-import { withFeatureScope, scopeFromHeaders } from "@/lib/specs/feature-context";
+import { withFeatureScope, scopeFromRequest } from "@/lib/specs/feature-context";
 
 export const dynamic = "force-dynamic";
 
@@ -30,9 +30,13 @@ async function collectRecursive(vfsPath: string, relBase: string, out: ZipEntryI
 }
 
 export async function GET(req: NextRequest) {
-  const p = new URL(req.url).searchParams.get("path");
+  const { searchParams } = new URL(req.url);
+  const p = searchParams.get("path");
   if (!p) return NextResponse.json({ error: "Missing path" }, { status: 400 });
-  return withFeatureScope(scopeFromHeaders(req.headers), async () => {
+  // Reached via a plain <a href download> click, which cannot set custom
+  // headers — scope must also be resolvable from a query param (see
+  // scopeFromRequest / api/fs/raw/route.ts for the same fix).
+  return withFeatureScope(scopeFromRequest(req.headers, searchParams), async () => {
     try {
       const info = await vfs.stat(p);
       if (info.type === "file") {

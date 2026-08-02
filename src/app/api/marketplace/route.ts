@@ -7,15 +7,29 @@ import {
   adoptSpec,
   installSkill,
   installMarketplaceItem,
+  uninstallBosPlugin,
+  uninstallMarketplaceItem,
 } from "@/lib/marketplace/client";
+import { listInstalledItems } from "@/system/items/installed";
 
 // Marketplace API (028). GET lists registered marketplaces + their items; POST
 // carries an `op` (add / remove / sync / adopt-spec). All heavy lifting +
 // validation lives in the client; this is a thin, error-safe boundary.
 export const dynamic = "force-dynamic";
 
+/** Ids of every installed item, from the one shared scanner (035) — the only
+ *  answer to "is this installed" that works for a facet with no registry of its
+ *  own, such as a plugin. */
+async function listInstalledItemIds(): Promise<string[]> {
+  return (await listInstalledItems()).filter((i) => !i.broken).map((i) => i.id);
+}
+
 export async function GET() {
-  return NextResponse.json({ marketplaces: await listCatalog() });
+  // installedItemIds travels ALONGSIDE the catalog rather than as a flag on each
+  // item: MarketplaceItem is the manifest's own schema and gets serialized back to
+  // disk, so runtime state must never be attached to it.
+  const [marketplaces, installedItemIds] = await Promise.all([listCatalog(), listInstalledItemIds()]);
+  return NextResponse.json({ marketplaces, installedItemIds });
 }
 
 export async function POST(req: NextRequest) {
@@ -53,6 +67,14 @@ export async function POST(req: NextRequest) {
           return NextResponse.json({ error: "id and itemId are required" }, { status: 400 });
         }
         return NextResponse.json({ installed: await installSkill(body.id, body.itemId) });
+      case "uninstall-item":
+        if (!body.itemId) return NextResponse.json({ error: "itemId is required" }, { status: 400 });
+        await uninstallMarketplaceItem(body.itemId);
+        return NextResponse.json({ ok: true });
+      case "uninstall-plugin":
+        if (!body.id) return NextResponse.json({ error: "id (pluginId) is required" }, { status: 400 });
+        await uninstallBosPlugin(body.id);
+        return NextResponse.json({ ok: true });
       default:
         return NextResponse.json({ error: `unknown op: ${body.op}` }, { status: 400 });
     }

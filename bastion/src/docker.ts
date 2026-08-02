@@ -120,8 +120,14 @@ export async function createBosContainer(username: string, cfg: Config): Promise
       `BOS_WORKTREES=/worktrees`,     // outside /app — not traversed by chownSrc
       `BOS_DATA_CLONES=/data-clones`, // outside /app — not traversed by chownSrc
       `BOS_PUBLIC_PORT=8090`,   // bastion proxies to this port
-      `BOS_PORT_BASE=3000`,     // next dev internal port
-      `BOS_BASE_DEV=1`,         // supervisor starts next dev automatically
+      `BOS_PORT_BASE=3000`,     // base server internal port
+      // 0 → the Supervisor builds base and serves it with `next start`.
+      // NEVER set this to 1 here: `next dev` keeps Turbopack's compiler resident
+      // and leaks ~0.8 MB per request with no plateau (measured: 2.2 GB at boot,
+      // 7.1 GB after 4 min of light load, vs 130 MB / 249 MB steady-state for
+      // `next start`). On a shared host that ends in the kernel OOM killer
+      // reaping the base server and taking the whole box down with it.
+      `BOS_BASE_DEV=0`,
       ...(publicHostname && publicHostname !== "localhost" ? [`BOS_DEV_ORIGINS=${publicHostname}`] : []),
       ...(cfg.containerUid != null ? [`BOS_UID=${cfg.containerUid}`] : []),
       ...(cfg.containerGid != null ? [`BOS_GID=${cfg.containerGid}`] : []),
@@ -317,6 +323,185 @@ export async function getContainerLogs(username: string, tailLines = 60): Promis
     return buf.toString("utf8").replace(/[^\x09\x0a\x0d\x20-\x7e]/g, "").trim();
   } catch {
     return "";
+  }
+}
+
+// ── Real-state probes (System Monitor / health tracking) ──────────────────────
+//
+// "Container is running" is NOT the same as "BOS is serving": the Supervisor is
+// PID 1 inside the container, so it survives the death of the base Next.js
+// server. Everything below exists to tell those two states apart, and to expose
+// the metrics that actually diagnose failures (memory headroom, OOM kills,
+// restart counts) rather than just liveness.
+
+export interface SupervisorHealth {
+  ok: boolean;
+  serving: boolean;
+  base: {
+    state: string; port: number; branch: string | null; commit: string | null;
+    dev: boolean; reused: boolean; owned: boolean;
+    pid: number | null; procAlive: boolean; buildError: string | null;
+  } | null;
+  supervision: {
+    restarts: number; consecutiveFailures: number; givenUp: boolean;
+    lastRestartAt: number | null;
+    lastExit: { code: number | null; signal: string | null; at: number; expected: boolean; oomSuspected: boolean } | null;
+  };
+  previews: Array<{ branch: string; port: number; state: string; procAlive: boolean }>;
+  supervisor: { pid: number; uptimeSeconds: number; rssBytes: number; heapUsedBytes: number };
+  baseBranch: string;
+}
+
+/** Ask the container's Supervisor for the truth about what it is serving. */
+export function fetchSupervisorHealth(username: string, timeoutMs = 5000): Promise<SupervisorHealth | null> {
+  return new Promise((resolve) => {
+    const req = http.get(
+      { hostname: containerName(username), port: 8090, path: "/__supervisor/health", timeout: timeoutMs },
+      (res) => {
+        let body = "";
+        res.on("data", (c) => (body += c));
+        res.on("end", () => {
+          if (res.statusCode !== 200) { resolve(null); return; }
+          try { resolve(JSON.parse(body) as SupervisorHealth); } catch { resolve(null); }
+        });
+      },
+    );
+    req.on("error", () => resolve(null));
+    req.on("timeout", () => { req.destroy(); resolve(null); });
+  });
+}
+
+export interface ContainerRuntime {
+  id: string;
+  status: string;
+  running: boolean;
+  /** Docker HEALTHCHECK verdict: starting | healthy | unhealthy | none. */
+  health: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  exitCode: number | null;
+  oomKilled: boolean;
+  restartCount: number;
+  /** 0 / null means "no limit" — the container may consume the whole host. */
+  memoryLimitBytes: number | null;
+}
+
+export async function getContainerRuntime(username: string): Promise<ContainerRuntime | null> {
+  const info = await inspectContainer(containerName(username));
+  if (!info) return null;
+  return {
+    id: info.Id.slice(0, 12),
+    status: info.State.Status,
+    running: info.State.Running,
+    health: info.State.Health?.Status ?? "none",
+    startedAt: info.State.StartedAt ?? null,
+    finishedAt: info.State.FinishedAt ?? null,
+    exitCode: typeof info.State.ExitCode === "number" ? info.State.ExitCode : null,
+    oomKilled: !!info.State.OOMKilled,
+    restartCount: info.RestartCount ?? 0,
+    memoryLimitBytes: info.HostConfig?.Memory ? info.HostConfig.Memory : null,
+  };
+}
+
+export interface ContainerUsage {
+  memUsageBytes: number | null;
+  memLimitBytes: number | null;
+  cpuPercent: number | null;
+}
+
+/** One-shot resource sample (the same numbers `docker stats` shows). */
+export async function getContainerUsage(username: string): Promise<ContainerUsage> {
+  const empty: ContainerUsage = { memUsageBytes: null, memLimitBytes: null, cpuPercent: null };
+  try {
+    const c = docker.getContainer(containerName(username));
+    const raw = (await c.stats({ stream: false })) as unknown as {
+      memory_stats?: { usage?: number; limit?: number; stats?: { inactive_file?: number } };
+      cpu_stats?: { cpu_usage?: { total_usage?: number }; system_cpu_usage?: number; online_cpus?: number };
+      precpu_stats?: { cpu_usage?: { total_usage?: number }; system_cpu_usage?: number };
+    };
+    // Docker's own `docker stats` subtracts inactive_file from usage; match it so
+    // the number the admin sees here equals the number on the CLI.
+    const usage = raw.memory_stats?.usage ?? null;
+    const inactive = raw.memory_stats?.stats?.inactive_file ?? 0;
+    const memUsageBytes = usage != null ? Math.max(0, usage - inactive) : null;
+
+    const cpuDelta = (raw.cpu_stats?.cpu_usage?.total_usage ?? 0) - (raw.precpu_stats?.cpu_usage?.total_usage ?? 0);
+    const sysDelta = (raw.cpu_stats?.system_cpu_usage ?? 0) - (raw.precpu_stats?.system_cpu_usage ?? 0);
+    const cpus = raw.cpu_stats?.online_cpus ?? 1;
+    const cpuPercent = sysDelta > 0 && cpuDelta >= 0 ? (cpuDelta / sysDelta) * cpus * 100 : null;
+
+    return { memUsageBytes, memLimitBytes: raw.memory_stats?.limit ?? null, cpuPercent };
+  } catch {
+    return empty;
+  }
+}
+
+/**
+ * Read the container's cgroup memory counters. `oom_kill` is the counter that
+ * proves the kernel reaped a process inside the container, and `oom`/`max`
+ * staying at 0 while `oom_kill` is non-zero proves it was the HOST running out
+ * rather than the container hitting its own limit — the exact distinction that
+ * diagnosed the 2026-07-29 outage. Best-effort: returns nulls if unreadable.
+ */
+export async function getCgroupMemoryEvents(username: string): Promise<{ oomKill: number | null; oom: number | null; peakBytes: number | null; maxBytes: string | null }> {
+  const empty = { oomKill: null, oom: null, peakBytes: null, maxBytes: null };
+  try {
+    const c = docker.getContainer(containerName(username));
+    const exec = await c.exec({
+      Cmd: ["sh", "-c", "cat /sys/fs/cgroup/memory.events 2>/dev/null; echo ---; cat /sys/fs/cgroup/memory.peak 2>/dev/null; echo ---; cat /sys/fs/cgroup/memory.max 2>/dev/null"],
+      AttachStdout: true, AttachStderr: true,
+    });
+    const stream = await exec.start({ hijack: true, stdin: false });
+    const out = await new Promise<string>((resolve) => {
+      let buf = "";
+      stream.on("data", (chunk: Buffer) => { buf += chunk.toString("utf8"); });
+      stream.on("end", () => resolve(buf));
+      stream.on("error", () => resolve(buf));
+      setTimeout(() => resolve(buf), 4000);
+    });
+    // Strip Docker's 8-byte stream-multiplexing frame headers.
+    const text = out.replace(/[^\x09\x0a\x0d\x20-\x7e]/g, "");
+    const [eventsPart = "", peakPart = "", maxPart = ""] = text.split("---");
+    const num = (re: RegExp): number | null => {
+      const m = re.exec(eventsPart);
+      return m ? Number(m[1]) : null;
+    };
+    const peak = /(\d{3,})/.exec(peakPart);
+    const max = /(max|\d{3,})/.exec(maxPart);
+    return {
+      oomKill: num(/oom_kill\s+(\d+)/),
+      oom: num(/oom\s+(\d+)/),
+      peakBytes: peak ? Number(peak[1]) : null,
+      maxBytes: max ? max[1] : null,
+    };
+  } catch {
+    return empty;
+  }
+}
+
+export interface HostInfo {
+  memTotalBytes: number | null;
+  ncpu: number | null;
+  dockerVersion: string | null;
+  containersRunning: number | null;
+  containersStopped: number | null;
+}
+
+export async function getHostInfo(): Promise<HostInfo> {
+  try {
+    const info = (await docker.info()) as {
+      MemTotal?: number; NCPU?: number; ServerVersion?: string;
+      ContainersRunning?: number; ContainersStopped?: number;
+    };
+    return {
+      memTotalBytes: info.MemTotal ?? null,
+      ncpu: info.NCPU ?? null,
+      dockerVersion: info.ServerVersion ?? null,
+      containersRunning: info.ContainersRunning ?? null,
+      containersStopped: info.ContainersStopped ?? null,
+    };
+  } catch {
+    return { memTotalBytes: null, ncpu: null, dockerVersion: null, containersRunning: null, containersStopped: null };
   }
 }
 

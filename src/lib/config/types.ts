@@ -18,6 +18,14 @@ export interface ConfigField {
   options?: ConfigOption[];
   /** Secret values are never returned in plaintext by the API. */
   secret?: boolean;
+  /**
+   * URL from which the frontend fetches select options at render time.
+   * When set, the field renders as a select regardless of declared `type`.
+   * The endpoint may return `{ options: (string | ConfigOption)[] }`, a bare
+   * array of strings, or a bare array of `{ value, label }` — extraction is
+   * handled by ConfigForm.
+   */
+  optionsEndpoint?: string;
 }
 
 export interface ConfigSchema {

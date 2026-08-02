@@ -1,11 +1,15 @@
 import "server-only";
-import type { ConfigSchema } from "./types";
+import type { ConfigField, ConfigSchema } from "./types";
 import { readNamespace, patchNamespace, writeNamespace } from "./store";
+import { listSettingsPanels } from "@/lib/bos-plugins/settings-registry";
+import type { SettingsPanelRegistration } from "@/lib/bos-plugins/types";
 import { getProviderConfig, updateProviderConfig, type ProviderConfig } from "@/lib/agent/provider";
 import { PROVIDER_LIST } from "@/lib/agent/provider-meta";
 import { getSettings, updateSettings } from "@/os/settings";
 import { loadVoiceConfig, saveVoiceConfig, redactVoiceConfig } from "@/lib/voice/config";
 import type { VoiceConfig } from "@/lib/voice/types";
+import { regenerateHarnessConfigFiles } from "@/lib/devharness/generate-config";
+import { normalizeClaudeProvider, normalizeOpenCodeProvider, resolveHarnessSelection } from "@/lib/devharness/provider";
 
 export interface ConfigRegistration {
   schema: ConfigSchema;
@@ -247,14 +251,30 @@ const REGISTRATIONS: ConfigRegistration[] = [
       order: 30,
       customComponent: "dev-harness",
       fields: [
+        // Top-level choice (029-settings-dev-harness US4): which coding agent
+        // runs development tasks. Everything below is organized as one row per
+        // CLI in the custom UI, ordered by real dependency (run mode → auth
+        // method → that method's fields → model) — the `fields` array here
+        // exists for the generic secret/coercion mechanism and the assistant's
+        // auto-generated config tools, not for visual ordering.
         {
-          key: "transport",
-          label: "Mode",
+          key: "harness",
+          label: "Dev Harness",
           type: "select",
-          description: "Claude/OpenCode CLI run a coding agent headless in the repo; the MCP modes drive a harness's Agent tool.",
+          description: "Which coding agent runs development tasks.",
           options: [
-            { value: "cli", label: "Claude CLI (headless, recommended)" },
-            { value: "opencode", label: "OpenCode CLI (headless)" },
+            { value: "claude", label: "Claude Code" },
+            { value: "opencode", label: "OpenCode" },
+          ],
+        },
+        // Claude Code row.
+        {
+          key: "claudeRunMode",
+          label: "Claude run mode",
+          type: "select",
+          description: "Local CLI spawns `claude` headless; the MCP modes instead drive an already-running remote Claude Code harness's Agent tool (no auth/model settings apply there).",
+          options: [
+            { value: "cli", label: "Local CLI (headless, recommended)" },
             { value: "stdio", label: "MCP stdio (claude mcp serve)" },
             { value: "http", label: "MCP HTTP (remote)" },
             { value: "sse", label: "MCP SSE (remote)" },
@@ -263,28 +283,133 @@ const REGISTRATIONS: ConfigRegistration[] = [
         { key: "command", label: "MCP stdio command", type: "text", placeholder: HARNESS_DEFAULT_COMMAND },
         { key: "url", label: "MCP harness URL", type: "text", placeholder: HARNESS_DEFAULT_URL },
         {
-          key: "model",
-          label: "Model override",
+          key: "claudeAuthMethod",
+          label: "Claude auth method",
+          type: "select",
+          description: "How Claude CLI authenticates (Local run mode only).",
+          options: [
+            { value: "credential-file", label: "Credential file (paste below)" },
+            { value: "api-key", label: "API key" },
+            { value: "oauth-token", label: "OAuth token (claude setup-token)" },
+            { value: "bedrock", label: "AWS Bedrock" },
+            { value: "vertex", label: "Google Vertex AI" },
+          ],
+        },
+        { key: "claudeApiKey", label: "Claude API key", type: "password", secret: true },
+        { key: "claudeOAuthToken", label: "Claude OAuth token", type: "password", secret: true },
+        { key: "claudeApiBaseUrl", label: "Claude API base URL", type: "text", placeholder: "https://api.anthropic.com" },
+        { key: "claudeBedrockRegion", label: "Bedrock AWS region", type: "text", placeholder: "us-east-1" },
+        { key: "claudeBedrockProfile", label: "Bedrock AWS profile", type: "text" },
+        { key: "claudeVertexProject", label: "Vertex GCP project", type: "text" },
+        { key: "claudeVertexRegion", label: "Vertex GCP region", type: "text", placeholder: "us-central1" },
+        {
+          key: "claudeModel",
+          label: "Claude model override",
           type: "text",
           placeholder: "e.g. claude-opus-4-7 (blank = CLI default)",
-          description:
-            "Model id passed to the CLI via --model. Only applies to the Claude CLI / OpenCode CLI modes; leave blank to use the CLI's own default model.",
+          description: "Model id passed to Claude CLI via --model (Local run mode only). Leave blank to use the CLI's own default.",
+        },
+        // OpenCode row. The auth method IS the provider choice (029-settings-dev-harness
+        // US5) — a free-text provider id was verified unsafe (see provider.ts), so this
+        // is a dropdown of real ids; only some need fields beyond the generic pair below.
+        {
+          key: "opencodeAuthMethod",
+          label: "OpenCode auth method",
+          type: "select",
+          description: "How OpenCode CLI authenticates.",
+          options: [
+            { value: "credential-file", label: "Credential file (paste below)" },
+            { value: "anthropic", label: "Anthropic" },
+            { value: "openai", label: "OpenAI" },
+            { value: "openrouter", label: "OpenRouter" },
+            { value: "groq", label: "Groq" },
+            { value: "deepseek", label: "DeepSeek" },
+            { value: "together-ai", label: "Together AI" },
+            { value: "fireworks-ai", label: "Fireworks AI" },
+            { value: "xai", label: "xAI" },
+            { value: "ollama", label: "Ollama (local)" },
+            { value: "amazon-bedrock", label: "AWS Bedrock" },
+            { value: "google-vertex", label: "Google Vertex AI" },
+            { value: "azure", label: "Azure OpenAI" },
+            { value: "custom", label: "Custom" },
+          ],
+        },
+        // Generic (Anthropic/OpenAI/OpenRouter/Groq/DeepSeek/Together AI/Fireworks AI/xAI/Ollama) + Azure + Custom.
+        { key: "opencodeApiKey", label: "OpenCode API key", type: "password", secret: true },
+        { key: "opencodeBaseUrl", label: "OpenCode base URL", type: "text" },
+        // AWS Bedrock — no API key (AWS-credential-based).
+        { key: "opencodeBedrockRegion", label: "Bedrock AWS region", type: "text", placeholder: "us-east-1" },
+        { key: "opencodeBedrockProfile", label: "Bedrock AWS profile", type: "text" },
+        { key: "opencodeBedrockEndpoint", label: "Bedrock VPC endpoint", type: "text" },
+        // Google Vertex AI — environment-variable-only; see the credentials route for the service-account file.
+        { key: "opencodeVertexProject", label: "Vertex GCP project", type: "text" },
+        { key: "opencodeVertexLocation", label: "Vertex GCP location", type: "text", placeholder: "global" },
+        // Azure OpenAI — resource name is environment-variable-only; API key (above) is file-based.
+        { key: "opencodeAzureResourceName", label: "Azure resource name", type: "text" },
+        // Custom — the genuinely-arbitrary escape hatch (needs an npm adapter + a model id to function).
+        { key: "opencodeCustomProviderId", label: "Custom provider id", type: "text", placeholder: "e.g. myserver" },
+        { key: "opencodeCustomNpmPackage", label: "Custom npm package", type: "text", placeholder: "@ai-sdk/openai-compatible" },
+        { key: "opencodeCustomModelId", label: "Custom model id", type: "text" },
+        {
+          key: "opencodeModel",
+          label: "OpenCode model override",
+          type: "text",
+          placeholder: "e.g. claude-opus-4-7 (blank = CLI default)",
+          description: "Model id passed to OpenCode CLI via --model. Leave blank to use the CLI's own default.",
         },
       ],
     },
     load: async () => {
       const stored = await readNamespace("dev-harness");
+      const { harness, claudeRunMode, claudeModel, opencodeModel } = resolveHarnessSelection(stored);
+      const claude = normalizeClaudeProvider(stored);
+      const opencode = normalizeOpenCodeProvider(stored);
       return {
-        transport: (stored.transport as string) || "cli",
+        harness,
+        claudeRunMode,
         command: (stored.command as string) || HARNESS_DEFAULT_COMMAND,
         url: (stored.url as string) || HARNESS_DEFAULT_URL,
-        model: (stored.model as string) || "",
+        claudeAuthMethod: claude.mode,
+        claudeApiKey: claude.apiKey || "",
+        claudeOAuthToken: claude.oauthToken || "",
+        claudeApiBaseUrl: claude.baseUrl || "",
+        claudeBedrockRegion: claude.bedrockRegion || "",
+        claudeBedrockProfile: claude.bedrockProfile || "",
+        claudeVertexProject: claude.vertexProject || "",
+        claudeVertexRegion: claude.vertexRegion || "",
+        claudeModel,
+        opencodeAuthMethod: opencode.mode,
+        opencodeApiKey: opencode.apiKey || "",
+        opencodeBaseUrl: opencode.baseUrl || "",
+        opencodeBedrockRegion: opencode.bedrockRegion || "",
+        opencodeBedrockProfile: opencode.bedrockProfile || "",
+        opencodeBedrockEndpoint: opencode.bedrockEndpoint || "",
+        opencodeVertexProject: opencode.vertexProject || "",
+        opencodeVertexLocation: opencode.vertexLocation || "",
+        opencodeAzureResourceName: opencode.azureResourceName || "",
+        opencodeCustomProviderId: opencode.customProviderId || "",
+        opencodeCustomNpmPackage: opencode.customNpmPackage || "",
+        opencodeCustomModelId: opencode.customModelId || "",
+        opencodeModel,
       };
     },
     save: async (patch) => {
       const next = { ...(await readNamespace("dev-harness")), ...patch };
       delete next.cwd;
+      // Only ever write the current field names going forward — the superseded
+      // ones (transport/model/claudeProviderMode/opencodeProviderMode, and the
+      // free-text opencodeProviderId superseded by opencodeAuthMethod's dropdown)
+      // are read-time-derived by resolveHarnessSelection/normalize*Provider when
+      // the current fields are absent, but a save should not perpetuate the old shape.
+      delete next.transport;
+      delete next.model;
+      delete next.claudeProviderMode;
+      delete next.opencodeProviderMode;
+      delete next.opencodeProviderId;
       await writeNamespace("dev-harness", next);
+      // Harness/provider/model may have changed — regenerate the harness's own
+      // generated config files (029-settings-dev-harness).
+      await regenerateHarnessConfigFiles();
     },
   },
   {
@@ -478,12 +603,89 @@ const REGISTRATIONS: ConfigRegistration[] = [
   },
 ];
 
+// Turn a camelCase / snake_case / kebab-case key into a human-readable label:
+// "avatarServerUrl" → "Avatar Server URL", "default_avatar_id" → "Default
+// Avatar Id". Used only as a fallback when the plugin's JSON schema doesn't
+// declare an explicit `title` for the property.
+function humanizeKey(key: string): string {
+  const spaced = key
+    .replace(/[_-]+/g, " ")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2");
+  return spaced
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((w) => (/^(url|api|id|ttl|css|html|json|http|https|ws|uri|ip)$/i.test(w) ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1)))
+    .join(" ");
+}
+
+// Property shape we recognize inside a plugin's JSON schema. `title` is
+// standard JSON Schema; `optionsEndpoint` is a BOS-specific extension used
+// by ConfigForm to render a select whose options are fetched at render time.
+type PluginPropertySchema = {
+  type?: string;
+  title?: string;
+  description?: string;
+  optionsEndpoint?: string;
+};
+
+// Build the ConfigField list for a plugin settings panel from its JSON-schema
+// `configSchema.properties`. Shared by listConfigSchemas (schema view returned
+// to Settings) and getRegistration's on-demand synthesis (so the API PATCH
+// coerce step sees the same fields the UI was rendered from).
+function buildPluginFields(panel: SettingsPanelRegistration): ConfigField[] {
+  const properties = ((panel.configSchema as { properties?: Record<string, PluginPropertySchema> }).properties) ?? {};
+  return Object.entries(properties).map(([key, def]) => {
+    const baseType = def.type === "boolean" ? "boolean" : def.type === "number" ? "number" : "text";
+    // A property with an optionsEndpoint is always rendered as a select —
+    // its options are fetched at render time (see ConfigForm).
+    const fieldType: ConfigField["type"] = def.optionsEndpoint ? "select" : baseType;
+    return {
+      key,
+      label: def.title || humanizeKey(key),
+      type: fieldType,
+      description: def.description,
+      secret: panel.secretFields.includes(key),
+      optionsEndpoint: def.optionsEndpoint,
+    };
+  });
+}
+
+function pluginSchemaFor(panel: SettingsPanelRegistration): ConfigSchema {
+  return {
+    namespace: `plugin:${panel.pluginId}`,
+    title: panel.label,
+    icon: panel.icon,
+    order: panel.order,
+    fields: buildPluginFields(panel),
+  } as ConfigSchema;
+}
+
 export function listConfigSchemas(): ConfigSchema[] {
-  return [...REGISTRATIONS].sort((a, b) => (a.schema.order ?? 100) - (b.schema.order ?? 100)).map((r) => r.schema);
+  const pluginSchemas = listSettingsPanels().map(pluginSchemaFor);
+  return [...REGISTRATIONS.map((r) => r.schema), ...pluginSchemas]
+    .sort((a, b) => (a.order ?? 100) - (b.order ?? 100));
 }
 
 export function getRegistration(namespace: string): ConfigRegistration | undefined {
-  return REGISTRATIONS.find((r) => r.schema.namespace === namespace);
+  const builtin = REGISTRATIONS.find((r) => r.schema.namespace === namespace);
+  if (builtin) return builtin;
+  // Plugin settings panels aren't in REGISTRATIONS — synthesize on demand so
+  // the generic /api/config load/save path can reach them. Storage is the
+  // usual data/config/<namespace>.json (namespace already carries the
+  // "plugin:" prefix, matching the plugin SDK's readConfig/patchConfig).
+  if (namespace.startsWith("plugin:")) {
+    const panel = listSettingsPanels().find((p) => `plugin:${p.pluginId}` === namespace);
+    if (!panel) return undefined;
+    return {
+      schema: pluginSchemaFor(panel),
+      load: async () => readNamespace(namespace),
+      save: async (patch) => {
+        await patchNamespace(namespace, patch);
+      },
+    };
+  }
+  return undefined;
 }
 
 /** Helper for server features needing a resolved config value (with env defaults). */

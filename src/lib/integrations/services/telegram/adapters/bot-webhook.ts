@@ -82,6 +82,7 @@ export class TelegramBotWebhookHandler implements WebhookHandler {
     integrationId: string;
     serviceId: string;
     config: WebhookConfig;
+    origin?: string;
   }): Promise<void> {
     const token = await readBotToken();
     if (!token) {
@@ -90,8 +91,8 @@ export class TelegramBotWebhookHandler implements WebhookHandler {
       );
     }
     const extras = (input.config.extras ?? {}) as TelegramWebhookExtras;
-    const origin = (process.env.NEXT_PUBLIC_APP_ORIGIN ?? "http://localhost:3000").replace(/\/$/, "");
-    const url = `${origin}/api/integrations/webhooks/telegram/bot`;
+    const resolvedOrigin = (input.origin ?? process.env.NEXT_PUBLIC_APP_ORIGIN ?? "http://localhost:3000").replace(/\/$/, "");
+    const url = `${resolvedOrigin}/api/integrations/webhooks/telegram/bot`;
     const body: Record<string, unknown> = { url };
     if (extras.secretToken) body.secret_token = extras.secretToken;
     if (extras.allowedUpdates?.length) body.allowed_updates = extras.allowedUpdates;

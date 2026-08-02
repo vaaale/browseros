@@ -3,6 +3,7 @@ import { promises as fs } from "fs";
 import path from "path";
 import { dataDir } from "@/os/data-dir";
 import { writeFileAtomic } from "@/os/atomic-write";
+import { regenerateHarnessConfigFiles } from "@/lib/devharness/generate-config";
 import type { McpServerConfig } from "./types";
 
 const FILE = path.join(dataDir(), "mcp-servers.json");
@@ -38,11 +39,14 @@ export async function addMcpServer(cfg: McpServerConfig): Promise<McpServerConfi
   // Keyed by name (upsert): re-adding the same name replaces it.
   const next = [...servers.filter((s) => s.name !== cfg.name), cfg];
   await save(next);
+  // A server's includeInDevHarness flag may have changed (029-settings-dev-harness).
+  await regenerateHarnessConfigFiles();
   return next;
 }
 
 export async function removeMcpServer(name: string): Promise<McpServerConfig[]> {
   const next = (await listMcpServers()).filter((s) => s.name !== name);
   await save(next);
+  await regenerateHarnessConfigFiles();
   return next;
 }

@@ -1,132 +1,125 @@
 import "server-only";
 import { promises as fs } from "fs";
 import path from "path";
-import { dataDir } from "@/os/data-dir";
+import { itemLinkPath, itemConfigDir, isItemInstalled, RESERVED_ITEM_IDS } from "@/system/items/installed";
 
-// Item-to-system symlink mapping (user-specs/002-service-daemons/spec.md
-// §"Item-to-System Symlink Mapping"). Every service item is a self-contained
-// folder under dataDir()/user-apps/<id>/ (or a marketplace clone); installing
-// it means symlinking its known subdirectories into dataDir()/system/<type>/<id>
-// so the rest of BOS can discover it by a stable, type-scoped path.
-
-export interface SymlinkTarget {
-  /** Absolute path where the symlink is created. */
-  linkPath: string;
-  /** Absolute path the symlink points at. */
-  targetPath: string;
-  /** If false, the source directory is optional — skipped silently when absent. */
-  required: boolean;
-}
-
-function symlinkTargets(itemPath: string, serviceId: string): SymlinkTarget[] {
-  return [
-    { linkPath: path.join(dataDir(), "system", "services", serviceId), targetPath: path.join(itemPath, "services"), required: true },
-    { linkPath: path.join(dataDir(), "config", serviceId), targetPath: path.join(itemPath, "config"), required: true },
-    { linkPath: path.join(dataDir(), "specs", "external-specs", serviceId), targetPath: path.join(itemPath, "spec"), required: false },
-    { linkPath: path.join(dataDir(), "docs", "external-docs", serviceId), targetPath: path.join(itemPath, "doc"), required: false },
-    { linkPath: path.join(dataDir(), "system", "hooks", serviceId), targetPath: path.join(itemPath, "hooks"), required: false },
-    { linkPath: path.join(dataDir(), "system", "app", serviceId), targetPath: path.join(itemPath, "app"), required: false },
-  ];
-}
+/**
+ * Installing = ONE symlink, plus seeding config (035-install-by-symlink).
+ *
+ *   dataDir()/system/<item-id>        -> the item directory (marketplace clone or user-apps/items)
+ *   dataDir()/system/config/<item-id> -> a REAL directory, copied from the item's config/ defaults
+ *
+ * Nothing else is created and no item content is copied. This replaces the
+ * previous six-symlinks-per-item scheme (`system/services`, `system/app`,
+ * `system/hooks`, `config/<id>`, `specs/external-specs/<id>`,
+ * `docs/external-docs/<id>`) — two of which had no readers at all.
+ *
+ * Config is the single permitted copy, and only because it is mutable STATE
+ * rather than content: a service writes `runtime.json` into its config directory
+ * when it binds a port, and that must never land inside a read-only marketplace
+ * clone that BOS later `git pull`s.
+ */
 
 async function pathExists(p: string): Promise<boolean> {
   return fs.access(p).then(() => true).catch(() => false);
 }
 
-async function createOneSymlink(target: SymlinkTarget): Promise<void> {
-  const sourceExists = await pathExists(target.targetPath);
-  if (!sourceExists) {
-    if (target.required) {
-      throw new Error(`Cannot create symlink: source directory does not exist: ${target.targetPath}`);
-    }
-    return;
+function wrapFsError(err: unknown, action: string, target: string): Error {
+  const e = err as NodeJS.ErrnoException;
+  if (e.code === "EACCES" || e.code === "EPERM") {
+    return new Error(`Permission denied ${action} "${target}". Check filesystem permissions for dataDir() and retry.`);
+  }
+  return new Error(`Failed ${action} "${target}": ${e.message}`);
+}
+
+/**
+ * Seed `system/config/<id>/` from the item's `config/` defaults.
+ *
+ * Never overwrites: on reinstall the user's existing settings win over the
+ * item's defaults, and uninstall deliberately leaves this directory behind so a
+ * reinstall keeps them.
+ */
+export async function seedItemConfig(itemPath: string, itemId: string): Promise<void> {
+  const dest = itemConfigDir(itemId);
+  if (await pathExists(dest)) return;
+
+  const src = path.join(itemPath, "config");
+  try {
+    await fs.mkdir(dest, { recursive: true });
+    if (await pathExists(src)) await fs.cp(src, dest, { recursive: true });
+  } catch (err) {
+    throw wrapFsError(err, "seeding config into", dest);
+  }
+}
+
+/**
+ * Install an item: create `system/<id>` → itemPath, then seed its config.
+ * Idempotent — a re-install replaces the link and leaves existing config alone.
+ */
+export async function installItemLink(itemPath: string, itemId: string): Promise<void> {
+  if (RESERVED_ITEM_IDS.has(itemId)) {
+    throw new Error(`"${itemId}" is a reserved item id — dataDir()/system/${itemId}/ is used by BOS itself.`);
+  }
+  if (!(await pathExists(itemPath))) {
+    throw new Error(`Cannot install "${itemId}": item directory does not exist: ${itemPath}`);
   }
 
-  try {
-    await fs.mkdir(path.dirname(target.linkPath), { recursive: true });
-    // Remove a stale link/file at the destination (re-install case) before
-    // creating the new one — fs.symlink fails with EEXIST otherwise.
-    await fs.rm(target.linkPath, { force: true, recursive: false }).catch(() => {});
-    await fs.symlink(target.targetPath, target.linkPath, "dir");
-  } catch (err) {
-    const nodeErr = err as NodeJS.ErrnoException;
-    if (nodeErr.code === "EACCES" || nodeErr.code === "EPERM") {
+  // Two marketplaces can offer the same item id, but the flat system/ namespace
+  // holds only one. Refuse rather than silently rebinding an existing install.
+  const link = itemLinkPath(itemId);
+  const existing = await fs.readlink(link).catch(() => null);
+  if (existing) {
+    const resolved = path.resolve(path.dirname(link), existing);
+    if (resolved !== path.resolve(itemPath)) {
       throw new Error(
-        `Permission denied creating symlink at "${target.linkPath}" -> "${target.targetPath}". ` +
-          `Check filesystem permissions for dataDir() and retry.`,
+        `"${itemId}" is already installed from a different source (${resolved}). ` +
+        `Uninstall it first if you want to install this one instead.`,
       );
     }
-    throw new Error(`Failed to create symlink at "${target.linkPath}" -> "${target.targetPath}": ${nodeErr.message}`);
   }
-}
 
-/** Create the config directory symlink only (used standalone by callers that
- *  just need config wired up before the rest of installation completes). */
-export async function createConfigSymlink(itemPath: string, serviceId: string): Promise<void> {
-  const target = symlinkTargets(itemPath, serviceId).find((t) => t.linkPath.includes(path.join("config", serviceId)))!;
-  await createOneSymlink(target);
-}
-
-/** Create the system/app/<id> symlink only — installing an item's app facet
- *  (which needs no services/ or config/, unlike a full service install). */
-export async function createAppSymlink(itemPath: string, itemId: string): Promise<void> {
-  const target = symlinkTargets(itemPath, itemId).find((t) => t.linkPath === path.join(dataDir(), "system", "app", itemId))!;
-  await createOneSymlink({ ...target, required: true });
-}
-
-/** Remove the system/app/<id> symlink only (soft app uninstall — the item's
- *  files are untouched). Missing link is ignored. */
-export async function removeAppSymlink(itemId: string): Promise<void> {
-  await fs.rm(path.join(dataDir(), "system", "app", itemId), { force: true }).catch(() => {});
-}
-
-/** Create all applicable symlinks for a service item. Required targets
- *  (services/, config/) must exist in the item or this throws. Optional
- *  targets (spec/, doc/, hooks/, app/) are skipped silently when absent. */
-export async function createSymlinks(itemPath: string, serviceId: string): Promise<void> {
-  const targets = symlinkTargets(itemPath, serviceId);
-  const created: SymlinkTarget[] = [];
   try {
-    for (const target of targets) {
-      await createOneSymlink(target);
-      created.push(target);
-    }
+    await fs.mkdir(path.dirname(link), { recursive: true });
+    await fs.rm(link, { force: true });
+    await fs.symlink(path.resolve(itemPath), link, "dir");
   } catch (err) {
-    // Roll back any symlinks already created in this call so a failed
-    // install doesn't leave a half-installed service behind.
-    for (const target of created) {
-      await fs.rm(target.linkPath, { force: true }).catch(() => {});
-    }
-    throw err;
+    throw wrapFsError(err, "creating item symlink at", link);
+  }
+
+  await seedItemConfig(itemPath, itemId);
+}
+
+/**
+ * Uninstall: remove the one symlink. Seeded config is intentionally kept, so
+ * reinstalling preserves the user's settings.
+ */
+export async function uninstallItemLink(itemId: string): Promise<void> {
+  try {
+    await fs.rm(itemLinkPath(itemId), { force: true });
+  } catch (err) {
+    throw wrapFsError(err, "removing item symlink at", itemLinkPath(itemId));
   }
 }
 
-/** Remove every symlink that createSymlinks may have created for this id.
- *  Missing links are ignored — uninstall is idempotent. */
-export async function removeSymlinks(serviceId: string): Promise<void> {
-  const links = [
-    path.join(dataDir(), "system", "services", serviceId),
-    path.join(dataDir(), "config", serviceId),
-    path.join(dataDir(), "specs", "external-specs", serviceId),
-    path.join(dataDir(), "docs", "external-docs", serviceId),
-    path.join(dataDir(), "system", "hooks", serviceId),
-    path.join(dataDir(), "system", "app", serviceId),
-  ];
-  for (const linkPath of links) {
-    try {
-      await fs.rm(linkPath, { force: true });
-    } catch (err) {
-      const nodeErr = err as NodeJS.ErrnoException;
-      if (nodeErr.code === "EACCES" || nodeErr.code === "EPERM") {
-        throw new Error(`Permission denied removing symlink at "${linkPath}". Check filesystem permissions for dataDir() and retry.`);
-      }
-      throw new Error(`Failed to remove symlink at "${linkPath}": ${nodeErr.message}`);
-    }
-  }
+/** True when `dataDir()/system/<id>` exists — the definition of "installed". */
+export async function isInstalled(itemId: string): Promise<boolean> {
+  return isItemInstalled(itemId);
 }
 
-/** True if the service's required "system/services/<id>" symlink exists —
- *  the definition of "installed" per the spec's source/installed split. */
-export async function isInstalled(serviceId: string): Promise<boolean> {
-  return pathExists(path.join(dataDir(), "system", "services", serviceId));
+// ── Transitional aliases ──────────────────────────────────────────────────────
+// The app surface still speaks in terms of "the app's symlink". Under 035 an
+// app has no symlink of its own — its item does — so these map onto the item
+// link. Kept as named aliases (rather than rewriting every call site at once)
+// because the app registry's uninstall/restore semantics need a decision of
+// their own: with one link per item, "uninstalled but still listed" no longer
+// has a representation.
+
+/** Install the item that carries this app. */
+export async function createAppSymlink(itemPath: string, itemId: string): Promise<void> {
+  await installItemLink(itemPath, itemId);
+}
+
+/** Uninstall the item that carries this app. */
+export async function removeAppSymlink(itemId: string): Promise<void> {
+  await uninstallItemLink(itemId);
 }

@@ -29,19 +29,21 @@ export const runtime = "nodejs";
 //         UI for editing event types / labels without touching enable state).
 
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ id: string; serviceId: string }> },
 ) {
   const { id, serviceId } = await params;
   const svc = getService(id, serviceId);
   if (!svc) return NextResponse.json({ error: `Unknown service: ${id}/${serviceId}` }, { status: 404 });
-  const snapshot = await getSnapshot(id, serviceId);
+  const browserOrigin = new URL(req.url).searchParams.get("browserOrigin")?.trim().replace(/\/+$/, "") || undefined;
+  const snapshot = await getSnapshot(id, serviceId, browserOrigin);
   return NextResponse.json(snapshot);
 }
 
 interface PostBody {
   action: "enable" | "disable" | "rotate" | "delete";
   patch?: Partial<WebhookConfig>;
+  browserOrigin?: string;
 }
 
 export async function POST(
@@ -59,6 +61,7 @@ export async function POST(
     return NextResponse.json({ error: "invalid JSON body" }, { status: 400 });
   }
 
+  const origin = body.browserOrigin?.trim().replace(/\/+$/, "") || undefined;
   try {
     switch (body.action) {
       case "enable": {
@@ -66,23 +69,21 @@ export async function POST(
           integrationId: id,
           serviceId,
           patch: body.patch,
+          origin,
         });
         return NextResponse.json(snapshot);
       }
       case "disable": {
-        const snapshot = await disableWebhook({ integrationId: id, serviceId });
+        const snapshot = await disableWebhook({ integrationId: id, serviceId, origin });
         return NextResponse.json(snapshot);
       }
       case "rotate": {
         const { secrets, snapshot } = await rotateSecret({ integrationId: id, serviceId });
-        // We reveal the plaintext primary ONCE here — the user needs it to
-        // paste into their provider. Subsequent GETs report `hasSecret: true`
-        // but never leak it.
         return NextResponse.json({ ...snapshot, primary: secrets.primary });
       }
       case "delete": {
         await deleteWebhook({ integrationId: id, serviceId });
-        const snapshot = await getSnapshot(id, serviceId);
+        const snapshot = await getSnapshot(id, serviceId, origin);
         return NextResponse.json(snapshot);
       }
       default:

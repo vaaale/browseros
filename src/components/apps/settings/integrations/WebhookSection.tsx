@@ -77,7 +77,8 @@ export function WebhookSection({ item, serviceId, supported }: WebhookSectionPro
   const load = useCallback(async () => {
     try {
       setLoading(true);
-      const res = await fetch(base);
+      const browserOrigin = encodeURIComponent(window.location.origin);
+      const res = await fetch(`${base}?browserOrigin=${browserOrigin}`);
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string };
         throw new Error(body.error ?? `Failed to load webhook (${res.status})`);
@@ -150,7 +151,7 @@ export function WebhookSection({ item, serviceId, supported }: WebhookSectionPro
         const res = await fetch(base, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action, patch }),
+          body: JSON.stringify({ action, patch, browserOrigin: window.location.origin }),
         });
         const body = (await res.json()) as (WebhookSnapshot & { primary?: string }) | { error?: string };
         if (!res.ok) throw new Error((body as { error?: string }).error ?? `Action failed: ${res.status}`);

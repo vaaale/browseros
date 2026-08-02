@@ -86,7 +86,7 @@ function clearedToolResultPart<T extends { type: "tool-result"; toolCallId: stri
  * Deterministic — same (messages, watermark, config) always yields the same
  * output, which is the SC-003 prompt-cache invariant.
  */
-function applyLayer1Clearing(
+export function applyLayer1Clearing(
   messages: CompactionPrompt,
   sidecar: Sidecar,
   config: CompactionView,
@@ -308,7 +308,7 @@ export function truncateToTail(
   const first = firstUserIdx >= 0 ? messages[firstUserIdx] : null;
   const firstTokens = first ? estimateTokens([first]) : 0;
   const remaining = Math.max(0, targetTokens - firstTokens);
-  const start = findTailStart(messages, 1, 1, remaining);
+  const start = findTailStart(messages, config.keepTailMessages, 1, remaining);
   const tail = messages.slice(Math.max(start, firstUserIdx + 1));
   return first ? [first, ...tail] : tail;
 }

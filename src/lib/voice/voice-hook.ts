@@ -12,34 +12,24 @@ export function registerVoiceModeHook(): void {
     extendSystemPrompt: async () => {
       try {
         const cfg = await loadVoiceConfig();
-        if (!cfg.enabled) return undefined;
-
-        // "Speak mode" = replies are synthesized and spoken aloud (TTS on).
-        // When off, voice is input-only (dictation → text reply).
-        const speakMode = cfg.speakReplies !== false;
+        // Spoken replies are the one thing the server can know for certain, and
+        // the only one that changes how a reply should be WRITTEN. Whether the
+        // user is dictating is client-side state we deliberately don't guess at.
+        if (cfg.voiceOutput === "off") return undefined;
 
         // A stable, greppable status line the user can key their own agent
-        // instructions off (e.g. "When VOICE MODE is active and replies are
-        // spoken, keep answers under three sentences."). Keep these tokens
-        // stable — users' prompts may depend on them.
-        const statusLine = `[VOICE MODE: active | Spoken replies: ${speakMode ? "on" : "off"} | Wake phrase: "${cfg.wakeWord}"]`;
+        // instructions off (e.g. "When replies are spoken, keep answers under
+        // three sentences."). Keep these tokens stable — users' prompts may
+        // depend on them.
+        const statusLine = `[VOICE MODE: active | Spoken replies: on | Wake phrase: "${cfg.wakeWord}"]`;
 
         const guidance = [
-          "You are interacting with the user through voice mode.",
-          `The user may address you with the wake phrase "${cfg.wakeWord}" (speech-to-text may spell it differently, e.g. "hey boss").`,
-          "Treat the wake phrase as being addressed directly — do not comment on it.",
+          "Your replies are spoken aloud. Be concise and natural. Avoid markdown formatting,",
+          "bullet lists, numbered lists, code blocks, and headers unless the user explicitly asks for them.",
+          "Speak in complete sentences. Keep responses brief and conversational.",
+          `If the user addresses you with the wake phrase "${cfg.wakeWord}" (speech-to-text may spell it differently, e.g. "hey boss"), treat it as being addressed directly — do not comment on it.`,
           "If a message consists of only the wake phrase, reply with a very short acknowledgement asking what they need (e.g. \"Yes? How can I help?\").",
         ];
-
-        if (speakMode) {
-          guidance.push(
-            "Your replies are spoken aloud. Be concise and natural. Avoid markdown formatting,",
-            "bullet lists, numbered lists, code blocks, and headers unless the user explicitly asks for them.",
-            "Speak in complete sentences. Keep responses brief and conversational.",
-          );
-        } else {
-          guidance.push("Your replies are shown as text (not spoken), but the user's input arrives by voice, so expect conversational phrasing and possible transcription quirks.");
-        }
 
         return `${statusLine}\n${guidance.join(" ")}`;
       } catch {

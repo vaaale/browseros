@@ -43,6 +43,34 @@ relying on it.
 
 ---
 
+## Provider
+
+On top of pasting credential material (below), you can pick a **provider** for
+each CLI instead — useful when you don't have interactive credential-file material
+to paste (an API-key-only account, enterprise Bedrock/Vertex billing, or a
+self-hosted OpenAI-compatible endpoint):
+
+- **Claude CLI**: `Default` (credential-file login, unchanged) | **API key**
+  (`ANTHROPIC_API_KEY`, optional base URL) | **AWS Bedrock** (region/profile) |
+  **Google Vertex AI** (project/region).
+- **OpenCode CLI**: `Default` (`auth.json` login, unchanged) | **Named provider**
+  (a provider id like `anthropic`/`openai`/`openrouter`, plus API key/base URL).
+
+Leaving a CLI's provider as **Default** leaves its credential-file login exactly as
+before — nothing changes unless you pick something else. BOS writes the selected
+provider into a **generated** config file inside the harness's own home directory
+(`~/.claude/settings.json` for Claude, `~/.config/opencode/opencode.json` for
+OpenCode) — these are regenerated on every save, so don't hand-edit them.
+
+## Giving the harness your MCP servers
+
+Any MCP server you've configured under **Settings → MCP Servers** can also be
+handed to the headless CLI: open that server's editor and check **"Include in Dev
+Harness"**. On save, BOS folds it into the harness's generated `~/.claude.json`
+(Claude) and `opencode.json` (OpenCode) MCP configuration — no need to configure
+the same server twice. Unchecking it removes it from both files. See
+[MCP servers](../mcp/mcp-servers.md).
+
 ## If it isn't configured
 
 If the harness isn't set up or can't be reached, the assistant will **tell you**

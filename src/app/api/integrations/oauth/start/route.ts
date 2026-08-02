@@ -15,10 +15,11 @@ export async function GET(req: NextRequest) {
   const scopesParam = url.searchParams.get("scopes");
   const scopes = scopesParam ? scopesParam.split(",").map((s) => s.trim()).filter(Boolean) : undefined;
   try {
+    const browserOrigin = url.searchParams.get("browserOrigin")?.trim().replace(/\/+$/, "") || undefined;
     const result = await getOAuthManager().startFlow({
       integrationId,
       scopes,
-      origin: url.origin,
+      origin: browserOrigin ?? (process.env.NEXT_PUBLIC_APP_ORIGIN || undefined),
     });
     return NextResponse.json(result);
   } catch (err) {

@@ -56,6 +56,12 @@ export interface ServiceDefinition {
   itemPath: string;
   /** Set when service.json could not be (re-)loaded after install (FR error handling). */
   corruptedReason?: string;
+  /** Human-readable reason the most recent start/crash failed (port conflict,
+   *  reserved-port collision, startup timeout, crash). Cleared on the next
+   *  successful start. Distinct from corruptedReason: this is a transient,
+   *  retryable condition (state stays "stopped"/"crashed"), not a structural
+   *  manifest problem that blocks Start entirely. */
+  lastError?: string;
 }
 
 export interface CrashRecoveryPolicy {
@@ -119,6 +125,7 @@ export interface ServiceStatusView {
   boundPort: number | null;
   boundHost: string | null;
   corruptedReason?: string;
+  lastError?: string;
 }
 
 /** Shared mapper from internal runtime state to the shape served over
@@ -133,11 +140,12 @@ export function toServiceStatusView(def: ServiceDefinition): ServiceStatusView {
     boundPort: def.boundPort,
     boundHost: def.boundHost,
     corruptedReason: def.corruptedReason,
+    lastError: def.lastError,
   };
 }
 
 export type ServiceRegistryEvent =
-  | { type: "service:status:changed"; id: string; state: ServiceState }
+  | { type: "service:status:changed"; id: string; state: ServiceState; error?: string }
   | { type: "service:crash"; id: string; error: string; stack?: string; restartCount: number }
   | { type: "service:bound"; id: string; port: number; host: string }
   | { type: "service:installed"; id: string }

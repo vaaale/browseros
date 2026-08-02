@@ -39,18 +39,15 @@ A per‑skill `.usage.json` sidecar tracks `useCount`, `patchCount`,
 
 ---
 
-## Pass 1 — review / reflect (`src/lib/agent/review.ts`)
+## Pass 1 — memory loops (fast/slow, spec 021)
 
-`skill_reflect` (action) → `/api/assistant/reflect` → `runReview(transcript)`:
-
-- A **separate** LLM pass over the finished conversation with a **restricted
-  toolset**: only `MEMORY_LLM_TOOL` and skill create/patch tools. It takes no other
-  actions and never touches the live chat.
-- Routes durable user facts → **memory**; reusable procedure/style corrections →
-  **skills** (preferring to **patch** an existing skill over creating one).
-- "Nothing to save" is a valid result. Explicitly avoids hardening transient or
-  environment‑specific failures.
-- Gated by `hasCredentials()`.
+The original voluntary `skill_reflect` → `runReview(transcript)` pass (spec 003) has
+been retired and removed — `/api/assistant/reflect` now runs the **fast loop**
+instead, and consolidation into long-term memory is a separate **slow loop**. See
+`docs/dev/memory/memory.md` for the full mechanism: automated scheduler jobs
+(`memory.fast-loop` / `memory.slow-loop`) that scan conversations, write episodes,
+and consolidate them into memory/skill updates — no longer a single manual
+end-of-task action.
 
 ---
 

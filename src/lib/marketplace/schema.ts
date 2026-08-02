@@ -5,12 +5,31 @@
 // unit-testable and safe to import anywhere.
 
 export interface MarketplaceItemApp {
-  /** Path (relative to the marketplace repo root) to the app's served directory. */
+  /** Path (relative to the marketplace repo root) to the app directory (iframe)
+   *  or plugin directory (plugin-served). */
   entrypoint: string;
-  runtime: "iframe";
+  /**
+   * "iframe" — files served from the filesystem via /apps/<id>/.
+   * "plugin-served" — app served via the plugin's own route at /api/plugin/<id>/app;
+   *   no files are copied to user-apps.
+   */
+  runtime: "iframe" | "plugin-served";
   version: string;
   /** lucide-react icon name. */
   icon?: string;
+}
+
+/** A BOS plugin (integration or voice engine) loaded at runtime via the
+ *  bos-plugin loader (data/bos-plugins/<id>/bos-plugin.json + index.js). */
+export interface MarketplaceItemBosPlugin {
+  /** Path (relative to the marketplace repo root) to the directory containing
+   *  bos-plugin.json. */
+  entrypoint: string;
+  version: string;
+  /** For a voice engine: the id it registers (`VoiceEnginePlugin.id`), so a
+   *  catalog can name the engine without loading the plugin. Curated — a scan
+   *  cannot derive it, so validation must carry it through rather than drop it. */
+  engineId?: string;
 }
 
 export interface MarketplaceItemSpec {
@@ -49,6 +68,10 @@ export interface MarketplaceItem {
   skill?: MarketplaceItemSkill;
   serverPlugin?: MarketplaceItemServerPlugin;
   services?: MarketplaceItemService;
+  /** OAuth integration plugin (registers manifest + adapters via the bos-plugin loader). */
+  integration?: MarketplaceItemBosPlugin;
+  /** Voice engine plugin (registers a TTS engine via the bos-plugin loader). */
+  voiceEngine?: MarketplaceItemBosPlugin;
 }
 
 export interface MarketplaceManifest {
@@ -100,10 +123,11 @@ export function validateManifest(raw: unknown): MarketplaceManifest {
     if (o.app != null) {
       const a = o.app as Record<string, unknown>;
       if (!relPathOk(a.entrypoint)) throw new Error(`item ${o.id}: invalid app.entrypoint`);
-      if (a.runtime !== "iframe") throw new Error(`item ${o.id}: app.runtime must be "iframe"`);
+      if (a.runtime !== "iframe" && a.runtime !== "plugin-served")
+        throw new Error(`item ${o.id}: app.runtime must be "iframe" or "plugin-served"`);
       app = {
         entrypoint: a.entrypoint as string,
-        runtime: "iframe",
+        runtime: a.runtime as "iframe" | "plugin-served",
         version: typeof a.version === "string" ? a.version : "0.0.0",
         icon: typeof a.icon === "string" ? a.icon : undefined,
       };
@@ -137,7 +161,22 @@ export function validateManifest(raw: unknown): MarketplaceManifest {
       services = { entrypoint: sv.entrypoint as string, version: typeof sv.version === "string" ? sv.version : "0.0.0" };
     }
 
-    if (!app && !spec && !skill && !serverPlugin && !services) throw new Error(`item ${o.id}: must expose an app, spec, skill, serverPlugin, and/or services`);
+    function parseBosPlugin(raw: unknown, field: string): MarketplaceItemBosPlugin | undefined {
+      if (raw == null) return undefined;
+      const p = raw as Record<string, unknown>;
+      if (!relPathOk(p.entrypoint)) throw new Error(`item ${o.id}: invalid ${field}.entrypoint`);
+      return {
+        entrypoint: p.entrypoint as string,
+        version: typeof p.version === "string" ? p.version : "0.0.0",
+        ...(typeof p.engineId === "string" ? { engineId: p.engineId } : {}),
+      };
+    }
+
+    const integration = parseBosPlugin(o.integration, "integration");
+    const voiceEngine = parseBosPlugin(o.voiceEngine, "voiceEngine");
+
+    if (!app && !spec && !skill && !serverPlugin && !services && !integration && !voiceEngine)
+      throw new Error(`item ${o.id}: must expose at least one facet`);
     return {
       id: o.id as string,
       name: o.name as string,
@@ -148,6 +187,8 @@ export function validateManifest(raw: unknown): MarketplaceManifest {
       skill,
       serverPlugin,
       services,
+      integration,
+      voiceEngine,
     };
   });
 

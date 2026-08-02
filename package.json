@@ -2,6 +2,9 @@
   "name": "browseros",
   "version": "0.1.0",
   "private": true,
+  "imports": {
+    "#bos-plugin-sdk": "./src/lib/bos-plugins/sdk/index.ts"
+  },
   "scripts": {
     "gen:apps": "node tools/gen-apps.mjs",
     "gen:vad": "node tools/copy-vad-assets.mjs",

@@ -44,7 +44,28 @@ canonical file is never mutated in place).
 - The Supervisor gives each version its own `BOS_DATA_DIR` (`dataDir()` reads it).
   Active = canonical `data/`; a candidate = a clone under `BOS_DATA_CLONES`.
 - **Promote is code‑only:** the new active restarts on **canonical** data and the
-  clone is discarded.
+  clone is discarded — so anything written under `data/` during a preview
+  (config, memory, logs, …) does not survive promote/discard, by design,
+  **except one directory** (below).
+
+### Exception: `user-apps/` is branch-coupled, not cloned
+
+`dataDir()/user-apps` (the user's local marketplace — a real git repo,
+`src/lib/gitfs/store.ts`) used to be just part of the blanket clone like
+everything else here — a disconnected, un-branched snapshot. That silently
+destroyed marketplace apps installed during a preview: they lived only in the
+clone, which is discarded on promote regardless of whether the code merge
+itself succeeded. It's now mounted the same way a spec store is
+(020-branch-coupled-specs): a git worktree of the canonical `user-apps` repo,
+checked out on the *same* `bos/<feature>` branch as the code, placed at
+`<dataDir>/user-apps` inside the clone (not inside the code worktree — unlike
+specs there's no root override to redirect it, so mounting it exactly where
+`dataDir()/user-apps` already resolves needs no changes anywhere in `src/`).
+Promote merges it right after the spec stores and before the clone is
+discarded; discard drops the worktree + branch. See "user-apps/ is
+branch-coupled too" in `docs/dev/self-modification/live-version-control.md`
+for the full mechanics, including the one wrinkle unique to it (its primary
+checkout isn't always on its default branch, unlike a spec store).
 
 ---
 

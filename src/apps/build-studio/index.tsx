@@ -71,6 +71,21 @@ function featureIdOf(path: string): string {
   return path.split("/").slice(0, 2).join("/");
 }
 
+// A draft artifact (020) only carries its branch on the tree node — the flat
+// `specs` list built from base alone wouldn't have it. Extracted so both
+// openFile's normal (assume-fresh-tree) path and openArtifactForAgent's
+// refresh-and-retry path (below) share one lookup instead of duplicating it.
+function findBranchInTree(tree: SpecTreeNode[], path: string): string {
+  for (const group of tree) {
+    for (const featureNode of group.children ?? []) {
+      for (const child of featureNode.children ?? []) {
+        if (child.path === path && child.branch) return child.branch;
+      }
+    }
+  }
+  return "";
+}
+
 // GitHub-style heading slug (the anchor `buildstudio_artifact_highlight`
 // expects) — derived independently on every heading so it stays stable
 // across re-renders without a rehype-slug dependency.
@@ -200,24 +215,35 @@ export default function BuildStudioApp({ windowId }: AppProps) {
 
   const specByPath = useMemo(() => new Map(specs.map((s) => [s.path, s])), [specs]);
 
+  // Awaitable form — returns the freshly-fetched tree directly rather than
+  // relying on the caller reading treeRef.current right after, since a
+  // setTree() doesn't sync treeRef until the next render/effect commits.
+  // openArtifactForAgent (below) needs the actual fetched value in hand to
+  // retry a branch lookup against it in the same tick.
+  const refreshTree = useCallback(async (): Promise<SpecTreeNode[]> => {
+    setReloadToken((n) => n + 1);
+    try {
+      const r = await fetch("/api/specs");
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const res = (await r.json()) as SpecsResponse;
+      setTree(res.tree ?? []);
+      setSpecs(res.specs ?? []);
+      setError(""); // clear any stale load error (e.g. from a cold-start miss) on success
+      return res.tree ?? [];
+    } catch {
+      setError("Could not load specs.");
+      return treeRef.current;
+    }
+  }, []);
+
   const loadTree = useCallback(() => {
     // Refresh means refresh what's on screen, not just the tree: also force a
     // reload of the currently-open artifact's content (buildstudio_tree_refresh
     // and the manual refresh button are the only way to recover from an edit
-    // that landed while this same artifact was already open).
-    setReloadToken((n) => n + 1);
-    fetch("/api/specs")
-      .then(async (r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return (await r.json()) as SpecsResponse;
-      })
-      .then((res: SpecsResponse) => {
-        setTree(res.tree ?? []);
-        setSpecs(res.specs ?? []);
-        setError(""); // clear any stale load error (e.g. from a cold-start miss) on success
-      })
-      .catch(() => setError("Could not load specs."));
-  }, []);
+    // that landed while this same artifact was already open). Fire-and-forget
+    // for callers that don't need the result (mount effect, refresh button).
+    void refreshTree();
+  }, [refreshTree]);
 
   useEffect(() => {
     fetch("/api/config/build-studio")
@@ -236,6 +262,11 @@ export default function BuildStudioApp({ windowId }: AppProps) {
   const activeKey = activeBranch ? `${activePath}@${activeBranch}` : activePath;
   const loadKey = `${activeKey}#${reloadToken}`;
   const loading = Boolean(activePath) && loadedKey !== loadKey;
+  // An HTML artifact (a UI mockup, most commonly) is rendered live rather than
+  // as markdown/raw text — content is already fetched branch-scoped via
+  // /api/specs above, so this is a plain srcDoc render with no separate fetch
+  // (and none of api/fs/raw's branch-scoping concerns) needed.
+  const isHtmlPath = /\.html?$/i.test(activePath);
 
   // Mirrors of state read by highlightSection, which needs FRESH values from
   // a stable (deps-free) callback — see below for why.
@@ -280,19 +311,7 @@ export default function BuildStudioApp({ windowId }: AppProps) {
   const openFile = useCallback((path: string, branch = "") => {
     // When called from the tool (no branch arg), look up the draft branch from
     // the tree so specs that only exist in a worktree are fetched correctly.
-    let resolvedBranch = branch;
-    if (!resolvedBranch) {
-      outer: for (const group of treeRef.current) {
-        for (const featureNode of group.children ?? []) {
-          for (const child of featureNode.children ?? []) {
-            if (child.path === path && child.branch) {
-              resolvedBranch = child.branch;
-              break outer;
-            }
-          }
-        }
-      }
-    }
+    const resolvedBranch = branch || findBranchInTree(treeRef.current, path);
     // Set synchronously, not just via the mirroring effects below: a real
     // agent calls buildstudio_artifact_open then buildstudio_artifact_highlight
     // back-to-back, and both can be dispatched to this window in the same
@@ -321,6 +340,44 @@ export default function BuildStudioApp({ windowId }: AppProps) {
       return allFeatures;
     });
   }, []);
+
+  // The buildstudio_artifact_open tool's actual handler — unlike openFile
+  // (a synchronous state-setter used by clicks in this same render), this is
+  // the ONLY feedback channel back to the agent, so it must reflect what
+  // actually happened, the same principle highlightSection below already
+  // follows. A real session hit this for real: it opened a design.md an
+  // architect sub-agent had just written on a draft feature branch, and the
+  // tool reported "Opened" while the viewer showed nothing, because this
+  // window's tree was fetched before that write landed and openFile's branch
+  // lookup silently found no match. Waits for the load, and — only if it
+  // failed — refreshes the tree once and retries before giving up, instead of
+  // reporting success the instant a fetch is merely kicked off.
+  const openArtifactForAgent = useCallback(
+    async (path: string): Promise<string> => {
+      const waitForLoad = async () => {
+        const deadline = Date.now() + 10000;
+        while (loadingRef.current && Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 50));
+        }
+      };
+      const failed = () => contentRef.current.startsWith('Could not load "');
+
+      openFile(path);
+      await waitForLoad();
+
+      if (failed()) {
+        const freshTree = await refreshTree();
+        openFile(path, findBranchInTree(freshTree, path));
+        await waitForLoad();
+      }
+
+      if (failed()) {
+        return `Could not open "${path}" in the Build Studio viewer: ${contentRef.current} Check the path is store-prefixed and correct (e.g. "user-specs/<id>/design.md"), and that the file has actually been written — a stale tree was already retried once.`;
+      }
+      return `Opened ${path} in the Build Studio viewer.`;
+    },
+    [openFile, refreshTree],
+  );
 
   // Deps-free (reads refs) so its identity never changes and it always sees
   // the LATEST state: a real agent calls buildstudio_artifact_open then
@@ -402,8 +459,8 @@ export default function BuildStudioApp({ windowId }: AppProps) {
   // actually invoked later by the run loop; buildStudioSurfaceTools just stores the
   // reference here (declarations + handlers) — it never calls it during this render.
   const buildStudioTools = useMemo(
-    () => buildStudioSurfaceTools({ onOpen: openFile, onHighlight: highlightSection, onRefresh: loadTree }), // eslint-disable-line react-hooks/refs
-    [openFile, highlightSection, loadTree],
+    () => buildStudioSurfaceTools({ onOpen: openArtifactForAgent, onHighlight: highlightSection, onRefresh: loadTree }), // eslint-disable-line react-hooks/refs
+    [openArtifactForAgent, highlightSection, loadTree],
   );
   useEffect(() => registerAppSurfaceTools(windowId, buildStudioTools), [windowId, buildStudioTools]);
 
@@ -566,7 +623,7 @@ export default function BuildStudioApp({ windowId }: AppProps) {
             <PhaseStrip phases={activeSpec.phases} />
           </div>
         )}
-        <div ref={viewerRef} onClick={onViewerClick} className="min-h-0 flex-1 overflow-auto p-5">
+        <div ref={viewerRef} onClick={onViewerClick} className={`min-h-0 flex-1 overflow-auto ${isHtmlPath && !editing ? "" : "p-5"}`}>
           {error && <p className="mb-2 text-xs text-red-400">{error}</p>}
           {!activePath ? (
             <p className="text-xs text-white/40">Select a specification on the left to view it, or use the chat to author one.</p>
@@ -578,6 +635,14 @@ export default function BuildStudioApp({ windowId }: AppProps) {
               onChange={(e) => setDraft(e.target.value)}
               spellCheck={false}
               className="h-full w-full resize-none rounded border border-white/10 bg-black/30 p-3 font-mono text-xs text-white/85 outline-none focus:border-white/25"
+            />
+          ) : isHtmlPath ? (
+            <iframe
+              key={loadKey}
+              srcDoc={content}
+              sandbox="allow-scripts"
+              title={activePath}
+              className="h-full w-full rounded border border-white/10 bg-[#0f1117]"
             />
           ) : (
             <article className="prose-sm max-w-none text-white/85">

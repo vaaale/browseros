@@ -74,10 +74,23 @@ export interface WindowInstance extends WindowBounds {
   zIndex: number;
   minimized: boolean;
   maximized: boolean;
+  /** Kept above every unpinned window regardless of focus order. */
+  alwaysOnTop?: boolean;
   /** Saved bounds to restore when un-maximizing. */
   prevBounds?: WindowBounds;
   /** Launch parameters handed to the app component. */
   params?: Record<string, unknown>;
+}
+
+/** Explicit launch geometry. Any field given is used verbatim, bypassing the
+ *  default "80% of the viewport, centred" sizing — for windows whose size is
+ *  dictated by their content (a video surface's aspect ratio) rather than by how
+ *  much room a person needs to work in them. */
+export interface WindowPlacement {
+  width?: number;
+  height?: number;
+  x?: number;
+  y?: number;
 }
 
 export type VfsNodeType = "file" | "dir";

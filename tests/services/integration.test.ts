@@ -1,6 +1,6 @@
 // Integration tests for the install/uninstall flow (T046): symlink creation
 // (including rollback on a bad manifest), manifest validation, and registry
-// update — end to end through the REAL createSymlinks/installService/
+// update — end to end through the REAL installItemLink/installService/
 // uninstallService functions, not the registry's registerInstalled() shortcut
 // the other unit tests use. Real fs under a temp BOS_DATA_DIR, real worker
 // fixtures, no module mocking — same conventions as ServiceManager.test.ts /
@@ -9,7 +9,7 @@
 import "./_stub-server-only";
 import { test, expect } from "@playwright/test";
 import { join } from "path";
-import { existsSync, mkdirSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, writeFileSync, lstatSync } from "fs";
 import { installService, uninstallService } from "../../src/system/marketplace/install/serviceInstaller";
 import { isInstalled } from "../../src/system/marketplace/install/symlinkManager";
 import { serviceRegistry } from "../../src/core/service/ServiceRegistry";
@@ -29,12 +29,11 @@ function setupTest(label: string) {
   };
 }
 
-/** Lays out a full user-apps/<id>/ item (services/ + config/, both required
- *  by createSymlinks) — the shape installService() expects `itemPath` to
- *  already be in, mirroring an item already present in the user's own
- *  user-apps/ GitFS repo before calling installService(). */
+/** Lays out a full user-apps/items/<id>/ item (services/ + config/) — the shape
+ *  installService() expects `itemPath` to already be in. Nothing is copied on
+ *  install; the item stays here and is symlinked from system/<id> (035). */
 function layOutItem(dataDir: string, id: string, opts: { entrySource?: string; withApp?: boolean } = {}): string {
-  const itemPath = join(dataDir, "user-apps", id);
+  const itemPath = join(dataDir, "user-apps", "items", id);
   const servicesDir = join(itemPath, "services");
   const configDir = join(itemPath, "config");
   mkdirSync(servicesDir, { recursive: true });
@@ -50,7 +49,7 @@ function layOutItem(dataDir: string, id: string, opts: { entrySource?: string; w
 }
 
 test.describe("installService", () => {
-  test("creates the required symlinks, validates the manifest, and registers the service", async () => {
+  test("creates ONE item symlink, seeds config, validates the manifest, registers the service", async () => {
     const { dir, dispose } = setupTest("integration-install-basic");
     try {
       const itemPath = layOutItem(dir, "svc");
@@ -59,29 +58,43 @@ test.describe("installService", () => {
 
       expect(manifest.id).toBe("svc");
       expect(await isInstalled("svc")).toBe(true);
-      expect(existsSync(join(dir, "system", "services", "svc", "service.json"))).toBe(true);
-      expect(existsSync(join(dir, "config", "svc"))).toBe(true);
-      // config/ resolves through the symlink to the item's own config dir.
-      expect(existsSync(join(dir, "config", "svc", "svc.json"))).toBe(true);
+
+      // Installed state is exactly one symlink at system/<id> (035 FR-002) —
+      // no per-facet farm, and the manifest resolves THROUGH it.
+      expect(lstatSync(join(dir, "system", "svc")).isSymbolicLink()).toBe(true);
+      expect(existsSync(join(dir, "system", "svc", "services", "service.json"))).toBe(true);
+      expect(existsSync(join(dir, "system", "services"))).toBe(false);
+
+      // Config is seeded as a REAL BOS-owned directory, not a link into the item
+      // (035 FR-004) — a service writes runtime.json there.
+      const configDir = join(dir, "system", "config", "svc");
+      expect(lstatSync(configDir).isSymbolicLink()).toBe(false);
+      expect(existsSync(join(configDir, "svc.json"))).toBe(true);
 
       const registered = serviceRegistry().getService("svc");
       expect(registered?.installed).toBe(true);
-      expect(registered?.state).toBe("stopped");
+      // installService() autostarts what it installed, and now that the
+      // entrypoint resolves through the item link it actually reaches "running".
+      // Previously this asserted "stopped" — which only held because the
+      // pre-035 path could not resolve the entry at all.
+      expect(registered?.state).toBe("running");
+      await uninstallService("svc");
     } finally {
       dispose();
     }
   });
 
-  test("creates optional app/ symlink when the item bundles one, skips it otherwise", async () => {
+  test("an app facet is reachable through the item link; an item without one has none", async () => {
     const { dir, dispose } = setupTest("integration-install-optional-app");
     try {
       const withApp = layOutItem(dir, "svc-with-app", { withApp: true });
       await installService(withApp, "svc-with-app");
-      expect(existsSync(join(dir, "system", "app", "svc-with-app", "index.html"))).toBe(true);
+      // Reached through the single item link rather than a system/app/<id> link.
+      expect(existsSync(join(dir, "system", "svc-with-app", "app", "index.html"))).toBe(true);
 
       const withoutApp = layOutItem(dir, "svc-without-app");
       await installService(withoutApp, "svc-without-app");
-      expect(existsSync(join(dir, "system", "app", "svc-without-app"))).toBe(false);
+      expect(existsSync(join(dir, "system", "svc-without-app", "app"))).toBe(false);
     } finally {
       dispose();
     }

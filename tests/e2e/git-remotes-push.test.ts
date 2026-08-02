@@ -206,14 +206,68 @@ function simulateGitRemotesPOST(
     }
 
     case "push": {
-      const { name, branch } = body as { name: string; branch?: string };
+      // `rejection` simulates the shape of a git push failure that the real
+      // route (src/app/api/git-remotes/route.ts) would catch and attempt to
+      // auto-recover from — mirrors what a shallow, re-cloned checkout
+      // (Dokploy re-clones BrowserOS's own source with `--depth 1` on every
+      // redeploy) produces: a plain push rejected as non-fast-forward even
+      // though nothing really conflicts.
+      const { name, branch, force, rejection } = body as {
+        name: string;
+        branch?: string;
+        force?: boolean;
+        rejection?: "auth" | "recoverable" | "unrelated" | "conflict";
+      };
       if (!name) return { status: 400, json: err("MISSING_PARAMS", "name is required.") };
       const config = configStore.find(name);
       if (!config) return { status: 400, json: err("REMOTE_NOT_FOUND", `Remote '${name}' not found.`) };
+
+      const targetBranch = branch ?? "main";
+
+      if (rejection && force !== true) {
+        // Auth failures never attempt recovery — same as pushError.code ===
+        // "GIT_AUTH_FAILURE" short-circuiting in the real route.
+        if (rejection === "auth") {
+          return { status: 400, json: err("GIT_PUSH_FAILED", "Authentication failed") };
+        }
+        if (rejection === "unrelated") {
+          return {
+            status: 200,
+            json: { ok: true, unrelatedHistory: true, ahead: 1, behind: 3, message: `'${name}' has no shared history with this store.` },
+          };
+        }
+        if (rejection === "conflict") {
+          return {
+            status: 200,
+            json: {
+              ok: true,
+              merged: false,
+              rebaseConflict: true,
+              ahead: 2,
+              behind: 1,
+              message: `Local and '${name}/${targetBranch}' have diverged (2 ahead, 1 behind). Automatic rebase hit conflicts — resolve manually, or force-push to make local win.`,
+            },
+          };
+        }
+        // "recoverable": unshallow + fetch + rebase succeeded — the retried
+        // push goes through and lastPushed updates, same as a plain success.
+        configStore.update(name, { lastPushed: new Date().toISOString() });
+        return {
+          status: 200,
+          json: { ok: true, rebased: true, message: `Rebased local commit(s) onto '${name}/${targetBranch}' and pushed.` },
+        };
+      }
+
+      // A force-push (or no simulated rejection) never attempts recovery —
+      // it either succeeds outright or fails outright.
+      if (rejection === "auth" && force === true) {
+        return { status: 400, json: err("GIT_PUSH_FAILED", "Authentication failed") };
+      }
+
       configStore.update(name, { lastPushed: new Date().toISOString() });
       return {
         status: 200,
-        json: { ok: true, message: `Pushed to '${name}/${branch ?? "main"}'.` },
+        json: { ok: true, message: `${force === true ? "Force-p" : "P"}ushed to '${name}/${targetBranch}'.` },
       };
     }
 
@@ -665,6 +719,96 @@ test.describe("git_push", () => {
     const parsed = JSON.parse(result);
     expect(parsed.status).toBe("failed");
     expect(parsed.error.code).toBe("GIT_AUTH_FAILURE");
+  });
+});
+
+// ── 4b. git_push — non-fast-forward auto-recovery ──────────────────────────
+//
+// Covers the shallow-clone recovery path added to the "push" action: a plain
+// push rejection now triggers unshallow + fetch + rebase before giving up,
+// mirroring what "Pull" already did. See src/app/api/git-remotes/route.ts.
+
+test.describe("git_push — non-fast-forward auto-recovery", () => {
+  test("silently recovers and pushes when the rebase can resolve it", () => {
+    configStore.add({ name: "origin", url: "https://gitlab.example.com/x/repo.git", provider: "gitlab", autoPush: false });
+
+    const { status, json } = simulateGitRemotesPOST(
+      "push",
+      { name: "origin", branch: "claude", rejection: "recoverable" },
+      configStore,
+      secretsStore,
+    );
+    expect(status).toBe(200);
+    const body = json as { ok: boolean; rebased?: boolean; message: string };
+    expect(body.ok).toBe(true);
+    expect(body.rebased).toBe(true);
+    expect(configStore.find("origin")?.lastPushed).toBeDefined();
+  });
+
+  test("surfaces unrelatedHistory instead of a bare push error", () => {
+    configStore.add({ name: "origin", url: "https://gitlab.example.com/x/repo.git", provider: "gitlab", autoPush: false });
+
+    const { status, json } = simulateGitRemotesPOST(
+      "push",
+      { name: "origin", branch: "claude", rejection: "unrelated" },
+      configStore,
+      secretsStore,
+    );
+    expect(status).toBe(200);
+    const body = json as { ok: boolean; unrelatedHistory?: boolean; ahead: number; behind: number };
+    expect(body.ok).toBe(true);
+    expect(body.unrelatedHistory).toBe(true);
+    // Not pushed — the UI should offer "Adopt", not report success.
+    expect(configStore.find("origin")?.lastPushed).toBeUndefined();
+  });
+
+  test("surfaces a rebase conflict instead of a bare push error", () => {
+    configStore.add({ name: "origin", url: "https://gitlab.example.com/x/repo.git", provider: "gitlab", autoPush: false });
+
+    const { status, json } = simulateGitRemotesPOST(
+      "push",
+      { name: "origin", branch: "claude", rejection: "conflict" },
+      configStore,
+      secretsStore,
+    );
+    expect(status).toBe(200);
+    const body = json as { ok: boolean; merged?: boolean; rebaseConflict?: boolean; ahead: number; behind: number };
+    expect(body.ok).toBe(true);
+    expect(body.merged).toBe(false);
+    expect(body.rebaseConflict).toBe(true);
+    expect(configStore.find("origin")?.lastPushed).toBeUndefined();
+  });
+
+  test("does not attempt recovery on an auth failure", () => {
+    configStore.add({ name: "origin", url: "https://gitlab.example.com/x/repo.git", provider: "gitlab", autoPush: false });
+
+    const { status, json } = simulateGitRemotesPOST(
+      "push",
+      { name: "origin", branch: "claude", rejection: "auth" },
+      configStore,
+      secretsStore,
+    );
+    expect(status).toBe(400);
+    const body = json as { error: { code: string } };
+    expect(body.error.code).toBe("GIT_PUSH_FAILED");
+  });
+
+  test("does not attempt recovery on an explicit force-push", () => {
+    configStore.add({ name: "origin", url: "https://gitlab.example.com/x/repo.git", provider: "gitlab", autoPush: false });
+
+    const { status, json } = simulateGitRemotesPOST(
+      "push",
+      { name: "origin", branch: "claude", force: true, rejection: "conflict" },
+      configStore,
+      secretsStore,
+    );
+    // force=true bypasses recovery entirely in the real route — a
+    // force-with-lease push either succeeds or fails outright.
+    expect(status).toBe(200);
+    const body = json as { ok: boolean; rebaseConflict?: boolean; message: string };
+    expect(body.ok).toBe(true);
+    expect(body.rebaseConflict).toBeUndefined();
+    expect(body.message).toContain("Force-pushed");
   });
 });
 

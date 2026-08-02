@@ -70,16 +70,13 @@ responses. Stream with NDJSON if long‑running.
 
 ## Add server boot-time initialization logic
 
-1. Put the logic in `src/instrumentation.node.ts`'s `register()` (or a new
-   Node-only module it imports) — **not** a bare new file that you assume
-   Next.js will discover on its own.
-2. Next only ever calls the `register()` exported from the file literally
-   named `src/instrumentation.ts`. If your logic lives elsewhere, that file
-   MUST `import()` and call it explicitly (gate on
-   `process.env.NEXT_RUNTIME === "nodejs"` if it's Node-only) — this is
-   already wired for `instrumentation.node.ts`, but if you add *another*
-   split-out boot file, it needs the same explicit wiring, not just existing
-   next to the others.
+1. Put the logic directly in `src/instrumentation.ts`'s `register()` — **not**
+   a bare new file that you assume Next.js will discover on its own.
+2. Next only ever calls the `register()` exported from the file literally named
+   `src/instrumentation.ts`, and a root-level `instrumentation.ts` silently
+   displaces it. Do not create either a sibling boot file or a root one; both
+   have already killed this boot sequence once each. The whole body is gated on
+   `process.env.NEXT_RUNTIME === "nodejs"`.
 3. **Verify it actually ran** — check the logs for output your code produces,
    or check that a file/directory it's supposed to create/read exists on
    disk. Don't stop at "the code compiles and looks wired up": an entire
@@ -100,7 +97,7 @@ responses. Stream with NDJSON if long‑running.
    thread at start time (CH‑011).
 2. `<item-id>/config/` (required, may be empty) — default config file(s).
    Optional `app/` (bundled iframe UI), `spec/`, `doc/`.
-3. Place it directly under `dataDir()/user-apps/<id>/` — the user's own GitFS
+3. Place it directly under `dataDir()/user-apps/items/<id>/` — the user's own GitFS
    repo (the same concept as `user-specs/`; BOS never seeds or deletes from
    it) — or install it via a marketplace item's `services.entrypoint`.
    Installing creates symlinks under `dataDir()/system/` — it does not copy
@@ -128,7 +125,7 @@ responses. Stream with NDJSON if long‑running.
    `beforeToolCall`/`afterToolCall`/`afterRun`/`onRunFinished`/`onError`).
 2. Register it: built-ins do this via a tiny `init.ts` that calls
    `registerPlugin(def)` at import time (see `src/plugins/compaction/init.ts`);
-   import that `init` module from both `src/instrumentation.node.ts` and
+   import that `init` module from both `src/instrumentation.ts` and
    `src/app/api/plugins/route.ts`.
 3. It appears in Settings → Plugins automatically (toggle, reorder, configure).
 
@@ -159,11 +156,20 @@ previews then promotes or stops.
 
 ---
 
-## Build an app for the user (the agent path)
+## Build an app or service for the user (the agent path)
 
-- **Static:** delegate (`contentOnly:true`) → one `index.html` → `app_install({ name,
-  files })`.
-- **Project:** delegate (`contentOnly:true`) to write a project dir → `app_build`
-  (`/api/apps/build`) → esbuild bundle → `app_install({ files, entry }, {draft})`.
+`app_install`/`app_build` install a full marketplace ITEM, not just an app — an
+item may bundle an `app/` facet, a `services/` facet, or both together.
 
-→ [Installed apps](./apps/installed-apps.md)
+- **Static (app only):** delegate (`contentOnly:true`) → one `index.html` →
+  `app_install({ name, html })`.
+- **Project (app and/or service):** delegate (`contentOnly:true`) to write a
+  staging directory whose root IS the item root — `app/` (e.g.
+  `app/src/main.tsx`), `services/` (`service.json` + entry script), `config/`
+  as needed — then `app_build({ name, dir, entry? })` (`/api/apps/build`):
+  bundles the app facet's entry with esbuild if present, installs the whole
+  item behind one symlink, and validates/registers/auto-starts a `services/`
+  facet the same way a Marketplace-triggered service install does. A
+  services-only item (no `app/` at all) is a fully valid build.
+
+→ [Installed apps](./apps/installed-apps.md) · [Service Daemons](./apps/services.md)

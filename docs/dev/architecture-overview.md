@@ -83,10 +83,12 @@ The VFS is the user's sandbox — an isolated file system backed by `data/vfs/`.
 | `src/components/apps/IframeApp.tsx` | Iframe renderer |
 | `src/app/apps/[...slug]/route.ts` | Static file serving |
 
-**Responsibilities:** Discover and manage installed apps. Built-in apps are React components discovered from `src/apps/`; installed apps are the `app/` facet of an ITEM under `dataDir()/user-apps/<id>/` (the user's GitFS repo), installed by symlinking `dataDir()/system/app/<id>` to it and served through that symlink as iframes — the same item-to-system mechanism services use (002).
+**Responsibilities:** Discover and manage installed apps. Built-in apps are React components discovered from `src/apps/`; installed apps are the `app/` facet of an ITEM under `dataDir()/user-apps/items/<id>/` (the user's GitFS repo), installed by one symlink, `dataDir()/system/<id>` → the item (035) and served through that symlink as iframes — the same item-to-system mechanism services use (002).
+
+The **Marketplace app** — the UI for browsing every content source and installing from it — is a master-detail layout (a source sidebar filtering collapsible per-source sections); see [apps/marketplace-app.md](./apps/marketplace-app.md).
 
 **Dependencies:** `src/os/data-dir.ts`, `src/lib/gitfs/store.ts`, `src/system/marketplace/install/symlinkManager.ts`.
-**Exposed Interfaces:** `listInstalledManifests()`, `installApp()`, `installItemApp()`, `uninstallApp()`, `restoreApp()`, `purgeApp()`, `buildAppDir()`, `toManifest()`, `setAppCapabilities()`.
+**Exposed Interfaces:** `listInstalledManifests()`, `installItem()` (installs a full item — app and/or service facets, not app-only), `installItemApp()`, `uninstallApp()`, `purgeApp()`, `buildAppDir()`, `toManifest()`, `setAppCapabilities()`. (Uninstall is final under 035 — no `restoreApp()`; reinstalling is a Marketplace action.)
 
 ---
 
@@ -336,6 +338,25 @@ primitive, the depth guard, and the single tool gate that replaced
 
 ---
 
+### 13.5. Generic Service Secrets & Headless Client Auth (`src/lib/secrets/`)
+
+**Stability: MODERATE — mechanism is fixed; consumers will grow over time**
+
+| File | Responsibility |
+|------|---------------|
+| `service-secrets.ts` | `createSecret`/`verifySecret`/`listSecrets`/`revokeSecret`/`hasAnySecret`, namespaced by an arbitrary `service` string any BOS feature chooses |
+| `credentials-index.ts` | Per-user plaintext routing companion file (`data/system/credentials-index.json`) — a fast, unsalted hash lookup aid for Bastion, never itself sufficient to authenticate |
+
+Lets any server-side feature mint its own scoped, revocable credential for a
+non-browser client (a mount client, a CLI) without a bespoke per-protocol
+token store, and — with zero Bastion code changes per new consumer — get
+routed correctly behind the multi-user Bastion proxy regardless of its
+configured identity provider. See `docs/dev/features/headless-client-auth.md`
+for the full mechanism and adoption checklist; the Bastion-side half
+(`bastion/src/credential-routing.ts`) is covered in §16 below.
+
+---
+
 ### 14. Workflows (`src/lib/workflows/`)
 
 **Stability: LOW — execution engine is evolving**
@@ -384,6 +405,17 @@ Browser → bastion:80
 ```
 
 Per-user isolation: each user gets a dedicated Docker container with three volumes (src bind, data bind, node_modules named volume).
+
+**Headless credential routing:** a request with no session cookie but a
+parseable `Authorization: Basic` header is routed by
+`bastion/src/credential-routing.ts`'s `resolveCredential()` — it hashes the
+presented password and scans every provisioned user's
+`data/system/credentials-index.json` (written by BOS's own
+`src/lib/secrets/credentials-index.ts`, see §13.5), never by asking the
+identity provider to resolve a username. `bastion/src/proxy.ts` rewrites a
+match to `Authorization: Bearer <secret>` and proxies it exactly like a
+session-based request; the target container's own `verifySecret()` remains
+the sole authority on validity. See `docs/dev/features/headless-client-auth.md`.
 
 ---
 

@@ -56,3 +56,22 @@ export function scopeFromHeaders(headers: Headers): FeatureScope {
     conversationId: headers.get(FEATURE_CONVERSATION_HEADER)?.trim() || undefined,
   };
 }
+
+/** Build a feature scope from URL search params (`branch`/`conversationId`) —
+ *  for routes reached via plain browser navigation (an `<iframe src>`, an
+ *  `<a href download>`) rather than a `fetch()` call, where a caller cannot
+ *  set custom headers at all. Same fields/precedence as scopeFromHeaders. */
+export function scopeFromSearchParams(params: URLSearchParams): FeatureScope {
+  return {
+    branch: params.get("branch")?.trim() || undefined,
+    conversationId: params.get("conversationId")?.trim() || undefined,
+  };
+}
+
+/** Prefer a header-carried scope (a fetch() caller that set one) and fall back
+ *  to search params (plain navigation) — either channel can supply scope,
+ *  whichever the caller actually used. */
+export function scopeFromRequest(headers: Headers, params: URLSearchParams): FeatureScope {
+  const fromHeaders = scopeFromHeaders(headers);
+  return fromHeaders.branch || fromHeaders.conversationId ? fromHeaders : scopeFromSearchParams(params);
+}

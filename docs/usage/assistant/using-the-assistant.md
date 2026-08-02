@@ -34,6 +34,37 @@ rendering:
 A **Working… / Ready** indicator in the header tells you whether the assistant is
 busy or finished.
 
+### Talking and listening
+
+The buttons to the left of the message box control voice:
+
+- **Microphone** — speak instead of typing. How it activates (push‑to‑talk, a wake
+  word, or holding a key) is set in **Settings → Voice**.
+- **Speaker** — turn spoken replies on or off. When it's on (green), the assistant
+  reads its answers aloud, whether you typed them or spoke them; click it again to
+  mute, which also silences whatever is playing right now.
+- **Video** — only shown if you have an avatar installed (such as Live Avatar).
+  Turning it on opens a small window in the upper left with the assistant's face,
+  already connected, and speaks replies through it. Turning it off keeps spoken
+  replies and just closes the face.
+
+Spoken replies start off, and stay off until you ask for them. These buttons are
+the only switches for output — Settings covers the voice, engine and microphone
+behaviour, not whether voice is on at the moment.
+
+A few things worth knowing:
+
+- Closing the face window is the same as switching the video button off; you keep
+  audio.
+- Switching the speaker off closes the face too, since video includes sound.
+- If the avatar can't connect, the window tells you why and offers to continue with
+  audio only — you never end up with a silent assistant.
+- The face doesn't come back by itself after a page reload (nor does any window).
+  Your audio preference does.
+- Any window, the face included, can be pinned on top with the pin button at the
+  right of its title bar — handy for keeping the assistant visible while you work
+  in another window.
+
 ### Live activity cards
 
 The assistant doesn't just give you a final answer — it shows its work **as it

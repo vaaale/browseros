@@ -103,8 +103,13 @@ export async function validateServiceJson(content: string, itemDir?: string): Pr
  * beyond what require() itself triggers (CommonJS), and never throws — callers
  * get a clear pass/fail plus the caught error message.
  */
-export async function validateManifestAtStart(manifest: ServiceManifest, servicesRootPath: string): Promise<ValidationResult> {
-  const entryPath = path.resolve(servicesRootPath, manifest.id, manifest.entry);
+/**
+ * `serviceDirPath` is the service's OWN directory — `dataDir()/system/<id>/services`
+ * under 035, where installed state is one symlink per item. It used to be the
+ * shared `system/services` root with the id joined on, which no longer exists.
+ */
+export async function validateManifestAtStart(manifest: ServiceManifest, serviceDirPath: string): Promise<ValidationResult> {
+  const entryPath = path.resolve(serviceDirPath, manifest.entry);
   try {
     const exists = await fs.access(entryPath).then(() => true).catch(() => false);
     if (!exists) {

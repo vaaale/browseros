@@ -28,7 +28,7 @@ src/
   app/                          Next.js App Router
     layout.tsx, page.tsx        Root layout; SSR entry — seeds the OS store
     apps/[...slug]/route.ts     Serves installed items' app files through their
-                                data/system/app/<id> symlink (/apps/<id>/…)
+                                data/system/<id> item symlink (/apps/<id>/…)
     api/**/route.ts             All server endpoints (see api-reference.md)
   apps/                         Built-in apps — one self-describing folder each:
     <id>/manifest.ts            App metadata (AppManifest; folder name = id)
@@ -43,7 +43,7 @@ src/
     types.ts                    AppManifest, OSSettings, WindowInstance, VfsEntry …
     apps.ts                     BUILTIN_APPS (sorted) + getApp()
     data-dir.ts                 dataDir(): BOS_DATA_DIR or <cwd>/data  (runtime state
-                                + installed items: user-apps/ content, system/ symlinks)
+                                + installed items: one system/<id> symlink each)
     atomic-write.ts             writeFileAtomic() (temp + rename)
     vfs.ts                      Virtual file system (jailed to data/vfs)
     settings.ts                 OS settings (data/settings.json)
@@ -94,7 +94,6 @@ src/
       card-collapse.ts          Event-card collapse store (timers OUTSIDE React)
       nested-events.ts          Encode/parse nested sub-agent event trees
       subagent-events.ts        Live delegation event store (keyed by task)
-      review.ts                 Self-improvement review pass (memory + skill tools)
       memory/curated.ts, tool.ts        Curated USER.md/MEMORY.md + the memory tool
       skills/store.ts, improve.ts, curator.ts, usage.ts   Skill library + GEPA + Curator
       subagents/store.ts, types.ts, runner.ts, claude-runner.ts, tools.ts, markdown.ts
@@ -111,8 +110,9 @@ data/                           ALL runtime state (gitignored) — see below
 | `data/specs/` | External spec stores (`BOS_SPECS_ROOT`, 027). `bos-system-specs/` (read-only, seeded from `seed/spec-store/`) + `user-specs/` (writable, backs the `Documents/Specs` SpecFS mount). `.worktrees/` holds SpecFS self-provisioned feature-branch worktrees. |
 | `data/settings.json` | OS settings (wallpaper, accent, theme). |
 | `data/config/<ns>.json` | Generic per‑namespace config (e.g. `dev-harness`, `browser-automation`, `datafs`, `assistant`, `build-studio`). `plugins.json` holds the hook-pipeline's active set + order + per-plugin config. |
-| `data/user-apps/` | The user's own GitFS repo (002-service-daemons) — the exact same concept as `user-specs/`: BOS only ensures it's a git repo (`ensureRepo()` at boot, a no-op if the user has already cloned their own remote there), never populates or deletes from it. Each `<id>/` subdirectory is a service/app item source (`services/`, `config/`, optional `app/`/`spec/`/`doc/`/`hooks/`); `dataDir()/system/*` symlinks point here once installed. Also the always-present "local marketplace" (`LOCAL_MARKETPLACE_ID = "user-apps"`) and its own "User Apps" entry in Settings → Versions. |
-| `data/system/services/<id>`, `data/system/app/<id>`, `data/system/hooks/<id>` | Installed-state symlinks into a `user-apps/<id>/` (or marketplace clone) subdirectory — see [Service Daemons](apps/services.md). |
+| `data/user-apps/` | The user's own private **marketplace** repo (002-service-daemons, 034) — the same layout as any marketplace clone: `marketplace.json` + `items/<id>/`. BOS ensures it's a git repo (`ensureRepo()` at boot, a no-op if the user already cloned their own remote) and maintains `marketplace.json` by merge, but never populates or deletes item content. Each `items/<id>/` is a service/app item source (`services/`, `config/`, optional `app/`/`spec/`/`doc/`/`hooks/`); `dataDir()/system/*` symlinks point at `items/<id>/…` once installed. Keyed internally as `LOCAL_MARKETPLACE_ID = "user-apps"` — a location, not the repo's identity. |
+| `data/system/<item-id>` | **The** installed-state record (035): one symlink per item, pointing at the item wherever it lives (`data/marketplace/<mktId>/items/<id>` or `data/user-apps/items/<id>`). Facets are found by a depth-2 scan through it — `<id>/app/`, `<id>/services/service.json`, `<id>/plugin/bos-plugin.json`, `<id>/spec/`, `<id>/hooks/`. Uninstalling is one `rm`. Installing copies nothing. |
+| `data/system/config/<item-id>/` | BOS-owned mutable state for an item: its `config/` defaults seeded at install, plus what BOS and the item write at runtime (`runtime.json`, `capabilities.json`). Survives uninstall, so a reinstall keeps the user's settings. The one permitted copy — config must never live inside a read-only marketplace clone. |
 | `data/config/<id>/` | Symlink to a service item's `config/` dir; holds its user-editable config file(s) plus a manager-owned `runtime.json` (actual bound port/host). |
 | `data/marketplace/<mktId>/items/<itemId>/` | Marketplace item clones (source for `installMarketplaceItem`/`installServerPlugin`, left in place after uninstall for re-install). |
 | `data/logs/services/<id>.log` | Service worker stdout/stderr, tailed by the Settings log viewer. |
@@ -130,19 +130,39 @@ data/                           ALL runtime state (gitignored) — see below
 
 ## User apps (`data/user-apps/`, 002-service-daemons)
 
-The user's **own** GitFS repo — the same concept as `user-specs/`, but for
-services/apps/hooks the user develops themselves, not spec-kit features. BOS
-only runs `ensureRepo()` on it at boot (a no-op if the user has already cloned
-their own remote there); it never populates or deletes content in it, and
-never writes generated artifacts into it. Each `<id>/` subdirectory is a
-self-describing item (`services/`, `config/`, optional `app/`/`spec/`/`doc/`/
-`hooks/`) — installing one only ever creates symlinks under
-`dataDir()/system/`, uninstalling only ever removes them. This is the ONE
-install target for every item, **apps included** (assistant-built apps land
-here too, as `<id>/app/`; there is no separate apps repo — see
-[Installed apps](./apps/installed-apps.md)). It's also the always-present
-"local marketplace" (`LOCAL_MARKETPLACE_ID = "user-apps"`) and shows up as its
-own "User Apps" entry in Settings → Versions. See
+The user's **own** private **marketplace** — a GitFS repo with exactly the same
+shape as the central one, so the same repository can serve as either
+(`034-user-apps-marketplace-parity`):
+
+```
+data/user-apps/
+├── marketplace.json          ← BOS-maintained, by MERGE (see below)
+└── items/<id>/               ← services/, config/, optional app/ spec/ doc/ hooks/
+```
+
+BOS runs `ensureRepo()` on it at boot (a no-op if the user already cloned their
+own remote there) and never populates or deletes item content. Installing an item
+only ever creates symlinks under `dataDir()/system/`; uninstalling only ever
+removes them. This is the ONE install target for every item, **apps included** —
+assistant-built apps land at `items/<id>/app/`, there is no separate apps repo
+(see [Installed apps](./apps/installed-apps.md)).
+
+**BOS does maintain `marketplace.json`**, which reverses the earlier "never write
+generated artifacts here" rule. It writes only that one file, only by
+reconciliation — add entries for new `items/` directories, prune entries whose
+directory is gone, never touch a field it did not author — and only when the
+serialized result actually differs from what is on disk, so reading the catalog
+never dirties the repo. Regeneration is forbidden: curated `tags`, `icon`,
+descriptions, non-standard entrypoints (`items/x/app/dist`) and plugin facets
+(`voiceEngine`, `runtime: "plugin-served"`) exist only in the manifest.
+
+`LOCAL_MARKETPLACE_ID = "user-apps"` is the internal key for *this slot*,
+identified by **location**, not the repo's identity — the displayed name and id
+come from its own `marketplace.json`. A fresh, uninitialised repo is named
+`<username>-marketplace` from the bastion-injected `x-bos-username`, which is why
+that happens lazily on the first catalog read rather than at boot. Registering a
+remote whose manifest id matches the local one is rejected as a duplicate. The
+slot shows up as its own entry in Settings → Versions. See
 [Service Daemons](./apps/services.md).
 
 ---

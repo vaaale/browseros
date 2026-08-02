@@ -126,19 +126,47 @@ function safeKey(sessionKey: string): string {
   return createHash("sha1").update(sessionKey).digest("hex").slice(0, 16);
 }
 
+/**
+ * Hand the Google Workspace CLI (`gws`) the account BOS is already connected to.
+ *
+ * `gws` reads GOOGLE_WORKSPACE_CLI_TOKEN ahead of every other auth source
+ * precisely so a host tool can mint the token, so this needs no second OAuth
+ * flow and no consent of its own. The token is minted per invocation and
+ * refreshed by getValidToken() when it is within 60 s of expiring — deliberately
+ * NOT `gws auth import`, which would write the refresh token and client secret in
+ * plaintext to ~/.config/gws/credentials.json and undo BOS's encryption at rest.
+ *
+ * The grant is whatever the gsuite integration asked for (Gmail, Calendar,
+ * Contacts, Photos, partial Drive), so `gws sheets|docs|admin …` will get a 403
+ * until those scopes are added to the integration manifest and re-consented.
+ *
+ * Absent or unusable credentials yield no variable at all, so `gws` falls back to
+ * its own auth and says "not authenticated" instead of failing on a bad token.
+ */
+async function googleWorkspaceCliEnv(): Promise<Record<string, string>> {
+  try {
+    const { getOAuthManager } = await import("@/lib/integrations/oauth/manager");
+    const token = await getOAuthManager().getValidToken("gsuite");
+    return token ? { GOOGLE_WORKSPACE_CLI_TOKEN: token } : {};
+  } catch {
+    // Not connected, no refresh_token, refresh rejected — all "no token", never fatal.
+    return {};
+  }
+}
+
 // Spawn a child, merging stdout+stderr, enforcing an idle (inter-output) watchdog
 // AND a global max timeout, with output buffer caps. Never throws.
 function runChild(
   prog: string,
   args: string[],
-  o: { cwd?: string; idleMs: number; maxMs: number; backend: string },
+  o: { cwd?: string; idleMs: number; maxMs: number; backend: string; env?: Record<string, string> },
 ): Promise<RunResult> {
   return new Promise((resolve) => {
     const start = Date.now();
     const child = spawn(prog, args, {
       cwd: o.cwd,
       stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env },
+      env: { ...process.env, ...o.env },
     });
 
     let buf = Buffer.alloc(0);
@@ -363,12 +391,23 @@ export async function runCommand(opts: {
     } catch (err) {
       return { ok: false, exitCode: null, output: `Failed to start sandbox container: ${(err as Error).message}`, durationMs: 0, backend: "docker" };
     }
+    // No Google token here on purpose: `gws` is installed in the BOS user image,
+    // not in the run-command sandbox image, and `docker exec -e VAR=<token>`
+    // would put a live bearer token in argv where `ps` on the HOST can read it.
+    // Production never takes this path anyway — in bastion mode the backend is
+    // forced to "local" because the user container IS the sandbox.
     return runChild("docker", ["exec", "-i", name, prog, ...args], { idleMs: cfg.idleTimeoutMs, maxMs, backend: "docker" });
   }
 
   // Local backend: sync VFS symlinks so absolute paths like /Documents resolve.
   await syncLocalSymlinks(cfg.vfsMounts);
-  return runChild(prog, args, { cwd: workspaceHost, idleMs: cfg.idleTimeoutMs, maxMs, backend: "local" });
+  return runChild(prog, args, {
+    cwd: workspaceHost,
+    idleMs: cfg.idleTimeoutMs,
+    maxMs,
+    backend: "local",
+    env: await googleWorkspaceCliEnv(),
+  });
 }
 
 /** Tear down all sandbox containers (call on shutdown). */

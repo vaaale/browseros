@@ -2,7 +2,7 @@
 name: bos-app
 description: Drive the iterative design and specification of a BrowserOS app with a UI. Interview, categorize, design functionality and UI live with A2UI, keep the spec visible, and delegate implementation to the Developer.
 when_to_use: When the user wants to build a BOS app that has a UI, or when a request needs to be categorized as bos-app before detailed design begins.
-created_by: assistant
+created_by: seed
 pinned: true
 ---
 
@@ -53,7 +53,7 @@ PHASE 2 — FUNCTIONAL DESIGN
 
 1. Structure the spec sections: User Scenarios, Requirements, Key Entities, Success Criteria, Assumptions.
 2. Write detailed functional requirements. Use stable IDs (FR-001, FR-002, …) and keep the spec open/highlighted as you go.
-3. Identify the app type: built-in vs installed. Document the choice and rationale in the spec.
+3. Identify the app type: built-in vs installed (marketplace). Use the decision checklist in `docs/dev/guides/apps.md` §1 (direct OS state/internal APIs/thin wrapper around a BOS subsystem → built-in; self-contained user tool with its own lifecycle → installed/marketplace). Record it in the spec's **App Target** field (`file_edit`, set to `builtin-app` or `marketplace-item`) — that exact field, not a note buried in prose — plus a one-line rationale right after it. This is the ONLY thing Phase 6 (and any later session picking this spec back up cold) consults to pick the right delegation mechanism, so it must be set before this gate passes. `marketplace-item` covers an app facet, a background-service facet, or both together — if the interview surfaced a background/daemon need alongside the UI (e.g. this app needs a companion service), that's still ONE `marketplace-item`, not a separate target; note both facets in the spec.
 4. Map requirements to proposed file paths (`src/apps/<id>/`, `src/lib/...`, config namespace, API routes, etc.).
 
 GATE: The user approves the functional design.
@@ -106,20 +106,22 @@ GATE: User explicitly approves BOTH plan and tasks.
 PHASE 6 — DELEGATE
 ═══════════════════════════════
 
-Call `dev_delegate` with a COMPLETE brief (the Developer has no other context):
+The mechanism here depends on the app type — they are NOT interchangeable. Do not rely on remembering Phase 2's decision from earlier in the conversation: `file_read` the spec and check its **App Target** field now (this also correctly handles picking the spec back up in a fresh/later session where Phase 2 wasn't just run). Then load the matching Build Studio reference:
 
-"Read the spec at specs/<store>/<NNN-slug>/ — spec.md, plan.md, tasks.md.
- <Concise summary of the spec and plan.>
- Tasks to execute: <list from tasks.md>.
- Acceptance criteria: <from spec.md>.
- Constraints:
- - Keep all changes on the active feature branch.
- - Run `npx tsc --noEmit` and `npm run lint`; fix every error before finishing.
- - Update relevant docs under docs/ if architecture changed.
- - Name any Playwright test file `e2e/<feature-id>.spec.ts`.
- - Use the BOS style guide (`docs/dev/guides/style-guide.md`) and apps guide (`docs/dev/guides/apps.md`)."
+- **Built-in app** (`src/apps/<id>/`): follow `references/target-builtin-app.md` from the Build Studio skill. In short: ensure an Active feature branch (`dev_branch_request` if none), then call `dev_delegate` handing over the SPEC, not a restated version of it:
 
-After `dev_delegate` returns, summarize what was built and call `buildstudio_tree_refresh()`.
+  "Read the spec at specs/<store>/<NNN-slug>/ — spec.md, plan.md, tasks.md — and implement per the plan and tasks; acceptance criteria are in spec.md.
+   Follow the built-in app anatomy: src/apps/<id>/manifest.ts + index.tsx, folder name = id, no manual registry edits (tools/gen-apps.mjs discovers it).
+   Constraints:
+   - Keep all changes on the active feature branch.
+   - Run `npx tsc --noEmit` and `npm run lint`; fix every error before finishing.
+   - Update relevant docs under docs/ if architecture changed.
+   - Name any Playwright test file `e2e/<feature-id>.spec.ts`.
+   - Use the BOS style guide (`docs/dev/guides/style-guide.md`) and apps guide (`docs/dev/guides/apps.md`)."
+
+  Do NOT paste a paraphrased summary of the spec, a re-listed task breakdown, or a re-transcribed acceptance-criteria list into the task — the Developer reads spec.md/plan.md/tasks.md directly from its own worktree (mounted read-only there); duplicating them is wasted effort and risks drifting from what the spec actually says. The only things worth adding beyond the path are what genuinely ISN'T in the spec: the anatomy convention above, and the standing constraints. After `dev_delegate` returns, summarize what was built and call `buildstudio_tree_refresh()`.
+
+- **Marketplace item** (`data/user-apps/items/<id>/` — app facet, service facet, or both): follow `references/target-marketplace-item.md` from the Build Studio skill instead. In short: do NOT call `dev_branch_request` or `dev_delegate`. Call `agent_delegate` (`agent:"developer"`, `contentOnly:true`) to get either a self-contained `index.html` or a staged multi-facet project (app under `app/`, a background service under `services/`, or both — exact task phrasing and trigger-phrase rules are in that reference, getting the wording wrong gets the delegation refused), then call `app_install` or `app_build` YOURSELF to finish the install — one call installs every facet the staged item has, and lands it on the previewable `app-candidate` branch. Summarize what was built (including any service facet — point the user at Settings → Plugins → Services for that), call `buildstudio_tree_refresh()`, and use `app_list`/`bos_app_launch` to confirm and show the app facet if there is one.
 
 ═══════════════════════════════
 PHASE 7 — VERIFY & CONVERGE
@@ -127,14 +129,15 @@ PHASE 7 — VERIFY & CONVERGE
 
 1. Run analyze + converge using the Build Studio pipeline.
 2. Report any drift and ask the user for confirmation before instructing the Developer to fix.
-3. Do NOT merge or discard branches yourself — the user controls Promote/Discard.
+3. Do NOT promote or discard anything yourself — the user controls it, from the Topbar. Built-in apps use the feature-branch Promote/Stop/Discard controls; marketplace items use the separate "app preview" Promote app/Discard app controls (see `target-marketplace-item.md`). Point the user at the right one.
 
 ═══════════════════════════════
 HARD RULES
 ═══════════════════════════════
 
 - Never skip a gate. If the user wants to rush, remind them what they are skipping.
-- Never write BOS source code yourself. Implementation = `dev_delegate` only.
+- Never write BOS source code, and never write app files directly, yourself. Implementation is `dev_delegate` (built-in apps) or `agent_delegate`+`app_install`/`app_build` (marketplace items — app facet, service facet, or both) — see Phase 6.
+- If a problem report comes in about an app you already built, relay it to the Developer immediately via the same mechanism you used to build it — do not investigate it yourself first.
 - If something is unclear, ask. Do not assume.
 - Keep `spec.md` as the source of truth; update it if anything changes during implementation.
 - Live updates are mandatory: every new requirement and every UI iteration must be visible to the user (spec viewer + UI Preview).

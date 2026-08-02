@@ -89,7 +89,7 @@ const slog = (level, component, msg, extra = {}) => {
 // Only two roles: the always-on BASE (a singleton, a detached worktree at the base
 // commit so it never conflicts with REPO's own checkout of baseBranch) and zero or
 // more PREVIEWs (feature branches in branch-named worktrees), keyed by branch name.
-/** @typedef {{role:string,branch?:string,worktree?:string,dataDir?:string,port:number,state:string,proc?:import('node:child_process').ChildProcess|null,commit?:string,reused?:boolean}} Version */
+/** @typedef {{role:string,branch?:string,worktree?:string,dataDir?:string,port:number,state:string,proc?:import('node:child_process').ChildProcess|null,commit?:string,reused?:boolean,dev?:boolean,expectingExit?:boolean}} Version */
 /** @type {Version|null} */ let base = null;
 /** @type {Map<string, Version>} */ const previews = new Map(); // branch → preview
 
@@ -166,6 +166,8 @@ async function restorePreviews() {
       await mountSpecStores(wt, branch).catch((e) => slog("warn", "restore", `spec mount failed for ${branch}: ${e?.message || e}`, { branch }));
       const clone = clonePath(branch);
       await provisionClone(clone);
+      await mountUserApps(clone, branch).catch((e) => slog("warn", "restore", `user-apps mount failed for ${branch}: ${e?.message || e}`, { branch }));
+      await linkUserAppsIntoWorktree(wt, clone).catch((e) => slog("warn", "restore", `user-apps worktree link failed for ${branch}: ${e?.message || e}`, { branch }));
       const port = await allocPreviewPort();
       const p = { role: "preview", branch, worktree: wt, dataDir: clone, port, state: "not-built", proc: null, commit: await gitTry(["rev-parse", "HEAD"], ignoreGitError, wt) };
       previews.set(branch, p);
@@ -396,6 +398,14 @@ async function commitSpecStores(wt, branch) {
     const dst = path.join(wt, "specs", s.id);
     if (!(await fs.access(path.join(dst, ".git")).then(() => true).catch(() => false))) continue;
     await gitTry(["add", "-A"], ignoreGitError, dst);
+    // Skip the commit attempt entirely when there's nothing staged — Build
+    // Studio already commits spec edits on save, so by promote time this is
+    // usually already clean. Committing anyway would just fail with "nothing
+    // to commit" every time, and gitTry logs every git failure unconditionally
+    // (by design), so that "expected" failure would show up as a spurious
+    // warning on nearly every promote.
+    const dirty = await gitTry(["status", "--porcelain"], ignoreGitError, dst);
+    if (!dirty) continue;
     await gitTry([...GIT_IDENTITY, "commit", "-m", `spec candidate (${branch})`], ignoreGitError, dst);
   }
 }
@@ -455,6 +465,168 @@ async function discardSpecStores(branch, wt) {
   }
 }
 
+// ---------------------------------------------------------------- user-apps (branch-coupled data)
+// dataDir()/user-apps (APPS_REPO) is the user's local marketplace — a real
+// GitFS repo (src/lib/gitfs/store.ts), not ephemeral runtime state. A preview's
+// blanket data clone (provisionClone) would otherwise leave it a disconnected,
+// un-branched hardlink snapshot of whatever APPS_REPO's working tree looked
+// like at clone time — exactly the gap that silently destroyed a marketplace
+// app built during a feature-branch preview (Promote is code-only; the data
+// clone, including anything written under user-apps/, is discarded once the
+// code merges). Mount it the same way spec stores are (020-branch-coupled-
+// specs): a real git worktree of APPS_REPO on the SAME feature branch. Unlike
+// specs it's placed AT `<dataDir>/user-apps`, not inside the code worktree —
+// nothing overrides where user-apps lives, dataDir()/user-apps already always
+// resolves there, so this needs zero changes anywhere in src/.
+//
+// Unlike a spec store, APPS_REPO's OWN primary checkout (CANONICAL_DATA/user-apps,
+// what BASE actually serves user-apps/ from) is NOT always on its default
+// branch: the pre-existing bare-BASE app-candidate flow (appBegin/appPromote/
+// appDiscard, further below) checks it out onto APP_CANDIDATE_BRANCH in place.
+// promoteUserApps accounts for that below.
+
+/** The branch APPS_REPO's primary checkout should be considered "based on",
+ *  even if it's currently sitting on APP_CANDIDATE_BRANCH mid a bare-BASE draft. */
+async function userAppsBaseBranch() {
+  const cur = await gitTry(["symbolic-ref", "--short", "HEAD"], ignoreGitError, APPS_REPO);
+  if (cur && cur !== APP_CANDIDATE_BRANCH) return cur;
+  return appCandidate?.base || "master";
+}
+
+// Mount (or refresh) the user-apps worktree for `branch` at `<dataDir>/user-apps`.
+// Reuses an intact existing mount; otherwise prunes stale registrations and adds
+// the worktree — on the existing app-content branch, or a new one off the
+// current true base. Mirrors mountSpecStores.
+async function mountUserApps(dataDir, branch) {
+  await ensureAppsRepo();
+  const dst = path.join(dataDir, "user-apps");
+  const mounted = await fs.access(path.join(dst, ".git")).then(() => true).catch(() => false);
+  if (mounted && (await gitTry(["rev-parse", "--abbrev-ref", "HEAD"], ignoreGitError, dst)) === branch) return;
+  await fs.rm(dst, { recursive: true, force: true }).catch(() => {});
+  await gitTry(["worktree", "prune"], ignoreGitError, APPS_REPO);
+  if (await gitTry(["rev-parse", "--verify", `refs/heads/${branch}`], ignoreGitError, APPS_REPO)) {
+    await git(["worktree", "add", dst, branch], APPS_REPO);
+  } else {
+    await git(["worktree", "add", "-b", branch, dst, await userAppsBaseBranch()], APPS_REPO);
+  }
+}
+
+/**
+ * Symlink the CODE worktree's own `data/user-apps` at the properly
+ * branch-coupled worktree mountUserApps just (re)mounted. Without this, a
+ * developer sub-agent — which only ever operates inside its worktree, and has
+ * no reason to know about BOS_DATA_CLONES or any running server's API — will
+ * naturally reach for the path that looks right, `data/user-apps/items/<id>/`,
+ * relative to its own working directory. That path is otherwise a plain,
+ * gitignored, disconnected directory: never read by any running server, never
+ * git-tracked, and wiped the moment the worktree is torn down (`git worktree
+ * remove`) — which is exactly how a marketplace app built this way is
+ * silently lost on promote/discard, even with user-apps itself now correctly
+ * branch-coupled.
+ *
+ * With the symlink in place, writing to that natural relative path IS writing
+ * into the same git worktree the running preview server, promoteUserApps, and
+ * discardUserApps all use — no special-cased path or API call required.
+ * Idempotent; safe to call on every mount.
+ */
+async function linkUserAppsIntoWorktree(wt, dataDir) {
+  const dst = path.join(wt, "data", "user-apps");
+  const target = path.join(dataDir, "user-apps");
+  const existing = await fs.lstat(dst).catch(() => null);
+  if (existing?.isSymbolicLink() && (await fs.readlink(dst).catch(() => null)) === target) return;
+  if (existing) await fs.rm(dst, { recursive: true, force: true });
+  await fs.mkdir(path.dirname(dst), { recursive: true });
+  await fs.symlink(target, dst, "dir");
+}
+
+// Commit any pending app-content edits in the mounted worktree (mirrors
+// commitSpecStores). installApp() already commits after every write, so this
+// is a safety net for anything that bypassed that, not the primary path.
+async function commitUserApps(dataDir, branch) {
+  const dst = path.join(dataDir, "user-apps");
+  if (!(await fs.access(path.join(dst, ".git")).then(() => true).catch(() => false))) return;
+  await gitTry(["add", "-A"], ignoreGitError, dst);
+  // Skip the commit attempt entirely when there's nothing staged — installApp()
+  // already commits after every write, so by promote time this is usually
+  // already clean. See commitSpecStores for why an unconditional commit here
+  // would otherwise show up as a spurious warning on nearly every promote.
+  const dirty = await gitTry(["status", "--porcelain"], ignoreGitError, dst);
+  if (!dirty) return;
+  await gitTry([...GIT_IDENTITY, "commit", "-m", `app content candidate (${branch})`], ignoreGitError, dst);
+}
+
+// Pre-check: can `branch` merge cleanly into user-apps' true base? Mirrors
+// specStoreConflicts — run BEFORE the code promote's point of no return, so an
+// app-content conflict blocks the whole promote rather than stranding it.
+async function userAppsConflicts(branch) {
+  if (!(await gitTry(["rev-parse", "--verify", `refs/heads/${branch}`], ignoreGitError, APPS_REPO))) return null;
+  const base = await userAppsBaseBranch();
+  const mb = await gitTry(["merge-base", base, branch], ignoreGitError, APPS_REPO);
+  if (!mb) return null;
+  try {
+    await exec("git", ["merge-tree", "--write-tree", `--merge-base=${mb}`, base, branch], { cwd: APPS_REPO, maxBuffer: 8 * 1024 * 1024 });
+  } catch (e) {
+    const out = `${String(e.stdout || "")}\n${String(e.stderr || "")}`.trim();
+    return `user-apps: branch ${branch} conflicts with ${base}:\n${out || "(merge conflicts)"}`;
+  }
+  return null;
+}
+
+/**
+ * Merge `branch` into user-apps' true base, then drop the worktree + branch.
+ * Called right after the code promote succeeds, BEFORE the preview's data
+ * clone is discarded.
+ *
+ * APPS_REPO's primary checkout (what BASE actually serves user-apps/ from) is
+ * USUALLY on its default branch, in which case merging directly there is safe
+ * (same as promoteSpecStores). But it can be transiently on
+ * APP_CANDIDATE_BRANCH (an unrelated bare-BASE draft in progress) — checking
+ * out master there to merge would flip branches on the exact directory BASE is
+ * live-serving from mid-request. So when that's the case, merge via plumbing
+ * instead (merge-tree + commit-tree + update-ref): the ref advances, but the
+ * working directory is never touched. BASE keeps showing the app-candidate
+ * draft until it resolves; appPromote/appDiscard's own later checkout of the
+ * base branch then picks up the already-advanced tip transparently.
+ */
+async function promoteUserApps(branch, dataDir) {
+  if (!(await gitTry(["rev-parse", "--verify", `refs/heads/${branch}`], ignoreGitError, APPS_REPO))) return;
+  await removeStoreWorktree(APPS_REPO, path.join(dataDir, "user-apps"));
+
+  const cur = await gitTry(["symbolic-ref", "--short", "HEAD"], ignoreGitError, APPS_REPO);
+  try {
+    if (cur && cur !== APP_CANDIDATE_BRANCH) {
+      // Primary checkout is genuinely on its default branch — safe to merge in place.
+      await git([...GIT_IDENTITY, "merge", "--no-edit", branch], APPS_REPO);
+      slog("info", "promote", `user-apps: merged ${branch} onto ${cur}`, { branch });
+    } else {
+      // Primary checkout is busy (app-candidate, or detached) — merge via
+      // plumbing so we never touch its working tree.
+      const base = appCandidate?.base || "master";
+      const baseTip = await git(["rev-parse", base], APPS_REPO);
+      const branchTip = await git(["rev-parse", branch], APPS_REPO);
+      const mb = await git(["merge-base", base, branch], APPS_REPO);
+      const { stdout } = await exec("git", ["merge-tree", "--write-tree", `--merge-base=${mb}`, baseTip, branchTip], { cwd: APPS_REPO, maxBuffer: 8 * 1024 * 1024 });
+      const treeSha = stdout.trim().split("\n")[0];
+      const mergeCommit = await git([...GIT_IDENTITY, "commit-tree", treeSha, "-p", baseTip, "-p", branchTip, "-m", `app content: merge ${branch}`], APPS_REPO);
+      await git(["update-ref", `refs/heads/${base}`, mergeCommit], APPS_REPO);
+      slog("info", "promote", `user-apps: merged ${branch} into ${base} via plumbing (primary checkout busy on ${cur || "(detached)"})`, { branch });
+    }
+    await gitTry(["branch", "-D", branch], ignoreGitError, APPS_REPO);
+  } catch (e) {
+    await gitTry(["merge", "--abort"], ignoreGitError, APPS_REPO);
+    slog("error", "promote", `user-apps: merge of ${branch} FAILED after code promote — merge manually in ${APPS_REPO}: ${e?.message || e}`, { branch });
+  }
+}
+
+// Drop the app-content branch + worktree registration (Discard). Committed
+// canonical history is untouched; uncommitted worktree edits die with the
+// worktree, same as code.
+async function discardUserApps(branch, dataDir) {
+  if (dataDir) await removeStoreWorktree(APPS_REPO, path.join(dataDir, "user-apps"));
+  else await gitTry(["worktree", "prune"], ignoreGitError, APPS_REPO);
+  await gitTry(["branch", "-D", branch], ignoreGitError, APPS_REPO);
+}
+
 // Create/replace the BASE worktree: detached at `commit` so it never conflicts with
 // REPO's own checkout of baseBranch. Fixed location (base is a singleton).
 async function addBaseWorktree(commit) {
@@ -502,6 +674,126 @@ async function addWorktreeForBranch(branch) {
   return wt;
 }
 
+// ------------------------------------------------------------ process supervision
+// Backoff schedule for restarting a base server that died on its own. Its length
+// is also the give-up threshold: after this many CONSECUTIVE failed restarts the
+// Supervisor stops trying and leaves base "failed", so /__supervisor/status and
+// the bastion's health probe report the truth rather than an endless quiet loop.
+const BASE_RESTART_BACKOFF_MS = [1_000, 5_000, 15_000, 30_000, 60_000];
+const BASE_RESTART_MAX = BASE_RESTART_BACKOFF_MS.length;
+
+/** Base-server supervision counters, exposed via /__supervisor/status. */
+const baseSupervision = {
+  restarts: 0,
+  consecutiveFailures: 0,
+  /** @type {{code:number|null,signal:string|null,at:number,expected:boolean,oomSuspected:boolean}|null} */
+  lastExit: null,
+  /** @type {number|null} */ lastRestartAt: null,
+  givenUp: false,
+};
+let baseRestarting = false;
+
+const napMs = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** True when this exit was caused by us (Stop / promote swap / shutdown). Single-shot. */
+function consumeExpectedExit(v) {
+  const expected = v.expectingExit === true;
+  v.expectingExit = false;
+  return expected;
+}
+
+function describeExit(code, signal) {
+  if (signal) return `signal ${signal}`;
+  return `code ${code ?? "null"}`;
+}
+
+/**
+ * Log a child server's exit with the SIGNAL included, not just the code.
+ *
+ * Why the signal matters: when the kernel OOM-kills `next dev`'s next-server
+ * child, the parent `next dev` process exits with code 0 — so logging only the
+ * code reports a clean shutdown for what was actually an out-of-memory kill.
+ * That masked a real production OOM for 10 hours. A SIGKILL, or a code-0 exit
+ * from a server that was healthy and serving, both get flagged here.
+ */
+function recordExit(v, code, signal, expected) {
+  const oomSuspected = signal === "SIGKILL" || (!expected && code === 0 && v.state === "ready");
+  const label = v === base ? "base" : `version "${v.role}"`;
+  const detail = describeExit(code, signal);
+  const suffix = oomSuspected
+    ? " — SIGKILL or a clean exit from a serving process usually means the kernel OOM killer; check `dmesg` and the cgroup's memory.events oom_kill counter"
+    : "";
+  if (v === base) {
+    baseSupervision.lastExit = { code: code ?? null, signal: signal ?? null, at: Date.now(), expected, oomSuspected };
+  }
+  slog(expected ? "info" : "error", "process", `${label} server exited (${detail})${expected ? ", as requested" : suffix}`, {
+    branch: v.branch,
+    versionLabel: v === base ? "base" : v.role,
+    data: { code: code ?? null, signal: signal ?? null, expected, oomSuspected },
+  });
+}
+
+/**
+ * Bring base back after it died on its own.
+ *
+ * The Supervisor is PID 1 in the container, so when the base server dies the
+ * container stays "up" while BOS is unreachable — nothing outside notices. This
+ * closes that gap. It is NOT a substitute for fixing why base died: every
+ * restart is logged at error level and counted in baseSupervision, which the
+ * bastion's System Monitor surfaces.
+ *
+ * A reused external base (BOS_ACTIVE_REUSE_PORT) is the user's own process and
+ * is left alone.
+ */
+async function restartBase(reason) {
+  if (shuttingDown || baseRestarting || baseSupervision.givenUp) return;
+  if (!base) return;
+  if (base.reused) {
+    slog("error", "process", `base (reused, external) stopped responding: ${reason} — the Supervisor cannot restart a server it does not own`, { versionLabel: "base" });
+    return;
+  }
+
+  baseRestarting = true;
+  try {
+    while (!shuttingDown) {
+      if (baseSupervision.consecutiveFailures >= BASE_RESTART_MAX) {
+        baseSupervision.givenUp = true;
+        base.state = "failed";
+        base.buildError = `base server keeps dying (${reason}); gave up after ${baseSupervision.consecutiveFailures} restart attempts`;
+        slog("error", "process", base.buildError, { versionLabel: "base", data: { restarts: baseSupervision.restarts } });
+        return;
+      }
+
+      const attempt = baseSupervision.consecutiveFailures;
+      await napMs(BASE_RESTART_BACKOFF_MS[attempt]);
+      if (shuttingDown) return;
+
+      baseSupervision.restarts += 1;
+      baseSupervision.consecutiveFailures += 1;
+      baseSupervision.lastRestartAt = Date.now();
+      slog("error", "process", `base server died (${reason}) — restarting (attempt ${attempt + 1}/${BASE_RESTART_MAX})`, {
+        versionLabel: "base",
+        data: { attempt: attempt + 1, totalRestarts: baseSupervision.restarts },
+      });
+
+      base.state = "building";
+      if (base.dev) startBaseDevProc(base);
+      else startProc(base);
+
+      if (await waitHealthy(base.port, base)) {
+        base.state = "ready";
+        baseSupervision.consecutiveFailures = 0;
+        log(`base server restarted and healthy on :${base.port} (${baseSupervision.restarts} restart(s) total)`);
+        return;
+      }
+      // Didn't come up — reap whatever is left and fall through to the next backoff step.
+      await stopProc(base);
+    }
+  } finally {
+    baseRestarting = false;
+  }
+}
+
 function startProc(v) {
   v.proc = spawn("npx", ["next", "start", "-p", String(v.port)], {
     cwd: v.worktree,
@@ -518,6 +810,17 @@ function startProc(v) {
       BOS_CANONICAL_DATA: CANONICAL_DATA,
       BOS_VERSION_LABEL: v.role,
       BOS_BASE_BRANCH: baseBranch,
+      // EVERY server the Supervisor spawns must be supervisor-aware, exactly as
+      // startBaseDevProc's is. This was missing here, so anything served through
+      // this path silently lost the whole Supervisor integration, which keys off
+      // BOS_SUPERVISOR_URL: the service-WebSocket proxy path (`wsPath` in
+      // /api/services/<id>/config — without it the Terminal app falls back to a
+      // direct host:port the browser cannot reach, e.g. wss://host:3001),
+      // supervisor-backed git (src/lib/system/git.ts), and log shipping to the
+      // central store (src/lib/logging/server-logger.ts, /api/logs).
+      // It went unnoticed while base ran in dev mode, because only base was in
+      // production-mode's blind spot; switching base to `next start` exposed it.
+      BOS_SUPERVISOR_URL: `http://127.0.0.1:${PUBLIC_PORT}`,
       BOS_SPECS_ROOT: v.role === "preview" ? path.join(v.worktree, "specs") : SPECS_ROOT,
       ...(v.role === "preview" ? { BOS_SPECS_SEED: "0" } : {}),
     },
@@ -529,15 +832,17 @@ function startProc(v) {
     // Without this, killing npx orphans the next process which keeps the port.
     detached: true,
   });
-  v.proc.on("exit", (code) => {
-    slog(code === 0 || code === null ? "info" : "warn", "process", `version "${v.role}" (${v.branch}) process exited (${code})`, { branch: v.branch, versionLabel: v.role, data: { code } });
+  v.proc.on("exit", (code, signal) => {
+    const expected = consumeExpectedExit(v);
+    recordExit(v, code, signal, expected);
     // An unexpected death of a running version must not keep routing traffic to a
     // dead port — mark it so pinnedVersion falls back to base.
     if (v.state === "ready") v.state = "stopped";
     else if (v.state === "building") {
       v.state = "failed";
-      v.buildError = `preview process exited before becoming healthy (code ${code ?? "null"})`;
+      v.buildError = `preview process exited before becoming healthy (${describeExit(code, signal)})`;
     }
+    if (!expected && v === base) void restartBase(describeExit(code, signal));
   });
 }
 
@@ -548,6 +853,9 @@ function stopProc(v) {
   return new Promise((resolve) => {
     const p = v?.proc;
     if (!p || p.killed || p.exitCode !== null || p.signalCode) { if (v) v.proc = null; return resolve(); }
+    // Tell the exit handler this death is deliberate, so base supervision does
+    // not treat a Stop / promote swap / shutdown as a crash and respawn it.
+    v.expectingExit = true;
     const pid = p.pid;
     p.once("exit", () => { v.proc = null; resolve(); });
     // Kill the entire process group (negative PID) so child processes spawned by
@@ -700,13 +1008,40 @@ async function regenApps() {
   );
 }
 
+// Memory ceiling for the DEV base server (MB of V8 old space); 0 disables.
+//
+// `next dev` retains roughly 0.8 MB per request with no plateau (measured: 2.2 GB
+// at boot, 7.1 GB after 4 minutes of light load, versus 130 MB / 249 MB
+// steady-state for `next start`). Capping V8's old space makes Next's own dev
+// memory guard fire — "⚠ Server is approaching the used memory threshold,
+// restarting…" — so it recycles gracefully instead of growing until the kernel
+// OOM-kills it.
+//
+// Two caveats, both measured:
+//  - This bounds the HEAP, not total RSS. About half the footprint lives outside
+//    V8's old space (other V8 spaces, code space, native/Turbopack allocations),
+//    so RSS lands at roughly 2x the cap. Size it at ~half the memory you are
+//    willing to give the dev server.
+//  - It is a BOUND, not a fix. What retains the memory in dev is still
+//    unexplained; production mode does not exhibit it at all.
+const DEV_MAX_OLD_SPACE_MB = Number(process.env.BOS_DEV_MAX_OLD_SPACE_MB ?? 2048);
+
 function startBaseDevProc(v) {
+  // Append rather than replace, so an operator-supplied NODE_OPTIONS survives.
+  const nodeOptions = [
+    process.env.NODE_OPTIONS,
+    DEV_MAX_OLD_SPACE_MB > 0 ? `--max-old-space-size=${DEV_MAX_OLD_SPACE_MB}` : "",
+  ].filter(Boolean).join(" ");
+  if (DEV_MAX_OLD_SPACE_MB > 0) {
+    log(`base dev server memory ceiling: --max-old-space-size=${DEV_MAX_OLD_SPACE_MB} (expect RSS ~${DEV_MAX_OLD_SPACE_MB * 2} MB; Next recycles the server at the threshold)`);
+  }
   // Run via `npm run dev` (not `npx next dev`) so the `predev` hook regenerates the
   // built-in app registry on every start/restart. Pass the port after `--`.
   v.proc = spawn("npm", ["run", "dev", "--", "-p", String(v.port)], {
     cwd: REPO,
     env: {
       ...process.env,
+      ...(nodeOptions ? { NODE_OPTIONS: nodeOptions } : {}),
       PORT: String(v.port),
       BOS_DATA_DIR: CANONICAL_DATA,
       BOS_CANONICAL_DATA: CANONICAL_DATA,
@@ -720,9 +1055,11 @@ function startBaseDevProc(v) {
     stdio: ["inherit", "inherit", process.stdout],
     detached: true,
   });
-  v.proc.on("exit", (code) => {
-    slog(code === 0 || code === null ? "info" : "warn", "process", `base dev server exited (${code})`, { branch: v.branch, versionLabel: "base", data: { code } });
+  v.proc.on("exit", (code, signal) => {
+    const expected = consumeExpectedExit(v);
+    recordExit(v, code, signal, expected);
     if (v.state === "ready") v.state = "stopped";
+    if (!expected) void restartBase(describeExit(code, signal));
   });
 }
 
@@ -838,6 +1175,8 @@ async function provisionPreview(branch) {
   const wt = await addWorktreeForBranch(branch);
   const clone = clonePath(branch);
   await provisionClone(clone);
+  await mountUserApps(clone, branch);
+  await linkUserAppsIntoWorktree(wt, clone);
   const port = await allocPreviewPort();
   const p = { role: "preview", branch, worktree: wt, dataDir: clone, port, state: "not-built", proc: null, commit: await gitTry(["rev-parse", "HEAD"], ignoreGitError, wt) };
   previews.set(branch, p);
@@ -864,12 +1203,14 @@ async function discardPreview(branch) {
   previews.delete(branch);
   if (!p) {
     await discardSpecStores(branch, null);
+    await discardUserApps(branch, null);
     await gitTry(["branch", "-D", branch], ignoreGitError);
     log(`discarded preview ${branch} (branch deleted)`);
     return;
   }
   await stopProc(p);
   await discardSpecStores(branch, p.worktree);
+  await discardUserApps(branch, p.dataDir);
   await gitTry(["worktree", "remove", "--force", p.worktree], ignoreGitError);
   await fs.rm(p.dataDir, { recursive: true, force: true }).catch(() => {});
   await gitTry(["branch", "-D", p.branch], ignoreGitError);
@@ -940,6 +1281,15 @@ async function promote(branch) {
   await commitSpecStores(cand.worktree, cand.branch);
   const specConflicts = await specStoreConflicts(cand.branch);
   if (specConflicts) throw new Error(`promote blocked — ${specConflicts}`);
+
+  // Same for app-content: whatever was installed under user-apps/ during this
+  // preview (its own branch-coupled worktree at cand.dataDir/user-apps) must
+  // merge cleanly before anything irreversible happens — this is the fix for
+  // the data-loss bug where a marketplace app built during a preview vanished
+  // on promote.
+  await commitUserApps(cand.dataDir, cand.branch);
+  const appConflicts = await userAppsConflicts(cand.branch);
+  if (appConflicts) throw new Error(`promote blocked — ${appConflicts}`);
 
   // Verify the shared reconciliation pipeline's outcome and clear/leave the
   // preview's interim "escalated" indicator accordingly. Throws (leaving
@@ -1049,6 +1399,9 @@ async function promote(branch) {
     const configChanged = /(^|\n)(next\.config\.|tsconfig|\.env)/.test(changed);
     // Land the coupled spec branches now that the code promote is committed.
     await promoteSpecStores(cand.branch, cand.worktree);
+    // Land the coupled app-content branch too, BEFORE the data clone (which is
+    // what cand.dataDir/user-apps' worktree physically lives inside) is discarded.
+    await promoteUserApps(cand.branch, cand.dataDir);
     // Reap the promoted preview before touching base (frees resources / the branch).
     await stopProc(cand);
     await gitTry(["worktree", "remove", "--force", cand.worktree], ignoreGitError);
@@ -1117,6 +1470,12 @@ async function promote(branch) {
   // Land the coupled spec branches; this also unregisters the store worktrees
   // inside the adopted base worktree (the new base reads the canonical stores).
   await promoteSpecStores(cand.branch, swapped.worktree);
+  // Land the coupled app-content branch too, BEFORE cand.dataDir (which is
+  // what its user-apps worktree physically lives inside) is discarded below.
+  // The adopted base now reads user-apps/ straight from CANONICAL_DATA/user-apps
+  // (swapped.dataDir === CANONICAL_DATA === APPS_REPO's own primary checkout),
+  // which is exactly what this merges into.
+  await promoteUserApps(cand.branch, cand.dataDir);
   await gitTry(["checkout", "--detach"], ignoreGitError, swapped.worktree);
   base.branch = baseBranch;
   if (oldBase?.worktree && oldBase.worktree !== swapped.worktree) await gitTry(["worktree", "remove", "--force", oldBase.worktree], ignoreGitError);
@@ -1255,8 +1614,90 @@ async function appDiscard() {
   return { discarded: true };
 }
 
+// Detects an auth-type git failure so pushWithRecovery doesn't waste time
+// unshallowing/rebasing when the real problem is credentials — mirrors
+// isAuthFailure in src/lib/gitops/git-ops.ts (the Settings → Git Remotes push
+// path). Duplicated here rather than imported: the Supervisor is a
+// standalone, dependency-light script (Node built-ins only) and does not
+// import from src/lib.
+function isGitAuthFailure(message) {
+  return (
+    /authentication/i.test(message) ||
+    /permission denied/i.test(message) ||
+    /fatal: .*(?:token|credential)/i.test(message) ||
+    /401/.test(message) ||
+    /403/.test(message) ||
+    /could not read (username|password)/i.test(message) ||
+    /terminal prompts disabled/i.test(message)
+  );
+}
+
+// Push `branch` to `remote`, recovering from a non-fast-forward rejection
+// caused by BrowserOS's own checkout being shallow — Dokploy re-clones
+// `code/` with `--depth 1` on every redeploy (docs/dev/deployment.md), which
+// leaves git unable to prove the local branch descends from the remote's even
+// when nothing really conflicts. Mirrors the recovery the per-remote "Push"
+// button performs (src/app/api/git-remotes/route.ts): unshallow, fetch, then
+// retry once a genuine (non-diverged) fast-forward is confirmed possible.
+// Deliberately does NOT rebase or force-push on a real divergence — this path
+// also runs unattended (auto-push-on-promote), so it throws a clear,
+// actionable error instead of guessing; the per-remote "Push" button is where
+// a human resolves that (rebase-then-retry, or an explicit force-push).
+async function pushWithRecovery(repoPath, remote, branch, extraArgs = []) {
+  try {
+    await git(["push", remote, branch, ...extraArgs], repoPath);
+    return;
+  } catch (e) {
+    const msg = e?.message || String(e);
+    if (isGitAuthFailure(msg)) throw e;
+
+    const shallow = (await gitTry(["rev-parse", "--is-shallow-repository"], ignoreGitError, repoPath)) === "true";
+    if (shallow) await gitTry(["fetch", "--unshallow", remote], ignoreGitError, repoPath);
+    await gitTry(["fetch", remote, branch], ignoreGitError, repoPath);
+
+    const mergeBase = await gitTry(["merge-base", "HEAD", `${remote}/${branch}`], ignoreGitError, repoPath);
+    if (!mergeBase) {
+      throw new Error(`push to ${remote}/${branch} rejected and no shared history was found even after unshallowing — refusing to guess; resolve manually via Settings → Versions → Git Remotes. Original error: ${msg}`);
+    }
+    const canFastForward = (await gitTry(["merge-base", "--is-ancestor", `${remote}/${branch}`, "HEAD"], ignoreGitError, repoPath)) !== null;
+    if (!canFastForward) {
+      throw new Error(`push to ${remote}/${branch} rejected: local and the remote have genuinely diverged (not just a shallow-history artifact) — resolve via Settings → Versions → Git Remotes, which can rebase or force-push. Original error: ${msg}`);
+    }
+    await git(["push", remote, branch, ...extraArgs], repoPath);
+  }
+}
+
+// Push base's `branch` to `origin` via base's own /api/git-remotes push
+// action, rather than a bare `git push` here. That route resolves OAuth/token
+// credentials through BOS's git-credential-helper
+// (src/lib/gitops/git-credential-helper.ts) — credentials the Supervisor (a
+// separate, unbundled Node process with no access to src/lib/... or the
+// SecretsStore, the same limitation a marketplace service's worker thread
+// has) has no way to supply itself. A bare `git push origin ...` run from
+// here carries no credentials at all and fails immediately with "could not
+// read Username for '<host>'" the moment origin needs auth — i.e. always,
+// for any HTTPS remote without a cached system-level credential. This
+// happened for real via the "Push to remote" button in Settings → Versions.
+async function pushOriginViaBaseApi(branch) {
+  if (!base || base.state !== "ready") throw new Error("Base is not ready — cannot push to origin yet");
+  const res = await fetch(`http://127.0.0.1:${base.port}/api/git-remotes`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "push", name: "origin", branch }),
+  });
+  const respBody = await res.json().catch(() => ({}));
+  const errMsg = typeof respBody?.error === "string" ? respBody.error : respBody?.error?.message;
+  if (!res.ok || errMsg) throw new Error(errMsg || `push to origin/${branch} failed with HTTP ${res.status}`);
+  if (respBody.rebaseConflict) {
+    throw new Error(respBody.message || `push to origin/${branch}: local and remote have diverged and automatic rebase conflicted — resolve via Settings → Versions → Git Remotes`);
+  }
+  if (respBody.unrelatedHistory) {
+    throw new Error(respBody.message || `push to origin/${branch}: no shared history with the remote`);
+  }
+}
+
 async function pushNow() {
-  await git(["push", REMOTE, baseBranch, "--follow-tags"], REPO);
+  await pushOriginViaBaseApi(baseBranch);
   return { pushed: baseBranch };
 }
 
@@ -1277,7 +1718,7 @@ async function runAutoPush(repoPath, branch) {
   const results = [];
   for (const remote of remotes) {
     try {
-      await git(["push", remote.name, branch, "--follow-tags"], repoPath);
+      await pushWithRecovery(repoPath, remote.name, branch, ["--follow-tags"]);
       results.push({ remoteName: remote.name, status: "success" });
       log(`auto-push to ${remote.name}: success`);
     } catch (e) {
@@ -1299,7 +1740,7 @@ async function pushPromotedBase(repoPath, branch) {
   const results = [];
   if (PUSH_MODE === "auto-on-promote") {
     try {
-      await git(["push", REMOTE, branch, "--follow-tags"], repoPath);
+      await pushOriginViaBaseApi(branch);
       results.push({ remoteName: REMOTE, status: "success" });
       log(`auto-push to ${REMOTE}: success`);
     } catch (e) {
@@ -1379,9 +1820,9 @@ function sendJson(res, obj, status = 200, headers = {}) {
   res.end(body);
 }
 
-function proxyTo(port, req, res) {
+function proxyTo(port, req, res, overridePath) {
   const up = http.request(
-    { hostname: "127.0.0.1", port, path: req.url, method: req.method, headers: req.headers },
+    { hostname: "127.0.0.1", port, path: overridePath ?? req.url, method: req.method, headers: req.headers },
     (upRes) => { res.writeHead(upRes.statusCode || 502, upRes.headers); upRes.pipe(res); },
   );
   up.on("error", (e) => {
@@ -1419,38 +1860,96 @@ function forwardUpgrade(port, req, clientSocket, head) {
     upSocket.on("close", () => clientSocket.destroy());
     clientSocket.on("close", () => upSocket.destroy());
   });
-  up.on("error", () => clientSocket.destroy());
+  up.on("error", (e) => {
+    log(`ws upgrade to 127.0.0.1:${port}${req.url} failed: ${e.code || e.message}`);
+    clientSocket.destroy();
+  });
   up.end();
 }
 
-// Proxy a service's own WebSocket (e.g. Terminal's shell socket) through the
-// Supervisor's already-exposed, already-TLS-terminated PUBLIC_PORT —
+// Proxy a service's own traffic — WebSocket upgrade or plain HTTP — through
+// the Supervisor's already-exposed, already-TLS-terminated PUBLIC_PORT.
 // user-specs/002-service-daemons services bind their own internal port,
 // which isn't reachable directly once BOS is deployed behind a reverse proxy
 // (only PUBLIC_PORT is exposed/TLS-terminated there). Resolves the actual
-// bound port from the pinned version's own dataDir()/config/<id>/runtime.json
+// bound port from the pinned version's own dataDir()/system/config/<id>/runtime.json
 // (written by ServiceManager.ts after the service's `bound` IPC message) —
 // same per-version routing as the HMR case, so a preview's own services are
-// reached, not always base's.
-async function proxyServiceUpgrade(serviceId, req, clientSocket, head) {
+// reached, not always base's. See docs/dev/apps/services.md §11 for the full
+// picture (both the WS and plain-HTTP cases, and the client-side pattern).
+//
+// The "system" segment is load-bearing: a service's live config is BOS-owned
+// state under <dataDir>/system/config/<id>/, NOT <dataDir>/config/<id>/ (which
+// holds unrelated top-level JSON: plugins.json, marketplaces.json, …). Reading
+// the wrong one throws ENOENT, which the WS path surfaces only as a socket
+// that never connects — see src/lib/marketplace/migrate-installed-state.ts
+// for the layout.
+async function resolveServicePort(req, serviceId, kind) {
   const v = pinnedVersion(req);
-  if (!v) return clientSocket.destroy();
+  if (!v) {
+    log(`service ${kind} ${serviceId}: no version resolved for this request`);
+    return null;
+  }
+  const runtimePath = path.join(v.dataDir, "system", "config", serviceId, "runtime.json");
   let port;
   try {
-    const raw = await fs.readFile(path.join(v.dataDir, "config", serviceId, "runtime.json"), "utf8");
+    const raw = await fs.readFile(runtimePath, "utf8");
     port = JSON.parse(raw).port;
-  } catch {
-    return clientSocket.destroy();
+  } catch (e) {
+    log(`service ${kind} ${serviceId}: cannot read ${runtimePath} (${e.code || e.message}); is the service running?`);
+    return null;
   }
-  if (typeof port !== "number") return clientSocket.destroy();
+  if (typeof port !== "number") {
+    log(`service ${kind} ${serviceId}: ${runtimePath} has no numeric port (got ${JSON.stringify(port)})`);
+    return null;
+  }
+  return port;
+}
+
+// WS case: only reachable mid-upgrade, where there is no response object to
+// carry an error code — a silent destroy() here is indistinguishable from a
+// hung network, so resolveServicePort's log is the only diagnostic.
+async function proxyServiceUpgrade(serviceId, req, clientSocket, head) {
+  const port = await resolveServicePort(req, serviceId, "ws");
+  if (port == null) return clientSocket.destroy();
   forwardUpgrade(port, req, clientSocket, head);
 }
 
+// Plain-HTTP case: the non-upgrade counterpart, and what makes a service's
+// own protocol reachable through the Supervisor even when that protocol isn't
+// a WebSocket and isn't expressible as a Next.js route handler at all (e.g.
+// WebDAV's PROPFIND/MKCOL/COPY/MOVE — Next.js's App Router only dispatches a
+// fixed, standard set of HTTP methods). `subPath` is the request path with the
+// `/__supervisor/services/<id>` prefix already stripped (plus the original
+// query string), so the service sees exactly the path it would see if reached
+// directly — no BOS-specific rewriting on its side.
+async function proxyServiceHttp(serviceId, subPath, req, res) {
+  const port = await resolveServicePort(req, serviceId, "http");
+  if (port == null) {
+    res.writeHead(502, { "Content-Type": "text/plain" });
+    res.end(`Service "${serviceId}" is not running or not installed.`);
+    return;
+  }
+  proxyTo(port, req, res, subPath);
+}
+
+// "Occupied" means SOMETHING is listening on this port — not "something
+// answered our HTTP GET." A raw TCP/WebSocket-only listener (e.g. a service's
+// own daemon that never speaks plain HTTP, like Terminal's WebSocketServer)
+// accepts the TCP connection but never sends a valid HTTP response, so the
+// GET request just times out — which used to be misread as "nothing here,
+// free" and let allocPreviewPort() hand that same port to a new preview
+// build, which then failed with a real EADDRINUSE. Track the TCP-level
+// connect event separately from the HTTP-level response: a successful TCP
+// connect, even with no/garbled HTTP reply afterward, is occupied; only an
+// outright connection refusal (nothing listening at all) is free.
 function probeOnce(port) {
   return new Promise((resolve) => {
+    let connected = false;
     const r = http.get({ hostname: "127.0.0.1", port, path: "/", timeout: 3000 }, (res) => { res.resume(); resolve(true); });
-    r.on("error", () => resolve(false));
-    r.on("timeout", () => { r.destroy(); resolve(false); });
+    r.on("socket", (socket) => { socket.once("connect", () => { connected = true; }); });
+    r.on("error", () => resolve(connected));
+    r.on("timeout", () => { r.destroy(); resolve(connected); });
   });
 }
 
@@ -1475,6 +1974,44 @@ async function handleControl(req, res, sub) {
       limit: q.get("limit") ? Number(q.get("limit")) : undefined,
     });
     return sendJson(res, { ok: true, records });
+  }
+  // --- real health, for the bastion's System Monitor -------------------------
+  // "Container is running" says nothing about whether BOS is serving: the
+  // Supervisor is PID 1, so it stays up when the base server dies. This reports
+  // the truth — a live PROBE of base plus the supervision counters — so the
+  // bastion can distinguish "up" from "actually working".
+  if (req.method === "GET" && sub === "health") {
+    const proc = base?.proc ?? null;
+    const procAlive = !!proc && proc.exitCode === null && !proc.signalCode;
+    const serving = base ? await probeOnce(base.port) : false;
+    const mem = process.memoryUsage();
+    return sendJson(res, {
+      ok: serving,
+      serving,
+      base: base
+        ? {
+            state: base.state,
+            port: base.port,
+            branch: base.branch ?? null,
+            commit: base.commit ?? null,
+            dev: !!base.dev,
+            reused: !!base.reused,
+            owned: !base.reused,
+            pid: proc?.pid ?? null,
+            procAlive,
+            buildError: base.buildError || null,
+          }
+        : null,
+      supervision: { ...baseSupervision },
+      previews: [...previews.values()].map((p) => ({ branch: p.branch, port: p.port, state: p.state, procAlive: !!p.proc && p.proc.exitCode === null })),
+      supervisor: {
+        pid: process.pid,
+        uptimeSeconds: Math.round(process.uptime()),
+        rssBytes: mem.rss,
+        heapUsedBytes: mem.heapUsed,
+      },
+      baseBranch,
+    });
   }
   if (req.method === "GET" && (sub === "" || sub === "state" || sub === "branches" || sub === "preview-changes" || sub === "next-changes")) {
     if (sub === "") { res.writeHead(200, { "Content-Type": "text/html" }); res.end(controlPage()); return; }
@@ -1636,6 +2173,15 @@ async function main() {
 
   const server = http.createServer((req, res) => {
     const url = new URL(req.url, "http://localhost");
+    // A service's own plain-HTTP traffic, at /__supervisor/services/<id>(/...)
+    // — see proxyServiceHttp. Checked before the generic /__supervisor/*
+    // control-route branch below, since this shares the same prefix.
+    const svcMatch = url.pathname.match(/^\/__supervisor\/services\/([a-zA-Z0-9._-]+)(\/.*)?$/);
+    if (svcMatch) {
+      const subPath = (svcMatch[2] || "/") + url.search;
+      void proxyServiceHttp(svcMatch[1], subPath, req, res);
+      return;
+    }
     if (url.pathname === "/__supervisor" || url.pathname.startsWith("/__supervisor/")) {
       const sub = url.pathname === "/__supervisor" ? "" : url.pathname.slice("/__supervisor/".length);
       void handleControl(req, res, sub);

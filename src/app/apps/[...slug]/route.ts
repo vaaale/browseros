@@ -3,6 +3,7 @@ import { promises as fs } from "fs";
 import path from "path";
 import * as esbuild from "esbuild";
 import { dataDir } from "@/os/data-dir";
+import { itemLinkPath } from "@/system/items/installed";
 import { mimeForPath } from "@/lib/mime";
 
 export const dynamic = "force-dynamic";
@@ -59,7 +60,8 @@ export async function GET(_req: Request, ctx: { params: Promise<{ slug: string[]
 
   // Built projects are served from <id>/dist (bundled output); plain static apps
   // from <id> directly. We never serve the project source for a built app.
-  const appBase = path.resolve(dataDir(), "system", "app", id);
+  // Installed state is one symlink per item (035): dataDir()/system/<id>/app/
+  const appBase = path.resolve(itemLinkPath(id), "app");
   const distRoot = path.join(appBase, "dist");
   const isBuilt = await fs
     .access(path.join(distRoot, "index.html"))

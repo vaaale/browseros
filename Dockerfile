@@ -27,7 +27,8 @@ RUN apt-get update && apt-get install -y \
     poppler-utils \
     libreoffice \
     openjdk-25-jre-headless \
-    fonts-dejavu fonts-liberation
+    fonts-dejavu fonts-liberation \
+    vim
 
 # node:trixie ships a "node" user/group at uid/gid 1000 by default. BOS itself
 # runs as a DIFFERENT account, "user" — created fresh by docker-entrypoint.sh
@@ -55,7 +56,8 @@ RUN pip install --no-cache-dir \
     "markitdown[all]" \
     Pillow \
     python-pptx \
-    python-docx
+    python-docx \
+    jq
 
 # pptxgenjs is a Node package (used by run_command skills for pptx generation).
 # Make it resolvable from /workspace scripts via NODE_PATH.
@@ -81,11 +83,22 @@ COPY . .
 # Install Claude Code and OpenCode CLIs globally
 RUN npm install -g --allow-scripts=@anthropic-ai/claude-code,opencode-ai
 RUN npm install -g @anthropic-ai/claude-code opencode-ai
+RUN npm install -g @googleworkspace/cli
 
 COPY docker-entrypoint.sh /docker-entrypoint.sh
 RUN chmod +x /docker-entrypoint.sh
 
 EXPOSE 8090
+
+# Report whether BOS is actually SERVING, not merely whether the container is up.
+# The Supervisor is PID 1, so it survives the death of the base Next.js server —
+# without this, a container with a dead base server still shows as "Up" and
+# nothing outside it notices (that hid a production outage for 10 hours).
+# /__supervisor/health probes base and returns {ok:false} when it isn't serving.
+# start-period is generous: a cold first start runs npm install AND a full
+# `next build` before base can answer.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=900s --retries=3 \
+  CMD node -e "require('http').get({host:'127.0.0.1',port:8090,path:'/__supervisor/health',timeout:8000},r=>{let b='';r.on('data',c=>b+=c);r.on('end',()=>{try{process.exit(JSON.parse(b).ok?0:1)}catch(e){process.exit(1)}})}).on('error',()=>process.exit(1)).on('timeout',function(){this.destroy();process.exit(1)})"
 
 # BOS_DATA_DIR is set by the bastion when spawning containers (/app/data).
 # The Supervisor listens on 8090.

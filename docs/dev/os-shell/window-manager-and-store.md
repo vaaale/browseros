@@ -16,14 +16,46 @@ Actions:
 
 | Action | Purpose |
 |---|---|
-| `launch(appId, params?) → id\|null` | Open a window. If the app is `singleton` and already open, focuses it (merging `params`). |
+| `launch(appId, params?, placement?) → id\|null` | Open a window. If the app is `singleton` and already open, focuses it (merging `params`). |
 | `close(id)` / `minimize(id)` / `focus(id)` | Window lifecycle. `focus` bumps `zIndex` and un‑minimizes. |
-| `move(id,x,y)` / `resize(id,bounds)` / `toggleMaximize(id)` | Geometry (clamped: min 280×180; below the top bar). |
+| `move(id,x,y)` / `resize(id,bounds,opts?)` / `toggleMaximize(id)` | Geometry (clamped: min 280×180; below the top bar). |
+| `togglePin(id)` | Always‑on‑top (see below). |
 | `setTitle(id,title)` | Rename a window (apps set their own titles, e.g. Files/Browser). |
 | `applySettings(patch)` | Update OS settings **in the store** (persist separately via `settingsClient`). |
 | `registerApp(app)` / `unregisterApp(id)` | Add/remove an app at runtime (live desktop/dock refresh; `unregisterApp` also closes its windows). |
 
 New window ids are `"<appId>-<base36 time>-<rand>"`; launch positions cascade.
+
+**Nothing is persisted.** `windows` starts empty on every load and no app is
+auto‑launched, so a reload leaves a bare desktop. Anything that should come back
+after a refresh has to be re‑opened deliberately by whatever owns it.
+
+### Sizing: the 80% rule and how to opt out
+
+By default a window opens at `max(manifest default, 80% of the viewport)`, centred
+with a cascade. That default is about how much room a *person* needs, so a manifest
+asking for `defaultWidth: 320` still gets 80% of the viewport — declaring a small
+size in the manifest does nothing.
+
+Pass `placement` to `launch()` for windows whose geometry is dictated by their
+**content** instead: any of `{ width, height, x, y }` is used verbatim and bypasses
+the rule. The presence window (the agent's face) uses this to open small in the
+upper‑left quadrant, then `resize(id, bounds, { exact: true })` to match the video
+stream's aspect ratio — `exact` skips the 280×180 minimum, which exists to stop a
+*user* dragging a window to nothing and would otherwise distort a small portrait
+surface.
+
+### Always‑on‑top
+
+`WindowInstance.alwaysOnTop`, toggled by `togglePin(id)` from a pin button on the
+**right** of the title bar (it occupies the spacer that balances the centred title,
+so nothing shifts). An icon rather than a fourth traffic light, because it is a mode
+that stays on rather than an action.
+
+The z‑band is applied at render: `zIndex + 1_000_000` for pinned windows. Deliberately
+not stored — `focus()` keeps handing out plain incrementing values and there is no
+stacking state to keep consistent, so focusing an unpinned window can never bury a
+pinned one.
 
 ---
 
@@ -55,11 +87,16 @@ interface AppManifest {
   defaultWidth: number; defaultHeight: number;
   order?: number;                                // desktop/dock sort key
   singleton?: boolean; builtin?: boolean;
+  hidden?: boolean;                              // no dock/desktop entry; opened programmatically
   kind?: "builtin" | "iframe";                   // how it renders
   url?: string;                                  // iframe apps: /apps/<id>
   source?: string;                               // installed apps: dir
 }
 ```
+
+`hidden` is for windows that are not places the user *goes*: `html-viewer`,
+`ui-preview`, and `presence` (the agent's face) are opened by other code, never
+from an icon.
 
 ---
 

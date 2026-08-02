@@ -11,7 +11,7 @@ import { ConversationPanel } from "@/components/apps/assistant/ConversationPanel
 import { AgentSelector, ConversationSelector, FeatureBranchSelector } from "@/components/apps/assistant/AgentSelector";
 import { SelfImproveIndicator } from "@/components/agent/SelfImproveIndicator";
 import { openConversation } from "@/lib/assistant/client/run-client";
-import { useChatState } from "@/lib/assistant/client/chat-store";
+import { useChatSelector } from "@/lib/assistant/client/chat-store";
 import { MessageListV2 } from "./MessageListV2";
 import { ChatInputV2 } from "./ChatInputV2";
 import { FrontendToolsV2 } from "./FrontendToolsV2";
@@ -47,7 +47,10 @@ export function AssistantChatV2(props: AssistantChatV2Props) {
   const resolvedAgentId = activeConv?.agentId ?? props.agentId ?? DEFAULT_AGENT_ID;
   const conv = useConversations(resolvedAgentId);
   const conversationId = conv.activeId ?? "";
-  const state = useChatState(conversationId);
+  // Selector-based — this component only needs `running` for the toolbar
+  // status indicator; a whole-object subscription would re-render this (and
+  // its subtree, absent memoization) on every streamed token.
+  const running = useChatSelector(conversationId, (s) => s.running);
 
   // Opening a conversation loads its (server-sanitized) history and re-attaches
   // to a still-running run — a reloaded tab is just a viewer catching up.
@@ -104,7 +107,7 @@ export function AssistantChatV2(props: AssistantChatV2Props) {
               {props.allGroups ? <AgentSelector agentId={currentAgentId} /> : <ConversationSelector agentId={resolvedAgentId} />}
               <FeatureBranchSelector agentId={props.allGroups ? currentAgentId : resolvedAgentId} />
               <span className="ml-auto flex items-center gap-1.5">
-                {state.running ? (
+                {running ? (
                   <>
                     <Loader2 size={12} className="animate-spin text-amber-300" />
                     <span className="text-amber-200">Working…</span>

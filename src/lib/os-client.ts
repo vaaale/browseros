@@ -53,8 +53,16 @@ export const fsClient = {
     ...fsClient,
     ...fsOps({ [CONVERSATION_HEADER]: conversationId }),
   }),
-  rawUrl: (path: string) => `/api/fs/raw?path=${encodeURIComponent(path)}`,
-  downloadUrl: (path: string) => `/api/fs/download?path=${encodeURIComponent(path)}`,
+  // `conversationId` is optional and travels as a query param, not a header —
+  // both routes are loaded via plain browser navigation (iframe src / anchor
+  // download), which cannot set custom headers the way scoped() above does
+  // for its fetch()-based ops. Without it, a path under a branch-coupled
+  // mount (/Specs, /Docs) that only exists on an active feature branch
+  // silently 404s even though it's genuinely reachable through file_read.
+  rawUrl: (path: string, conversationId?: string) =>
+    `/api/fs/raw?path=${encodeURIComponent(path)}${conversationId ? `&conversationId=${encodeURIComponent(conversationId)}` : ""}`,
+  downloadUrl: (path: string, conversationId?: string) =>
+    `/api/fs/download?path=${encodeURIComponent(path)}${conversationId ? `&conversationId=${encodeURIComponent(conversationId)}` : ""}`,
   /** Trigger a browser download of a file or a zipped folder without navigating away. */
   downloadEntry: (path: string) => {
     const a = document.createElement("a");

@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Brain, ChevronDown, ChevronRight, Pencil, RotateCcw, ThumbsDown, ThumbsUp, Trash2 } from "lucide-react";
 import type { ChatMessage } from "@/lib/assistant/messages";
 import { lastUserIndex, buildRetryPrompt } from "@/lib/assistant/messages";
-import { useChatState, setEditing, type ChatState, type ToolCallView } from "@/lib/assistant/client/chat-store";
+import { useChatState, setEditing, type ToolCallView } from "@/lib/assistant/client/chat-store";
 import { sendFeedback, sendMessage, deleteLastTurn } from "@/lib/assistant/client/run-client";
 import { registerCard, toggleCard, useCardOpen, useCardScope } from "@/lib/agent/card-collapse";
 import { ChatMarkdown } from "./ChatMarkdown";
@@ -74,16 +74,25 @@ function cardsFor(message: ChatMessage, resultsByCall: Map<string, string>, live
   });
 }
 
-function AssistantTurn({
+// Takes only the specific slices of ChatState it needs (not the whole object)
+// and is memoized, so a store update that only touches e.g. streamText/
+// streamReasoning (i.e. every token of every streamed reply) does not
+// re-render every historical message — only `toolCalls`/`running`/
+// `lastUserMessage` changing does.
+const AssistantTurn = memo(function AssistantTurn({
   message,
-  state,
+  toolCalls,
+  running,
+  lastUserMessage,
   resultsByCall,
   conversationId,
   agentId,
   isLast,
 }: {
   message: ChatMessage;
-  state: ChatState;
+  toolCalls: Record<string, ToolCallView>;
+  running: boolean;
+  lastUserMessage: ChatMessage | undefined;
   resultsByCall: Map<string, string>;
   conversationId: string;
   agentId: string;
@@ -96,14 +105,12 @@ function AssistantTurn({
   const reasoning = message.reasoning ?? fromContent.reasoning;
   const answer = message.reasoning ? (message.content ?? "") : fromContent.answer;
   const live = message.reasoning ? false : fromContent.live;
-  const cards = cardsFor(message, resultsByCall, state.toolCalls);
+  const cards = cardsFor(message, resultsByCall, toolCalls);
   const rating = message.feedback?.rating;
 
   const handleRegenerate = () => {
-    if (state.running) return;
-    const lastUser = [...state.messages].reverse().find((m) => m.role === "user");
-    if (!lastUser) return;
-    void sendMessage(conversationId, agentId, lastUser.content ?? "", { editOfMessageId: lastUser.id });
+    if (running || !lastUserMessage) return;
+    void sendMessage(conversationId, agentId, lastUserMessage.content ?? "", { editOfMessageId: lastUserMessage.id });
   };
   return (
     <div className="group" data-testid="assistant-message">
@@ -130,7 +137,7 @@ function AssistantTurn({
           >
             <ThumbsDown size={13} />
           </button>
-          {isLast && !state.running && (
+          {isLast && !running && (
             <button
               type="button"
               aria-label="Regenerate response"
@@ -144,7 +151,64 @@ function AssistantTurn({
       )}
     </div>
   );
-}
+});
+
+/** Error card for a failed model turn (message.error). Shows the provider error
+ *  and — while it's the last message and no run is active — a Retry (edit-resubmit
+ *  the last user turn with a summary of the failed attempt) and a Cancel that
+ *  just dismisses the card. */
+const ErrorCard = memo(function ErrorCard({
+  message,
+  messages,
+  conversationId,
+  agentId,
+  isLast,
+  running,
+}: {
+  message: ChatMessage;
+  messages: ChatMessage[];
+  conversationId: string;
+  agentId: string;
+  isLast: boolean;
+  running: boolean;
+}) {
+  const [dismissed, setDismissed] = useState(false);
+  if (dismissed) return null;
+  const handleRetry = () => {
+    if (running) return;
+    const lastUser = [...messages].reverse().find((m) => m.role === "user");
+    if (!lastUser) return;
+    void sendMessage(conversationId, agentId, buildRetryPrompt(messages, message.content ?? ""), {
+      editOfMessageId: lastUser.id,
+    });
+  };
+  return (
+    <div className="my-1 rounded-lg border border-rose-500/30 bg-rose-500/10 p-3 text-xs" data-testid="error-card">
+      <div className="mb-1 font-medium text-rose-100">The model returned an error</div>
+      <div className="mb-2 max-h-40 overflow-auto whitespace-pre-wrap break-words text-rose-200/90">{message.content}</div>
+      {isLast && !running && (
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={handleRetry}
+            data-testid="error-retry"
+            className="rounded bg-rose-400/20 px-2.5 py-1 font-medium text-rose-100 hover:bg-rose-400/30"
+          >
+            Retry
+          </button>
+          <button
+            type="button"
+            onClick={() => setDismissed(true)}
+            data-testid="error-cancel"
+            className="rounded bg-white/10 px-2.5 py-1 font-medium hover:bg-white/20"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
+    </div>
+  );
+});
 
 /** Error card for a failed model turn (message.error). Shows the provider error
  *  and — while it's the last message and no run is active — a Retry (edit-resubmit
@@ -229,6 +293,12 @@ export function MessageListV2({
     state.messages.forEach((m, i) => { if (m.role === "assistant") last = i; });
     return last;
   }, [state.messages]);
+  // Passed to AssistantTurn instead of the whole messages array, so it only
+  // needs to re-render on a new last-user-message, not on every token.
+  const lastUserMessage = useMemo(
+    () => [...state.messages].reverse().find((m) => m.role === "user"),
+    [state.messages],
+  );
   const liveStream = state.running && (state.streamText || state.streamReasoning);
   const liveSplit = liveStream ? splitReasoning(state.streamText) : undefined;
 
@@ -327,7 +397,17 @@ export function MessageListV2({
             );
           }
           return (
-            <AssistantTurn key={m.id} message={m} state={state} resultsByCall={resultsByCall} conversationId={conversationId} agentId={agentId} isLast={i === lastAssistantIdx} />
+            <AssistantTurn
+              key={m.id}
+              message={m}
+              toolCalls={state.toolCalls}
+              running={state.running}
+              lastUserMessage={lastUserMessage}
+              resultsByCall={resultsByCall}
+              conversationId={conversationId}
+              agentId={agentId}
+              isLast={i === lastAssistantIdx}
+            />
           );
         }
         return null; // tool results render inside their assistant turn's cards

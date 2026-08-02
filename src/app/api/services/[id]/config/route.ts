@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { promises as fs } from "fs";
 import path from "path";
-import { dataDir } from "@/os/data-dir";
 import { writeFileAtomic } from "@/os/atomic-write";
 import { serviceRegistry } from "@/core/service/ServiceRegistry";
 import { supervisorEnabled } from "@/lib/devharness/supervisor";
@@ -13,14 +12,6 @@ export const dynamic = "force-dynamic";
 interface ConfigFileView {
   name: string;
   values: Record<string, unknown>;
-}
-
-function isReadOnly(itemPath: string): boolean {
-  // Marketplace-sourced items are read-only; user-apps items are writable
-  // (spec: "Config files are read-only when from marketplace (external),
-  // writable in user-apps").
-  const marketplaceRoot = path.join(dataDir(), "marketplace");
-  return itemPath.startsWith(marketplaceRoot + path.sep);
 }
 
 async function readJsonSafe(filePath: string): Promise<Record<string, unknown> | null> {
@@ -51,19 +42,29 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
 
     // A service's own port generally isn't reachable directly once BOS is
     // deployed behind a reverse proxy (only the Supervisor's public port is
-    // exposed/TLS-terminated there) — see docs/dev/apps/services.md's Known
-    // limitations. Under the Supervisor, tell the client to connect through
-    // its already-exposed port instead (tools/supervisor/supervisor.mjs's
-    // proxyServiceUpgrade). Absent under plain `npm run dev` (no Supervisor
-    // in front), where direct host:port access already works fine.
+    // exposed/TLS-terminated there) — see docs/dev/apps/services.md §11. Under
+    // the Supervisor, tell the client to connect through its already-exposed
+    // port instead (tools/supervisor/supervisor.mjs's proxyServiceUpgrade for
+    // WebSocket traffic, proxyServiceHttp for everything else — e.g. a WebDAV
+    // service's PROPFIND/MKCOL/COPY/MOVE, which a Next.js route handler can't
+    // express). Both are absent under plain `npm run dev` (no Supervisor in
+    // front), where direct host:port access already works fine.
     const wsPath = supervisorEnabled() ? `/__supervisor/services/${id}/ws` : null;
+    const httpPath = supervisorEnabled() ? `/__supervisor/services/${id}/` : null;
 
     return NextResponse.json({
       configFiles,
       runtime,
-      readOnly: isReadOnly(def.itemPath),
+      // Always writable (035 FR-004): config is BOS-owned state under
+      // dataDir()/system/config/<id>/, seeded from the item's defaults — never the
+      // item's own folder. The old "read-only when from a marketplace" rule existed
+      // because installing used to COPY the item into user-apps, so a marketplace
+      // item's config sat in a read-only clone. Nothing is copied now. Kept in the
+      // response so the client contract is unchanged.
+      readOnly: false,
       configSchema: def.manifest.configSchema ?? null,
       wsPath,
+      httpPath,
     });
   } catch (err) {
     logger().error("services.api", `GET /api/services/${id}/config failed`, err);
@@ -78,10 +79,6 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
   try {
     const def = serviceRegistry().getService(id);
     if (!def) return NextResponse.json({ error: "unknown or not-installed service" }, { status: 404 });
-
-    if (isReadOnly(def.itemPath)) {
-      return NextResponse.json({ error: "This service's config comes from a read-only marketplace source." }, { status: 403 });
-    }
 
     const body = await req.json();
     const { file, patch } = body as { file?: string; patch?: Record<string, unknown> };

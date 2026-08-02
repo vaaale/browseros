@@ -1,18 +1,23 @@
 "use client";
 
 import { createElement, useCallback, useEffect, useRef, type PointerEvent as ReactPointerEvent } from "react";
+import { Pin, PinOff } from "lucide-react";
 import type { WindowInstance } from "@/os/types";
 import { useOSStore } from "@/store/os-provider";
 import { getAppComponent } from "@/components/apps/registry";
 import { IframeApp } from "@/components/apps/IframeApp";
 
 const TOPBAR_H = 32;
+// Higher than zCounter can plausibly reach in a session, so a pinned window can
+// never be covered by focusing an unpinned one.
+const PIN_Z_BAND = 1_000_000;
 
 export function Window({ win }: { win: WindowInstance }) {
   const focus = useOSStore((s) => s.focus);
   const close = useOSStore((s) => s.close);
   const minimize = useOSStore((s) => s.minimize);
   const toggleMaximize = useOSStore((s) => s.toggleMaximize);
+  const togglePin = useOSStore((s) => s.togglePin);
   const move = useOSStore((s) => s.move);
   const resize = useOSStore((s) => s.resize);
   const focusedId = useOSStore((s) => s.focusedId);
@@ -127,15 +132,20 @@ export function Window({ win }: { win: WindowInstance }) {
   const AppComponent = getAppComponent(win.appId);
   const isFocused = focusedId === win.id;
 
+  // Pinned windows live in a z-band above every unpinned one. Applied at render
+  // instead of stored, so focus() keeps handing out plain incrementing values and
+  // there is no stacking state to keep consistent.
+  const z = win.zIndex + (win.alwaysOnTop ? PIN_Z_BAND : 0);
+
   const style: React.CSSProperties = win.maximized
-    ? { top: TOPBAR_H + 8, left: 8, right: 8, bottom: 84, zIndex: win.zIndex, willChange: "transform" }
+    ? { top: TOPBAR_H + 8, left: 8, right: 8, bottom: 84, zIndex: z, willChange: "transform" }
     : {
         top: 0,
         left: 0,
         width: win.width,
         height: win.height,
         transform: `translate3d(${win.x}px, ${win.y}px, 0)`,
-        zIndex: win.zIndex,
+        zIndex: z,
         willChange: "transform",
       };
 
@@ -179,7 +189,22 @@ export function Window({ win }: { win: WindowInstance }) {
         <span className="pointer-events-none flex-1 truncate text-center text-xs font-medium text-white/70">
           {win.title}
         </span>
-        <div className="w-12" />
+        {/* Occupies the spacer that balances the centred title. An icon, not a
+            fourth traffic light — this is a mode that stays on, not an action. */}
+        <div className="flex w-12 justify-end">
+          <button
+            aria-label={win.alwaysOnTop ? "Unpin window" : "Pin window on top"}
+            aria-pressed={!!win.alwaysOnTop}
+            title={win.alwaysOnTop ? "Always on top — click to unpin" : "Keep this window on top"}
+            onClick={(e) => { e.stopPropagation(); togglePin(win.id); }}
+            onPointerDown={(e) => e.stopPropagation()}
+            className={`rounded p-1 transition-colors ${
+              win.alwaysOnTop ? "text-[#5b8cff] hover:bg-white/10" : "text-white/25 hover:bg-white/10 hover:text-white/60"
+            }`}
+          >
+            {win.alwaysOnTop ? <Pin size={12} /> : <PinOff size={12} />}
+          </button>
+        </div>
       </div>
 
       <div className="relative min-h-0 flex-1 bg-[#0f1117] text-white/90">

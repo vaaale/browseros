@@ -1,8 +1,47 @@
 # BrowserOS
 
-BrowserOS (BOS) is an agentic operating system that runs in the browser. It has a desktop, draggable windows, a dock, and a built-in AI assistant that can operate the OS, manage files, browse the web, install apps, and modify BOS itself — including writing and previewing its own code changes on a live branch.
+**An operating system that runs in your browser — and rewrites itself.**
+
+BrowserOS (BOS) has a desktop, draggable windows, a dock, and a built-in AI assistant that can operate the OS, manage files, browse the web, and install apps — just like you'd expect. What it isn't supposed to do is modify its own source code, live, on a branch you can preview before merging. But it does that too.
+
+Clone it, run one command, and in a couple of minutes you'll have your own self-improving desktop with an assistant that can talk to you, show you its face, and build new apps and skills for itself on request.
 
 ![Desktop](./docs/assets/BOS%20Intro.png)
+
+## Why people like it
+
+- **A real desktop, not a demo** — windows, a dock, Files, Settings, and a growing set of built-in apps.
+- **An assistant that can act, not just chat** — it browses the web, edits files, runs commands, and delegates to sub-agents for bigger jobs.
+- **Self-modifying, safely** — the assistant writes and previews BOS's own code on an isolated branch before anything touches your live instance.
+- **A Marketplace, not a plugin folder** — add apps, assistant skills, and spec templates from any git repo with one URL.
+- **Talk to it, see it** — voice conversations with an optional animated avatar, not just a text box.
+- **Bring your own AI** — Anthropic, OpenAI, a local model, and either Claude Code or OpenCode as the coding backend — your keys, your choice.
+
+---
+
+## Marketplace
+
+BOS has a built-in **Marketplace** app that lets you extend the OS with apps, assistant skills, and spec templates published in external git repositories. Just paste a URL and BOS handles the rest.
+
+![Marketplace with two registered sources](./docs/assets/marketplace/05-anthropic-added.png)
+
+**Key features:**
+
+- **Three item types** — install sandboxed **apps** (appear on the desktop instantly), **skills** (available to the assistant immediately), or **adopt spec templates** into your own Build Studio workflow.
+- **Multi-format support** — BOS automatically detects the format when you add a URL. It supports BOS-native marketplaces (e.g. [vaaale/bos-marketplace](https://github.com/vaaale/bos-marketplace)), Anthropic agent-skills repos (e.g. [anthropics/skills](https://github.com/anthropics/skills)), and Claude Code skill repos (e.g. [ericgandrade/claude-superskills](https://github.com/ericgandrade/claude-superskills)). No manual configuration needed.
+- **Search and filter** — a live filter narrows items across all registered marketplaces by name, description, or tag.
+- **Installed badges** — items you've already installed are highlighted so you never lose track of what's in your OS.
+- **Sync and remove** — pull the latest from any marketplace with one click, or remove a source entirely without affecting what you've already installed.
+
+**To get started**, open the Marketplace app and add any of these URLs:
+
+| Marketplace | URL |
+|---|---|
+| BOS Marketplace | `https://github.com/vaaale/bos-marketplace.git` |
+| Anthropic Agent Skills | `https://github.com/anthropics/skills.git` |
+| Claude Superskills | `https://github.com/ericgandrade/claude-superskills.git` |
+
+→ **[Full tutorial: Using the Marketplace](docs/usage/tutorials/marketplace.md)**
 
 ---
 
@@ -89,13 +128,16 @@ Open **http://localhost:3000**
 
 ### 4. First-time setup
 
-On first launch a setup wizard appears. It configures:
+On first launch a guided setup wizard walks you through:
 
-1. **AI Provider** — which model powers the assistant (Anthropic / OpenAI / local)
-2. **Dev Harness** — how the assistant runs the autonomous coder for development tasks (Claude CLI headless is the default)
+1. **AI Provider** — which model powers the assistant (Anthropic / OpenAI / local), with a live model list
+2. **Dev Harness** — the autonomous coder the assistant delegates to (Claude Code or OpenCode)
 3. **Data Isolation** — how preview data is isolated from live data during self-modification
+4. **Git Repos** — where your BOS source, spec store, and personal app repo live (sensible defaults, all editable)
+5. **Marketplace** — which app marketplaces to add out of the box
+6. A live progress screen while BOS provisions itself
 
-You can skip the wizard and configure everything from **Settings** at any time.
+Every step is optional — skip the wizard entirely and configure everything from **Settings** at any time.
 
 ---
 
@@ -160,7 +202,7 @@ docker compose up -d
 
 Visit **http://localhost** — you will be presented with a login page.
 
-### 4. Create the first admin user
+### 5. Create the first admin user
 
 Generate a bcrypt hash inside the running bastion container, then write `users.yml`:
 
@@ -186,19 +228,21 @@ Then log in at **http://localhost** with `admin` / `changeme` and change your pa
 docker compose -f docker-compose.yml -f docker-compose.keycloak.yml up -d
 ```
 
-See [docs/dev/deployment.md](docs/dev/deployment.md) for the full deployment guide including Keycloak setup, volume layout, idle timeout, and re-provisioning.
+See [docs/dev/deployment.md](docs/dev/deployment.md) for the full deployment guide including Keycloak setup, volume layout, and re-provisioning.
 
 ---
 
 ## Developer harness
 
-For the AI assistant to write and preview code changes, it needs a developer harness — an autonomous coder it can delegate to. The default is **Claude CLI (headless)**, which requires Claude Code to be installed on the machine running BOS:
+For the AI assistant to write and preview code changes, it needs a developer harness — an autonomous coder it can delegate to. Pick either **Claude Code** or **OpenCode** in **Settings → Dev Harness**, then authenticate it however suits you: an interactive credential-file login, a plain API key, AWS Bedrock, Google Vertex AI, or (for Claude Code) a dedicated OAuth token via `claude setup-token` that won't conflict with your own local CLI session.
+
+Claude Code, if you want it, installs with:
 
 ```bash
 npm install -g @anthropic-ai/claude-code
 ```
 
-Then configure the harness URL in **Settings → Dev Harness**. Without a harness, all BOS features work except self-modification.
+Without a harness configured, everything else in BOS still works — you just lose self-modification.
 
 ---
 
@@ -225,3 +269,11 @@ npm run test:e2e     # Playwright e2e tests
 ```
 
 BOS follows a spec-first workflow: features are specified in **Build Studio** before being implemented. See `specs/bos-system-specs/` and `docs/dev/architecture-overview.md`.
+
+---
+
+## Contributing
+
+BOS builds itself in the open — most new features start as a spec written in Build Studio, often by BOS's own assistant. Bug reports, feature specs, and pull requests are all welcome via GitHub Issues.
+
+Licensed under [Attribution-NonCommercial 2.0](./LICENSE.md).

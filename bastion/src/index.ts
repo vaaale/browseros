@@ -13,6 +13,7 @@ import { createBosProxy } from "./proxy";
 import { initLifecycle, reconcileOnStartup, getAllInstances, stopInstance } from "./lifecycle";
 import { initLogStore } from "./log-store";
 import { resolveOwnMountSource } from "./docker";
+import { ensureSourceRepoHasHistory } from "./provision";
 
 async function main(): Promise<void> {
   const cfg = loadConfig();
@@ -30,6 +31,12 @@ async function main(): Promise<void> {
   }
 
   const provider = await loadProvider(cfg);
+
+  // Give the deployment's source checkout real history BEFORE serving. Dokploy
+  // clones it shallow and re-clones it on every redeploy, which breaks the
+  // per-user clones that fetch from it. Awaited so a user cannot trigger a
+  // source update that races the repair; it costs seconds and never throws.
+  await ensureSourceRepoHasHistory(cfg);
 
   initLifecycle(cfg);
   initLogStore(cfg.dataDir);
@@ -93,10 +100,10 @@ async function main(): Promise<void> {
     shuttingDown = true;
     console.log(`[bastion] ${signal} received — stopping all user containers…`);
     server.close();
-    const running = getAllInstances().filter((s) => s.status === "running");
+    const running = getAllInstances().filter((s) => s.status === "running" || s.status === "unhealthy");
     await Promise.allSettled(running.map((s) => {
       console.log(`[bastion] stopping container for ${s.username}`);
-      return stopInstance(s.username);
+      return stopInstance(s.username, `bastion shutdown (${signal})`);
     }));
     console.log("[bastion] all containers stopped, exiting.");
     process.exit(0);

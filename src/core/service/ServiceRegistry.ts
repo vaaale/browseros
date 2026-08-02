@@ -4,6 +4,7 @@ import path from "path";
 import { dataDir } from "@/os/data-dir";
 import { logger } from "@/lib/logging";
 import { isInstalled } from "@/system/marketplace/install/symlinkManager";
+import { listInstalledItems, itemConfigDir, itemLinkPath } from "@/system/items/installed";
 import { validateManifest } from "./manifestValidator";
 import type { ServiceManifest, ServiceDefinition, ServiceState, ServiceRegistryEvent } from "./types";
 
@@ -26,17 +27,6 @@ async function listDirs(root: string): Promise<string[]> {
   try {
     const entries = await fs.readdir(root, { withFileTypes: true });
     return entries.filter((e) => e.isDirectory()).map((e) => path.join(root, e.name));
-  } catch {
-    return [];
-  }
-}
-
-/** Names of entries directly under `root`, regardless of type — used for
- *  dataDir()/system/services/ where every entry is a SYMLINK (readdir's
- *  Dirent reports DT_LNK, so `.isDirectory()` would wrongly filter them out). */
-async function listNames(root: string): Promise<string[]> {
-  try {
-    return await fs.readdir(root);
   } catch {
     return [];
   }
@@ -82,7 +72,8 @@ export class ServiceRegistry {
   async discoverServices(): Promise<void> {
     const found = new Map<string, SourceItem>();
 
-    const userAppsRoot = path.join(dataDir(), "user-apps");
+    // user-apps is a marketplace repo like any other: items under items/ (034 FR-001).
+    const userAppsRoot = path.join(dataDir(), "user-apps", "items");
     for (const itemPath of await listDirs(userAppsRoot)) {
       const manifest = await readManifestAt(itemPath);
       if (manifest) found.set(manifest.id, { id: manifest.id, itemPath, manifest });
@@ -101,16 +92,19 @@ export class ServiceRegistry {
 
     this.sourceItems = found;
 
-    // Refresh installed definitions from the dataDir()/system/services/<id>
-    // symlinks — the authoritative "installed" list — merging onto any
-    // existing runtime state so a re-scan never resets a running service.
-    const systemServicesRoot = path.join(dataDir(), "system", "services");
-    const installedIds = new Set(await listNames(systemServicesRoot));
+    // Installed services come from the ONE shared installed-item scan (035
+    // FR-007) — an item is an installed service when it has a services/ facet.
+    // Never scan the install root here independently: a second, subtly different
+    // scan is exactly how this registry and the marketplace client previously
+    // disagreed about what existed.
+    const installed = (await listInstalledItems()).filter((i) => i.facets.service);
+    const installedIds = new Set(installed.map((i) => i.id));
+    const installedPathById = new Map(installed.map((i) => [i.id, i.itemPath]));
     for (const id of installedIds) {
       const resolvedManifest = await this.readInstalledManifest(id);
       const existing = this.definitions.get(id);
       const wasCorrupted = existing?.state === "corrupted";
-      const itemPath = found.get(id)?.itemPath ?? existing?.itemPath ?? "";
+      const itemPath = installedPathById.get(id) ?? found.get(id)?.itemPath ?? existing?.itemPath ?? "";
 
       if (!resolvedManifest) {
         this.definitions.set(id, {
@@ -118,7 +112,7 @@ export class ServiceRegistry {
           manifest: existing?.manifest ?? ({ id, name: id, version: "0.0.0", entry: "index.js" } as ServiceManifest),
           state: "corrupted",
           worker: existing?.worker ?? null,
-          configDirPath: path.join(dataDir(), "config", id),
+          configDirPath: itemConfigDir(id),
           logsPath: path.join(dataDir(), "logs", "services", `${id}.log`),
           restartCount: existing?.restartCount ?? 0,
           boundPort: existing?.boundPort ?? null,
@@ -147,7 +141,7 @@ export class ServiceRegistry {
         manifest: resolvedManifest,
         state: nextState,
         worker: existing?.worker ?? null,
-        configDirPath: path.join(dataDir(), "config", id),
+        configDirPath: itemConfigDir(id),
         logsPath: path.join(dataDir(), "logs", "services", `${id}.log`),
         restartCount: existing?.restartCount ?? 0,
         boundPort: existing?.boundPort ?? null,
@@ -170,7 +164,7 @@ export class ServiceRegistry {
   }
 
   private async readInstalledManifest(id: string): Promise<ServiceManifest | null> {
-    const manifestPath = path.join(dataDir(), "system", "services", id, "service.json");
+    const manifestPath = path.join(itemLinkPath(id), "services", "service.json");
     try {
       const raw = await fs.readFile(manifestPath, "utf8");
       return JSON.parse(raw) as ServiceManifest;
@@ -203,7 +197,7 @@ export class ServiceRegistry {
       manifest: item.manifest,
       state: "stopped" as ServiceState,
       worker: null,
-      configDirPath: path.join(dataDir(), "config", item.id),
+      configDirPath: itemConfigDir(item.id),
       logsPath: path.join(dataDir(), "logs", "services", `${item.id}.log`),
       restartCount: 0,
       boundPort: null,
@@ -227,7 +221,7 @@ export class ServiceRegistry {
       manifest,
       state: existing?.state ?? "stopped",
       worker: existing?.worker ?? null,
-      configDirPath: path.join(dataDir(), "config", id),
+      configDirPath: itemConfigDir(id),
       logsPath: path.join(dataDir(), "logs", "services", `${id}.log`),
       restartCount: existing?.restartCount ?? 0,
       boundPort: existing?.boundPort ?? null,
@@ -241,11 +235,12 @@ export class ServiceRegistry {
     this.definitions.delete(id);
   }
 
-  setState(id: string, state: ServiceState): void {
+  setState(id: string, state: ServiceState, error?: string): void {
     const def = this.definitions.get(id);
     if (!def) return;
     def.state = state;
-    this.emit({ type: "service:status:changed", id, state });
+    def.lastError = error;
+    this.emit({ type: "service:status:changed", id, state, error });
   }
 
   setWorker(id: string, worker: ServiceDefinition["worker"]): void {

@@ -62,8 +62,9 @@ export function IntegrationDetailView({ item, onOpenService, onRefresh, onDiscon
     setBusy(true);
     setError(undefined);
     try {
+      const browserOrigin = window.location.origin;
       const res = await fetch(
-        `/api/integrations/oauth/start?integrationId=${encodeURIComponent(item.manifest.id)}`,
+        `/api/integrations/oauth/start?integrationId=${encodeURIComponent(item.manifest.id)}&browserOrigin=${encodeURIComponent(browserOrigin)}`,
       );
       const body = (await res.json()) as { authUrl?: string; error?: string };
       if (!res.ok || !body.authUrl) throw new Error(body.error ?? "Failed to start OAuth flow.");
@@ -124,8 +125,13 @@ export function IntegrationDetailView({ item, onOpenService, onRefresh, onDiscon
         />
       )}
 
-      {!isTelegram && !usesFieldCredentials && !item.hasClientSecret && (
-        <ClientSecretUpload integrationId={item.manifest.id} onUploaded={onRefresh} />
+      {!isTelegram && !usesFieldCredentials && (
+        <ClientSecretUpload
+          integrationId={item.manifest.id}
+          hasClientSecret={item.hasClientSecret}
+          onUploaded={onRefresh}
+          onCleared={onRefresh}
+        />
       )}
 
       {isTelegram && <TelegramBotAuthSection onChange={onRefresh} />}

@@ -66,9 +66,13 @@ async function derivePhases(
   featurePath: string,
   featureId: string,
   artifactNames: Set<string>,
+  branch?: string,
 ): Promise<PipelinePhase[]> {
-  const spec = artifactNames.has("spec.md") ? await readOr(`${featurePath}/spec.md`) : "";
-  const tasksBody = artifactNames.has("tasks.md") ? await readOr(`${featurePath}/tasks.md`) : "";
+  // Draft-branch content (020) is read at the branch, not base — a spec being
+  // actively written on a feature branch has no base copy to fall back to.
+  const read = (rel: string) => (branch ? specfs.readFileAt(`${featurePath}/${rel}`, branch).catch(() => "") : readOr(`${featurePath}/${rel}`));
+  const spec = artifactNames.has("spec.md") ? await read("spec.md") : "";
+  const tasksBody = artifactNames.has("tasks.md") ? await read("tasks.md") : "";
   const tasks = parseTasks(tasksBody);
   const done = tasks.filter((t) => t.done).length;
   const sid = await systemStoreId();
@@ -79,7 +83,7 @@ async function derivePhases(
   let implementState: PipelinePhase["state"] = "na";
   if (tasks.length > 0) implementState = done === tasks.length ? "done" : done > 0 ? "pending" : "na";
 
-  const testResults = artifactNames.has("test-results.md") ? await readOr(`${featurePath}/test-results.md`) : "";
+  const testResults = artifactNames.has("test-results.md") ? await read("test-results.md") : "";
   let testState: PipelinePhase["state"] = "na";
   if (testResults) testState = testResults.includes("**Status**: PASSED") ? "done" : "pending";
 
@@ -96,16 +100,25 @@ async function derivePhases(
   ];
 }
 
-async function buildSpecification(storeId: string, id: string): Promise<Specification> {
+/** `opts.branch` + `opts.files` (store-prefixed paths, from listBranchDirFiles)
+ *  build a Specification purely from a draft `bos/*` branch — used when the
+ *  feature doesn't exist on base at all yet (020). Omit both for the normal
+ *  base-store case. */
+async function buildSpecification(storeId: string, id: string, opts?: { branch?: string; files?: string[] }): Promise<Specification> {
   const featurePath = `${storeId}/${id}`;
-  const entries = await specfs.listDir(featurePath).catch(() => []);
-  const artifacts: Artifact[] = entries
-    .filter((e) => e.type === "file" && e.name.endsWith(".md"))
-    .map((e) => ({ name: e.name, path: e.path }));
+  const branch = opts?.branch;
+  const artifacts: Artifact[] = branch
+    ? (opts?.files ?? [])
+        .filter((p) => p.endsWith(".md"))
+        .map((p) => ({ name: p.split("/").pop() ?? p, path: p }))
+    : (await specfs.listDir(featurePath).catch(() => []))
+        .filter((e) => e.type === "file" && e.name.endsWith(".md"))
+        .map((e) => ({ name: e.name, path: e.path }));
   const artifactNames = new Set(artifacts.map((a) => a.name));
 
-  const specBody = artifactNames.has("spec.md") ? await readOr(`${featurePath}/spec.md`) : "";
-  const tasksBody = artifactNames.has("tasks.md") ? await readOr(`${featurePath}/tasks.md`) : "";
+  const read = (rel: string) => (branch ? specfs.readFileAt(`${featurePath}/${rel}`, branch).catch(() => "") : readOr(`${featurePath}/${rel}`));
+  const specBody = artifactNames.has("spec.md") ? await read("spec.md") : "";
+  const tasksBody = artifactNames.has("tasks.md") ? await read("tasks.md") : "";
   const tasks = parseTasks(tasksBody);
 
   return {
@@ -114,8 +127,9 @@ async function buildSpecification(storeId: string, id: string): Promise<Specific
     title: titleFromSpec(specBody, id),
     path: featurePath,
     artifacts: artifacts.sort(byArtifactOrder),
-    phases: await derivePhases(featurePath, id, artifactNames),
+    phases: await derivePhases(featurePath, id, artifactNames, branch),
     taskProgress: tasks.length ? { done: tasks.filter((t) => t.done).length, total: tasks.length } : undefined,
+    ...(branch ? { branch } : {}),
   };
 }
 
@@ -127,7 +141,16 @@ function byArtifactOrder(a: Artifact, b: Artifact): number {
   return a.name.localeCompare(b.name);
 }
 
-/** All feature folders across all stores, each with derived pipeline status. */
+/** All feature folders across all stores, each with derived pipeline status.
+ *
+ *  Also surfaces features that only exist as drafts on an active `bos/*`
+ *  feature branch (020) — pushed AFTER the base scan so a feature touched on
+ *  both wins with the draft (more current) version once the client keys a Map
+ *  by `path`. Without this, a spec written entirely on a feature branch (the
+ *  ordinary case while working through the spec-kit pipeline) has no entry
+ *  here at all — `specTree()` already discovers it for the sidebar, but this
+ *  function silently didn't, leaving Build Studio's PhaseStrip badges blank
+ *  for exactly the specs a user is most likely to be actively looking at. */
 export async function listSpecifications(): Promise<Specification[]> {
   await ensureStoresOnce();
   constitutionReady = undefined; // re-evaluate per request
@@ -137,18 +160,40 @@ export async function listSpecifications(): Promise<Specification[]> {
     for (const f of top.filter((e) => e.type === "dir")) {
       specs.push(await buildSpecification(store.id, f.name));
     }
+    for (const branch of await listDraftBranches(store.root).catch(() => [] as string[])) {
+      const changed = await draftChangedFiles(store.root, branch).catch(() => [] as string[]);
+      const touched = new Set<string>();
+      for (const rel of changed) {
+        const [featureId, ...rest] = rel.split("/");
+        if (!featureId || !rest.length) continue; // loose root files: not a feature
+        touched.add(featureId);
+      }
+      for (const featureId of touched) {
+        const files = (await listBranchDirFiles(store.root, branch, featureId).catch(() => [] as string[])).map((rel) => `${store.id}/${rel}`);
+        specs.push(await buildSpecification(store.id, featureId, { branch, files }));
+      }
+    }
   }
   return specs.sort((a, b) => (a.store === b.store ? a.id.localeCompare(b.id) : a.store.localeCompare(b.store)));
 }
 
-/** Fetch one specification by its store-prefixed path `<storeId>/<featureId>`. */
+/** Fetch one specification by its store-prefixed path `<storeId>/<featureId>`.
+ *  Falls back to a draft `bos/*` branch (020) when the feature has no base
+ *  copy — same reason as listSpecifications' fallback above. */
 export async function getSpecification(fullPath: string): Promise<Specification | undefined> {
   const safe = fullPath.replace(/[^a-zA-Z0-9._/-]/g, "");
   const [storeId, id] = safe.split("/");
   if (!storeId || !id) return undefined;
-  if (!(await specfs.exists(`${storeId}/${id}`))) return undefined;
   constitutionReady = undefined;
-  return buildSpecification(storeId, id);
+  if (await specfs.exists(`${storeId}/${id}`)) return buildSpecification(storeId, id);
+
+  const store = (await listStores()).find((s) => s.id === storeId);
+  if (!store) return undefined;
+  for (const branch of await listDraftBranches(store.root).catch(() => [] as string[])) {
+    const files = (await listBranchDirFiles(store.root, branch, id).catch(() => [] as string[])).map((rel) => `${storeId}/${rel}`);
+    if (files.length > 0) return buildSpecification(storeId, id, { branch, files });
+  }
+  return undefined;
 }
 
 /** Every store as a group node (feature folders + loose files as children). */

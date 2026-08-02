@@ -36,35 +36,55 @@ export interface AdapterCapabilities {
   webhook?: boolean;
 }
 
+export interface AdapterMethodDescriptor {
+  method: string;
+  scope: string;
+  description: string;
+  parameters: import("./types").AdapterMethodParameter[];
+}
+
 export interface AdapterEntry {
   createAdapter: () => ServiceAdapter;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   methods: readonly AdapterMethodMeta<any>[];
   capabilities?: AdapterCapabilities;
+  /** Framework-free descriptors for the capabilities registry. */
+  methodDescriptors?: readonly AdapterMethodDescriptor[];
 }
 
-const ADAPTERS: Record<string, Record<string, AdapterEntry>> = {};
+const ADAPTERS_KEY = "__bos_adapter_registry__" as const;
+
+function getAdapters(): Record<string, Record<string, AdapterEntry>> {
+  const g = globalThis as Record<string, unknown>;
+  if (!g[ADAPTERS_KEY]) g[ADAPTERS_KEY] = {};
+  return g[ADAPTERS_KEY] as Record<string, Record<string, AdapterEntry>>;
+}
 
 /**
  * Register an adapter with the server-side registry. Duplicate registrations
- * for the same `(integrationId, serviceId)` throw — matches
- * `registerIntegration` semantics so a subtle module-graph doubling
- * surfaces as a load-time failure rather than a silent overwrite.
+ * replace the existing entry (supports HMR re-evaluation in dev and plugin
+ * reload without a server restart).
  */
 export function registerAdapter(
   integrationId: string,
   serviceId: string,
   entry: AdapterEntry,
 ): void {
-  const bucket = ADAPTERS[integrationId] ?? (ADAPTERS[integrationId] = {});
-  if (bucket[serviceId]) {
-    throw new Error(`Duplicate adapter registration: ${integrationId}/${serviceId}`);
+  const adapters = getAdapters();
+  if (!adapters[integrationId]) adapters[integrationId] = {};
+  adapters[integrationId][serviceId] = entry;
+}
+
+export function unregisterAdapter(integrationId: string, serviceId: string): void {
+  const adapters = getAdapters();
+  if (adapters[integrationId]) {
+    delete adapters[integrationId][serviceId];
+    if (Object.keys(adapters[integrationId]).length === 0) delete adapters[integrationId];
   }
-  bucket[serviceId] = entry;
 }
 
 export function getAdapterEntry(integrationId: string, serviceId: string): AdapterEntry | undefined {
-  return ADAPTERS[integrationId]?.[serviceId];
+  return getAdapters()[integrationId]?.[serviceId];
 }
 
 export function getAdapterMethod(
@@ -90,7 +110,7 @@ export function listAdapterServices(): Array<{
     methods: readonly AdapterMethodMeta<any>[];
     capabilities: AdapterCapabilities;
   }> = [];
-  for (const [integrationId, services] of Object.entries(ADAPTERS)) {
+  for (const [integrationId, services] of Object.entries(getAdapters())) {
     for (const [serviceId, entry] of Object.entries(services)) {
       out.push({
         integrationId,
@@ -105,5 +125,6 @@ export function listAdapterServices(): Array<{
 
 /** Test-only: wipe the registry. */
 export function _resetAdapterRegistry(): void {
-  for (const k of Object.keys(ADAPTERS)) delete ADAPTERS[k];
+  const adapters = getAdapters();
+  for (const k of Object.keys(adapters)) delete adapters[k];
 }

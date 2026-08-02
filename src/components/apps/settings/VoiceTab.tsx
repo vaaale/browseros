@@ -1,6 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useVoiceConfig,
+  useVoiceEngines,
+  loadVoiceConfig,
+  patchVoiceConfig,
+} from "@/lib/voice/client/config-store";
 import type { VoiceConfig, OmnivoiceTTSConfig } from "@/lib/voice/types";
 
 type VoiceSource = "alias" | "design" | "clone";
@@ -44,6 +50,43 @@ function Slider({ label, value, min, max, step, onChange }: {
   );
 }
 
+function formatKeyCode(code: string): string {
+  if (!code) return "—";
+  const side = code.endsWith("Left") ? "Left " : code.endsWith("Right") ? "Right " : "";
+  const bare = code.replace(/(Left|Right)$/, "");
+  const namePart = bare.startsWith("Key") ? bare.slice(3)
+    : bare.startsWith("Digit") ? bare.slice(5)
+    : bare.startsWith("Arrow") ? `${bare.slice(5)} Arrow`
+    : bare === "Control" ? "Ctrl"
+    : bare;
+  return `${side}${namePart}`.trim();
+}
+
+function KeyCaptureButton({ value, onChange }: { value: string; onChange: (code: string) => void }) {
+  const [capturing, setCapturing] = useState(false);
+  useEffect(() => {
+    if (!capturing) return;
+    const onKey = (e: KeyboardEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.code === "Escape") { setCapturing(false); return; }
+      onChange(e.code);
+      setCapturing(false);
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, [capturing, onChange]);
+  return (
+    <button
+      type="button"
+      onClick={() => setCapturing((v) => !v)}
+      className={INPUT + " text-left"}
+    >
+      {capturing ? "Press any key… (Esc to cancel)" : formatKeyCode(value)}
+    </button>
+  );
+}
+
 function DesignSelect({ label, value, options, onChange, note }: {
   label: string; value: string; options: string[]; onChange: (v: string) => void; note?: string;
 }) {
@@ -72,21 +115,30 @@ export function VoiceTab() {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [previewing, setPreviewing] = useState<"idle" | "fetching" | "playing">("idle");
   const [previewError, setPreviewError] = useState<string>("");
+  const [seeded, setSeeded] = useState(false);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingPatchRef = useRef<Partial<VoiceConfig>>({});
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
 
+  // Reads through the shared store, so a change made here is visible immediately
+  // to the mic button and the presence host, and vice versa. `cfg` is only an
+  // edit draft — typing must not round-trip to the server on every keystroke.
+  const shared = useVoiceConfig();
+  const engines = useVoiceEngines();
+
   const load = useCallback(async () => {
-    const res = await fetch("/api/voice").then((r) => r.json()) as { config?: VoiceConfig };
-    if (res.config) {
-      setCfg(res.config);
-      const ov = res.config.omnivoice;
-      // Prefer the persisted source; fall back to deriving it for pre-existing
-      // configs saved before voiceSource was stored.
-      if (ov.voiceSource) setVoiceSource(ov.voiceSource);
-      else if (ov.refAudioPath) setVoiceSource("clone");
-      else setVoiceSource("alias");
-    }
+    await loadVoiceConfig();
   }, []);
+
+  // Seed the draft from the store during render (not in an effect, which would
+  // cascade a second render). Prefer the persisted voice source, falling back to
+  // deriving it for configs saved before voiceSource existed.
+  if (!seeded && shared) {
+    setSeeded(true);
+    setCfg(shared);
+    const ov = shared.omnivoice;
+    setVoiceSource(ov.voiceSource ? ov.voiceSource : ov.refAudioPath ? "clone" : "alias");
+  }
 
   useEffect(() => {
     const id = setTimeout(() => void load(), 0);
@@ -147,13 +199,8 @@ export function VoiceTab() {
   const patchConfig = useCallback(async (patch: Partial<VoiceConfig>) => {
     setStatus("Saving…");
     try {
-      const res = await fetch("/api/voice", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ patch }),
-      }).then((r) => r.json()) as { config?: VoiceConfig; error?: string };
-      if (res.error) { setStatus(`Error: ${res.error}`); return; }
-      if (res.config) setCfg(res.config);
+      const saved = await patchVoiceConfig(patch);
+      if (saved) setCfg(saved);
       setStatus("Saved");
       setTimeout(() => setStatus(""), 2000);
     } catch (e) {
@@ -161,9 +208,17 @@ export function VoiceTab() {
     }
   }, []);
 
+  // Debounced saves ACCUMULATE. Restarting the timer with only the newest patch
+  // silently drops every earlier field changed inside the same 600 ms, while the
+  // UI keeps showing the optimistic value — the setting looks saved and isn't.
   const save = useCallback((patch: Partial<VoiceConfig>) => {
+    pendingPatchRef.current = { ...pendingPatchRef.current, ...patch };
     if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => void patchConfig(patch), 600);
+    saveTimer.current = setTimeout(() => {
+      const merged = pendingPatchRef.current;
+      pendingPatchRef.current = {};
+      void patchConfig(merged);
+    }, 600);
   }, [patchConfig]);
 
   // Flush any pending debounced save immediately (returns when persisted) so
@@ -171,7 +226,9 @@ export function VoiceTab() {
   // current selection instead of stale config.
   const flushSave = useCallback(async (current: VoiceConfig) => {
     if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null; }
-    await patchConfig({ omnivoice: current.omnivoice, openai: current.openai, ttsProvider: current.ttsProvider });
+    const merged = pendingPatchRef.current;
+    pendingPatchRef.current = {};
+    await patchConfig({ ...merged, omnivoice: current.omnivoice, openai: current.openai, ttsProvider: current.ttsProvider });
   }, [patchConfig]);
 
   const update = useCallback(<K extends keyof VoiceConfig>(key: K, value: VoiceConfig[K]) => {
@@ -246,16 +303,19 @@ export function VoiceTab() {
         throw new Error(msg);
       }
 
-      const blob = await res.blob();
-      // A header-only response (a few dozen bytes, no audio frames) means the
-      // model generated nothing — e.g. an unsupported voice-design instruct.
-      if (blob.size < 512) throw new Error("TTS returned no audio — the voice settings may be unsupported by this Omnivoice model. Try different voice-design attributes.");
+      const result = await res.json() as { ok?: boolean; audioUrl?: string | null; routedTo?: string | null; error?: string };
+      if (!result.ok) throw new Error(result.error ?? "TTS failed");
+      if (!result.audioUrl) {
+        // Either an active sink (a connected Live Avatar) spoke it, or the model
+        // generated nothing — e.g. an unsupported voice-design instruct.
+        if (result.routedTo) { setPreviewing("idle"); return; }
+        throw new Error("TTS returned no audio — the voice settings may be unsupported by this Omnivoice model. Try different voice-design attributes.");
+      }
 
-      const url = URL.createObjectURL(blob);
-      const audio = new Audio(url);
+      const audio = new Audio(result.audioUrl);
       previewAudioRef.current = audio;
 
-      const cleanup = () => { URL.revokeObjectURL(url); setPreviewing("idle"); };
+      const cleanup = () => { setPreviewing("idle"); };
       audio.onended = cleanup;
       audio.onerror = () => { cleanup(); setPreviewError("Audio playback failed — browser could not decode the audio"); };
 
@@ -371,10 +431,16 @@ export function VoiceTab() {
             <select
               className={INPUT}
               value={cfg.ttsProvider}
-              onChange={(e) => update("ttsProvider", e.target.value as VoiceConfig["ttsProvider"])}
+              onChange={(e) => update("ttsProvider", e.target.value)}
             >
-              <option value="omnivoice">Omnivoice (native)</option>
-              <option value="openai-compatible">OpenAI Compatible</option>
+              {engines.length > 0
+                ? engines.map((e) => <option key={e.id} value={e.id}>{e.displayName}</option>)
+                : (
+                  <>
+                    <option value="omnivoice">Omnivoice (native)</option>
+                    <option value="openai-compatible">OpenAI Compatible</option>
+                  </>
+                )}
             </select>
           </div>
 
@@ -626,11 +692,11 @@ export function VoiceTab() {
       {/* Activation */}
       <section>
         <h4 className={SECTION_HEAD}>Activation</h4>
+        <p className="mb-3 text-[11px] text-white/35">
+          Turning voice on or off is done in the Assistant: the microphone button starts
+          listening, the speaker button next to it turns spoken replies on and off.
+        </p>
         <div className="space-y-3">
-          <label className="flex cursor-pointer items-center gap-2 text-sm text-white/80">
-            <input type="checkbox" checked={cfg.enabled} onChange={(e) => update("enabled", e.target.checked)} className="h-4 w-4 accent-[#5b8cff]" />
-            Enable voice mode
-          </label>
           <div>
             <label className={LABEL}>Activation mode</label>
             <div className="flex gap-4">
@@ -642,8 +708,21 @@ export function VoiceTab() {
                 <input type="radio" value="wake-word" checked={cfg.activationMode === "wake-word"} onChange={() => update("activationMode", "wake-word")} className="accent-[#5b8cff]" />
                 Always on (wake word)
               </label>
+              <label className="flex cursor-pointer items-center gap-1.5 text-xs text-white/70">
+                <input type="radio" value="key" checked={cfg.activationMode === "key"} onChange={() => update("activationMode", "key")} className="accent-[#5b8cff]" />
+                Key to talk
+              </label>
             </div>
           </div>
+          {cfg.activationMode === "key" && (
+            <div>
+              <label className={LABEL}>Activation key</label>
+              <KeyCaptureButton value={cfg.activationKey || "ControlLeft"} onChange={(k) => update("activationKey", k)} />
+              <p className="mt-1 text-[11px] text-white/35">
+                Hold this key to record; release to submit. Hitting <kbd className="rounded bg-white/10 px-1">Esc</kbd> while capturing cancels.
+              </p>
+            </div>
+          )}
           {cfg.activationMode === "wake-word" && (
             <>
               <div>
@@ -669,10 +748,6 @@ export function VoiceTab() {
               </div>
             </>
           )}
-          <label className="flex cursor-pointer items-center gap-2 text-sm text-white/80">
-            <input type="checkbox" checked={cfg.speakReplies !== false} onChange={(e) => update("speakReplies", e.target.checked)} className="h-4 w-4 accent-[#5b8cff]" />
-            Speak replies aloud
-          </label>
           <div>
             <label className={LABEL}>
               Interruption grace period <span className="text-white/40">{(cfg.interruptGraceMs / 1000).toFixed(2)}s</span>

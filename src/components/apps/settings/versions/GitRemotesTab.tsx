@@ -442,9 +442,10 @@ interface FilesystemCardProps {
   onEdit: (remote: GitRemote) => void;
   onAction: (action: string, remote: GitRemote) => void;
   onPull: (remote: GitRemote) => void;
+  onPush: (remote: GitRemote) => void;
 }
 
-function FilesystemCard({ fs, remotes, busyAction, onAdd, onEdit, onAction, onPull }: FilesystemCardProps) {
+function FilesystemCard({ fs, remotes, busyAction, onAdd, onEdit, onAction, onPull, onPush }: FilesystemCardProps) {
   const btn = "rounded px-2 py-1 text-[11px] font-medium disabled:opacity-40";
   const loading = remotes === undefined;
   return (
@@ -517,7 +518,7 @@ function FilesystemCard({ fs, remotes, busyAction, onAdd, onEdit, onAction, onPu
                   </button>
                   <button
                     disabled={busyAction !== null}
-                    onClick={() => onAction("push", remote)}
+                    onClick={() => onPush(remote)}
                     className={`${btn} inline-flex items-center gap-1 bg-sky-500/20 hover:bg-sky-500/30`}
                   >
                     {busyAction === `push-${fs.id}-${remote.name}` ? <Loader2 size={10} className="animate-spin" /> : <Send size={10} />}
@@ -665,6 +666,41 @@ export function GitRemotesTab() {
     }
   }, [loadRemotes]);
 
+  // Push is a dedicated flow (not the generic api() helper) for the same
+  // reason Pull is: the route now auto-recovers a plain rejection (unshallow
+  // + fetch + rebase, mirroring what "Pull" does), and a response can still
+  // carry `unrelatedHistory` or `rebaseConflict` when that recovery can't
+  // resolve things automatically — those need the existing confirmation
+  // dialogs (Adopt / Force push), not a plain success/error toast.
+  const onPush = useCallback(async (fs: GitFsInstance, remote: GitRemote) => {
+    setBusyAction(`push-${fs.id}-${remote.name}`);
+    setMsg(null);
+    try {
+      const res = await fetch("/api/git-remotes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...sessionHeader() },
+        body: JSON.stringify({ action: "push", filesystem: fs.id, name: remote.name }),
+      });
+      const data = await res.json();
+      if (data.error) {
+        setMsg(`Error: ${data.error.message ?? data.error}`);
+        return;
+      }
+      if (data.unrelatedHistory) {
+        setUnrelatedState({ fs, remote, ahead: data.ahead ?? 0, behind: data.behind ?? 0 });
+        return;
+      }
+      if (data.merged === false && data.rebaseConflict) {
+        setDivergedState({ fs, remote, ahead: data.ahead ?? 0, behind: data.behind ?? 0 });
+        return;
+      }
+      setMsg(data.message ?? "Done.");
+      await loadRemotes(fs.id);
+    } finally {
+      setBusyAction(null);
+    }
+  }, [loadRemotes]);
+
   const onForcePush = useCallback(async () => {
     if (!divergedState) return;
     const { fs, remote } = divergedState;
@@ -721,6 +757,7 @@ export function GitRemotesTab() {
               onEdit={(remote) => setEditState({ fs, remote })}
               onAction={(action, remote) => void onRemoteAction(fs.id, action, remote)}
               onPull={(remote) => void onPull(fs, remote)}
+              onPush={(remote) => void onPush(fs, remote)}
             />
           ))}
         </div>
@@ -807,9 +844,9 @@ export function GitRemotesTab() {
             <p className="text-[12px] text-white/70">
               Local and <span className="font-medium">{divergedState.remote.name}</span> have diverged:{" "}
               <span className="font-medium">{divergedState.ahead}</span> commit(s) only local,{" "}
-              <span className="font-medium">{divergedState.behind}</span> commit(s) only on the remote. Pull already
-              tried to rebase local commits onto the remote automatically, but that hit conflicts. You&apos;ll need
-              to either resolve the conflicts with a manual merge on the command line, or force-push to make local
+              <span className="font-medium">{divergedState.behind}</span> commit(s) only on the remote. An automatic
+              rebase of local commits onto the remote was attempted, but that hit conflicts. You&apos;ll need to
+              either resolve the conflicts with a manual merge on the command line, or force-push to make local
               win (the remote-only commits above will be discarded from the branch).
             </p>
             <div className="mt-4 flex justify-end gap-2">

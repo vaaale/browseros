@@ -55,3 +55,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     return NextResponse.json({ error: (err as Error).message, code: (err as IntegrationError).code }, { status });
   }
 }
+
+// DELETE /api/integrations/[id]/client-secret
+// Removes the stored OAuth client credentials so a new file can be uploaded.
+export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  const manifest = getIntegration(id);
+  if (!manifest) return NextResponse.json({ error: `Unknown integration: ${id}` }, { status: 404 });
+  await getSecretsStore().delete(id, "oauth_client");
+  return NextResponse.json({ ok: true });
+}

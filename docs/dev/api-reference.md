@@ -27,7 +27,7 @@ delimited JSON), not a single body.
 |---|---|---|
 | `/api/apps` | GET, POST, DELETE (`?purge=1`), PATCH | Installed apps: list / install / uninstall|purge / restore |
 | `/api/apps/build` | POST | Build & install a project app (`readProjectDir` → esbuild → `installApp`) |
-| `/apps/[[...slug]]` | GET | **Serve** an installed item's app files through its `data/system/app/<id>` symlink (iframe content; `dist/` if built) |
+| `/apps/[[...slug]]` | GET | **Serve** an installed item's app files through its `data/system/<id>` item symlink (iframe content; `dist/` if built) |
 
 ## Services / plugins / marketplace
 
@@ -40,7 +40,8 @@ delimited JSON), not a single body.
 | `/api/services/[id]/app` | GET | Serves the item's bundled `app/index.html` (404 if none) |
 | `/api/services/events` | GET | NDJSON `ServiceRegistryEvent` stream (`?since=` replay) |
 | `/api/plugins` | GET, PATCH, PUT, DELETE | List; toggle/reconfigure one `{ pluginId, active?, config? }`; reorder `{ orderedIds }`; uninstall `{ pluginId }` |
-| `/api/marketplace` | GET, POST | List registered marketplaces + catalogue; `op` in `{ add, remove, sync, adopt-spec, install-item, install-skill }` (`{ id, itemId }` for item ops; `{ url }` for `add`) |
+| `/api/marketplace` | GET, POST | GET returns registered marketplaces + catalogue **and `installedItemIds`** (the 035 scan); `op` in `{ add, remove, sync, adopt-spec, install-item, install-skill, uninstall-item, uninstall-plugin }` (`{ id, itemId }` for item ops, `{ itemId }` for `uninstall-item`; `{ url }` for `add`) |
+| `/api/items` | GET | Installed ITEMS from the one shared scan (035): id, name, facets, origin, `broken`. The read surface for shapes with no registry of their own — a plugin-only item appears in neither `/api/apps` nor `/api/services` |
 
 See [Service Daemons](apps/services.md) and [Plugin pipeline](plugins/plugin-pipeline.md)
 for the underlying architecture.

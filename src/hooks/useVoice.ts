@@ -3,7 +3,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useChatState } from "@/lib/assistant/client/chat-store";
 import { sendMessage, stopRun } from "@/lib/assistant/client/run-client";
-import type { VoiceConfig, VoiceStatus, VoiceActivationMode } from "@/lib/voice/types";
+import { useVoiceConfig, loadVoiceConfig, patchVoiceConfig } from "@/lib/voice/client/config-store";
+import { setAgentSpeaking } from "@/lib/voice/client/status-store";
+import type { VoiceConfig, VoiceStatus, VoiceActivationMode, VoiceOutputMode } from "@/lib/voice/types";
 import type { MicVAD } from "@ricky0123/vad-web";
 
 export interface UseVoiceOptions {
@@ -23,7 +25,9 @@ export interface UseVoiceReturn {
   stream: MediaStream | null;
   config: VoiceConfig | null;
   activationMode: VoiceActivationMode;
-  isEnabled: boolean;
+  /** How replies reach the user: off / audio / avatar (the speaker + video toggles). */
+  voiceOutput: VoiceOutputMode;
+  setVoiceOutput: (mode: VoiceOutputMode) => Promise<void>;
   isActive: boolean;
   startListening: () => Promise<void>;
   stopListening: () => void;
@@ -31,7 +35,6 @@ export interface UseVoiceReturn {
   stopSpeaking: () => void;
   activate: () => void;
   deactivate: () => void;
-  reloadConfig: () => Promise<void>;
 }
 
 // Energy-based VAD. vadThreshold (0.1–1.0 sensitivity): higher → lower energy
@@ -164,8 +167,16 @@ export function useVoice({
   const [transcript, setTranscript] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
-  const [config, setConfig] = useState<VoiceConfig | null>(null);
   const [isActive, setIsActive] = useState(false);
+
+  // Shared with the Settings tab and the presence host — one copy, so no consumer
+  // can act on a stale view of whether output is on (033 §9a).
+  const config = useVoiceConfig();
+
+  // Reactive (not a ref): the sentence-streaming effect below gates on it, so a
+  // toggle mid-conversation must re-run that effect.
+  const voiceOutput: VoiceOutputMode = config?.voiceOutput ?? "off";
+  const speaks = voiceOutput !== "off";
 
   // Mirror status in a ref so audio callbacks read the live value.
   const statusRef = useRef<VoiceStatus>("idle");
@@ -180,14 +191,12 @@ export function useVoice({
   const minSilenceMsRef = useRef(700);
   const interruptGraceMsRef = useRef(2000);
   const awakeTimeoutMsRef = useRef(5000);
-  const speakRepliesRef = useRef(true);
   useEffect(() => {
     configRef.current = config;
     silenceCeilingRef.current = (1 - (config?.vadThreshold ?? 0.75)) * VAD_MAX_ENERGY;
     minSilenceMsRef.current = config?.minSilenceMs ?? 700;
     interruptGraceMsRef.current = config?.interruptGraceMs ?? 2000;
     awakeTimeoutMsRef.current = config?.awakeTimeoutMs ?? 5000;
-    speakRepliesRef.current = config?.speakReplies !== false;
   }, [config]);
 
   // Latest-value refs for caller-supplied props. Callers often pass inline
@@ -232,6 +241,12 @@ export function useVoice({
   const ptAudioCtxRef = useRef<AudioContext | null>(null);
   const ptSilenceStartRef = useRef<number | null>(null);
 
+  // Key-to-talk refs. The mic stream is opened once on activate() so the first
+  // keydown doesn't stall behind a permission prompt or getUserMedia latency;
+  // MediaRecorder starts/stops per key press/release.
+  const keyStreamRef = useRef<MediaStream | null>(null);
+  const keyRecRef = useRef<ActiveRecording | null>(null);
+
   // TTS refs — generation counter cancels queued-but-not-started segments.
   const ttsAbortRef = useRef<AbortController | null>(null);
   const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -246,10 +261,11 @@ export function useVoice({
   // within interruptGraceMs of this amend + resubmit; later ones start a new turn.
   const speakingStartedAtRef = useRef<number | null>(null);
 
-  // Run-stream watching for sentence TTS: cursor over the stream snapshot.
+  // Run-stream watching for sentence TTS: how many characters of each assistant
+  // message have already been handed to TTS, keyed by message id.
   const chatState = useChatState(conversationId);
-  const streamSnapshotRef = useRef("");
-  const spokenLenRef = useRef(0);
+  const spokenLenByMessageRef = useRef(new Map<string, number>());
+  const convIdRef = useRef(conversationId);
   const prevRunningRef = useRef(false);
   // Live mirror of chatState.running for stable callbacks (is_generating).
   const runningRef = useRef(false);
@@ -271,20 +287,16 @@ export function useVoice({
     });
   }, []);
 
-  const reloadConfig = useCallback(async () => {
-    try {
-      const res = await fetch("/api/voice").then((r) => r.json()) as { config?: VoiceConfig };
-      if (res.config) {
-        setConfig(res.config);
-        applyVADOptions(res.config);
-      }
-    } catch { /* non-fatal */ }
-  }, [applyVADOptions]);
-
+  // A live VAD instance has to be told about threshold changes from anywhere.
   useEffect(() => {
-    const id = setTimeout(() => void reloadConfig(), 0);
+    if (config) applyVADOptions(config);
+  }, [config, applyVADOptions]);
+
+  // The store de-duplicates concurrent loads, so every mount can just ask.
+  useEffect(() => {
+    const id = setTimeout(() => void loadVoiceConfig(), 0);
     return () => clearTimeout(id);
-  }, [reloadConfig]);
+  }, []);
 
   // ── Awake lifecycle ─────────────────────────────────────────────────────────
 
@@ -334,6 +346,8 @@ export function useVoice({
       const res = await fetch("/api/voice/tts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        // No session id: the engine session belongs to the presence window, and
+        // the server resolves it from the live presence lease (036).
         body: JSON.stringify({ text }),
         signal: abort.signal,
       });
@@ -342,19 +356,30 @@ export function useVoice({
         throw new Error(body);
       }
       if (abort.signal.aborted) return;
-      const blob = await res.blob();
+      const result = await res.json() as { ok?: boolean; durationMs?: number; audioUrl?: string | null; error?: string };
+      if (!result.ok) throw new Error(result.error ?? "TTS failed");
       if (abort.signal.aborted) return;
-      const url = URL.createObjectURL(blob);
-      const audio = new Audio(url);
-      ttsAudioRef.current = audio;
       // Stamp the moment the turn's speech becomes audible (first segment only).
       if (speakingStartedAtRef.current === null) speakingStartedAtRef.current = Date.now();
-      await new Promise<void>((resolve) => {
-        audio.onended = () => { URL.revokeObjectURL(url); resolve(); };
-        audio.onerror = () => { URL.revokeObjectURL(url); resolve(); };
-        abort.signal.addEventListener("abort", () => { audio.pause(); URL.revokeObjectURL(url); resolve(); });
-        void audio.play().catch(resolve);
-      });
+      if (result.audioUrl) {
+        // Built-in engine: audio data URL — play locally.
+        const audio = new Audio(result.audioUrl);
+        ttsAudioRef.current = audio;
+        await new Promise<void>((resolve) => {
+          audio.onended = () => resolve();
+          audio.onerror = () => resolve();
+          abort.signal.addEventListener("abort", () => { audio.pause(); resolve(); });
+          void audio.play().catch(resolve);
+        });
+      } else {
+        // Plugin engine (e.g. live-avatar): audio delivered externally.
+        // Wait for the estimated duration, respecting abort.
+        const durationMs = result.durationMs ?? 3000;
+        await new Promise<void>((resolve) => {
+          const t = setTimeout(resolve, durationMs);
+          abort.signal.addEventListener("abort", () => { clearTimeout(t); resolve(); });
+        });
+      }
     } catch (e) {
       if ((e as Error).name !== "AbortError") showError(`TTS error: ${(e as Error).message}`);
     }
@@ -363,22 +388,44 @@ export function useVoice({
   const speak = useCallback((text: string) => {
     const gen = ttsGenRef.current;
     pendingTTSRef.current += 1;
+    setAgentSpeaking(true);
     ttsQueueRef.current = ttsQueueRef.current.then(async () => {
       try {
         // Skip segments queued before an interruption bumped the generation.
         if (gen === ttsGenRef.current) await speakSegment(text);
       } finally {
         pendingTTSRef.current = Math.max(0, pendingTTSRef.current - 1);
-        if (pendingTTSRef.current === 0) restoreReadyStatus();
+        if (pendingTTSRef.current === 0) {
+          setAgentSpeaking(false);
+          restoreReadyStatus();
+        }
       }
     });
   }, [speakSegment, restoreReadyStatus]);
 
   const stopSpeaking = useCallback(() => {
     ttsGenRef.current += 1; // queued-but-not-started segments will be skipped
+    setAgentSpeaking(false);
     ttsAbortRef.current?.abort();
     if (ttsAudioRef.current) { ttsAudioRef.current.pause(); ttsAudioRef.current = null; }
+    // Notify the active engine (e.g. live-avatar) to stop playback immediately.
+    void fetch("/api/voice/interrupt", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    }).catch(() => {});
   }, []);
+
+  const setVoiceOutput = useCallback(async (mode: VoiceOutputMode) => {
+    // Turning output down must silence what is already playing, not just stop
+    // the next segment.
+    if (mode === "off") stopSpeaking();
+    try {
+      await patchVoiceConfig({ voiceOutput: mode });
+    } catch (e) {
+      showError(`Could not change voice output: ${(e as Error).message}`);
+    }
+  }, [stopSpeaking, showError]);
 
   // ── Auto-submit (session mode) ──────────────────────────────────────────────
 
@@ -663,6 +710,104 @@ export function useVoice({
     }
   }, [startEnergySession, handleClip, handleSpeechStart, showError, setStatusBoth]);
 
+  // ── Key-to-talk (hold configured key to record, release to submit) ─────────
+  //
+  // Session-shaped like always-on (engine-session lifecycle + auto-submit +
+  // barge-in), but the wake-word/VAD gate is replaced by a global keydown /
+  // keyup handler on config.activationKey. The mic stream stays open across
+  // key presses so the first keydown doesn't stall behind getUserMedia; each
+  // key press start/stops a MediaRecorder and pipes the resulting blob into
+  // the same handleClip → processUtterance → autoSubmit path used by the
+  // always-on session (isWakeWordClip is false in "key" mode, so no wake-word
+  // gate applies).
+  //
+  // Global key listeners are installed while isActive && mode === "key" — see
+  // the useEffect below.
+
+  const startKeySession = useCallback(async () => {
+    if (keyStreamRef.current) return;
+    try {
+      const mediaStream = await navigator.mediaDevices.getUserMedia(MIC_CONSTRAINTS);
+      keyStreamRef.current = mediaStream;
+    } catch (e) {
+      showError(`Microphone error: ${(e as Error).message}`);
+      setStatusBoth("idle");
+      setIsActive(false);
+      isActiveRef.current = false;
+    }
+  }, [showError, setStatusBoth]);
+
+  const stopKeySession = useCallback(() => {
+    // Force-stop an in-flight recording so its onstop doesn't reference a
+    // now-closed stream. The onstop handler itself is a no-op when not active.
+    const rec = keyRecRef.current;
+    if (rec && rec.recorder.state !== "inactive") {
+      try { rec.recorder.stop(); } catch { /* already stopped */ }
+    }
+    keyRecRef.current = null;
+    keyStreamRef.current?.getTracks().forEach((t) => t.stop());
+    keyStreamRef.current = null;
+    setStream(null);
+  }, []);
+
+  const startKeyRecording = useCallback(() => {
+    if (!isActiveRef.current) return;
+    if (statusRef.current === "listening" || statusRef.current === "transcribing") return;
+    const stream = keyStreamRef.current;
+    if (!stream) return;
+    // Barge-in — cancel a running TTS / generation, route interruption combining.
+    handleSpeechStart();
+    const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus" : "audio/webm";
+    const chunks: Blob[] = [];
+    const recorder = new MediaRecorder(stream, { mimeType });
+    recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+    recorder.onstop = () => {
+      const rec = keyRecRef.current;
+      keyRecRef.current = null;
+      if (!isActiveRef.current) return;
+      if (chunks.length === 0) { backToReady(); return; }
+      const mt = rec?.recorder.mimeType || mimeType;
+      handleClip(new Blob(chunks, { type: mt }));
+    };
+    recorder.start(100);
+    keyRecRef.current = { recorder, chunks };
+    setStream(stream);
+    setStatusBoth("listening");
+  }, [handleSpeechStart, handleClip, backToReady, setStatusBoth]);
+
+  const stopKeyRecording = useCallback(() => {
+    const rec = keyRecRef.current;
+    if (!rec || rec.recorder.state === "inactive") return;
+    rec.recorder.stop(); // onstop → handleClip → processUtterance → autoSubmit
+  }, []);
+
+  // Global keydown/keyup for key-to-talk. Installed only while a key-mode
+  // session is active. Reads config through the ref so a key change in
+  // Settings takes effect without re-registering the listeners.
+  useEffect(() => {
+    if (!isActive) return;
+    if (configRef.current?.activationMode !== "key") return;
+    const onDown = (e: KeyboardEvent) => {
+      const cfg = configRef.current;
+      if (!cfg || cfg.activationMode !== "key") return;
+      if (e.code !== (cfg.activationKey || "ControlLeft")) return;
+      if (e.repeat) return;
+      startKeyRecording();
+    };
+    const onUp = (e: KeyboardEvent) => {
+      const cfg = configRef.current;
+      if (!cfg || cfg.activationMode !== "key") return;
+      if (e.code !== (cfg.activationKey || "ControlLeft")) return;
+      stopKeyRecording();
+    };
+    document.addEventListener("keydown", onDown);
+    document.addEventListener("keyup", onUp);
+    return () => {
+      document.removeEventListener("keydown", onDown);
+      document.removeEventListener("keyup", onUp);
+    };
+  }, [isActive, startKeyRecording, stopKeyRecording]);
+
   // ── Push-to-talk (dictation) ────────────────────────────────────────────────
 
   const stopPTT = useCallback(() => {
@@ -734,6 +879,12 @@ export function useVoice({
 
   const stopListening = useCallback(() => {
     if (isActiveRef.current) {
+      // Key-to-talk: force-stop the in-flight hold-to-record recording; its
+      // onstop commits the utterance the same way a key release would.
+      if (configRef.current?.activationMode === "key") {
+        stopKeyRecording();
+        return;
+      }
       // Session mode: force-commit the in-flight recording as an utterance.
       const vad = sileroVADRef.current;
       if (vad) {
@@ -746,7 +897,7 @@ export function useVoice({
     } else {
       stopPTT();
     }
-  }, [stopPTT]);
+  }, [stopPTT, stopKeyRecording]);
 
   // ── Activate / deactivate ───────────────────────────────────────────────────
 
@@ -754,69 +905,93 @@ export function useVoice({
     isActiveRef.current = true;
     setIsActive(true);
     setStatusBoth("dormant");
-    void startSession();
-  }, [startSession, setStatusBoth]);
+    // Key-to-talk skips the VAD/wake-word session — it opens the mic once and
+    // then listens for the configured key (see the effect above). Otherwise
+    // fall through to the always-on Silero session.
+    if (configRef.current?.activationMode === "key") {
+      void startKeySession();
+    } else {
+      void startSession();
+    }
+  }, [startSession, startKeySession, setStatusBoth]);
 
   const deactivate = useCallback(() => {
     isActiveRef.current = false;
     setIsActive(false);
     stopSpeaking();
     stopSession();
+    stopKeySession();
     lastSubmittedRef.current = "";
     isInterruptingRef.current = false;
     speakingStartedAtRef.current = null;
-    streamSnapshotRef.current = "";
-    spokenLenRef.current = 0;
-    prevRunningRef.current = false;
     setStatusBoth("idle");
-  }, [stopSpeaking, stopSession, setStatusBoth]);
+  }, [stopSpeaking, stopSession, stopKeySession, setStatusBoth]);
 
-  // ── Sentence-streaming TTS + turn lifecycle (session mode) ──────────────────
+  // ── Sentence-streaming TTS + turn lifecycle ─────────────────────────────────
   //
-  // Tracks a spoken-length cursor over a snapshot of the live stream text.
-  // The chat store CLEARS streamText when a message finalizes (mid-run and at
-  // run end), so the snapshot — not streamText itself — is the source of truth
-  // for what remains to be spoken. Every character of every reply is spoken:
-  // complete sentences stream out as they arrive; the remainder flushes when
-  // the message finalizes or the run ends.
-
-  const flushRemainder = useCallback(() => {
-    const rest = streamSnapshotRef.current.slice(spokenLenRef.current).trim();
-    streamSnapshotRef.current = "";
-    spokenLenRef.current = 0;
-    if (rest && speakRepliesRef.current) speak(rest);
-  }, [speak]);
+  // This is the ONLY place BOS turns agent replies into speech. It used to share
+  // the job with a second passive player, and the two disagreed about whether
+  // TTS was on — so a reply could be synthesized twice, or once after the user
+  // had switched it off. One producer, one gate (voiceOutput).
+  //
+  // Every character of every reply is spoken exactly once: complete sentences
+  // stream out as they arrive, and the finalized message covers whatever the
+  // stream didn't. The cursor is per MESSAGE ID, not over a snapshot of
+  // streamText, because the store clears streamText the moment a message
+  // finalizes — when a short reply arrives as a single delta React batches the
+  // delta with the finalize and the stream text never appears in a render at
+  // all, so a snapshot cursor would speak nothing.
+  //
+  // The cursor advances even while muted, so switching the speaker on mid-reply
+  // starts at the next sentence instead of re-speaking from the beginning.
 
   useEffect(() => {
-    runningRef.current = chatState.running;
-    if (!isActive) return;
     const running = chatState.running;
-    const text = chatState.streamText ?? "";
+    runningRef.current = running;
+    const mute = !speaks;
+    // Text is only ever spoken while a run is live (or in the render batch that
+    // ends it). Anything else — a conversation being opened, a switch to another
+    // transcript — is history: recorded as already-spoken, never voiced.
+    const isHistory = !running && !prevRunningRef.current;
 
-    // 1) Stream buffer reset (message finalized) — speak the unspoken
-    //    remainder of the previous snapshot before tracking the new stream.
-    if (text.length < streamSnapshotRef.current.length) {
-      flushRemainder();
+    if (convIdRef.current !== conversationId) {
+      convIdRef.current = conversationId;
+      spokenLenByMessageRef.current = new Map();
     }
+    const spoken = spokenLenByMessageRef.current;
 
-    // 2) New text — queue complete sentences beyond the spoken cursor.
-    if (text !== streamSnapshotRef.current) {
-      streamSnapshotRef.current = text;
-      const unspoken = text.slice(spokenLenRef.current);
+    // 1) Live stream — hand over complete sentences beyond the cursor.
+    const streamId = chatState.streamMessageId;
+    const streamText = chatState.streamText ?? "";
+    if (streamId && streamText) {
+      const len = spoken.get(streamId) ?? 0;
+      const unspoken = streamText.slice(len);
       const { complete, remainder } = splitSentences(unspoken, 2);
       if (complete.length) {
-        spokenLenRef.current += unspoken.length - remainder.length;
-        if (speakRepliesRef.current) for (const sentence of complete) speak(sentence);
+        spoken.set(streamId, len + unspoken.length - remainder.length);
+        if (!mute) for (const sentence of complete) speak(sentence);
       }
     }
 
-    // 3) Run finished — flush the tail and restore the ready state.
-    if (!running && prevRunningRef.current) {
-      flushRemainder();
-      if (pendingTTSRef.current === 0) restoreReadyStatus();
+    // 2) Finalized messages — the tail (or the whole reply, when the stream was
+    //    never rendered).
+    for (const m of chatState.messages) {
+      if (m.role !== "assistant") continue;
+      const content = m.content ?? "";
+      const len = spoken.get(m.id) ?? 0;
+      if (content.length <= len) continue;
+      spoken.set(m.id, content.length);
+      const rest = content.slice(len).trim();
+      if (rest && !mute && !isHistory) speak(rest);
+    }
+
+    // 3) Run finished — leave the turn's status behind even when muted,
+    //    otherwise a voice session with TTS off stays stuck on "thinking".
+    if (!running && prevRunningRef.current && pendingTTSRef.current === 0) {
+      restoreReadyStatus();
     }
     prevRunningRef.current = running;
-  }, [chatState.streamText, chatState.running, isActive, speak, flushRemainder, restoreReadyStatus]);
+  }, [conversationId, chatState.messages, chatState.streamText, chatState.streamMessageId, chatState.running, speaks, speak, restoreReadyStatus]);
 
   // ── Cleanup on unmount ──────────────────────────────────────────────────────
   // The teardown MUST be unmount-only. With teardown functions in the dep
@@ -829,6 +1004,7 @@ export function useVoice({
     teardownRef.current = () => {
       stopSpeaking();
       stopSession();
+      stopKeySession();
       stopPTT();
     };
   });
@@ -841,7 +1017,8 @@ export function useVoice({
     stream,
     config,
     activationMode: config?.activationMode ?? "button",
-    isEnabled: config?.enabled ?? false,
+    voiceOutput,
+    setVoiceOutput,
     isActive,
     startListening,
     stopListening,
@@ -849,6 +1026,5 @@ export function useVoice({
     stopSpeaking,
     activate,
     deactivate,
-    reloadConfig,
   };
 }

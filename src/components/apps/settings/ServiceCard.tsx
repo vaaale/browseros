@@ -56,9 +56,9 @@ export function ServiceCard({ service, busy, isSelected, onAction, onOpenConfig,
           </>
         )}
       </p>
-      {service.corruptedReason && (
+      {(service.corruptedReason || service.lastError) && (
         <p className="mb-1.5 rounded bg-orange-500/10 px-1.5 py-1 text-[10px] leading-snug text-orange-300">
-          {service.corruptedReason}
+          {service.corruptedReason || service.lastError}
         </p>
       )}
       <div className="flex items-center gap-1">

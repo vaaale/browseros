@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import type { ConfigSchemaView } from "@/lib/config/types";
+import { useEffect, useState } from "react";
+import type { ConfigField, ConfigOption, ConfigSchemaView } from "@/lib/config/types";
 
 // Generic settings form rendered from a registered config schema. Used for any
 // namespace that doesn't provide a custom component.
@@ -37,15 +37,7 @@ export function ConfigForm({ schema, onSaved }: { schema: ConfigSchemaView; onSa
           return (
             <FieldRow key={f.key} label={f.label}>
               {f.type === "select" ? (
-                <select
-                  value={String(val ?? "")}
-                  onChange={(e) => set(f.key, e.target.value)}
-                  className="rounded border border-white/10 bg-black/30 px-2 py-1.5 text-xs outline-none focus:border-white/30"
-                >
-                  {f.options?.map((o) => (
-                    <option key={o.value} value={o.value}>{o.label}</option>
-                  ))}
-                </select>
+                <SelectField field={f} value={val} onChange={(v) => set(f.key, v)} />
               ) : f.type === "boolean" ? (
                 <input type="checkbox" checked={!!val} onChange={(e) => set(f.key, e.target.checked)} />
               ) : f.type === "textarea" ? (
@@ -85,4 +77,89 @@ function FieldRow({ label, children }: { label: string; children: React.ReactNod
       {children}
     </>
   );
+}
+
+// A <select> whose options are either declared inline on the field (static
+// enum) or fetched from `field.optionsEndpoint` at render time (dynamic list,
+// e.g. plugins whose options depend on external state). Renders "Loading…"
+// while fetching and a fallback error option if the fetch fails.
+function SelectField({
+  field,
+  value,
+  onChange,
+}: {
+  field: ConfigField;
+  value: unknown;
+  onChange: (v: string) => void;
+}) {
+  const [dynamicOptions, setDynamicOptions] = useState<ConfigOption[] | null>(null);
+  const [status, setStatus] = useState<"idle" | "loading" | "error">(field.optionsEndpoint ? "loading" : "idle");
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!field.optionsEndpoint) return;
+    let cancelled = false;
+    fetch(field.optionsEndpoint)
+      .then(async (res) => {
+        const body = await res.json().catch(() => null);
+        if (!res.ok) throw new Error(body?.error || `HTTP ${res.status}`);
+        return body;
+      })
+      .then((body: unknown) => {
+        if (cancelled) return;
+        setDynamicOptions(normalizeOptions(body));
+        setStatus("idle");
+      })
+      .catch((err: Error) => {
+        if (cancelled) return;
+        setErrorMsg(err.message || "Failed to load options");
+        setStatus("error");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [field.optionsEndpoint]);
+
+  const options = dynamicOptions ?? field.options ?? [];
+  const current = String(value ?? "");
+
+  return (
+    <select
+      value={current}
+      onChange={(e) => onChange(e.target.value)}
+      className="rounded border border-white/10 bg-black/30 px-2 py-1.5 text-xs outline-none focus:border-white/30"
+    >
+      <option value="">
+        {status === "loading" ? "Loading…" : status === "error" ? `— ${errorMsg} —` : ""}
+      </option>
+      {options.map((o) => (
+        <option key={o.value} value={o.value}>
+          {o.label}
+        </option>
+      ))}
+      {/* Preserve a previously-saved value that no longer appears in the fetched list. */}
+      {current && !options.some((o) => o.value === current) && status !== "loading" && (
+        <option value={current}>{current}</option>
+      )}
+    </select>
+  );
+}
+
+// Normalize an optionsEndpoint response into ConfigOption[]. Accepted shapes:
+//   { options: (string | { value, label })[] }
+//   (string | { value, label })[]
+function normalizeOptions(body: unknown): ConfigOption[] {
+  const raw: unknown = Array.isArray(body)
+    ? body
+    : (body as { options?: unknown })?.options;
+  if (!Array.isArray(raw)) return [];
+  return raw.map((item) => {
+    if (typeof item === "string") return { value: item, label: item };
+    if (item && typeof item === "object" && "value" in item) {
+      const o = item as { value: unknown; label?: unknown };
+      const value = String(o.value);
+      return { value, label: typeof o.label === "string" ? o.label : value };
+    }
+    return { value: String(item), label: String(item) };
+  });
 }

@@ -6,6 +6,8 @@
 
 **Status**: Draft
 
+**App Target**: [bos-core | builtin-app | marketplace-item | n/a — n/a when this feature isn't an app/BOS-source change with its own implementation mechanism. `marketplace-item` covers an app facet, a background service facet, or both together in one item — do NOT split a single item across two target values just because it has both a UI and a daemon. Before picking bos-core because a feature needs raw/continuous/non-standard server behavior (a protocol handler, a daemon, a non-HTTP-verb listener), check whether it can be a marketplace-item's service facet instead (an installed item's own worker-thread process on its own port, outside Next.js entirely) — see references/target-marketplace-item.md.]
+
 **Input**: User description: "$ARGUMENTS"
 
 ## User Scenarios & Testing *(mandatory)*

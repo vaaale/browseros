@@ -184,7 +184,8 @@ export default function Account() {
           )}
           <div style={s.row}>
             <Button size="sm" onClick={() => doOp("restart")} loading={loadingOp === "restart"} disabled={loadingOp !== null}>Restart</Button>
-            <Button size="sm" variant="secondary" onClick={() => doOp("update-src")} loading={loadingOp === "update-src"} disabled={loadingOp !== null}>Update source</Button>
+            <Button size="sm" variant="secondary" onClick={() => doOp("pull-and-update-src")} loading={loadingOp === "pull-and-update-src"} disabled={loadingOp !== null} title="Fetch and merge — keeps commits you have made in src/">Pull / Update Source</Button>
+            <Button size="sm" variant="secondary" onClick={() => doOp("update-src")} loading={loadingOp === "update-src"} disabled={loadingOp !== null} title="Fetch and hard-reset — DISCARDS commits you have made in src/">Update source</Button>
             <Button size="sm" variant="secondary" onClick={() => doOp("rebuild-nm")} loading={loadingOp === "rebuild-nm"} disabled={loadingOp !== null}>Rebuild deps</Button>
             <a href="/" style={{ padding: "4px 10px", border: "1px solid #2563eb", borderRadius: 4, color: "#7af", fontSize: 12, textDecoration: "none" }}>
               Open BrowserOS ↗
@@ -228,7 +229,11 @@ export default function Account() {
         {/* Source configuration */}
         <div style={s.card}>
           <div style={s.section}>Source configuration</div>
-          <div style={s.opDesc}>Choose which remote and branch "Update source" pulls from. Works even when your instance is offline.</div>
+          <div style={s.opDesc}>
+            Choose which remote and branch the two source operations use. Works even when your instance is offline.
+            &ldquo;Pull / Update Source&rdquo; fetches and <b>merges</b>, keeping commits you have made in your checkout;
+            &ldquo;Update source&rdquo; fetches and hard-resets, which <b>discards</b> them.
+          </div>
           <div style={{ display: "flex", flexDirection: "column" as const, gap: 10, marginTop: 10 }}>
             <div>
               <label style={s.label}>Remote</label>

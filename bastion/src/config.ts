@@ -7,7 +7,6 @@ export interface Config {
   authProvider: "simple" | "keycloak";
   bosImage: string;
   volumeBase: string;
-  idleTimeoutMs: number;
   maxConcurrentInstances: number;
   bosBaseRef: string;
   bosRepoPath: string;
@@ -70,7 +69,6 @@ export function loadConfig(): Config {
     // `${VOLUME_BASE:-./user-data}:/user-data` bind-mount source, resolved
     // relative to the compose file's directory — never this constant.
     volumeBase: "/user-data",
-    idleTimeoutMs: parseInt(process.env.IDLE_TIMEOUT_MS ?? String(persisted.idleTimeoutMs ?? 1_800_000), 10),
     maxConcurrentInstances: parseInt(process.env.MAX_CONCURRENT_INSTANCES ?? String(persisted.maxConcurrentInstances ?? 50), 10),
     bosBaseRef: process.env.BOS_BASE_REF ?? persisted.bosBaseRef ?? "main",
     bosRepoPath: process.env.BOS_REPO_PATH ?? persisted.bosRepoPath ?? "/bos-src",
@@ -100,7 +98,7 @@ export function saveConfig(dataDir: string, patch: Partial<Config>): void {
     existing = JSON.parse(fs.readFileSync(file, "utf8")) as Partial<Config>;
   } catch { /* start fresh */ }
   const allowed: (keyof Config)[] = [
-    "bosImage", "idleTimeoutMs", "maxConcurrentInstances",
+    "bosImage", "maxConcurrentInstances",
     "bosBaseRef", "bosRepoPath", "bosNet", "keycloakIssuer", "keycloakClientId",
     "keycloakUsernameClaim", "keycloakAdminRole", "publicUrl",
   ];

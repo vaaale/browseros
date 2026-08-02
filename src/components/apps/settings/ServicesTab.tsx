@@ -95,7 +95,9 @@ export function ServicesTab({ selected, onOpenConfig, onOpenLogs }: ServicesTabP
     function applyEvent(event: ServiceRegistryEvent) {
       switch (event.type) {
         case "service:status:changed":
-          setServices((prev) => prev.map((s) => (s.id === event.id ? { ...s, state: event.state } : s)));
+          setServices((prev) =>
+            prev.map((s) => (s.id === event.id ? { ...s, state: event.state, lastError: event.error } : s)),
+          );
           break;
         case "service:bound":
           setServices((prev) =>
@@ -104,7 +106,7 @@ export function ServicesTab({ selected, onOpenConfig, onOpenLogs }: ServicesTabP
           break;
         case "service:crash":
           setServices((prev) =>
-            prev.map((s) => (s.id === event.id ? { ...s, restartCount: event.restartCount } : s)),
+            prev.map((s) => (s.id === event.id ? { ...s, restartCount: event.restartCount, lastError: event.error } : s)),
           );
           break;
         case "service:installed":

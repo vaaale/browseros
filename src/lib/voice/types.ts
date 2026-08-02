@@ -1,5 +1,11 @@
 export type TTSProviderType = "openai-compatible" | "omnivoice";
-export type VoiceActivationMode = "button" | "wake-word";
+/** How the agent's replies reach the user (036). One setting, so "a face on
+ *  screen with the sound off" is not a representable state:
+ *  - "off"    — replies are text only; nothing is synthesized.
+ *  - "audio"  — replies are spoken.
+ *  - "avatar" — replies are spoken by an embodied engine in the presence window. */
+export type VoiceOutputMode = "off" | "audio" | "avatar";
+export type VoiceActivationMode = "button" | "wake-word" | "key";
 export type WakeWordEngine = "speaches" | "onnx";
 export type VoiceStatus =
   | "idle"
@@ -84,23 +90,27 @@ export interface VoiceConfig {
   activationMode: VoiceActivationMode;
   wakeWord: string;
   wakeWordEngine: WakeWordEngine;
+  /** KeyboardEvent.code used for key-to-talk (e.g. "ControlLeft"). Held-down =
+   *  recording; release = submit. Ignored in other activation modes. */
+  activationKey: string;
 
   // VAD
   vadThreshold: number;
   minSilenceMs: number;
 
   // TTS
-  ttsProvider: TTSProviderType;
+  ttsProvider: string; // "openai-compatible" | "omnivoice" | plugin-registered id
   openai: OpenAITTSConfig;
   omnivoice: OmnivoiceTTSConfig;
 
   // Real-time conversation
-  enabled: boolean;
   /** Interruptions within this window (ms) after the agent starts speaking
    *  amend + resubmit the previous message; later interruptions start a new turn. */
   interruptGraceMs: number;
   /** How long (ms) the agent stays awake (no wake word needed) after a turn. */
   awakeTimeoutMs: number;
-  /** Speak agent replies aloud (TTS). Off = voice input only. */
-  speakReplies: boolean;
+  /** THE output switch, driven by the speaker and video buttons in the Assistant
+   *  input row. Nothing else gates speech: if this isn't "off", replies are
+   *  spoken — whether the message was typed or dictated. */
+  voiceOutput: VoiceOutputMode;
 }

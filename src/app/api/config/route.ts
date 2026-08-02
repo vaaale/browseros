@@ -40,7 +40,11 @@ function coerce(fields: ConfigField[], input: Record<string, unknown>): Record<s
 export async function GET() {
   const schemas: ConfigSchemaView[] = [];
   for (const schema of listConfigSchemas()) {
-    const reg = getRegistration(schema.namespace)!;
+    // A plugin schema without a resolvable registration means the plugin
+    // was unregistered between listConfigSchemas() and now (or is otherwise
+    // stale). Skip rather than 500 the whole Settings page.
+    const reg = getRegistration(schema.namespace);
+    if (!reg) continue;
     const raw = await reg.load();
     schemas.push({ ...schema, ...maskValues(schema.fields, raw) });
   }

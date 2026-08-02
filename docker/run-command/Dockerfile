@@ -44,12 +44,14 @@ RUN pip install --no-cache-dir \
     "markitdown[all]" \
     Pillow \
     python-pptx \
-    python-docx
+    python-docx \
+    jq
 
 RUN echo "Skipping chmod"
 #RUN chmod -R a+rwX "$VIRTUAL_ENV"
 
 RUN npm install -g pptxgenjs docx xlsx-populate
+RUN npm install -g @googleworkspace/cli
 
 # Make globally-installed node modules (pptxgenjs) resolvable by scripts run from
 # /workspace, and keep python output unbuffered so the idle watchdog sees progress.

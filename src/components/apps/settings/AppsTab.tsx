@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Trash2, RotateCcw, PackageX, ExternalLink, Puzzle, ShieldCheck, ChevronDown, ChevronRight } from "lucide-react";
+import { Trash2, PackageX, ExternalLink, Puzzle, ShieldCheck, ChevronDown, ChevronRight } from "lucide-react";
 import type { AppManifest, AppCapability } from "@/os/types";
 import { useOSStore } from "@/store/os-provider";
 
@@ -14,12 +14,26 @@ const ALL_CAPABILITIES: { id: AppCapability; label: string; description: string 
   { id: "services:read", label: "Read services",     description: "Read a service's config (e.g. its bound port) — needed by an app bundled with its own service, like Terminal" },
 ];
 
+interface InstalledItemView {
+  id: string;
+  name: string;
+  description: string;
+  version?: string;
+  facets: string[];
+  origin: "local" | "marketplace";
+  marketplaceId?: string;
+  broken: boolean;
+}
+
 interface ManagedApp {
   id: string;
   name: string;
   icon: string;
   status: "installed" | "uninstalled";
   capabilities?: AppCapability[];
+  /** Absent/"local" = the user authored it; "marketplace" = its files belong to a marketplace. */
+  origin?: "local" | "marketplace";
+  marketplaceId?: string;
 }
 
 export function AppsTab() {
@@ -27,10 +41,20 @@ export function AppsTab() {
   const unregisterApp = useOSStore((s) => s.unregisterApp);
   const launch = useOSStore((s) => s.launch);
   const [apps, setApps] = useState<ManagedApp[]>([]);
+  /** Installed items that are NOT apps — a voice engine or integration has no
+   *  window to open, so nothing else in the UI ever listed it and it looked
+   *  uninstalled while being active. */
+  const [pluginItems, setPluginItems] = useState<InstalledItemView[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
 
+  const loadPluginItems = useCallback(async () => {
+    const res = await fetch("/api/items").then((r) => r.json()) as { items?: InstalledItemView[] };
+    setPluginItems((res.items ?? []).filter((i) => i.facets.includes("plugin") && !i.facets.includes("app")));
+  }, []);
+
   const load = useCallback(async () => {
+    void loadPluginItems();
     const res = await fetch("/api/apps").then((r) => r.json());
     const rawApps: ManagedApp[] = res.apps ?? [];
     const withCaps = await Promise.all(
@@ -42,7 +66,7 @@ export function AppsTab() {
       }),
     );
     setApps(withCaps);
-  }, []);
+  }, [loadPluginItems]);
 
   useEffect(() => {
     const id = setTimeout(() => void load(), 0);
@@ -54,17 +78,6 @@ export function AppsTab() {
     try {
       await fetch(`/api/apps?id=${encodeURIComponent(id)}`, { method: "DELETE" });
       unregisterApp(id); // live desktop/dock refresh
-      await load();
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const restore = async (id: string) => {
-    setBusy(id);
-    try {
-      const res = await fetch(`/api/apps?id=${encodeURIComponent(id)}`, { method: "PATCH" }).then((r) => r.json());
-      if (res.app) registerApp(res.app as AppManifest); // live desktop/dock refresh
       await load();
     } finally {
       setBusy(null);
@@ -93,14 +106,30 @@ export function AppsTab() {
     }
   };
 
+  const uninstallItem = useCallback(async (id: string) => {
+    setBusy(id);
+    try {
+      await fetch("/api/marketplace", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ op: "uninstall-item", itemId: id }),
+      });
+      await loadPluginItems();
+    } finally {
+      setBusy(null);
+    }
+  }, [loadPluginItems]);
+
+  // Installed state IS the item symlink (035), so every listed app is installed —
+  // uninstalling removes it from this list entirely.
   const installed = apps.filter((a) => a.status === "installed");
-  const uninstalled = apps.filter((a) => a.status === "uninstalled");
 
   return (
     <div className="space-y-6">
       <p className="text-xs text-white/50">
-        Apps are built by the assistant and installed into BrowserOS. Uninstalling hides an app but keeps its files so you can
-        restore it later; purge deletes the files for good.
+        Apps are built by the assistant, or installed from the Marketplace. Uninstalling removes an app completely — to get it
+        back, install it again from the Marketplace. Purge additionally deletes the files, and is only available for apps you
+        authored yourself (a marketplace app&apos;s files belong to its marketplace).
       </p>
 
       <section>
@@ -131,6 +160,16 @@ export function AppsTab() {
                 >
                   <PackageX size={12} /> Uninstall
                 </button>
+                {a.origin !== "marketplace" && (
+                  <button
+                    onClick={() => purge(a.id, a.name)}
+                    disabled={busy === a.id}
+                    title="Delete this app's files permanently"
+                    className="flex items-center gap-1 rounded px-2 py-1 text-[11px] text-red-300 hover:bg-red-500/15 disabled:opacity-40"
+                  >
+                    <Trash2 size={12} /> Purge
+                  </button>
+                )}
               </Row>
               {expanded === a.id && (
                 <div className="ml-4 mt-0.5 rounded border border-white/10 bg-white/[0.02] p-3 space-y-2">
@@ -156,31 +195,41 @@ export function AppsTab() {
         </div>
       </section>
 
-      {uninstalled.length > 0 && (
+      {pluginItems.length > 0 && (
         <section>
-          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-white/50">Uninstalled ({uninstalled.length})</h3>
+          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-white/50">
+            Plugins ({pluginItems.length})
+          </h3>
+          <p className="mb-2 text-[11px] text-white/40">
+            Installed from the Marketplace, with no window of their own — a voice engine or an
+            integration. Each one configures itself on its own Settings page.
+          </p>
           <div className="space-y-1">
-            {uninstalled.map((a) => (
-              <Row key={a.id} app={a} busy={busy === a.id} dim>
+            {pluginItems.map((i) => (
+              <div
+                key={i.id}
+                className="flex items-center gap-2 rounded border border-white/10 bg-white/[0.03] px-2.5 py-1.5"
+              >
+                <Puzzle size={14} className="shrink-0 text-white/40" />
+                <span className="flex-1 truncate text-xs">
+                  {i.name}
+                  {i.version && <span className="ml-1.5 text-white/30">v{i.version}</span>}
+                  {i.broken && <span className="ml-1.5 text-red-300">— files missing</span>}
+                </span>
+                <span className="shrink-0 rounded bg-rose-500/20 px-1.5 py-0.5 text-[10px] text-rose-300">plugin</span>
                 <button
-                  onClick={() => restore(a.id)}
-                  disabled={busy === a.id}
-                  className="flex items-center gap-1 rounded px-2 py-1 text-[11px] text-emerald-200 hover:bg-emerald-400/15 disabled:opacity-40"
+                  onClick={() => void uninstallItem(i.id)}
+                  disabled={busy === i.id}
+                  className="flex shrink-0 items-center gap-1 rounded px-2 py-1 text-[11px] text-amber-200 hover:bg-amber-400/15 disabled:opacity-40"
                 >
-                  <RotateCcw size={12} /> Restore
+                  <PackageX size={12} /> Uninstall
                 </button>
-                <button
-                  onClick={() => purge(a.id, a.name)}
-                  disabled={busy === a.id}
-                  className="flex items-center gap-1 rounded px-2 py-1 text-[11px] text-red-300 hover:bg-red-500/15 disabled:opacity-40"
-                >
-                  <Trash2 size={12} /> Purge
-                </button>
-              </Row>
+              </div>
             ))}
           </div>
         </section>
       )}
+
     </div>
   );
 }

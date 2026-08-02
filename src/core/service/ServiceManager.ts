@@ -2,11 +2,11 @@ import "server-only";
 import { Worker } from "node:worker_threads";
 import { promises as fs } from "fs";
 import path from "path";
-import { dataDir } from "@/os/data-dir";
 import { logger } from "@/lib/logging";
 import { writeFileAtomic } from "@/os/atomic-write";
 import { serviceRegistry } from "./ServiceRegistry";
-import { checkPortAvailable } from "./PortChecker";
+import { itemLinkPath } from "@/system/items/installed";
+import { checkPortAvailable, checkPortReservedByBos } from "./PortChecker";
 import { validateManifestAtStart } from "./manifestValidator";
 import { checkDependenciesRunning, resolveOrder } from "./DependencyResolver";
 import { cancelPendingRestart, handleCrash } from "./CrashRecovery";
@@ -121,18 +121,21 @@ export class ServiceManager {
     cancelPendingRestart(serviceId);
 
     // 1. Validate manifest can actually be loaded (CH-011 at-start check).
-    const servicesRoot = path.join(dataDir(), "system", "services");
-    const startValidation = await validateManifestAtStart(def.manifest, servicesRoot);
+    // Resolve through the item symlink (035): dataDir()/system/<id>/services/
+    const serviceDir = path.join(itemLinkPath(serviceId), "services");
+    const startValidation = await validateManifestAtStart(def.manifest, serviceDir);
     if (!startValidation.valid) {
+      const message = `Manifest validation failed: ${startValidation.errors.join("; ")}`;
       logger().error(COMPONENT, `start: manifest validation failed for "${serviceId}"`, undefined, {
         serviceId,
         errors: startValidation.errors,
       });
+      registry.setState(serviceId, "stopped", message);
       return;
     }
 
     // 2. Resolve entrypoint path.
-    const entryPath = path.resolve(dataDir(), "system", "services", serviceId, def.manifest.entry);
+    const entryPath = path.resolve(itemLinkPath(serviceId), "services", def.manifest.entry);
 
     // 3. Config directory presence (warn, not error, if empty/missing).
     const configDirPath = def.configDirPath;
@@ -149,14 +152,17 @@ export class ServiceManager {
     // port: 0 means "OS assigns" — never pre-checked, always allowed.
     const configuredPort = await readConfiguredPort(configDirPath, serviceId);
     if (configuredPort && configuredPort.port !== 0) {
+      const reservedReason = checkPortReservedByBos(configuredPort.port);
+      if (reservedReason) {
+        logger().error(COMPONENT, reservedReason, undefined, { serviceId, port: configuredPort.port });
+        registry.setState(serviceId, "stopped", reservedReason);
+        return;
+      }
       const available = await checkPortAvailable(configuredPort.port, configuredPort.host);
       if (!available) {
-        logger().error(
-          COMPONENT,
-          `Port ${configuredPort.port} is already in use. Configure a different port in Settings.`,
-          undefined,
-          { serviceId, port: configuredPort.port },
-        );
+        const message = `Port ${configuredPort.port} is already in use. Configure a different port in Settings, or set "port": 0 to let the OS assign one automatically.`;
+        logger().error(COMPONENT, message, undefined, { serviceId, port: configuredPort.port });
+        registry.setState(serviceId, "stopped", message);
         return;
       }
     }
@@ -178,6 +184,7 @@ export class ServiceManager {
       });
     } catch (err) {
       logger().error(COMPONENT, `start: failed to create worker for "${serviceId}"`, err, { serviceId, entryPath });
+      registry.setState(serviceId, "stopped", `Failed to start worker: ${(err as Error).message}`);
       return;
     }
 
@@ -200,7 +207,7 @@ export class ServiceManager {
         this.expectingExit.add(serviceId);
         await worker.terminate().catch(() => {});
         registry.setWorker(serviceId, null);
-        registry.setState(serviceId, "stopped");
+        registry.setState(serviceId, "stopped", `Did not report ready within ${startupTimeoutMs}ms — check its logs.`);
         return;
       }
     }

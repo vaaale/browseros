@@ -166,6 +166,32 @@ build‑gate, and staging are harness‑agnostic.
   if none match it returns `HARNESS_UNAVAILABLE` and the CLI path is preferred.
   (OpenCode is **CLI‑only** here — it isn't exposed over this MCP `Agent` path.)
 
+### Provider selection & MCP-server inclusion (`devharness/provider.ts` + `devharness/generate-config.ts`, `029-settings-dev-harness`)
+
+On top of the credential-file login above, Settings → Dev Harness lets the user pick
+a per-CLI **provider** — Claude: `default` (credential-file login, unchanged) |
+`api-key` | `bedrock` | `vertex`; OpenCode: `default` (`auth.json` login, unchanged) |
+a named `provider` — and any MCP server (`src/lib/mcp/`) can be flagged
+`includeInDevHarness` (default `false`) to fold it into the harness too.
+`regenerateHarnessConfigFiles()` (`generate-config.ts`) reads both and **generates**
+(full replace, never merged) three files under the harness `HOME` — **not** the
+`cwd`/worktree, so this is unrelated to (and doesn't reintroduce) the "avoid writing
+an `opencode.json` the Supervisor would commit" concern above:
+
+- `.claude/settings.json` — Claude's provider `env` block (`ANTHROPIC_API_KEY`,
+  `CLAUDE_CODE_USE_BEDROCK`, etc.).
+- `.claude.json` — Claude's `mcpServers` (**not** `settings.json` — Claude Code
+  doesn't read MCP servers from there), from every `includeInDevHarness` server.
+- `.config/opencode/opencode.json` — OpenCode's `provider`/`model` fields plus its
+  `mcp` block, from the same server list.
+
+A file is deleted (not left empty) when it has nothing to say — e.g. provider left
+`default` and no servers flagged — which is also how
+`harnessCredentialEnv()`'s `HOME`/`XDG_*` redirection gate knows there's something
+to honor: it checks `hasClaudeCreds() || hasOpenCodeAuth() || hasGeneratedHarnessConfig()`
+(existence of any of the three files above), not just the credential files, so a
+provider- or MCP-only setup (no pasted credentials) still gets redirected correctly.
+
 ---
 
 ## Delegation + the Supervisor (code candidates)

@@ -45,6 +45,7 @@ folder with a manifest" model as installed apps.
 | `memory` | Memory | `Brain` | 40 | yes | user profile + agent memory editor |
 | `docs` | Docs | `BookOpen` | 50 | yes | in‑OS docs hub reader |
 | `settings` | Settings | `Settings` | 60 | yes | config tabs |
+| `marketplace` | Marketplace | `Store` | — | yes | browse every content source, install items, adopt specs — master-detail UI, see [marketplace-app.md](./marketplace-app.md) |
 
 > Note the built‑in chat app's `id` is **`chat`** but its display name is
 > **"Assistant"**. Launch it with `bos_app_launch("chat")`.

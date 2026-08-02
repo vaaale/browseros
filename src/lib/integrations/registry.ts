@@ -42,6 +42,11 @@ export function getService(integrationId: string, serviceId: string): ServiceDef
   return getIntegration(integrationId)?.services.find((s) => s.id === serviceId);
 }
 
+export function unregisterIntegration(id: string): void {
+  const idx = registry.findIndex((m) => m.id === id);
+  if (idx !== -1) registry.splice(idx, 1);
+}
+
 /** Test-only: clear the registry. */
 export function _resetRegistry(): void {
   registry.length = 0;

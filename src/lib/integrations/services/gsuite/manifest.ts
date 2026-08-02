@@ -32,6 +32,11 @@ export const CONTACTS_SCOPES = {
   readonly: "https://www.googleapis.com/auth/contacts.readonly",
 } as const;
 
+// Photos scopes — Google Photos Library API read-only surface.
+export const PHOTOS_SCOPES = {
+  readonly: "https://www.googleapis.com/auth/photoslibrary.readonly",
+} as const;
+
 // Union of all scopes this integration can request. Duplicates are impossible
 // (each URL appears in exactly one group) but we still normalise via a Set to
 // document the invariant.
@@ -41,6 +46,7 @@ const ALL_SCOPES = Array.from(
     ...Object.values(DRIVE_SCOPES),
     ...Object.values(CALENDAR_SCOPES),
     ...Object.values(CONTACTS_SCOPES),
+    ...Object.values(PHOTOS_SCOPES),
   ]),
 );
 
@@ -154,6 +160,23 @@ export const GSUITE_MANIFEST: IntegrationManifest = {
             type: "number",
             default: 500,
             description: "Max contacts to fetch per sync.",
+          },
+        },
+      },
+    },
+    {
+      id: "photos",
+      name: "Google Photos",
+      description: "Browse albums and search media items in Google Photos.",
+      icon: "Image",
+      scopes: [PHOTOS_SCOPES.readonly],
+      configSchema: {
+        type: "object",
+        properties: {
+          pageSize: {
+            type: "number",
+            default: 25,
+            description: "Default number of items per page when listing media.",
           },
         },
       },

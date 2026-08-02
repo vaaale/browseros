@@ -1,5 +1,16 @@
 # Assistant actions, tools & event rendering
 
+> **Stale (v1 CopilotKit path):** most of this doc describes the retired
+> `useCopilotAction`/`/api/copilotkit` chat path (CLAUDE.md: "CopilotKit is retired from
+> the chat path; it remains only as a markdown renderer"). Current tool wiring for the
+> v2 server-owned runs lives in `src/lib/assistant/registry.ts` +
+> `src/lib/assistant/tools/server/*` (server tools) and
+> `src/lib/assistant/tools/frontend-declarations.ts` +
+> `src/components/agent/v2/FrontendToolsV2.tsx` (frontend tools) — see CLAUDE.md's
+> Assistant section. The capability registry (`src/lib/agent/capabilities-registry.ts`,
+> referenced below) is still the live source of truth for tool ids/gating; the
+> `*Actions.tsx` component list is not.
+
 ## Actions (tools)
 
 Each `src/components/agent/*Actions.tsx` registers tools with
@@ -30,8 +41,10 @@ context(s) it runs in (`action` / `tool` / `both`). `tool-manifest.ts` is a view
 - Back-compat rule: legacy agents are migrated once to an explicit full tool
   allowlist. After migration, an empty `tools` allowlist means zero registry
   tools.
-- `SpecActions` (client spec ops over `/api/specs`) let an active-personality agent
-  (Build Studio) author specs directly, mirroring the server `SPEC_TOOLS`.
+- `SpecActions`/`DocsActions` (client spec/docs ops, `spec_list`/`spec_read`/`spec_write`/
+  `spec_edit`/`spec_search` and `docs_list`/`docs_read`) are **retired** — spec and docs
+  access now goes through the generic `file_*` tools against the `/Specs`, `/Docs`, and
+  `/Templates` VFS mounts (`src/lib/specs/spec-mount.ts`), same as any other file path.
 
 Tool naming standard: `subsystem_object_verb`, snake_case, one id per operation
 (see `src/lib/agent/capabilities-registry.ts`). Duplicated main-chat action /
@@ -43,14 +56,12 @@ the main chat and a delegated sub-agent both use `file_read`.
 | `OSActions` | `bos_app_launch, bos_app_list, bos_window_close, bos_wallpaper_set, bos_browser_open, web_view, file_list, file_read, file_write, file_mkdir, file_delete` |
 | `McpActions` | `mcp_server_list, mcp_tool_search, mcp_server_tools, mcp_tool_schema, mcp_tool_call, mcp_server_add, mcp_server_remove` |
 | `WebSearchActions` | `web_search` (Anthropic native web search over `/api/web-search`) |
-| `SpecActions` | `spec_list, spec_read, spec_write, spec_edit, spec_search` (over `/api/specs`) |
 | `SubAgentActions` | `agent_list, agent_create, agent_delegate, agent_request_claude, dev_branch_request` (elicitation card) |
 | `MemoryActions` | `memory_save` (add/replace/remove, batch), `memory_recall` |
 | `DevActions` | `app_install, app_build, app_list, app_uninstall, agent_prompt_get, agent_prompt_set` |
 | `ConfigActions` | `config_list, config_set` |
 | `SkillsActions` | `skill_list, skill_load, skill_read_file, skill_save` |
 | `SelfImprovementActions` | `skill_reflect, skill_improve, skill_curate` |
-| `DocsActions` | `docs_list, docs_read` |
 | `GitActions` | `dev_git_status` |
 | `RunCommandActions` | `run_command` (sandboxed exec; Settings → Command Execution) |
 | `WorkflowActions` | `workflow_create, workflow_modify, workflow_run, workflow_status, workflow_cancel, workflow_export, workflow_validate` |

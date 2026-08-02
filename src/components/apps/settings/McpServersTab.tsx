@@ -97,6 +97,7 @@ export function McpServersTab() {
   const [argsText, setArgsText] = useState("");
   const [env, setEnv] = useState<KV[]>([{ ...emptyRow }]);
   const [cwd, setCwd] = useState("");
+  const [includeInDevHarness, setIncludeInDevHarness] = useState(false);
 
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<McpProbeResult | null>(null);
@@ -127,6 +128,7 @@ export function McpServersTab() {
     setArgsText("");
     setEnv([{ ...emptyRow }]);
     setCwd("");
+    setIncludeInDevHarness(false);
     setTestResult(null);
     setError("");
   }, []);
@@ -143,6 +145,7 @@ export function McpServersTab() {
     setArgsText((s.args ?? []).join("\n"));
     setEnv(recordToRows(s.env));
     setCwd(s.cwd ?? "");
+    setIncludeInDevHarness(s.includeInDevHarness === true);
     setTestResult(null);
     setError("");
   }, []);
@@ -157,6 +160,7 @@ export function McpServersTab() {
         args: argsText.split("\n").map((s) => s.trim()).filter(Boolean),
         env: rowsToRecord(env),
         cwd: cwd.trim() || undefined,
+        includeInDevHarness: includeInDevHarness || undefined,
       };
     }
     return {
@@ -166,8 +170,9 @@ export function McpServersTab() {
       endpoint: endpoint.trim(),
       apiKey: apiKey.trim() || undefined,
       headers: rowsToRecord(headers),
+      includeInDevHarness: includeInDevHarness || undefined,
     };
-  }, [transport, name, description, command, argsText, env, cwd, endpoint, apiKey, headers]);
+  }, [transport, name, description, command, argsText, env, cwd, endpoint, apiKey, headers, includeInDevHarness]);
 
   const test = useCallback(async () => {
     setTesting(true);
@@ -299,6 +304,11 @@ export function McpServersTab() {
                   <span className="rounded border border-white/10 px-1.5 py-0.5 text-[10px] uppercase text-white/45">
                     {transportOf(s)}
                   </span>
+                  {s.includeInDevHarness && (
+                    <span className="rounded border border-violet-400/30 bg-violet-400/10 px-1.5 py-0.5 text-[10px] text-violet-200" title="Also given to the Dev Harness">
+                      harness
+                    </span>
+                  )}
                   <div className="ml-auto flex shrink-0 gap-1">
                     <button onClick={() => probe(s.name)} className="rounded px-2 py-1 text-xs text-sky-200 hover:bg-white/10" title="Test connection">
                       Test
@@ -361,6 +371,17 @@ export function McpServersTab() {
             className={fieldCls}
           />
         </div>
+
+        <label className="mt-3 flex items-center gap-2 text-xs text-white/70">
+          <input
+            type="checkbox"
+            checked={includeInDevHarness}
+            onChange={(e) => setIncludeInDevHarness(e.target.checked)}
+            className="h-3.5 w-3.5 rounded border-white/20 bg-black/30"
+          />
+          Include in Dev Harness
+          <span className="text-white/40">— also give this server to the headless Claude/OpenCode CLI (Settings → Dev Harness)</span>
+        </label>
 
         {isHttp ? (
           <div className="mt-3 space-y-3">

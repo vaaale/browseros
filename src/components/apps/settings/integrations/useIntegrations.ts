@@ -206,6 +206,7 @@ export function scopeLabel(scope: string): string {
     "https://www.googleapis.com/auth/calendar.readonly": "Read your calendars & events",
     "https://www.googleapis.com/auth/calendar.events": "Create, edit & delete calendar events",
     "https://www.googleapis.com/auth/contacts.readonly": "Read your contacts",
+    "https://www.googleapis.com/auth/photoslibrary.readonly": "Read Google Photos library (albums & media items)",
     "telegram:bot.read": "Read messages the bot receives",
     "telegram:bot.send": "Send messages via the bot",
     "telegram:bot.manage": "Manage chats (delete, pin, set commands)",

@@ -1,6 +1,6 @@
 ---
-name: feature-wizard
-description: Proactive end-to-end guide that drives the user through building a BOS feature. Requirements → UI Design → Spec → Branch → Plan → Implementation → Tests → Promote/Discard.
+name: Feature Wizard
+description: Proactive end-to-end guide that drives the user through building a BOS feature: Requirements → UI Design → Spec → Branch → Plan → Implementation → Tests → Promote/Discard.
 when_to_use: When the user wants to build a new feature from scratch and needs guided support through the full lifecycle, or when they say "I want to build X" without an existing spec.
 created_by: seed
 pinned: true
@@ -30,14 +30,14 @@ GATE: User approves the UI design.
 ═══════════════════════════════
 PHASE 2 — SPECIFICATION
 ═══════════════════════════════
-1. Find the next feature ID: file_list /Specs/user-specs; next NNN = max existing + 1.
-2. Read commands/specify.md and spec-template.md: file_read /Templates/commands/specify.md, file_read /Templates/spec-template.md.
-3. Write /Specs/user-specs/<NNN-slug>/spec.md following the template.
+1. Find the next feature ID: `file_list('/Specs/user-specs')`; next NNN = max existing + 1.
+2. Read `/Templates/commands/specify.md` and `/Templates/spec-template.md` with `file_read`.
+3. Write `/Specs/user-specs/<NNN-slug>/spec.md` with `file_write` following the template.
    Feature Branch field: use `<NNN-slug>` (without bos/ prefix — the wizard adds it in Phase 3).
    Include a summary of the approved UI design if one was produced.
 4. buildstudio_artifact_open('user-specs/<NNN-slug>/spec.md') + buildstudio_tree_refresh().
 5. Say: "Here is the full specification — please review it. Anything to change?"
-6. Edit with file_edit on /Specs/user-specs/<NNN-slug>/spec.md until the user explicitly approves.
+6. Edit with `file_edit` until the user explicitly approves.
 GATE: User approves the spec.
 
 ═══════════════════════════════
@@ -49,14 +49,14 @@ GATE: Feature branch is active on this conversation (dev_branch_request returned
 ═══════════════════════════════
 PHASE 4 — PLAN & TASKS
 ═══════════════════════════════
-1. Read commands/plan.md and plan-template.md: file_read /Templates/commands/plan.md, file_read /Templates/plan-template.md.
-2. Write /Specs/user-specs/<id>/plan.md:
+1. Read `/Templates/commands/plan.md` and `/Templates/plan-template.md` with `file_read`.
+2. Write `/Specs/user-specs/<id>/plan.md` with `file_write`:
    - Constitution check (quote the relevant principles and confirm compliance)
    - Technical context: which BOS files/systems are involved?
    - Real proposed file paths (not placeholders)
    - Design notes and trade-offs
-3. Read commands/tasks.md and tasks-template.md: file_read /Templates/commands/tasks.md, file_read /Templates/tasks-template.md.
-4. Write /Specs/user-specs/<id>/tasks.md: T001, T002 … grouped by user story, dependency-ordered, [P] for parallelisable.
+3. Read `/Templates/commands/tasks.md` and `/Templates/tasks-template.md` with `file_read`.
+4. Write `/Specs/user-specs/<id>/tasks.md` with `file_write`: T001, T002 … grouped by user story, dependency-ordered, [P] for parallelisable.
 5. Open both artifacts and refresh the tree.
 6. Say: "Here is the plan and task list. Review carefully — once you approve, I hand it to the Developer."
 GATE: User explicitly approves BOTH plan and tasks before delegation.

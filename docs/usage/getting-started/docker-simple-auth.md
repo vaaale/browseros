@@ -220,7 +220,6 @@ docker build -t browseros:latest .
 | `BASTION_PORT` | `80` | Host port for the bastion |
 | `PUBLIC_URL` | `http://localhost` | Public-facing URL (used in redirects) |
 | `VOLUME_BASE` | `./user-data` | Host directory for per-user data (resolved against the repo root) |
-| `IDLE_TIMEOUT_MS` | `1800000` | ms before idle containers are stopped (30 min) |
 | `MAX_CONCURRENT_INSTANCES` | `50` | Max simultaneously running user containers |
 | `BOS_BASE_REF` | `main` | Git branch to clone for each new user |
 | `ADMIN_USER` | `admin` | Username for the bootstrap admin account |

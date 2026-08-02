@@ -12,8 +12,17 @@ import {
   stopInstance,
   getOrProvision,
   clearInstanceState,
+  refreshAllHealth,
 } from "../lifecycle";
-import { killContainer, listBosImages, buildImage } from "../docker";
+import {
+  killContainer,
+  listBosImages,
+  buildImage,
+  getContainerRuntime,
+  getContainerUsage,
+  getCgroupMemoryEvents,
+  getHostInfo,
+} from "../docker";
 import {
   reprovisionRestart,
   reprovisionResetData,
@@ -116,7 +125,8 @@ export function createAdminRouter(cfg: Config, provider: AuthProvider): Router {
 
   router.post("/instances/:username/stop", async (req, res) => {
     try {
-      await stopInstance(req.params.username);
+      const admin = (req as Request & { session?: { username?: string } }).session?.username ?? "admin";
+      await stopInstance(req.params.username, `admin action by ${admin}`);
       res.json({ ok: true });
     } catch (err) {
       res.status(500).json({ error: String(err) });
@@ -150,6 +160,65 @@ export function createAdminRouter(cfg: Config, provider: AuthProvider): Router {
       await runReprovision(username, operation, cfg);
       clearInstanceState(username);
       res.json({ ok: true });
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
+  // ── System Monitor ─────────────────────────────────────────────────────────
+  //
+  // One call that answers "is BOS actually working, and if not, why". Every
+  // field here exists because it was needed to diagnose a real incident:
+  //  - `health.serving` vs `container.running` — a container reported "Up" for
+  //    10 h while BOS inside it was dead.
+  //  - `container.oomKilled` / `cgroup.oomKill` + `cgroup.oom` — proves a kill
+  //    happened AND whether it was the host or the container's own limit.
+  //  - `cgroup.maxBytes` — "max" means no limit, i.e. one tenant can take the
+  //    host down.
+  //  - `usage.memUsageBytes` vs `host.memTotalBytes` — headroom at a glance.
+  //  - `supervision.restarts` / `lastExit.signal` — makes a crash-restart loop
+  //    visible instead of letting supervision quietly hide it.
+  //  - `base.dev` — dev mode in production is what caused the OOM; flag it.
+  router.get("/monitor", guard, async (_req, res) => {
+    try {
+      // Refresh health synchronously so the page never shows a stale verdict.
+      await refreshAllHealth(cfg);
+      const mem = process.memoryUsage();
+      const instances = getAllInstances();
+      const detailed = await Promise.all(
+        instances.map(async (inst) => {
+          const container = await getContainerRuntime(inst.username);
+          const running = container?.running ?? false;
+          const [usage, cgroup] = await Promise.all([
+            running ? getContainerUsage(inst.username) : Promise.resolve({ memUsageBytes: null, memLimitBytes: null, cpuPercent: null }),
+            running ? getCgroupMemoryEvents(inst.username) : Promise.resolve({ oomKill: null, oom: null, peakBytes: null, maxBytes: null }),
+          ]);
+          return {
+            username: inst.username,
+            status: inst.status,
+            lastActive: inst.lastActive,
+            healthCheckedAt: inst.healthCheckedAt ?? null,
+            error: inst.error ?? null,
+            container,
+            usage,
+            cgroup,
+            health: inst.health ?? null,
+          };
+        }),
+      );
+      res.json({
+        now: Date.now(),
+        host: await getHostInfo(),
+        bastion: {
+          pid: process.pid,
+          uptimeSeconds: Math.round(process.uptime()),
+          rssBytes: mem.rss,
+          heapUsedBytes: mem.heapUsed,
+          bosImage: cfg.bosImage,
+          maxConcurrentInstances: cfg.maxConcurrentInstances,
+        },
+        instances: detailed,
+      });
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }
@@ -228,7 +297,9 @@ async function runReprovision(username: string, operation: string | undefined, c
   switch (operation) {
     case "restart": return reprovisionRestart(username, cfg);
     case "reset-data": return reprovisionResetData(username, cfg);
-    case "update-src": return reprovisionUpdateSrc(username, cfg);
+    case "update-src": return reprovisionUpdateSrc(username, cfg, "reset");
+    // Same operation, non-destructive integration: keeps local commits.
+    case "pull-and-update-src": return reprovisionUpdateSrc(username, cfg, "pull");
     case "rebuild-nm": return reprovisionRebuildNm(username, cfg);
     case "full": return reprovisionFull(username, cfg);
     default: throw new Error(`Unknown operation: ${operation}`);

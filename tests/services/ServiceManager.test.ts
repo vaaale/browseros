@@ -13,7 +13,7 @@ import { ServiceManager } from "../../src/core/service/ServiceManager";
 import { serviceRegistry } from "../../src/core/service/ServiceRegistry";
 import type { ServiceManifest } from "../../src/core/service/types";
 import { useTestDataDir, resetServiceSingletons } from "./_test-env";
-import { RESPONSIVE_WORKER, UNRESPONSIVE_WORKER, installFixtureService } from "./_worker-fixtures";
+import { RESPONSIVE_WORKER, UNRESPONSIVE_WORKER, installFixtureService, installBrokenFixtureService } from "./_worker-fixtures";
 
 function manifest(id: string, extra: Partial<ServiceManifest> = {}): ServiceManifest {
   return { id, name: id, version: "1.0.0", entry: "index.js", ...extra };
@@ -66,8 +66,7 @@ test.describe("start", () => {
     const { dir, registry, manager, dispose } = setupTest("manager-start-invalid-manifest");
     try {
       // Register the service but never write the entry file on disk.
-      mkdirSync(join(dir, "system", "services", "svc"), { recursive: true });
-      writeFileSync(join(dir, "system", "services", "svc", "service.json"), JSON.stringify(manifest("svc")));
+      installBrokenFixtureService(dir, "svc", manifest("svc"));
       registry.registerInstalled("svc", manifest("svc"), "/items/svc");
 
       await manager.start("svc");
@@ -145,7 +144,9 @@ test.describe("start", () => {
       if (typeof address === "string" || address === null) throw new Error("expected an AddressInfo");
       const occupiedPort = address.port;
 
-      const configDir = join(dir, "config", "svc");
+      // Config is BOS-owned state under system/config/<id>/ (035 FR-004), not
+      // data/config/<id> and not inside the item.
+      const configDir = join(dir, "system", "config", "svc");
       mkdirSync(configDir, { recursive: true });
       writeFileSync(join(configDir, "svc.json"), JSON.stringify({ port: occupiedPort, host: "127.0.0.1" }));
 
@@ -283,8 +284,7 @@ test.describe("startAll", () => {
       // "base"'s entry is never written — it fails manifest validation and
       // stays "stopped" forever, so "dependent" must be skipped rather than
       // started against a dependency that isn't actually running.
-      mkdirSync(join(dir, "system", "services", "base"), { recursive: true });
-      writeFileSync(join(dir, "system", "services", "base", "service.json"), JSON.stringify(manifest("base")));
+      installBrokenFixtureService(dir, "base", manifest("base"));
       installFixtureService(dir, "dependent", { entrySource: RESPONSIVE_WORKER, dependencies: ["base"] });
 
       registry.registerInstalled("base", manifest("base"), "/items/base");

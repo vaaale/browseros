@@ -16,7 +16,7 @@ Examples: Files, Settings, Build Studio, Assistant.
 
 ### Installed app
 
-A standalone project or static site — the `app/` facet of an ITEM under `data/user-apps/<id>/` (the user's GitFS repo), installed by symlinking `data/system/app/<id>` to it and rendered in a sandboxed iframe at `/apps/<id>`. Use this for user-facing or third-party apps that should be versioned independently and installed without changing BOS source.
+A standalone project or static site — the `app/` facet of an ITEM under `data/user-apps/items/<id>/` (the user's GitFS repo), installed by symlinking `data/system/<id>` to it and rendered in a sandboxed iframe at `/apps/<id>`. Use this for user-facing or third-party apps that should be versioned independently and installed without changing BOS source.
 
 Examples: user-created tools, experimental UIs, content apps.
 

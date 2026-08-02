@@ -17,15 +17,47 @@ const HANDLERS: Record<string, Record<string, WebhookHandler>> = {
   },
 };
 
+const DYNAMIC_KEY = "__bos_webhook_handlers__" as const;
+
+function getDynamic(): Record<string, Record<string, WebhookHandler>> {
+  const g = globalThis as Record<string, unknown>;
+  if (!g[DYNAMIC_KEY]) g[DYNAMIC_KEY] = {};
+  return g[DYNAMIC_KEY] as Record<string, Record<string, WebhookHandler>>;
+}
+
+export function registerWebhookHandler(
+  integrationId: string,
+  serviceId: string,
+  handler: WebhookHandler,
+): void {
+  const d = getDynamic();
+  if (!d[integrationId]) d[integrationId] = {};
+  d[integrationId][serviceId] = handler;
+}
+
+export function unregisterWebhookHandler(integrationId: string, serviceId: string): void {
+  const d = getDynamic();
+  if (d[integrationId]) delete d[integrationId][serviceId];
+}
+
 export function getWebhookHandler(integrationId: string, serviceId: string): WebhookHandler | undefined {
-  return HANDLERS[integrationId]?.[serviceId];
+  return getDynamic()[integrationId]?.[serviceId] ?? HANDLERS[integrationId]?.[serviceId];
 }
 
 export function listWebhookHandlers(): Array<{ integrationId: string; serviceId: string }> {
   const out: Array<{ integrationId: string; serviceId: string }> = [];
-  for (const [integrationId, services] of Object.entries(HANDLERS)) {
+  const seen = new Set<string>();
+  for (const [integrationId, services] of Object.entries(getDynamic())) {
     for (const serviceId of Object.keys(services)) {
       out.push({ integrationId, serviceId });
+      seen.add(`${integrationId}/${serviceId}`);
+    }
+  }
+  for (const [integrationId, services] of Object.entries(HANDLERS)) {
+    for (const serviceId of Object.keys(services)) {
+      if (!seen.has(`${integrationId}/${serviceId}`)) {
+        out.push({ integrationId, serviceId });
+      }
     }
   }
   return out;

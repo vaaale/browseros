@@ -50,7 +50,7 @@ export async function handleCrash(serviceId: string, errorMessage: string, stack
   logger().error(COMPONENT, `service "${serviceId}" crashed: ${errorMessage}`, undefined, { serviceId, restartCount, stack });
 
   if (!shouldRestart(restartCount, policy)) {
-    registry.setState(serviceId, "crashed");
+    registry.setState(serviceId, "crashed", errorMessage);
     logger().error(
       COMPONENT,
       `service "${serviceId}" exceeded max restarts (${policy.maxRestarts}) — stopping permanently`,

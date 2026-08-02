@@ -15,25 +15,25 @@ function manifestJson(id: string, extra: Partial<ServiceManifest> = {}): string 
   return JSON.stringify({ id, name: id, version: "1.0.0", entry: "index.js", ...extra });
 }
 
-/** Lays out dataDir()/user-apps/<id>/services/service.json and, when
- *  `install` is true, an dataDir()/system/services/<id> symlink pointing at
- *  it — mirroring the real item-to-system symlink mapping. */
+/** Lays out dataDir()/user-apps/items/<id>/services/service.json and, when
+ *  `install` is true, the ONE install symlink dataDir()/system/<id> -> the item
+ *  (035-install-by-symlink). There is no per-facet link farm. */
 function createSourceItem(dataDir: string, id: string, opts: { install?: boolean; manifestOverride?: string } = {}): void {
-  const itemDir = join(dataDir, "user-apps", id);
+  const itemDir = join(dataDir, "user-apps", "items", id);
   const servicesDir = join(itemDir, "services");
   mkdirSync(servicesDir, { recursive: true });
   writeFileSync(join(servicesDir, "service.json"), opts.manifestOverride ?? manifestJson(id));
   writeFileSync(join(servicesDir, "index.js"), "module.exports = {};");
 
   if (opts.install) {
-    const systemServicesRoot = join(dataDir, "system", "services");
-    mkdirSync(systemServicesRoot, { recursive: true });
-    symlinkSync(servicesDir, join(systemServicesRoot, id), "dir");
+    const systemRoot = join(dataDir, "system");
+    mkdirSync(systemRoot, { recursive: true });
+    symlinkSync(itemDir, join(systemRoot, id), "dir");
   }
 }
 
 test.describe("initialize / discoverServices", () => {
-  test("discovers services from user-apps", async () => {
+  test("discovers services from user-apps/items", async () => {
     const { dir, cleanup } = useTestDataDir("registry-discover-user-apps");
     try {
       createSourceItem(dir, "svc-a");
@@ -125,9 +125,13 @@ test.describe("getSourceServices / getAllServices / getService", () => {
   test("marks an installed service corrupted when its service.json is missing/invalid", async () => {
     const { dir, cleanup } = useTestDataDir("registry-corrupted-on-discover");
     try {
-      const systemServicesRoot = join(dir, "system", "services", "svc-broken");
-      mkdirSync(systemServicesRoot, { recursive: true });
-      writeFileSync(join(systemServicesRoot, "service.json"), "{ not valid json");
+      // An installed item whose services/service.json is unparseable. Installed
+      // state is the system/<id> link, so build the item then link it (035).
+      const itemDir = join(dir, "user-apps", "items", "svc-broken");
+      mkdirSync(join(itemDir, "services"), { recursive: true });
+      writeFileSync(join(itemDir, "services", "service.json"), "{ not valid json");
+      mkdirSync(join(dir, "system"), { recursive: true });
+      symlinkSync(itemDir, join(dir, "system", "svc-broken"), "dir");
       const registry = new ServiceRegistry();
       await registry.discoverServices();
       expect(registry.getService("svc-broken")?.state).toBe("corrupted");

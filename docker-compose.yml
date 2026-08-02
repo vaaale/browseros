@@ -38,7 +38,6 @@ services:
       - AUTH_PROVIDER=${AUTH_PROVIDER:-simple}
       - BOS_IMAGE=${BOS_IMAGE:-browseros:latest}
       - BOS_REPO_PATH=/bos-src
-      - IDLE_TIMEOUT_MS=${IDLE_TIMEOUT_MS:-1800000}
       - MAX_CONCURRENT_INSTANCES=${MAX_CONCURRENT_INSTANCES:-50}
       - BOS_BASE_REF=${BOS_BASE_REF:-main}
       - BOS_NET=bos-net
@@ -49,6 +48,71 @@ services:
     networks:
       - bos-net
     restart: unless-stopped
+    # On SIGTERM the bastion stops every user container before exiting. Docker's
+    # default 10 s grace is not enough for that cascade — it was SIGKILLed
+    # mid-shutdown (exit 137) with containers still stopping, which orphans them.
+    stop_grace_period: 120s
+
+  omnivoice:
+    image: hangrylabs/omnivoicetts:latest
+    hostname: omnivoice
+    profiles:
+      - voice
+    environment:
+      - HF_HUB_OFFLINE=0
+      - HF_TOKEN=${HF_TOKEN}
+    volumes:
+      - openai_voice_profiles:/app/openai_voice_profiles
+      - ${HOME}/.cache/huggingface:/app/.cache/huggingface
+    ports:
+      - "7861:7861"
+    networks: [ 'bos-net' ]
+    # GPU support (enabled by default for this compose file)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: [ "0" ]
+              capabilities: [ gpu ]
+
+  speaches:
+    hostname: speaches
+    profiles:
+      - voice
+    image: ghcr.io/speaches-ai/speaches:latest-cuda
+    restart: unless-stopped
+    networks:
+      - bos-net
+    volumes:
+      - speaches-huggingface:/home/ubuntu/.cache/huggingface/hub
+    develop:
+      watch:
+        - action: rebuild
+          path: ./uv.lock
+        - action: sync+restart
+          path: ./src
+          target: /home/ubuntu/speaches/src
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      UVICORN_PORT: 8082
+    healthcheck:
+      test: [ "CMD", "curl", "--fail", "http://0.0.0.0:8082/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+    deploy: 
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: [ "0" ]
+              capabilities: [ gpu ]
+
+
 
   omnivoice:
     image: hangrylabs/omnivoicetts:latest

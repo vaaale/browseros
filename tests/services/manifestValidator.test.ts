@@ -155,10 +155,12 @@ test.describe("validateManifest — entrypoint existence (itemDir supplied)", ()
 test.describe("validateManifestAtStart", () => {
   test("passes for a valid, loadable entrypoint", async () => {
     const dir = freshItemDir("at-start-valid");
-    const serviceDir = join(dir, "my-svc");
+    const serviceDir = join(dir, "services");
     mkdirSync(serviceDir, { recursive: true });
     writeFileSync(join(serviceDir, "index.js"), "module.exports = {};");
-    const result = await validateManifestAtStart(VALID as unknown as { id: string; entry: string } & typeof VALID, dir);
+    // 035: the second argument is the service's OWN directory, not a root that
+    // manifest.id is joined onto.
+    const result = await validateManifestAtStart(VALID as unknown as { id: string; entry: string } & typeof VALID, serviceDir);
     expect(result.valid).toBe(true);
   });
 
@@ -171,10 +173,10 @@ test.describe("validateManifestAtStart", () => {
 
   test("fails when the entrypoint throws on load", async () => {
     const dir = freshItemDir("at-start-throws");
-    const serviceDir = join(dir, "my-svc");
+    const serviceDir = join(dir, "services");
     mkdirSync(serviceDir, { recursive: true });
     writeFileSync(join(serviceDir, "index.js"), "throw new Error('boom');");
-    const result = await validateManifestAtStart(VALID as any, dir);
+    const result = await validateManifestAtStart(VALID as any, serviceDir);
     expect(result.valid).toBe(false);
     expect(result.errors[0]).toMatch(/entrypoint failed to load/);
   });

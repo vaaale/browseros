@@ -216,6 +216,39 @@ export async function fetchRepo(
   return result;
 }
 
+/** True when `repoPath` is a shallow clone (has no complete history). */
+export async function isShallowRepo(repoPath: string): Promise<boolean> {
+  const { stdout, exitCode } = await runGit(["rev-parse", "--is-shallow-repository"], { cwd: repoPath });
+  return exitCode === 0 && stdout.trim() === "true";
+}
+
+/**
+ * Deepen a shallow clone by fetching full history from `remote`. A shallow
+ * checkout — e.g. BrowserOS's own source tree, which Dokploy re-clones with
+ * `--depth 1` on every redeploy (see docs/dev/deployment.md) — has no
+ * connecting history to prove a local branch descends from the remote's, so
+ * merge-base/ahead-behind checks against it are unreliable until this runs.
+ * Never fatal: an unreachable remote, or a shallow history that's genuinely
+ * disconnected from `remote`, just leaves the repo shallow and callers fall
+ * back to the existing diverged/unrelated-history handling.
+ */
+export async function unshallowRepo(
+  repoPath: string,
+  remote: string,
+  auth?: GitAuth,
+): Promise<void> {
+  const op = "git.unshallow";
+  const { stderr, exitCode } = await runGit(
+    ["fetch", "--unshallow", remote],
+    { cwd: repoPath, auth, timeout: 600_000 },
+  );
+  if (exitCode !== 0) {
+    gitLogger().warn({ op, repoPath, remote, error: { code: "GIT_UNSHALLOW_FAILED", message: stderr } });
+    return;
+  }
+  gitLogger().info({ op, repoPath, remote, success: true });
+}
+
 export async function pushRepo(
   repoPath: string,
   remote: string,

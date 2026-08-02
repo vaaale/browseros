@@ -3,7 +3,7 @@ import { promises as fs } from "fs";
 import path from "path";
 import { dataDir } from "@/os/data-dir";
 import { writeFileAtomic } from "@/os/atomic-write";
-import type { VoiceConfig } from "./types";
+import type { VoiceConfig, VoiceOutputMode } from "./types";
 
 const CONFIG_PATH = path.join(dataDir(), "voice-config.json");
 
@@ -14,6 +14,7 @@ export const DEFAULT_VOICE_CONFIG: VoiceConfig = {
   activationMode: "button",
   wakeWord: "hey bos",
   wakeWordEngine: "speaches",
+  activationKey: "ControlLeft",
   vadThreshold: 0.75,
   minSilenceMs: 700,
   ttsProvider: "omnivoice",
@@ -65,16 +66,30 @@ export const DEFAULT_VOICE_CONFIG: VoiceConfig = {
     volume: 1.0,
     normalize: false,
   },
-  enabled: false,
   interruptGraceMs: 2000,
   awakeTimeoutMs: 5000,
-  speakReplies: true,
+  voiceOutput: "off",
 };
+
+/** Output used to be up to two booleans: an "Enable voice mode" master switch
+ *  (older still) and a speakReplies flag that only counted while it was on. */
+interface LegacyVoiceConfig {
+  enabled?: boolean;
+  speakReplies?: boolean;
+}
+
+function migrateOutputMode(legacy: LegacyVoiceConfig, stored: Partial<VoiceConfig>): VoiceOutputMode {
+  if (stored.voiceOutput) return stored.voiceOutput;
+  const spoken = legacy.enabled === undefined
+    ? legacy.speakReplies === true
+    : legacy.enabled && legacy.speakReplies !== false;
+  return spoken ? "audio" : "off";
+}
 
 export async function loadVoiceConfig(): Promise<VoiceConfig> {
   try {
     const raw = await fs.readFile(CONFIG_PATH, "utf8");
-    const stored = JSON.parse(raw) as Partial<VoiceConfig>;
+    const { enabled, speakReplies, ...stored } = JSON.parse(raw) as Partial<VoiceConfig> & LegacyVoiceConfig;
     const omnivoice = { ...DEFAULT_VOICE_CONFIG.omnivoice, ...(stored.omnivoice ?? {}) };
     // Migrate configs saved before voiceSource existed: infer the active source
     // from whichever field was populated so an existing clone setup isn't
@@ -85,6 +100,7 @@ export async function loadVoiceConfig(): Promise<VoiceConfig> {
     return {
       ...DEFAULT_VOICE_CONFIG,
       ...stored,
+      voiceOutput: migrateOutputMode({ enabled, speakReplies }, stored),
       openai: { ...DEFAULT_VOICE_CONFIG.openai, ...(stored.openai ?? {}) },
       omnivoice,
     };

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowUp, Square, X, Paperclip, FileText } from "lucide-react";
-import { useChatState, setEditing } from "@/lib/assistant/client/chat-store";
+import { useChatSelector, setEditing } from "@/lib/assistant/client/chat-store";
 import { sendMessage, stopRun } from "@/lib/assistant/client/run-client";
 import type { Attachment } from "@/lib/assistant/messages";
 import { VoiceMicButton } from "@/components/voice/VoiceMicButton";
@@ -37,7 +37,15 @@ export function ChatInputV2({
   /** Called before sending when there is no conversation yet; returns the id. */
   ensureConversation?: () => Promise<string>;
 }) {
-  const state = useChatState(conversationId);
+  // Selector-based: only re-renders on running/editingMessageId/editingMessage
+  // changes, not on every streamed token (see useChatSelector's doc comment) —
+  // this is the input box, so re-rendering it on every token would otherwise
+  // directly compete with the user's own keystrokes for the main thread.
+  const running = useChatSelector(conversationId, (s) => s.running);
+  const editingMessageId = useChatSelector(conversationId, (s) => s.editingMessageId);
+  const editingMessage = useChatSelector(conversationId, (s) =>
+    s.editingMessageId ? s.messages.find((m) => m.id === s.editingMessageId) : undefined,
+  );
   const [text, setText] = useState("");
   const [error, setError] = useState<string | undefined>();
   const [attachments, setAttachments] = useState<Attachment[]>([]);
@@ -73,30 +81,48 @@ export function ChatInputV2({
     }
   }, []);
 
-  const editingMessage = state.editingMessageId
-    ? state.messages.find((m) => m.id === state.editingMessageId)
-    : undefined;
-
   // Entering edit mode prefills the textarea with the message being edited
   // (derived-state reset during render; focus is the only effectful part).
   const [lastEditId, setLastEditId] = useState<string | undefined>();
-  if (state.editingMessageId !== lastEditId) {
-    setLastEditId(state.editingMessageId);
+  if (editingMessageId !== lastEditId) {
+    setLastEditId(editingMessageId);
     if (editingMessage) setText(editingMessage.content ?? "");
   }
   useEffect(() => {
-    if (state.editingMessageId) textareaRef.current?.focus();
-  }, [state.editingMessageId]);
+    if (editingMessageId) textareaRef.current?.focus();
+  }, [editingMessageId]);
 
+  // Reading scrollHeight/getComputedStyle right after writing style.height is a
+  // forced-synchronous-layout ("layout thrashing") pattern: the browser must
+  // finish a full reflow before it can hand back those values. Called directly
+  // from the textarea's onChange, that reflow ran on the MAIN THREAD on every
+  // single keystroke, before the typed character could even paint — and its
+  // cost scales with the size of the page's layout tree, i.e. with how many
+  // messages are in the conversation. Two fixes: cache lineHeight (it depends
+  // only on font/line-height CSS, never on content, so there's no reason to
+  // re-read it via getComputedStyle — itself a forced layout — on every call),
+  // and defer the actual resize to the next animation frame so it never blocks
+  // the keystroke that triggered it.
+  const lineHeightRef = useRef<number | null>(null);
+  const resizeRafRef = useRef<number | null>(null);
+  useEffect(() => () => {
+    if (resizeRafRef.current !== null) cancelAnimationFrame(resizeRafRef.current);
+  }, []);
   const autoResize = useCallback(() => {
-    const el = textareaRef.current;
-    if (!el) return;
-    el.style.height = "auto";
-    const line = parseFloat(getComputedStyle(el).lineHeight || "20") || 20;
-    el.style.height = `${Math.min(el.scrollHeight, line * MAX_ROWS)}px`;
+    if (resizeRafRef.current !== null) return; // already scheduled for this frame
+    resizeRafRef.current = requestAnimationFrame(() => {
+      resizeRafRef.current = null;
+      const el = textareaRef.current;
+      if (!el) return;
+      if (lineHeightRef.current === null) {
+        lineHeightRef.current = parseFloat(getComputedStyle(el).lineHeight || "20") || 20;
+      }
+      el.style.height = "auto";
+      el.style.height = `${Math.min(el.scrollHeight, lineHeightRef.current * MAX_ROWS)}px`;
+    });
   }, []);
 
-  const busy = state.running;
+  const busy = running;
   const canSend = !busy && !uploading && (text.trim().length > 0 || attachments.length > 0);
 
   const send = useCallback(async () => {
@@ -106,7 +132,7 @@ export function ChatInputV2({
     setText("");
     setAttachments([]);
     setError(undefined);
-    requestAnimationFrame(autoResize);
+    autoResize(); // defers itself internally now
     const convId = conversationId || (ensureConversation ? await ensureConversation() : "");
     if (!convId) return;
     const res = await sendMessage(convId, agentId, value, {
@@ -188,7 +214,7 @@ export function ChatInputV2({
           ensureConversation={ensureConversation}
           onTranscript={(t) => {
             setText((prev) => (prev ? `${prev} ${t}` : t));
-            requestAnimationFrame(autoResize);
+            autoResize(); // defers itself internally now
           }}
         />
         <textarea

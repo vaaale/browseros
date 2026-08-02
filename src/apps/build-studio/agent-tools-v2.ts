@@ -8,7 +8,10 @@
 import type { SurfaceTool } from "@/lib/assistant/client/surface-tools";
 
 export function buildStudioSurfaceTools(opts: {
-  onOpen: (path: string) => void;
+  // Returns the actual outcome (opened vs. could not load) — this is the
+  // agent's only feedback channel, so it must reflect what really happened
+  // rather than the tool reporting success the instant a fetch is kicked off.
+  onOpen: (path: string) => Promise<string>;
   onHighlight: (anchor: string) => string | Promise<string>;
   onRefresh: () => void;
 }): SurfaceTool[] {
@@ -31,8 +34,7 @@ export function buildStudioSurfaceTools(opts: {
           .trim()
           .replace(/^\/+/, "");
         if (!p) return "No path provided.";
-        opts.onOpen(p);
-        return `Opened ${p} in the Build Studio viewer.`;
+        return opts.onOpen(p);
       },
     },
     {

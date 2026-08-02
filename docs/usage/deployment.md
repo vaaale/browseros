@@ -6,7 +6,7 @@
 Browser ──► bastion:80 ──► bos-{username}:8090 (Supervisor)
 ```
 
-The bastion handles authentication, per-user container lifecycle, and proxies all HTTP and WebSocket traffic to each user's BOS instance. Containers are spawned dynamically on first login and stopped after an idle timeout.
+The bastion handles authentication, per-user container lifecycle, and proxies all HTTP and WebSocket traffic to each user's BOS instance. Containers are spawned dynamically on first login and then run until explicitly stopped (there is no idle reaper).
 
 Each user gets three isolated volumes:
 - **`src/`** — a git clone of BOS source they can freely mutate
@@ -135,7 +135,16 @@ Users can self-service from `/app/account`. Admins can use `/app/admin`.
 | Operation | What it does |
 |---|---|
 | `restart` | Stop + start the container |
-| `update-src` | `git pull` in `src/`, restart |
+| `pull-and-update-src` | Fetch and **merge** — keeps commits you made in your checkout |
+| `update-src` | Fetch and **reset** — makes the checkout match the remote exactly, discarding your commits |
+
+> **If "Pull / Update Source" reports that there is no merge base**, the
+> deployment's source checkout is a shallow clone (many platforms, Dokploy
+> included, clone with `--depth 1`). The bastion repairs this automatically on
+> startup, so redeploying the bastion usually clears it. Until it has history,
+> use **Update source** — it works against a shallow source, but replaces your
+> checkout with the remote's state. See
+> [the dev deployment guide](../dev/deployment.md) for the mechanics.
 | `rebuild-nm` | Wipe `node_modules` volume, restart (npm install on startup) |
 | `reset-data` | Wipe `data/`, restart |
 | `full` | Full deprovision + reprovision (destroys everything, requires confirm) |
@@ -153,7 +162,6 @@ Users can self-service from `/app/account`. Admins can use `/app/admin`.
 | `BASTION_PORT` | `80` | Host port for the bastion |
 | `PUBLIC_URL` | `http://localhost` | Public URL (used for OIDC callback) |
 | `VOLUME_BASE` | `./user-data` | Host path for per-user volumes |
-| `IDLE_TIMEOUT_MS` | `1800000` | Idle timeout before container stops (ms) |
 | `MAX_CONCURRENT_INSTANCES` | `50` | Max simultaneous running containers |
 | `KEYCLOAK_ISSUER` | — | OIDC issuer URL |
 | `KEYCLOAK_CLIENT_ID` | — | OIDC client ID |

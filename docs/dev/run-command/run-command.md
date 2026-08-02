@@ -55,6 +55,47 @@ Settings store timeouts in **seconds**; the executor converts to ms.
   (`makeRunCommandTool`) with `${getLogContext().sessionId}:${agentId}` — so
   parallel sub-agents get separate containers.
 
+## Google Workspace CLI (`gws`) inherits the connected account
+
+The BOS user image installs `@googleworkspace/cli`, and the **local backend**
+injects `GOOGLE_WORKSPACE_CLI_TOKEN` into every child's environment
+(`googleWorkspaceCliEnv()` in `run-command.ts`), minted per invocation from the
+`gsuite` integration via `getOAuthManager().getValidToken("gsuite")` — which
+refreshes when the token is within 60 s of expiring. So `gws` works with no
+`gws auth setup`, no `gws auth login` and no second consent:
+
+```
+gws gmail users labels list --params '{"userId":"me"}'
+gws calendar events list --params '{"calendarId":"primary"}'
+```
+
+That env var is first in `gws`'s auth precedence, ahead of its own credential
+store — verified against the shipped binary: with it unset `gws` fails locally
+("No credentials provided"); with it set it goes straight to the Google API.
+
+Three properties worth knowing:
+
+- **Scopes are whatever the integration asked for** (Gmail, Calendar, Contacts,
+  Photos, `drive.readonly` + `drive.file`). `gws sheets|docs|slides|admin …` will
+  get a **403** until those scopes are added to the gsuite manifest and
+  re-consented. `drive.file` also means `gws` can only *write* Drive files it
+  created itself.
+- **Not connected → no variable at all**, so `gws` reports its own "not
+  authenticated" instead of failing on a broken token. A missing integration, a
+  missing `refresh_token` and a rejected refresh are all just "no token", never an
+  error that breaks the command.
+- **The docker backend deliberately gets no token.** `gws` isn't in the sandbox
+  image, and `docker exec -e VAR=<token>` would put a live bearer token in argv
+  where `ps` on the *host* can read it. Production never takes that path: in
+  bastion mode the backend is forced to `local` because the user container **is**
+  the sandbox.
+
+Note this is ambient: every command the agent runs inherits the token, and
+anything in the container can read it from `/proc/<pid>/environ`. That is an
+accepted trade for a single-user container in which the agent already executes
+arbitrary code — a per-invocation wrapper would narrow it if that ever stops
+being true.
+
 ## The sandbox image
 
 `docker/run-command/Dockerfile` builds `browseros/run-command:latest` (the default

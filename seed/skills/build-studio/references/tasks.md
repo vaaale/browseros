@@ -1,1 +1,3 @@
-Step: tasks. Read the spec and plan plus /Templates/commands/tasks.md and /Templates/tasks-template.md via file_read. Write /Specs/<store>/<id>/tasks.md: tasks grouped by user story, dependency-ordered, [P] for parallelizable, with exact file paths.
+Step: tasks. Read the spec and plan plus `/Templates/commands/tasks.md` and `/Templates/tasks-template.md` with `file_read`. Write `/Specs/<store>/<id>/tasks.md` with `file_write`: tasks grouped by user story, dependency-ordered, [P] for parallelizable, with exact file paths.
+
+You write tasks.md. Nothing else — listing a task like "create services/service.json" is a task DESCRIPTION for the Developer to execute later during `implement`; it is not an instruction to create that file yourself now.

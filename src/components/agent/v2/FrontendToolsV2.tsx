@@ -46,16 +46,47 @@ export function FrontendToolsV2(_: { conversationId: string }) {
         const id = store.getState().launch("ui-preview");
         return id ? `Opened UI Preview (window ${id}).` : "Could not open UI Preview.";
       },
-      web_view: async ({ html, url, filePath, title, update }) => {
-        const toRawUrl = (p: string) => `/api/fs/raw?path=${encodeURIComponent(p)}`;
+      web_view: async ({ html, url, filePath, title, update }, { conversationId }) => {
+        // Scoped to this conversation's active feature branch (see
+        // fsClient.rawUrl / api/fs/raw/route.ts) — without this, a mockup or
+        // any other file that only exists on an active feature branch's
+        // worktree (e.g. under /Specs, /Docs) would silently 404 here even
+        // though file_read/file_write (which DO carry this scope) can see it.
+        const toRawUrl = (p: string) => fsClient.rawUrl(p, conversationId);
         const resolve = (value: string): string =>
           value.startsWith("/") && !value.startsWith("/api/") ? toRawUrl(value) : value;
         const params: Record<string, unknown> = {};
+        let checkUrl: string | undefined;
         if (typeof html === "string" && html) params.html = html;
-        else if (typeof filePath === "string" && filePath) params.url = filePath.startsWith("/") ? toRawUrl(filePath) : filePath;
-        else if (typeof url === "string" && url) params.url = resolve(url);
+        else if (typeof filePath === "string" && filePath) {
+          params.url = filePath.startsWith("/") ? toRawUrl(filePath) : filePath;
+          checkUrl = params.url as string;
+        } else if (typeof url === "string" && url) {
+          params.url = resolve(url);
+          checkUrl = params.url as string;
+        }
         if (typeof title === "string" && title) params.title = title;
         if (!params.html && !params.url) return "Provide either html, filePath, or url.";
+
+        // Verify the target actually resolves before reporting success. The
+        // preview iframe (src/apps/html-viewer) has no onError/onLoad handler
+        // at all, so a 404 or error JSON just renders silently inside the
+        // sandboxed window — without this check, the tool call would report
+        // "Opened" even when nothing real is behind the URL, which is exactly
+        // what happened for real: a path under /Specs on an unresolved branch
+        // scope, reported as a successful open.
+        if (checkUrl && checkUrl.startsWith("/api/fs/raw")) {
+          try {
+            const res = await fetch(checkUrl);
+            if (!res.ok) {
+              const body = await res.json().catch(() => ({}) as { error?: string });
+              return `Could not open preview: ${body.error ?? `HTTP ${res.status}`} for ${checkUrl}. Double-check the path — if it's under /Specs or /Docs, confirm the active feature branch is set for this conversation.`;
+            }
+          } catch {
+            return `Could not open preview: request to ${checkUrl} failed.`;
+          }
+        }
+
         if (update && htmlViewerIdRef.current) {
           const stillOpen = store.getState().windows.some((w) => w.id === htmlViewerIdRef.current);
           if (stillOpen) store.getState().close(htmlViewerIdRef.current);
@@ -93,11 +124,17 @@ export function FrontendToolsV2(_: { conversationId: string }) {
           body: JSON.stringify({ name, html, icon, draft: true }),
         }).then((r) => r.json());
         if (res.error) return `Error: ${res.error}`;
-        const app = res.app as AppManifest;
-        store.getState().registerApp(app);
-        store.getState().launch(app.id);
-        return `Installed "${app.name}". It is in your dock and open. If a Supervisor is running, it's a preview on the app-candidate branch — Promote or Discard it from the Topbar.`;
+        const app = res.app as AppManifest | undefined;
+        if (app) {
+          store.getState().registerApp(app);
+          store.getState().launch(app.id);
+        }
+        return `Installed "${app?.name ?? name}". It is in your dock and open. If a Supervisor is running, it's a preview on the app-candidate branch — Promote or Discard it from the Topbar.`;
       },
+      // A staged project can be a multi-facet ITEM (app/, services/, config/),
+      // not just an app — res.app is only present if it has an app facet, and
+      // res.service is only present if it has a services facet. A services-only
+      // item has nothing to launch as a window.
       app_build: async ({ name, dir, entry, icon }) => {
         const res = await fetch("/api/apps/build", {
           method: "POST",
@@ -105,10 +142,17 @@ export function FrontendToolsV2(_: { conversationId: string }) {
           body: JSON.stringify({ name, dir, entry, icon }),
         }).then((r) => r.json());
         if (res.error) return `Error: ${res.error}`;
-        const app = res.app as AppManifest;
-        store.getState().registerApp(app);
-        store.getState().launch(app.id);
-        return `Built and installed "${app.name}". It's a preview on the app-candidate branch — Promote or Discard from the Topbar.`;
+        const app = res.app as AppManifest | undefined;
+        const service = res.service as { id: string; name: string } | undefined;
+        if (app) {
+          store.getState().registerApp(app);
+          store.getState().launch(app.id);
+        }
+        const parts: string[] = [];
+        if (app) parts.push(`app "${app.name}" (in your dock and open)`);
+        if (service) parts.push(`service "${service.name}" (installed and started — manage it from Settings → Plugins → Services)`);
+        if (parts.length === 0) parts.push(`item "${name}"`);
+        return `Built and installed ${parts.join(" + ")}. It's a preview on the app-candidate branch — Promote or Discard from the Topbar.`;
       },
       app_list: async () => {
         const res = await fetch("/api/apps").then((r) => r.json());

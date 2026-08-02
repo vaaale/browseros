@@ -159,15 +159,35 @@ export async function reprovisionResetData(username: string, cfg: Config): Promi
 }
 
 interface UpdateSourceConfig { remote: string; branch?: string; }
-interface GitRemoteEntry { name: string; url: string; authType?: string; provider?: string; filesystem?: string; }
+interface GitRemoteEntry { name: string; url: string; authType?: string; provider?: string; filesystem?: string; defaultBranch?: string; }
 
 const SOURCE_FS_ID = "bos-src";
 
+/**
+ * Resolve which remote/branch "Pull / Update Source" targets.
+ *
+ * `bos-update-source.json` (an explicit user choice, written by whatever UI
+ * eventually exposes one) wins outright when present. Otherwise, prefer a
+ * real remote already registered for the `bos-src` filesystem in
+ * `git-remotes.json` — the SAME config the in-app "BrowserOS Source" card
+ * (Settings → Versions → git remotes) uses — over the `bos-default` factory
+ * -reset anchor. Without this, a user who already connected their own
+ * GitLab/GitHub remote through the in-app UI still gets silently routed to
+ * the (possibly stale) `bos-default` mirror here, and has to configure the
+ * same remote a second time in an unrelated Bastion-only preference file
+ * that nothing else ever writes. Prefer a remote literally named "origin"
+ * if more than one is registered; otherwise take the first.
+ */
 function readUpdateSourceConfig(data: string, fallbackBranch: string): UpdateSourceConfig {
   try {
     const raw = fs.readFileSync(path.join(data, "bos-update-source.json"), "utf8");
     return JSON.parse(raw) as UpdateSourceConfig;
   } catch {
+    const registered = readGitRemotes(data).filter(
+      (r) => (r.filesystem ?? SOURCE_FS_ID) === SOURCE_FS_ID && r.name !== BOS_DEFAULT_REMOTE,
+    );
+    const preferred = registered.find((r) => r.name === "origin") ?? registered[0];
+    if (preferred) return { remote: preferred.name, branch: preferred.defaultBranch || fallbackBranch };
     return { remote: BOS_DEFAULT_REMOTE, branch: fallbackBranch };
   }
 }
@@ -221,19 +241,204 @@ async function restoreCustomRemotes(src: string, data: string, log: (msg: string
   }
 }
 
-/** git fetch + switch to target branch, then restart.
+/**
+ * How remote changes are integrated into the user's `src/` checkout.
+ *
+ * - `reset` — **discards local commits**: hard-reset the target branch onto the
+ *   fetched tip. This is the long-standing "Update source" behaviour, and it is
+ *   the right one when the checkout should exactly match the remote.
+ * - `pull` — **preserves local commits**: fast-forward if possible, otherwise
+ *   merge. Refuses rather than clobbering when the tree is dirty or the merge
+ *   conflicts. Use this when the user has their own work in `src/` — a promoted
+ *   self-modification lands as a commit on the base branch in this very
+ *   checkout, and a reset would silently throw it away.
+ */
+export type UpdateSourceMode = "reset" | "pull";
+
+/**
+ * Give the deployment's source checkout real history, once, at bastion startup.
+ *
+ * Dokploy clones `code/` with `--depth 1 --single-branch` **and deletes and
+ * re-clones it on every redeployment**. That breaks the per-user clones which
+ * fetch from it (`bos-default` → `/bos-src`): a shallow remote cannot supply the
+ * connecting history, so `git fetch` dies with "did not send all necessary
+ * objects", and there is no merge base for a pull.
+ *
+ * Because `code/` is ephemeral by design, a manual `--unshallow` would be undone
+ * by the next deploy — so the repair has to run automatically. The bastion starts
+ * on every deploy, which makes this the right place for it. Idempotent: once the
+ * repo has history the shallow check short-circuits.
+ *
+ * Never throws. A bastion that cannot reach the git remote must still start.
+ */
+export async function ensureSourceRepoHasHistory(cfg: Config): Promise<void> {
+  const repo = cfg.bosRepoPath;
+  const log = (msg: string) => console.log(`[bastion] [source-repo] ${msg}`);
+
+  // `.git` can be a file (worktrees), so ask git rather than stat-ing a path.
+  const isRepo = await execFileAsync("git", ["-C", repo, "rev-parse", "--git-dir"]).then(() => true).catch(() => false);
+  if (!isRepo) {
+    log(`${repo} is not a git repository — skipping (nothing to deepen)`);
+    return;
+  }
+  if (!(await isShallowRepo(repo))) return;
+
+  const remote = await pickRemote(repo);
+  if (!remote) {
+    log(`${repo} is shallow but has no remote — cannot fetch history. ` +
+        `Per-user "Pull / Update Source" will be unavailable.`);
+    return;
+  }
+
+  log(`${repo} is a shallow clone — fetching full history from "${remote}" so per-user clones can fetch and merge …`);
+  try {
+    // 10 minutes: a cold unshallow of a large repo over a slow link is still
+    // preferable to leaving every source update broken.
+    await execFileAsync("git", ["-C", repo, "fetch", "--unshallow", remote], { timeout: 600_000 });
+    log("full history restored");
+  } catch (err) {
+    const raw = err instanceof Error ? err.message : String(err);
+    // Already complete (e.g. a previous run, or a non-shallow re-clone) is fine.
+    if (/on a complete repository does not make sense/i.test(raw)) {
+      log("already has full history");
+      return;
+    }
+    log(`could not deepen ${repo}: ${raw.split("\n")[0]}\n` +
+        `  Source updates will fall back to --depth=1, and "Pull / Update Source" will refuse.`);
+  }
+}
+
+/** The remote to fetch history from — "origin" if present, else the first one. */
+async function pickRemote(repo: string): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync("git", ["-C", repo, "remote"]);
+    const remotes = stdout.split("\n").map((r) => r.trim()).filter(Boolean);
+    if (remotes.length === 0) return null;
+    return remotes.includes("origin") ? "origin" : remotes[0];
+  } catch {
+    return null;
+  }
+}
+
+/** Deepen a shallow clone in place. Returns whether it now has history. */
+async function tryUnshallow(
+  repo: string,
+  remote: string,
+  branch: string,
+  credArgs: string[],
+  credEnv: Record<string, string> | undefined,
+  log: (msg: string) => void,
+): Promise<boolean> {
+  try {
+    await execFileAsync(
+      "git",
+      [...credArgs, "-C", repo, "fetch", "--unshallow", remote, branch],
+      { timeout: 600_000, ...(credEnv ? { env: { ...process.env, ...credEnv } } : {}) },
+    );
+    return !(await isShallowRepo(repo));
+  } catch (err) {
+    const raw = err instanceof Error ? err.message : String(err);
+    log(`Could not deepen this checkout: ${raw.split("\n")[0]}`);
+    return !(await isShallowRepo(repo));
+  }
+}
+
+/** True when a repo is a shallow clone (it has no complete history). */
+async function isShallowRepo(repo: string): Promise<boolean> {
+  try {
+    const { stdout } = await execFileAsync("git", ["-C", repo, "rev-parse", "--is-shallow-repository"]);
+    return stdout.trim() === "true";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Integrate FETCH_HEAD **without discarding local commits**.
+ *
+ * Order matters: refuse on a dirty tree BEFORE touching anything, prefer a
+ * fast-forward, and if a real merge is needed and it conflicts, `merge --abort`
+ * so the checkout is left exactly as it was. The whole point of this mode is
+ * that the user's own work survives, so every failure path must be a no-op
+ * rather than a partial state.
+ */
+async function integrateByPull(
+  src: string,
+  targetBranch: string,
+  currentBranch: string,
+  log: (msg: string) => void,
+): Promise<void> {
+  const git = (args: string[]) => execFileAsync("git", ["-C", src, ...args]);
+
+  const { stdout: dirty } = await git(["status", "--porcelain"]);
+  // package-lock.json churn from a previous npm install is expected and is not
+  // the user's work — the same allowance the Supervisor's promote makes.
+  const meaningful = dirty
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .filter((l) => !l.endsWith("package-lock.json"));
+  if (meaningful.length > 0) {
+    log(`Refusing to pull — uncommitted changes in src/:\n${meaningful.join("\n")}`);
+    throw new Error(
+      `Cannot pull: ${meaningful.length} uncommitted change(s) in src/. ` +
+      `Commit or discard them first, or use "Update source" to overwrite them.\n${meaningful.join("\n")}`,
+    );
+  }
+  if (dirty.trim()) {
+    log("Discarding package-lock.json churn from a previous install …");
+    await git(["checkout", "--", "package-lock.json"]).catch(() => undefined);
+  }
+
+  if (currentBranch !== targetBranch) {
+    // Check out the existing local branch if there is one (never -B, which would
+    // move it and lose commits); otherwise create it from the fetched tip.
+    const exists = await git(["rev-parse", "--verify", `refs/heads/${targetBranch}`]).then(() => true).catch(() => false);
+    log(exists ? `Switching to existing ${targetBranch} …` : `Creating ${targetBranch} from the fetched tip …`);
+    await git(exists ? ["checkout", targetBranch] : ["checkout", "-b", targetBranch, "FETCH_HEAD"]);
+  }
+
+  const ff = await git(["merge", "--ff-only", "FETCH_HEAD"]).then(() => true).catch(() => false);
+  if (ff) {
+    log("Fast-forwarded to the fetched tip");
+    return;
+  }
+
+  log("Local commits diverge from the remote — merging …");
+  try {
+    await git(["-c", "user.email=bos@localhost", "-c", "user.name=BrowserOS", "merge", "--no-edit", "FETCH_HEAD"]);
+    log("Merge succeeded — local commits preserved");
+  } catch (err) {
+    const { stdout: conflicts } = await git(["diff", "--name-only", "--diff-filter=U"]).catch(() => ({ stdout: "" }));
+    await git(["merge", "--abort"]).catch(() => undefined);
+    const raw = err instanceof Error ? err.message : String(err);
+    log(`Merge failed and was aborted — checkout unchanged:\n${raw}`);
+    throw new Error(
+      `Cannot pull: merging ${targetBranch} would conflict` +
+      (conflicts.trim() ? ` in:\n${conflicts.trim()}` : "") +
+      `\nThe checkout was left untouched. Resolve it in BrowserOS, or use "Update source" to overwrite local changes.`,
+    );
+  }
+}
+
+/** git fetch + integrate the target branch, then restart.
  *  Respects the user's update-source preference (remote + branch). */
-export async function reprovisionUpdateSrc(username: string, cfg: Config): Promise<void> {
+export async function reprovisionUpdateSrc(
+  username: string,
+  cfg: Config,
+  mode: UpdateSourceMode = "reset",
+): Promise<void> {
   const src = srcDir(username, cfg);
   const data = dataDir(username, cfg);
-  const log = (msg: string) => logStore.append(username, `[update-src] ${msg}`);
+  const tag = mode === "pull" ? "pull-and-update-src" : "update-src";
+  const log = (msg: string) => logStore.append(username, `[${tag}] ${msg}`);
 
   // Read user's preferred remote + branch (falls back to bos-default / bosBaseRef).
   const pref = readUpdateSourceConfig(data, cfg.bosBaseRef);
   const targetRemote = pref.remote || BOS_DEFAULT_REMOTE;
   const targetBranch = pref.branch || cfg.bosBaseRef;
 
-  log(`Starting source update (remote: ${targetRemote}, branch: ${targetBranch})`);
+  log(`Starting source update (mode: ${mode}, remote: ${targetRemote}, branch: ${targetBranch})`);
 
   // Migrate legacy "origin" remotes to "bos-default" in existing checkouts.
   try {
@@ -333,10 +538,34 @@ export async function reprovisionUpdateSrc(username: string, cfg: Config): Promi
 
   log(`Fetching ${targetRemote}/${targetBranch} …`);
 
+  // A shallow SOURCE cannot satisfy a full-history negotiation: the deployment
+  // checkout the user's clone fetches from (`/bos-src`) is a depth-1 clone under
+  // Dokploy, and a plain `git fetch` against it dies with
+  //   error: Could not read <sha> / fatal: revision walk setup failed
+  //   error: /bos-src did not send all necessary objects
+  // `--depth=1` asks only for the tip, so there is no walk to fail. We only add
+  // it when THIS clone is already shallow — passing it to a full clone would
+  // truncate the user's history, which is a different kind of damage.
+  let srcShallow = await isShallowRepo(src);
+  // Pull needs a merge base, so try to earn one before giving up. This succeeds
+  // once the source repo itself has history (see ensureSourceRepoHasHistory).
+  if (mode === "pull" && srcShallow) {
+    log("Checkout is shallow — fetching full history so a merge base exists …");
+    if (await tryUnshallow(src, targetRemote, targetBranch, credArgs, credEnv, log)) {
+      srcShallow = false;
+      log("History restored — a merge is now possible");
+    }
+  }
+
+  const fetchArgs = srcShallow
+    ? ["fetch", "--depth=1", targetRemote, targetBranch]
+    : ["fetch", targetRemote, targetBranch];
+  if (srcShallow) log("Shallow checkout — fetching with --depth=1");
+
   try {
     const { stdout, stderr } = await execFileAsync(
       "git",
-      [...credArgs, "-C", src, "fetch", targetRemote, targetBranch],
+      [...credArgs, "-C", src, ...fetchArgs],
       credEnv ? { env: { ...process.env, ...credEnv } } : undefined,
     );
     if (String(stdout).trim()) log(`fetch stdout: ${String(stdout).trim()}`);
@@ -347,6 +576,12 @@ export async function reprovisionUpdateSrc(username: string, cfg: Config): Promi
     if (raw.includes("couldn't find remote ref") || raw.includes("invalid refspec")) {
       throw new Error(`Branch '${targetBranch}' not found on remote '${targetRemote}'.`);
     }
+    if (raw.includes("did not send all necessary objects") || raw.includes("revision walk setup failed")) {
+      throw new Error(
+        `git fetch failed because '${targetRemote}' is a shallow clone and cannot supply the connecting history.\n` +
+        `Make the deployment's source checkout a full clone (or unshallow it) and retry.\n${raw}`,
+      );
+    }
     throw new Error(`git fetch failed:\n${raw}`);
   }
   log("Fetch succeeded");
@@ -354,14 +589,27 @@ export async function reprovisionUpdateSrc(username: string, cfg: Config): Promi
   const { stdout: currentBranch } = await execFileAsync("git", ["-C", src, "rev-parse", "--abbrev-ref", "HEAD"]);
   log(`Current branch: ${currentBranch.trim()}`);
 
-  if (currentBranch.trim() !== targetBranch) {
-    log(`Switching to ${targetBranch} …`);
+  if (mode === "pull") {
+    // Merging needs a merge base, which a shallow clone does not have. Say so
+    // plainly instead of letting git fail with "refusing to merge unrelated
+    // histories" or a truncated-history merge that silently loses commits.
+    if (srcShallow) {
+      log("Refusing to pull — this checkout is a shallow clone, so there is no merge base");
+      throw new Error(
+        `Cannot pull: this instance's src/ has no history and could not be deepened, so there is no merge base.\n` +
+        `That happens when '${targetRemote}' is itself a shallow clone. Use "Update source" to take the remote's ` +
+        `state as-is, or give the deployment's source checkout full history and retry.`,
+      );
+    }
+    await integrateByPull(src, targetBranch, currentBranch.trim(), log);
+  } else if (currentBranch.trim() !== targetBranch) {
+    log(`Switching to ${targetBranch} (discarding any local state on it) …`);
     await execFileAsync("git", ["-C", src, "checkout", "-B", targetBranch, "FETCH_HEAD"]);
   } else {
-    log("Already on target branch — resetting to FETCH_HEAD …");
+    log("Already on target branch — resetting to FETCH_HEAD (local commits discarded) …");
     await execFileAsync("git", ["-C", src, "reset", "--hard", "FETCH_HEAD"]);
   }
-  log("Checkout/reset done");
+  log("Integration done");
 
   // Wipe the Next.js compilation cache. git reset --hard preserves gitignored
   // directories like .next/, and a stale Turbopack cache from the previous

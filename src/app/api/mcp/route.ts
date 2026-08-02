@@ -12,6 +12,7 @@ function normalizeConfig(body: Partial<McpServerConfig>): McpServerConfig {
     body.transport === "sse" ? "sse" : body.transport === "stdio" ? "stdio" : "http";
 
   const description = body.description?.trim() || undefined;
+  const includeInDevHarness = body.includeInDevHarness === true ? true : undefined;
 
   if (transport === "stdio") {
     const command = body.command?.trim() || (body.endpoint ?? "").trim().split(/\s+/)[0];
@@ -26,6 +27,7 @@ function normalizeConfig(body: Partial<McpServerConfig>): McpServerConfig {
       env: body.env && typeof body.env === "object" ? body.env : undefined,
       cwd: body.cwd?.trim() || undefined,
       endpoint: body.endpoint?.trim() || undefined,
+      includeInDevHarness,
     };
   }
 
@@ -39,6 +41,7 @@ function normalizeConfig(body: Partial<McpServerConfig>): McpServerConfig {
     endpoint: body.endpoint,
     apiKey: body.apiKey || undefined,
     headers: body.headers && typeof body.headers === "object" ? body.headers : undefined,
+    includeInDevHarness,
   };
 }
 

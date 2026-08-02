@@ -5,7 +5,8 @@ import { wallpaperToCss } from "@/os/wallpapers";
 import { Topbar } from "./Topbar";
 import { Dock } from "./Dock";
 import { WindowManager } from "./WindowManager";
-import { FirstRunWizard } from "./FirstRunWizard";
+import { SetupWizard } from "./SetupWizard";
+import { PresenceHost } from "@/components/voice/PresenceHost";
 import { AppIcon } from "./icons";
 
 export function Desktop() {
@@ -38,7 +39,8 @@ export function Desktop() {
 
       <WindowManager />
       <Dock />
-      <FirstRunWizard />
+      <SetupWizard />
+      <PresenceHost />
     </div>
   );
 }

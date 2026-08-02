@@ -1,15 +1,14 @@
-// The dataDir()/user-apps/ "local marketplace" (user-specs/002-service-daemons):
-// user-apps/ is the user's own GitFS repo (the same concept as user-specs/ —
-// BOS only ensures it's a git repo, never populates or deletes from it) that's
-// auto-scanned and exposed through the same marketplace catalog + install ops
-// as a real registered marketplace, under the reserved id LOCAL_MARKETPLACE_ID
-// ("user-apps"). No marketplace.json is ever written into it — the catalog is
-// computed in memory on every read.
+// dataDir()/user-apps/ is the user's own PRIVATE MARKETPLACE — structurally
+// identical to any registered clone: a root marketplace.json plus items under
+// items/<id>/ (034-user-apps-marketplace-parity). It occupies the slot keyed by
+// LOCAL_MARKETPLACE_ID ("user-apps"), and BOS MAINTAINS its manifest by merge
+// (add discovered items, prune vanished ones, never touch authored fields).
+// Installing copies nothing — one symlink at dataDir()/system/<id> (035).
 //   npx playwright test -c playwright.unit.config.ts tests/services/local-marketplace.test.ts
 import "./_stub-server-only";
 import { test, expect } from "@playwright/test";
 import { join } from "path";
-import { existsSync, mkdirSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, writeFileSync, readFileSync, rmSync, lstatSync, realpathSync } from "fs";
 import { execFileSync } from "child_process";
 import {
   listCatalog,
@@ -34,9 +33,9 @@ function setupTest(label: string) {
   };
 }
 
-/** Lays out a user-apps/<id>/ item bundling both a service and an app. */
+/** Lays out a user-apps/items/<id>/ item bundling both a service and an app. */
 function layOutServiceAndApp(dataDir: string, id: string): void {
-  const itemPath = join(dataDir, "user-apps", id);
+  const itemPath = join(dataDir, "user-apps", "items", id);
   mkdirSync(join(itemPath, "services"), { recursive: true });
   mkdirSync(join(itemPath, "config"), { recursive: true });
   mkdirSync(join(itemPath, "app"), { recursive: true });
@@ -50,7 +49,7 @@ function layOutServiceAndApp(dataDir: string, id: string): void {
 }
 
 test.describe("local marketplace (dataDir()/user-apps/)", () => {
-  test("listCatalog auto-discovers user-apps items with both app and services badges, computed in memory only", async () => {
+  test("listCatalog auto-discovers items under items/ and writes the manifest BOS maintains", async () => {
     const { dir, dispose } = setupTest("local-mkt-catalog");
     try {
       layOutServiceAndApp(dir, "widget");
@@ -62,14 +61,46 @@ test.describe("local marketplace (dataDir()/user-apps/)", () => {
       const item = local!.items[0];
       expect(item.id).toBe("widget");
       expect(item.name).toBe("widget Service");
-      expect(item.app?.entrypoint).toBe("widget/app");
-      expect(item.services?.entrypoint).toBe("widget");
+      // Entrypoints are repo-relative, so they carry the items/ prefix — the same
+      // shape a registered marketplace's manifest uses.
+      expect(item.app?.entrypoint).toBe("items/widget/app");
+      expect(item.services?.entrypoint).toBe("items/widget");
 
-      // user-apps/ is the user's own GitFS repo (same concept as user-specs/)
-      // — BOS must never write a generated artifact into it, so no
-      // marketplace.json should ever land on disk there.
+      // BOS maintains this repo's marketplace.json (034 FR-002/FR-003), which is
+      // the reverse of the old rule that it must never write here.
       const manifestPath = join(dir, "user-apps", "marketplace.json");
-      expect(existsSync(manifestPath)).toBe(false);
+      expect(existsSync(manifestPath)).toBe(true);
+      const written = JSON.parse(readFileSync(manifestPath, "utf8")) as { items: { id: string }[] };
+      expect(written.items.map((i) => i.id)).toEqual(["widget"]);
+    } finally {
+      dispose();
+    }
+  });
+
+  test("reconciliation is a no-op when nothing changed — a catalog read must not dirty the repo", async () => {
+    const { dir, dispose } = setupTest("local-mkt-idempotent");
+    try {
+      layOutServiceAndApp(dir, "widget");
+      await listCatalog();
+      const manifestPath = join(dir, "user-apps", "marketplace.json");
+      const first = readFileSync(manifestPath, "utf8");
+
+      await listCatalog();
+      expect(readFileSync(manifestPath, "utf8")).toBe(first);
+    } finally {
+      dispose();
+    }
+  });
+
+  test("a removed item directory is pruned from the manifest", async () => {
+    const { dir, dispose } = setupTest("local-mkt-prune");
+    try {
+      layOutServiceAndApp(dir, "widget");
+      await listCatalog();
+      rmSync(join(dir, "user-apps", "items", "widget"), { recursive: true, force: true });
+
+      const catalog = await listCatalog();
+      expect(catalog.find((m) => m.id === LOCAL_MARKETPLACE_ID)?.items).toHaveLength(0);
     } finally {
       dispose();
     }
@@ -78,8 +109,8 @@ test.describe("local marketplace (dataDir()/user-apps/)", () => {
   test("listCatalog omits an item shape that isn't a recognised item type", async () => {
     const { dir, dispose } = setupTest("local-mkt-unrecognised");
     try {
-      mkdirSync(join(dir, "user-apps", "not-an-item"), { recursive: true });
-      writeFileSync(join(dir, "user-apps", "not-an-item", "README.md"), "just a stray folder");
+      mkdirSync(join(dir, "user-apps", "items", "not-an-item"), { recursive: true });
+      writeFileSync(join(dir, "user-apps", "items", "not-an-item", "README.md"), "just a stray folder");
 
       const catalog = await listCatalog();
       const local = catalog.find((m) => m.id === LOCAL_MARKETPLACE_ID);
@@ -89,7 +120,7 @@ test.describe("local marketplace (dataDir()/user-apps/)", () => {
     }
   });
 
-  test("installMarketplaceService installs an item directly from user-apps/ without copying it onto itself", async () => {
+  test("installing from the local marketplace creates one symlink and copies nothing", async () => {
     const { dir, dispose } = setupTest("local-mkt-install-service");
     try {
       layOutServiceAndApp(dir, "widget");
@@ -97,6 +128,19 @@ test.describe("local marketplace (dataDir()/user-apps/)", () => {
       const result = await installMarketplaceService(LOCAL_MARKETPLACE_ID, "widget");
       expect(result.serviceId).toBe("widget");
       expect(await isInstalled("widget")).toBe(true);
+
+      // Installed state is ONE symlink pointing at the item where it already
+      // lives — no copy, and no per-facet link farm (035 FR-002).
+      const link = join(dir, "system", "widget");
+      expect(lstatSync(link).isSymbolicLink()).toBe(true);
+      expect(realpathSync(link)).toBe(realpathSync(join(dir, "user-apps", "items", "widget")));
+      expect(existsSync(join(dir, "system", "services"))).toBe(false);
+      expect(existsSync(join(dir, "system", "app"))).toBe(false);
+
+      // Config is seeded as BOS-owned state, not linked into the item (035 FR-004).
+      const seeded = join(dir, "system", "config", "widget", "widget.json");
+      expect(existsSync(seeded)).toBe(true);
+      expect(lstatSync(join(dir, "system", "config", "widget")).isSymbolicLink()).toBe(false);
     } finally {
       dispose();
     }
@@ -129,7 +173,7 @@ test.describe("local marketplace (dataDir()/user-apps/)", () => {
     try {
       layOutServiceAndApp(dir, "widget");
       await expect(removeMarketplace(LOCAL_MARKETPLACE_ID)).rejects.toThrow();
-      expect(existsSync(join(dir, "user-apps", "widget"))).toBe(true);
+      expect(existsSync(join(dir, "user-apps", "items", "widget"))).toBe(true);
     } finally {
       dispose();
     }

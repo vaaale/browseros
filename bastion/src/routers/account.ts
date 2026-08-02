@@ -79,7 +79,9 @@ export function createAccountRouter(cfg: Config, provider: AuthProvider): Router
       switch (operation) {
         case "restart": await reprovisionRestart(username, cfg); break;
         case "reset-data": await reprovisionResetData(username, cfg); break;
-        case "update-src": await reprovisionUpdateSrc(username, cfg); break;
+        case "update-src": await reprovisionUpdateSrc(username, cfg, "reset"); break;
+        // Same operation, non-destructive integration: keeps local commits.
+        case "pull-and-update-src": await reprovisionUpdateSrc(username, cfg, "pull"); break;
         case "rebuild-nm": await reprovisionRebuildNm(username, cfg); break;
         case "reset-to-default": await reprovisionResetToDefault(username, cfg); break;
         case "full": await reprovisionFull(username, cfg); break;

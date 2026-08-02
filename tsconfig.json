@@ -19,7 +19,8 @@
       }
     ],
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "#bos-plugin-sdk": ["./src/lib/bos-plugins/sdk/index.ts"]
     }
   },
   "include": [
