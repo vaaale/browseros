@@ -32,6 +32,13 @@ function ProviderIcon({ provider, size = 14 }: { provider: string; size?: number
   return null;
 }
 
+// Mirrors GITHUB_MANIFEST.scopes / GITLAB_MANIFEST.scopes (src/lib/integrations/oauth/providers/*)
+// — duplicated here because those manifests pull in `node:crypto` and can't be imported client-side.
+const PROVIDER_SCOPES: Record<string, string[]> = {
+  github: ["read:user", "user:email", "repo"],
+  gitlab: ["api", "read_user", "read_repository", "write_repository"],
+};
+
 export function GitProvidersTab({ onRefresh: _onRefresh }: { onRefresh?: () => Promise<void> }) {
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
   const [loading, setLoading] = useState(true);
@@ -234,6 +241,7 @@ export function GitProvidersTab({ onRefresh: _onRefresh }: { onRefresh?: () => P
                       providerName={provider.name}
                       hasCredentials={provider.hasClientCredentials}
                       redirectUriPath={GIT_REMOTE_OAUTH_CALLBACK_PATH}
+                      requiredScopes={PROVIDER_SCOPES[provider.id]}
                       onSaved={async () => {
                         await load();
                         setConfiguring(null);

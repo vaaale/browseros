@@ -19,7 +19,17 @@ import {
   tagSkillCandidate,
   type Episode,
 } from "./episodes";
-import { addTopicEntry, createTopic, removeTopicEntry, replaceTopicEntry } from "./topics";
+import {
+  addTopicEntry,
+  clearConsolidateFlag,
+  createTopic,
+  getTopic,
+  listFlaggedTopicSlugs,
+  removeTopicEntry,
+  replaceTopicEntry,
+  setTopicDigest,
+  supersedeTopicEntry,
+} from "./topics";
 import { readMemoryDoc, setUserPreferences } from "./agent-memory";
 import { agentLockFile, MEMORIES_ROOT, safeAgentId } from "./paths";
 import { getMemoryLoopsConfig } from "./config";
@@ -54,6 +64,10 @@ export const SLOW_LOOP_SYSTEM_PROMPT = [
   "- topic_add_entry(topic, content) — add an entry to a topic (creates it if missing).",
   "- topic_replace_entry(topic, entryIdOrText, newContent) — supersede a stale/contradicted entry.",
   "- topic_remove_entry(topic, entryIdOrText) — remove an entry.",
+  "- topic_read(topic) — read a topic's FULL entry list (id, timestamp, text, lifecycle state), digest, and flag. Call this BEFORE reorganizing any flagged topic — the preamble below only shows you the slug + digest.",
+  "- topic_set_digest(topic, digest) — refresh a topic's one-line digest after reorganizing it.",
+  "- topic_supersede(topic, entryIdOrText, supersededById, supersededByTimestamp) — mark an OLDER entry superseded by a NEWER one (a detected contradiction), WITHOUT deleting it.",
+  "- topic_clear_consolidate(topic) — clear a topic's consolidation flag. Call ONLY once you've finished reorganizing it (or confirmed it needs no changes) — never before, and never speculatively.",
   "",
   "Episodes:",
   "- episode_tag_candidate(taskClass) — record a skill-candidate tag on the current episode for recurrence tracking.",
@@ -69,6 +83,18 @@ export const SLOW_LOOP_SYSTEM_PROMPT = [
   "",
   "## Anti-Patterns (Do NOT Harden These)",
   "- Transient failures, negative tool claims, resolved errors, one-off narratives.",
+  "",
+  "## Holistic topic consolidation (flagged topics)",
+  "Topics flagged for consolidation are listed in the preamble (soft-budget overflow or a manual request set the flag). For EACH flagged topic: topic_read it FIRST — never reorganize from the digest alone. Then reorganize using ONLY the incremental ops above; there is no whole-file rewrite op and there never will be:",
+  "- Merge near-duplicate entries: topic_remove_entry the redundant ones, then topic_add_entry ONE new entry capturing the combined meaning.",
+  "- Drop stale entries: topic_remove_entry. Prefer topic_supersede over remove when it's a genuine contradiction rather than staleness — the history stays visible and answerable later.",
+  "- Split an over-fat topic covering more than one subject: topic_create a focused sibling, topic_add_entry each moved entry there, THEN topic_remove_entry it from the source topic. Always add-to-destination BEFORE remove-from-source — a move, never a delete-then-recreate in the other order — so an interrupted pass can never lose an entry.",
+  "- Refresh the digest with topic_set_digest once the entries reflect the new organization.",
+  "- If a topic is already well-organized and non-redundant, make NO changes. Gratuitous rewrites are not the goal — leaving a clean topic alone is success.",
+  "- Call topic_clear_consolidate(topic) when you are done with that topic — including when you decided it needed no changes. This is what stops the scheduler from revisiting it every pass.",
+  "",
+  "## Contradiction detection",
+  "While reading a topic (via topic_read, or while extracting a new lesson from an episode), watch for two entries on the same subject that cannot both be true (e.g. 'user works at Acme' vs 'user works at Beta', stated at different times). This is best-effort background judgment, not a hard inline rule — when you're confident you've spotted one, topic_supersede the OLDER entry, pointing it at the NEWER entry's id and timestamp. Never delete the older entry; superseding keeps it answerable for as-of queries.",
   "",
   "## Processing Order",
   "  1. Review the episode against current preferences + topics.",
@@ -129,6 +155,8 @@ interface SlowLoopState {
   topicOps: number;
   refusedSkillCreates: { taskClass: string; reason: string }[];
   markedConsolidated: string[];
+  /** Topics whose consolidation flag was cleared this run (M1/FR-007). */
+  topicsReorganized: string[];
 }
 
 /** Run all three skill-creation gate checks (FR-014) for an agent. */
@@ -274,6 +302,109 @@ function buildSlowLoopTools(agentId: string, state: SlowLoopState): Record<strin
         return `Removed from topics/${topic}.`;
       },
     },
+    topic_read: {
+      description: "Read a topic's FULL entry list (id, timestamp, text, lifecycle state, supersededBy), plus its digest and consolidation flag. Call this before reorganizing any flagged topic.",
+      parameters: {
+        type: "object",
+        properties: { topic: { type: "string" } },
+        required: ["topic"],
+      },
+      execute: async (input) => {
+        const topic = String(input.topic ?? "").trim();
+        if (!topic) return "Error: topic is required.";
+        const t = await getTopic(agentId, topic);
+        if (!t) return `Error: topic "${topic}" does not exist.`;
+        return JSON.stringify(
+          {
+            slug: t.slug,
+            digest: t.digest,
+            consolidate: !!t.consolidate,
+            entries: t.entries.map((e) => ({
+              id: e.id,
+              timestamp: e.timestamp,
+              text: e.text,
+              state: e.state ?? "active",
+              supersededBy: e.supersededBy,
+            })),
+          },
+          null,
+          2,
+        );
+      },
+    },
+    topic_set_digest: {
+      description: "Refresh a topic's one-line digest, e.g. after merging/splitting its entries.",
+      parameters: {
+        type: "object",
+        properties: { topic: { type: "string" }, digest: { type: "string" } },
+        required: ["topic", "digest"],
+      },
+      execute: async (input) => {
+        const topic = String(input.topic ?? "").trim();
+        const digest = String(input.digest ?? "").trim();
+        if (!topic || !digest) return "Error: topic and digest are required.";
+        const r = await setTopicDigest(agentId, topic, digest);
+        if (!r.success) {
+          logger().error(LOG, "topic_set_digest failed", undefined, { agentId, topic, error: r.error });
+          return `Error: ${r.error}`;
+        }
+        state.topicOps += 1;
+        logger().info(LOG, "op: topic_set_digest", { agentId, topic });
+        return `Digest updated for topics/${topic}.`;
+      },
+    },
+    topic_supersede: {
+      description:
+        "Mark an OLDER entry as superseded by a NEWER one (a detected contradiction) WITHOUT deleting it. Provide the older entry's id/text and the newer entry's id + timestamp as the reference.",
+      parameters: {
+        type: "object",
+        properties: {
+          topic: { type: "string" },
+          entryIdOrText: { type: "string", description: "The OLDER entry to mark superseded." },
+          supersededById: { type: "string", description: "The id of the NEWER entry that supersedes it." },
+          supersededByTimestamp: { type: "string", description: "The newer entry's yyyy-mm-dd timestamp." },
+        },
+        required: ["topic", "entryIdOrText", "supersededById", "supersededByTimestamp"],
+      },
+      execute: async (input) => {
+        const topic = String(input.topic ?? "").trim();
+        const key = String(input.entryIdOrText ?? "").trim();
+        const supersededById = String(input.supersededById ?? "").trim();
+        const supersededByTimestamp = String(input.supersededByTimestamp ?? "").trim();
+        if (!topic || !key || !supersededById || !supersededByTimestamp) {
+          return "Error: topic, entryIdOrText, supersededById, and supersededByTimestamp are required.";
+        }
+        const r = await supersedeTopicEntry(agentId, topic, key, { id: supersededById, timestamp: supersededByTimestamp });
+        if (!r.success) {
+          logger().error(LOG, "topic_supersede failed", undefined, { agentId, topic, error: r.error });
+          return `Error: ${r.error}`;
+        }
+        state.topicOps += 1;
+        logger().info(LOG, "op: topic_supersede", { agentId, topic, key: key.slice(0, 60) });
+        return `Marked entry superseded in topics/${topic}.`;
+      },
+    },
+    topic_clear_consolidate: {
+      description:
+        "Clear a topic's consolidation flag. Call ONLY after you've finished reorganizing it (or confirmed it already needs no changes) — never before, and never speculatively.",
+      parameters: {
+        type: "object",
+        properties: { topic: { type: "string" } },
+        required: ["topic"],
+      },
+      execute: async (input) => {
+        const topic = String(input.topic ?? "").trim();
+        if (!topic) return "Error: topic is required.";
+        const r = await clearConsolidateFlag(agentId, topic);
+        if (!r.success) {
+          logger().error(LOG, "topic_clear_consolidate failed", undefined, { agentId, topic, error: r.error });
+          return `Error: ${r.error}`;
+        }
+        state.topicsReorganized.push(topic);
+        logger().info(LOG, "op: topic_clear_consolidate", { agentId, topic });
+        return `Cleared the consolidation flag on topics/${topic}.`;
+      },
+    },
     skill_list: {
       description: "List existing skills (id, name, description, whenToUse). Always call before skill_create.",
       parameters: { type: "object", properties: {} },
@@ -394,6 +525,8 @@ export interface SlowLoopRunSummary {
   skillsCreated: string[];
   skillsRefused: { taskClass: string; reason: string }[];
   markedConsolidated: string[];
+  /** Topics whose consolidation flag was cleared this run (M1/FR-007). */
+  topicsReorganized: string[];
   archived: number;
   errors: { agentId: string; episodePath: string; error: string }[];
 }
@@ -409,6 +542,7 @@ function emptySummary(): SlowLoopRunSummary {
     skillsCreated: [],
     skillsRefused: [],
     markedConsolidated: [],
+    topicsReorganized: [],
     archived: 0,
     errors: [],
   };
@@ -446,14 +580,18 @@ export async function runSlowLoop(opts: { force?: boolean; onlyAgentId?: string 
 
   for (const agentId of agentIds) {
     const pending = await listPendingEpisodes(agentId, cfg.slowLoop.batchSize);
-    if (pending.length === 0) {
+    // M1 fix: a topic flagged by a soft-budget overflow creates NO episode, so
+    // gating on pending episodes alone would skip it forever. Run a pass when
+    // there are pending episodes OR at least one flagged topic.
+    const flagged = await listFlaggedTopicSlugs(agentId);
+    if (pending.length === 0 && flagged.length === 0) {
       summary.archived += await archiveOldEpisodes(agentId, cfg.episodeArchiveAgeDays).catch(() => 0);
       continue;
     }
     anyPending = true;
     if (hasCreds === null) hasCreds = await hasCredentials();
     if (!hasCreds) {
-      logger().warn(LOG, "slow loop: no AI credentials configured — cannot run", { agentId, pending: pending.length });
+      logger().warn(LOG, "slow loop: no AI credentials configured — cannot run", { agentId, pending: pending.length, flagged: flagged.length });
       summary.reason = "no AI provider configured";
       continue;
     }
@@ -470,6 +608,7 @@ export async function runSlowLoop(opts: { force?: boolean; onlyAgentId?: string 
     skillsPatched: summary.skillsPatched.length,
     skillsCreated: summary.skillsCreated.length,
     skillsRefused: summary.skillsRefused.length,
+    topicsReorganized: summary.topicsReorganized.length,
     archived: summary.archived,
     errors: summary.errors.length,
   });
@@ -494,6 +633,7 @@ async function consolidateAgent(
     topicOps: 0,
     refusedSkillCreates: [],
     markedConsolidated: [],
+    topicsReorganized: [],
   };
   const tools = buildSlowLoopTools(agentId, state);
   const preamble = await renderAgentPreamble(agentId);
@@ -535,12 +675,28 @@ async function consolidateAgent(
         logger().log({ level: "error", component: LOG, conversation: convId, msg: "episode consolidation failed", err: e, data: { agentId, path: ep.path } });
       }
     }
+    // M1: re-derive the flagged set now — episode consolidation above may have
+    // just flagged a topic (a topic_add_entry that overflowed the budget), and
+    // this is the same pass that should reorganize it, not next hour's.
+    const flaggedTopics = await listFlaggedTopicSlugs(agentId);
+    for (const slug of flaggedTopics) {
+      logger().info(LOG, "consolidating flagged topic", { agentId, slug });
+      try {
+        await consolidateFlaggedTopic(agentId, slug, tools, preamble);
+      } catch (err) {
+        summary.errors.push({ agentId, episodePath: `topic:${slug}`, error: (err as Error).message });
+        const e = err instanceof Error ? { message: err.message, stack: err.stack } : { message: String(err) };
+        logger().log({ level: "error", component: LOG, msg: "flagged-topic consolidation failed", err: e, data: { agentId, slug } });
+      }
+    }
+
     summary.memoryOps += state.memoryOps;
     summary.topicOps += state.topicOps;
     summary.skillsPatched.push(...state.patchedSkills);
     summary.skillsCreated.push(...state.createdSkills);
     summary.skillsRefused.push(...state.refusedSkillCreates);
     summary.markedConsolidated.push(...state.markedConsolidated);
+    summary.topicsReorganized.push(...state.topicsReorganized);
     summary.archived += await archiveOldEpisodes(agentId, cfg.episodeArchiveAgeDays).catch(() => 0);
   } finally {
     await releaseLock(agentId, lock);
@@ -553,12 +709,39 @@ async function renderAgentPreamble(agentId: string): Promise<string> {
   const topics = doc.index.length
     ? doc.index.map((r) => `- ${r.file.replace(/^Topics\//, "").replace(/\.md$/, "")}: ${r.description}`).join("\n")
     : "_(no topics yet)_";
-  return [`This agent's CURRENT user preferences:`, prefs, "", `This agent's EXISTING topics (slug — digest):`, topics].join("\n");
+  const flagged = await listFlaggedTopicSlugs(agentId);
+  const flaggedBlock = flagged.length
+    ? `\n\nTopics FLAGGED for consolidation (topic_read + reorganize each; topic_clear_consolidate when done):\n${flagged
+        .map((s) => `- ${s}`)
+        .join("\n")}`
+    : "";
+  return [`This agent's CURRENT user preferences:`, prefs, "", `This agent's EXISTING topics (slug — digest):`, topics + flaggedBlock].join("\n");
 }
 
 async function consolidateEpisode(ep: Episode, tools: Record<string, LlmTool>, preamble: string): Promise<void> {
   const prompt = `${preamble}\n\n---\n\nPending episode to consolidate:\n\n${renderEpisodeForPrompt(ep)}`;
   await runToolLoop({ system: SLOW_LOOP_SYSTEM_PROMPT, prompt, tools, maxSteps: 12, correlationId: ep.meta.conversationId });
+}
+
+/** Reorganize ONE flagged topic (M1/T1): a dedicated tool-loop pass, independent
+ *  of any episode, so a topic flagged purely by a soft-budget overflow (which
+ *  creates no episode) still gets processed. */
+async function consolidateFlaggedTopic(
+  agentId: string,
+  slug: string,
+  tools: Record<string, LlmTool>,
+  preamble: string,
+): Promise<void> {
+  const prompt = [
+    preamble,
+    "",
+    "---",
+    "",
+    `Topic "${slug}" is flagged for consolidation (soft-budget overflow, or a manual request). Call topic_read("${slug}") FIRST to see its full entry list — do not reorganize from the digest alone.`,
+    "Then reorganize it per the Holistic topic consolidation guidance above, and refresh its digest if the entries changed.",
+    `Finish by calling topic_clear_consolidate("${slug}") — including if you decided the topic needed no changes.`,
+  ].join("\n");
+  await runToolLoop({ system: SLOW_LOOP_SYSTEM_PROMPT, prompt, tools, maxSteps: 16, correlationId: `topic:${agentId}:${slug}` });
 }
 
 function renderEpisodeForPrompt(ep: Episode): string {
@@ -616,7 +799,7 @@ async function runAsHandler(): Promise<HandlerRunResult> {
     status: "success",
     output:
       summary.reason ??
-      `agents=${summary.agents.length} processed=${summary.processed} memoryOps=${summary.memoryOps} topicOps=${summary.topicOps} skillsCreated=${summary.skillsCreated.length} skillsPatched=${summary.skillsPatched.length}`,
+      `agents=${summary.agents.length} processed=${summary.processed} memoryOps=${summary.memoryOps} topicOps=${summary.topicOps} skillsCreated=${summary.skillsCreated.length} skillsPatched=${summary.skillsPatched.length} topicsReorganized=${summary.topicsReorganized.length}`,
   };
 }
 

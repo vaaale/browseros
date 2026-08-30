@@ -6,13 +6,14 @@ import type { Agent } from "@/lib/agent/subagents/types";
 import { withLogContext, logger } from "@/lib/logging";
 
 export const dynamic = "force-dynamic";
-// A local dev tool-loop can run many steps; the NDJSON stream keeps the
-// connection alive, but give the route generous headroom.
-export const maxDuration = 600;
 
 // Streams the sub-agent run as NDJSON: one {type:"tool"} line per tool call as
-// it happens, then a final {type:"done"|"error"} line. This lets the chat show
-// the sub-agent's events live instead of all at once when it finishes.
+// it happens, enriched {type:"tool_result"} / {type:"reasoning_delta"} /
+// {type:"final_text"} lines (ADR-13, local headless runs only), then a final
+// {type:"done", result, text} | {type:"error"} line (text = the agent's final
+// response text). This lets the chat show the sub-agent's events live instead
+// of all at once when it finishes, and lets a consuming service log the full
+// agent-execution stream.
 export async function POST(req: NextRequest) {
   let body: Record<string, unknown>;
   try {
@@ -81,13 +82,29 @@ export async function POST(req: NextRequest) {
       try {
         logger().info("subagents.delegate", `delegate \u2192 ${agent.name}`, { agent: agent.id, interactive: body.interactive === true });
         const result = await runSubAgent(agent, task, {
-          onEvent: (ev) => emit({ type: "tool", ...ev }),
+          // ADR-13 (Workflow Manager service-tools): preserve the legacy
+          // per-tool-call NDJSON line ({type:"tool", tool, input}) for backward
+          // compat; forward the enriched events (tool_result / reasoning_delta /
+          // final_text) verbatim — they carry their own `type` + fields, so a
+          // consuming service can log the full agent-execution stream without
+          // round-trip reconstruction.
+          onEvent: (ev) => {
+            if ("type" in ev) emit(ev);
+            else emit({ type: "tool", tool: ev.tool, input: ev.input });
+          },
           contentOnly: body.contentOnly === true,
           // Resolved server-side; not exposed in the assistant tool schema.
           featureBranch,
           interactive: body.interactive === true,
+          // The sub-agent's tools resolve the active feature branch from this;
+          // omitting it made every branch-gated spec write fail as if no
+          // branch were set, even when the caller had one.
+          conversationId,
         });
-        emit({ type: "done", result });
+         // ADR-13: the terminal line also carries the agent's final response
+         // text (result.output) as `text` — additive; existing consumers that
+         // read only `result` are unaffected.
+         emit({ type: "done", result, text: result.output });
         logger().info("subagents.delegate", `delegate done: ${agent.name}`, { steps: result.steps, ...(result.error ? { error: result.error } : {}) });
       } catch (err) {
         emit({ type: "error", error: (err as Error).message });

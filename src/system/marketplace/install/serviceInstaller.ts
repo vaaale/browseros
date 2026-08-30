@@ -1,20 +1,14 @@
 import "server-only";
-import { promises as fs } from "fs";
 import path from "path";
 import { logger } from "@/lib/logging";
 import { installItemLink, uninstallItemLink } from "./symlinkManager";
 import { itemLinkPath } from "@/system/items/installed";
-import { validateManifest } from "@/core/service/manifestValidator";
+import { validateManifest, readServiceManifest } from "@/core/service/manifestValidator";
 import { serviceRegistry } from "@/core/service/ServiceRegistry";
+import { serviceToolBridge } from "@/lib/agent/service-tool-bridge";
 import type { ServiceManifest } from "@/core/service/types";
 
 const COMPONENT = "services.installer";
-
-async function readServiceManifest(installedServicesDir: string): Promise<ServiceManifest> {
-  const manifestPath = path.join(installedServicesDir, "service.json");
-  const raw = await fs.readFile(manifestPath, "utf8");
-  return JSON.parse(raw) as ServiceManifest;
-}
 
 /**
  * Install a service item: create the single dataDir()/system/<id> symlink (which
@@ -88,6 +82,11 @@ export async function uninstallService(serviceId: string): Promise<void> {
 
   await uninstallItemLink(serviceId);
   registry.unregisterInstalled(serviceId);
+  // 039-service-tool-exposure: belt-and-suspenders — stop() above already
+  // unregisters a running service's tools, but this covers uninstalling an
+  // already-stopped service (which stop() never touches) so no stale tool
+  // ever survives an uninstall (FR-006). No-op if the service had none.
+  serviceToolBridge().unregisterServiceTools(serviceId);
   registry.emit({ type: "service:uninstalled", id: serviceId });
 
   logger().info(COMPONENT, "service.uninstalled", { id: serviceId });

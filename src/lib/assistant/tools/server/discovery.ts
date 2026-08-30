@@ -1,11 +1,12 @@
 import "server-only";
 import type { AssistantTool } from "../../tools";
 import { serverTool, schema, p } from "./util";
-import { CAPABILITIES, groupDescription } from "@/lib/agent/capabilities-registry";
+import { listCapabilities, groupDescription } from "@/lib/agent/capabilities-registry";
 import { scoreCapability, scoreAgent } from "@/lib/agent/discovery-score";
 import { listSubAgents } from "@/lib/agent/subagents/store";
 import { getMaxFindResults } from "@/lib/config/registry";
-import { gateFor } from "../../gate";
+import { gateFor, gateFromAgent } from "../../gate";
+import { getInRunAgent } from "@/lib/agent/subagents/in-run-agents";
 import { runManager } from "../../run-manager";
 
 // Runtime tool/agent discovery (025), ported from DiscoveryActions.tsx. These
@@ -26,8 +27,16 @@ export function discoveryTools(lookup: (id: string) => AssistantTool | undefined
       async (input, ctx) => {
         const query = String(input.query ?? "").trim();
         if (query.length < 2) return JSON.stringify([]);
-        const [gate, maxResults] = await Promise.all([gateFor(ctx.agentId), getMaxFindResults()]);
-        const scored = CAPABILITIES
+        // ADR-12 (Workflow Manager service-tools): an EPHEMERAL agent is not
+        // persisted, so gateFor(ctx.agentId) resolves to an empty gate and
+        // find_tools returns [] for it. When this run registered an in-memory
+        // (ephemeral) agent (runLocalHeadless), resolve the gate from THAT
+        // object so find_tools returns its declared deferred tools (FR-034). A
+        // named agent's runId is never registered, so its gate still resolves
+        // via gateFor(ctx.agentId) — byte-identical to pre-patch.
+        const inRunAgent = getInRunAgent(ctx.runId);
+        const [gate, maxResults] = await Promise.all([inRunAgent ? gateFromAgent(inRunAgent) : gateFor(ctx.agentId), getMaxFindResults()]);
+        const scored = listCapabilities()
           .filter((c) => gate.deferred.has(c.id) && gate.allow.has(c.id) && lookup(c.id) !== undefined)
           .map((c) => ({ cap: c, score: scoreCapability(c, query, groupDescription(c.group)) }))
           .filter((r) => r.score > 0)

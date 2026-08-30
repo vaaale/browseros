@@ -1,10 +1,11 @@
 import "server-only";
 import type { AssistantTool, ToolGateConfig } from "./tools";
 import { gateFor } from "./gate";
-import { composeInstructions, buildSkillsIndexBlock, buildMcpIndexBlock, currentDateTimeBlock } from "@/lib/agent/instructions";
+import { composeInstructions, buildSkillsIndexBlock, buildMcpIndexBlock, buildKbIndexBlock, currentDateTimeBlock } from "@/lib/agent/instructions";
 import { getDefaultPromptAgent } from "@/lib/agent/subagents/store";
 import { listSkills } from "@/lib/agent/skills/store";
 import { listMcpServers } from "@/lib/mcp/store";
+import { listKnowledgeBases } from "@/lib/agent/kb-catalog";
 
 // Per-delegation-kind gate + system-prompt builders (025-agent-delegation-v2).
 // A named agent's gate/prompt are unchanged from today's primary-personality
@@ -74,19 +75,20 @@ export function namedComposeSystem(agentId: string): () => Promise<string> {
 }
 
 /** Ephemeral agent: default prompt + systemPrompt as personality, plus the
- *  inherited skills/mcp index blocks (FR-016), filtered against the DELEGATING
- *  agent's own `skills`/`mcp` fields (unset ⇒ inherit everything —
- *  `buildSkillsIndexBlock`/`buildMcpIndexBlock` are already unset-aware). No
- *  memory snapshot (FR-017 — an ephemeral agent has no identity to have memory
- *  of). */
+ *  inherited skills/mcp/kbs index blocks (FR-016; kbs per 038-knowledge-base),
+ *  filtered against the DELEGATING agent's own `skills`/`mcp`/`kbs` fields
+ *  (unset ⇒ inherit everything — `buildSkillsIndexBlock`/`buildMcpIndexBlock`/
+ *  `buildKbIndexBlock` are already unset-aware). No memory snapshot (FR-017 —
+ *  an ephemeral agent has no identity to have memory of). */
 export function ephemeralComposeSystem(
   systemPrompt: string,
-  parentAllowlists: { skills?: string[]; mcp?: string[] },
+  parentAllowlists: { skills?: string[]; mcp?: string[]; kbs?: string[] },
 ): () => Promise<string> {
   return async () => {
-    const [skills, mcpServers, defaultAgent] = await Promise.all([
+    const [skills, mcpServers, kbs, defaultAgent] = await Promise.all([
       listSkills(),
       listMcpServers(),
+      listKnowledgeBases(),
       getDefaultPromptAgent(),
     ]);
     const defaultBody = defaultAgent?.systemPrompt?.trim() || "";
@@ -94,6 +96,7 @@ export function ephemeralComposeSystem(
     out += defaultBody ? `${defaultBody}\n\n## Personality\n${systemPrompt}` : systemPrompt;
     out += buildSkillsIndexBlock(parentAllowlists.skills, skills);
     out += buildMcpIndexBlock(parentAllowlists.mcp, mcpServers);
+    out += buildKbIndexBlock(parentAllowlists.kbs, kbs);
     return out;
   };
 }

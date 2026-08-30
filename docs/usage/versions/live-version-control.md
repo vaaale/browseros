@@ -62,7 +62,7 @@ a Promote refused because the live checkout has uncommitted changes) rather than
 button appearing to do nothing.
 
 If the assistant just built or changed an **app**, you'll also see an **app preview**
-with **Promote app** / **Discard app** (apps are previewed via a branch in the apps
+with the branch's own Promote / Discard (apps are previewed via a branch in the apps
 content repo).
 
 ---

@@ -19,6 +19,28 @@ Hard‑won rules baked into the code. Violating these is how BOS breaks subtly.
 server markup** — don't introduce client‑only initial state. `desktop.spec.ts`
 fails on hydration mismatch; treat it as a tripwire.
 
+## Windows are `transform`-positioned — `position: fixed` UI inside one needs a portal
+
+`Window.tsx` positions every app window with a CSS `transform`, which makes the
+window the containing block for any `position: fixed` descendant — a naive
+`fixed inset-0` modal or `fixed left/top` context menu built inside an app
+resolves against the window's own bounds, not the real viewport, so it renders
+offset by wherever the window has been dragged (found via a real Build Studio
+context menu appearing far from the click point). Portal to `document.body`
+(`createPortal`) for any fixed-position overlay/menu — see
+`scheduler/index.tsx` or `build-studio/Dialogs.tsx`/`HistoryDialog.tsx`. The
+style guide's Modal/dialog recipe (`guides/style-guide.md` §"Modal / dialog")
+assumes this too — copy the portal along with the JSX, not just the JSX.
+
+## Native `window.confirm`/`alert`/`prompt` risk a React "flushSync" warning
+
+A synchronous blocking dialog re-enters the event loop mid-handler, which can
+collide with a `useSyncExternalStore`-backed update that follows it (e.g. the
+conversations store), tripping React 18's "flushSync was called from inside a
+lifecycle method" warning. Use a styled dialog (the `ConfirmDialog`/
+`PromptDialog` pattern) or a lightweight inline arm-then-click-again
+interaction instead — see `AgentSelector.tsx`'s conversation-delete button.
+
 ## The VFS is not the source tree
 
 File tools + Files app see only `data/vfs`. BOS source is edited via the developer
@@ -144,17 +166,32 @@ as a real app (it worked fine opened via `window.open()`, which isn't
 sandboxed). The fix is never "open CORS" — route the call through the
 `window.__bos` postMessage broker (`IframeApp.tsx`'s `dispatch()`, gated by an
 `AppCapability` the user must explicitly grant in Settings → Apps), the same
-pattern `fs`/`settings`/`storage` already use. Adding a new broker method means
-touching **four** places that must all agree: `AppCapability` in
-`src/os/types.ts`, the checkbox list in `AppsTab.tsx`, the server-side
-`VALID_CAPS` allowlist in `src/app/api/apps/[id]/capabilities/route.ts`
+pattern `fs`/`settings`/`storage` already use. Adding a broker method **under
+a brand-new capability** means touching **four** places that must all agree:
+`AppCapability` in `src/os/types.ts`, the checkbox list in `AppsTab.tsx`, the
+server-side `VALID_CAPS` allowlist in `src/app/api/apps/[id]/capabilities/route.ts`
 (silently drops any capability not listed there — no error), and the
 dispatch case + `CAP_FOR_METHOD` entry in `IframeApp.tsx`, plus the client
-wrapper in `src/lib/iframe-sdk/index.ts`. Also: `src/app/__bos/sdk.js/route.ts`
+wrapper in `src/lib/iframe-sdk/index.ts`. A new method that reuses an
+**existing** capability only needs the last two (`services.status`/
+`services.call` were added this way, both under `services:read` alongside
+the pre-existing `services.getConfig` — see docs/dev/apps/services.md §14).
+Also: `src/app/__bos/sdk.js/route.ts`
 is dead code (a Next "private folder" path that never registers as a route —
 see its own comment) — the SDK actually served/inlined comes from
 `src/lib/iframe-sdk/index.ts` via `src/app/api/iframe-sdk/route.ts` and the
 `/apps/[...slug]` route's esbuild inlining. Don't edit the dead copy.
+
+One capability breaks the request/response shape, and it's instructive:
+`assistant` (040) relays a *stream*, and an NDJSON `ReadableStream` cannot cross
+`postMessage`. The answer is not a WebSocket, a new route, or a service — it's to
+notice that the **parent frame already has a same-origin fetch context**, so it
+can own the reader loop and push each parsed event into the child as an
+unsolicited `{__bos_event, runId, event}` message, with a bounded per-run buffer
+so a reconnecting child can resume from its own cursor. When a broker method
+needs more than a single round-trip, put the state in a module-level registry
+next to `IframeApp` rather than reaching for new infrastructure. See
+[the assistant broker](assistant/assistant-broker.md).
 
 ## An app with zero granted capabilities gets no broker responses — calls hang, they don't reject
 

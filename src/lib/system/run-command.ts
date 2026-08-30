@@ -217,20 +217,29 @@ function runChild(
 
 // ── Global container registry (survives hot-reloads via globalThis) ──────────
 declare global {
-  // eslint-disable-next-line no-var
   var __bosRcContainers: Map<string, { name: string; lastUsed: number }> | undefined;
-  // eslint-disable-next-line no-var
   var __bosRcReaper: ReturnType<typeof setInterval> | undefined;
-  // eslint-disable-next-line no-var
   var __bosRcShutdown: boolean | undefined;
+  var __bosRcCreating: Map<string, Promise<string>> | undefined;
+  var __bosRcSymlinkSync: Promise<void> | undefined;
 }
 const g = globalThis as typeof globalThis & {
   __bosRcContainers?: Map<string, { name: string; lastUsed: number }>;
   __bosRcReaper?: ReturnType<typeof setInterval>;
   __bosRcShutdown?: boolean;
+  __bosRcCreating?: Map<string, Promise<string>>;
+  __bosRcSymlinkSync?: Promise<void>;
 };
 if (!g.__bosRcContainers) g.__bosRcContainers = new Map();
 const containers = g.__bosRcContainers;
+// In-flight container creations, keyed by sessionKey. Needed once tool calls
+// can run concurrently (agent-loop's parallel batching): two overlapping
+// runCommand() calls for the same session would otherwise both miss the
+// registry, both `docker rm -f` the same name, and both `docker run --name
+// <same>` — the second failing outright, or worse, one tearing down the
+// container the other just created and is about to exec into.
+if (!g.__bosRcCreating) g.__bosRcCreating = new Map();
+const creating = g.__bosRcCreating;
 
 function installShutdownHooks() {
   if (g.__bosRcShutdown) return;
@@ -277,7 +286,22 @@ function scheduleReaper(): void {
   g.__bosRcReaper.unref?.();
 }
 
+/**
+ * Get (or create) this session's sandbox container, at most once at a time.
+ *
+ * Concurrent callers for the same session share a single in-flight creation
+ * rather than each racing to build their own; callers for DIFFERENT sessions
+ * still proceed in parallel, since each owns a distinct container name.
+ */
 async function ensureContainer(cfg: RcConfig, sessionKey: string): Promise<string> {
+  const pending = creating.get(sessionKey);
+  if (pending) return pending;
+  const attempt = createContainer(cfg, sessionKey).finally(() => creating.delete(sessionKey));
+  creating.set(sessionKey, attempt);
+  return attempt;
+}
+
+async function createContainer(cfg: RcConfig, sessionKey: string): Promise<string> {
   const name = containerName(sessionKey);
   const existing = containers.get(sessionKey);
   if (existing && (await isRunning(name))) {
@@ -324,6 +348,20 @@ async function ensureContainer(cfg: RcConfig, sessionKey: string): Promise<strin
  * All errors are non-fatal — commands still run even if a symlink fails.
  */
 async function syncLocalSymlinks(mounts: VfsMount[]): Promise<void> {
+  // Coalesce concurrent syncs: the mount set is process-global config, so two
+  // overlapping runCommand() calls would otherwise both shell out to the same
+  // `bos-vfs-link add/remove` for the same paths. Sharing one in-flight pass
+  // keeps that to a single sudo round-trip per burst.
+  const pending = g.__bosRcSymlinkSync;
+  if (pending) return pending;
+  const attempt = syncLocalSymlinksOnce(mounts).finally(() => {
+    g.__bosRcSymlinkSync = undefined;
+  });
+  g.__bosRcSymlinkSync = attempt;
+  return attempt;
+}
+
+async function syncLocalSymlinksOnce(mounts: VfsMount[]): Promise<void> {
   for (const mount of mounts) {
     const target = hostPath(mount.vfsPath);
     const link = mount.containerPath;

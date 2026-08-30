@@ -1,5 +1,6 @@
 import "server-only";
 import { getLogContext } from "@/lib/logging/context";
+import { logger } from "@/lib/logging/server-logger";
 
 // Thin client the BOS app uses to talk to the Supervisor control plane
 // (tools/supervisor). Enabled only when BOS_SUPERVISOR_URL is set (i.e. the app
@@ -28,7 +29,14 @@ async function call(pathname: string, init?: RequestInit): Promise<Record<string
   try {
     const res = await fetch(`${u}/__supervisor/${pathname}`, { ...init, headers });
     return (await res.json()) as Record<string, unknown>;
-  } catch {
+  } catch (err) {
+    // Every caller here treats `null` as "not running under the Supervisor"
+    // — but BOS_SUPERVISOR_URL was set, so this is actually a genuine
+    // request failure (the Supervisor crashed mid-request, a network blip,
+    // etc), not "disabled". At minimum this must be visible instead of
+    // silently collapsing into the same "disabled" signal every caller
+    // already treats as a normal, expected no-op.
+    logger().warn("devharness.supervisor", `request to /__supervisor/${pathname} failed`, { error: (err as Error)?.message ?? String(err) });
     return null;
   }
 }
@@ -60,17 +68,45 @@ export function supervisorBegin(branch: string): Promise<Record<string, unknown>
   });
 }
 
+/**
+ * `supervisorBegin`, but the real failure reason always survives instead of
+ * getting collapsed into a generic "not mounted, maybe busy, retry" guess by
+ * every caller: a network/parse failure (already logged by `call()` above),
+ * an `{ok:false, error}` response (e.g. the Supervisor's own git fetch
+ * failed), and a missing `worktree` field are all distinct thrown errors
+ * carrying the actual cause. Callers still decide for themselves whether a
+ * caught error should fail loudly (writes) or fall back with logging
+ * (reads) — this only stops the cause itself from being thrown away.
+ */
+export async function supervisorBeginOrThrow(
+  branch: string,
+): Promise<{ worktree: string; dataDir: string; mountErrors?: Record<string, string> }> {
+  const begun = await supervisorBegin(branch);
+  if (!begun) {
+    throw new Error(`Supervisor request failed for branch "${branch}" (see devharness.supervisor logs for detail)`);
+  }
+  if (begun.ok === false) {
+    throw new Error(String(begun.error ?? "begin failed for an unknown reason"));
+  }
+  const worktree = typeof begun.worktree === "string" ? begun.worktree : "";
+  if (!worktree) {
+    throw new Error(`Supervisor returned no worktree for branch "${branch}"`);
+  }
+  // The preview's data clone, where the branch-coupled `user-apps` worktree is
+  // mounted. Unlike `worktree` this is not fatal when absent — only item-owned
+  // spec stores need it, and they raise their own, specific error (spec-fs's
+  // branchItemStoreRoot) rather than breaking every other caller of begin.
+  const dataDir = typeof begun.dataDir === "string" ? begun.dataDir : "";
+  return { worktree, dataDir, mountErrors: begun.mountErrors as Record<string, string> | undefined };
+}
+
 /** Build + health-gate the preview for a feature branch. */
 export function supervisorBuild(branch: string): Promise<Record<string, unknown> | null> {
   return call("build", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ branch }) });
 }
 
-/**
- * Begin (or reuse) the app-content candidate: a branch in the apps repo (GitFS)
- * that the active server serves once checked out. Installing an app while a
- * candidate is active lands it on that branch (previewable), then the user
- * promotes or discards it. No-op (returns null) when not under the Supervisor.
- */
-export function supervisorAppBegin(): Promise<Record<string, unknown> | null> {
-  return call("app-begin", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
-}
+// The app-content candidate (`supervisorAppBegin`, /__supervisor/app-begin) is
+// retired. `data/user-apps` is a branch-COUPLED repo like every spec store —
+// it mounts as a worktree on the active `bos/*` feature branch and promotes or
+// discards with the code — so there is no second, in-place branch scheme over
+// it any more, and no separate promote/discard surface for app content.

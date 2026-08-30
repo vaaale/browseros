@@ -1,10 +1,21 @@
 import "server-only";
-import { getConfigValue } from "@/lib/config/registry";
+import { readPluginsConfig } from "@/lib/plugins/registry";
 import { logger } from "@/lib/logging";
 
-// Typed getters for the `compaction` config namespace (spec 022 FR-018).
-// Defaults live here so the middleware has a deterministic baseline before the
-// namespace is registered/populated at first run.
+// Typed getters for the compaction plugin's config (spec 022 FR-018, redesigned
+// per the block-based compaction rewrite). Defaults live here so the pipeline
+// has a deterministic baseline before the plugin config has ever been saved.
+//
+// Reads straight from the plugin store (`data/config/plugins.json`'s
+// `config["bos-compaction"]`, via src/lib/plugins/registry.ts's
+// readPluginsConfig) — the SAME store Settings writes to. Previously this went
+// through src/lib/config/registry.ts's generic getConfigValue("compaction", key),
+// but no ConfigRegistration for the bare "compaction" namespace existed, so
+// every read silently fell back to defaults regardless of what was saved. The
+// Settings-facing ConfigRegistration (registry.ts) now delegates its own
+// load() to readCompactionConfig() below, so there is exactly one reader.
+
+const PLUGIN_ID = "bos-compaction";
 
 export interface CompactionConfig {
   enabled: boolean;
@@ -13,11 +24,16 @@ export interface CompactionConfig {
   summarizeThreshold: number;
   hardLimit: number;
   keepToolResults: number;
-  keepTailMessages: number;
+  /** Minimum size (in turns, not messages) of the always-verbatim live tail. */
+  keepTailTurns: number;
   tailBudgetFraction: number;
   unrecoverableTools: string[];
   model?: string;
   lockStalenessMs: number;
+  /** Turns folded into one block summary at a time. */
+  blockSize: number;
+  /** Block summaries retained before the oldest is evicted (permanently, no trace). */
+  maxRetainedBlocks: number;
 }
 
 export const COMPACTION_DEFAULTS: CompactionConfig = {
@@ -26,14 +42,14 @@ export const COMPACTION_DEFAULTS: CompactionConfig = {
   clearThreshold: 0.5,
   summarizeThreshold: 0.75,
   hardLimit: 0.92,
-  keepToolResults: 5,
-  keepTailMessages: 10,
+  keepToolResults: 2,
+  keepTailTurns: 3,
   tailBudgetFraction: 0.2,
   unrecoverableTools: [],
   lockStalenessMs: 600_000,
+  blockSize: 5,
+  maxRetainedBlocks: 8,
 };
-
-const NAMESPACE = "compaction";
 
 let invalidWarnedThisProcess = false;
 
@@ -65,14 +81,6 @@ function coerceStringArray(v: unknown, fallback: string[]): string[] {
   return fallback;
 }
 
-async function readNamespaceValue(key: keyof CompactionConfig | "unrecoverableTools"): Promise<unknown> {
-  try {
-    return await getConfigValue(NAMESPACE, key);
-  } catch {
-    return undefined;
-  }
-}
-
 // Small per-request cache so multiple middleware entries in one turn (tool
 // loop steps) do not re-read the config file on every call.
 let cached: { at: number; value: CompactionConfig } | null = null;
@@ -84,32 +92,25 @@ const CACHE_TTL_MS = 1500;
 export async function readCompactionConfig(): Promise<CompactionConfig> {
   const now = Date.now();
   if (cached && now - cached.at < CACHE_TTL_MS) return cached.value;
-  const [enabled, assumedContextTokens, clearThreshold, summarizeThreshold, hardLimit, keepToolResults, keepTailMessages, tailBudgetFraction, unrecoverableTools, model, lockStalenessMs] = await Promise.all([
-    readNamespaceValue("enabled"),
-    readNamespaceValue("assumedContextTokens"),
-    readNamespaceValue("clearThreshold"),
-    readNamespaceValue("summarizeThreshold"),
-    readNamespaceValue("hardLimit"),
-    readNamespaceValue("keepToolResults"),
-    readNamespaceValue("keepTailMessages"),
-    readNamespaceValue("tailBudgetFraction"),
-    readNamespaceValue("unrecoverableTools"),
-    readNamespaceValue("model"),
-    readNamespaceValue("lockStalenessMs"),
-  ]);
+
+  const stored = ((await readPluginsConfig()).config[PLUGIN_ID] ?? {}) as Record<string, unknown>;
+
   const merged: CompactionConfig = {
-    enabled: coerceBool(enabled, COMPACTION_DEFAULTS.enabled),
-    assumedContextTokens: Math.max(1024, coerceNumber(assumedContextTokens, COMPACTION_DEFAULTS.assumedContextTokens)),
-    clearThreshold: coerceFraction(clearThreshold, COMPACTION_DEFAULTS.clearThreshold),
-    summarizeThreshold: coerceFraction(summarizeThreshold, COMPACTION_DEFAULTS.summarizeThreshold),
-    hardLimit: coerceFraction(hardLimit, COMPACTION_DEFAULTS.hardLimit),
-    keepToolResults: Math.max(0, Math.floor(coerceNumber(keepToolResults, COMPACTION_DEFAULTS.keepToolResults))),
-    keepTailMessages: Math.max(1, Math.floor(coerceNumber(keepTailMessages, COMPACTION_DEFAULTS.keepTailMessages))),
-    tailBudgetFraction: coerceFraction(tailBudgetFraction, COMPACTION_DEFAULTS.tailBudgetFraction),
-    unrecoverableTools: coerceStringArray(unrecoverableTools, COMPACTION_DEFAULTS.unrecoverableTools),
-    model: typeof model === "string" && model.trim() ? model.trim() : undefined,
-    lockStalenessMs: Math.max(1000, coerceNumber(lockStalenessMs, COMPACTION_DEFAULTS.lockStalenessMs)),
+    enabled: coerceBool(stored.enabled, COMPACTION_DEFAULTS.enabled),
+    assumedContextTokens: Math.max(1024, coerceNumber(stored.assumedContextTokens, COMPACTION_DEFAULTS.assumedContextTokens)),
+    clearThreshold: coerceFraction(stored.clearThreshold, COMPACTION_DEFAULTS.clearThreshold),
+    summarizeThreshold: coerceFraction(stored.summarizeThreshold, COMPACTION_DEFAULTS.summarizeThreshold),
+    hardLimit: coerceFraction(stored.hardLimit, COMPACTION_DEFAULTS.hardLimit),
+    keepToolResults: Math.max(0, Math.floor(coerceNumber(stored.keepToolResults, COMPACTION_DEFAULTS.keepToolResults))),
+    keepTailTurns: Math.max(1, Math.floor(coerceNumber(stored.keepTailTurns, COMPACTION_DEFAULTS.keepTailTurns))),
+    tailBudgetFraction: coerceFraction(stored.tailBudgetFraction, COMPACTION_DEFAULTS.tailBudgetFraction),
+    unrecoverableTools: coerceStringArray(stored.unrecoverableTools, COMPACTION_DEFAULTS.unrecoverableTools),
+    model: typeof stored.model === "string" && stored.model.trim() ? stored.model.trim() : undefined,
+    lockStalenessMs: Math.max(1000, coerceNumber(stored.lockStalenessMs, COMPACTION_DEFAULTS.lockStalenessMs)),
+    blockSize: Math.max(1, Math.floor(coerceNumber(stored.blockSize, COMPACTION_DEFAULTS.blockSize))),
+    maxRetainedBlocks: Math.max(1, Math.floor(coerceNumber(stored.maxRetainedBlocks, COMPACTION_DEFAULTS.maxRetainedBlocks))),
   };
+
   let final = merged;
   if (!(merged.clearThreshold < merged.summarizeThreshold && merged.summarizeThreshold < merged.hardLimit)) {
     if (!invalidWarnedThisProcess) {
@@ -122,6 +123,7 @@ export async function readCompactionConfig(): Promise<CompactionConfig> {
     }
     final = { ...merged, clearThreshold: COMPACTION_DEFAULTS.clearThreshold, summarizeThreshold: COMPACTION_DEFAULTS.summarizeThreshold, hardLimit: COMPACTION_DEFAULTS.hardLimit };
   }
+
   cached = { at: now, value: final };
   return final;
 }

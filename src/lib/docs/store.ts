@@ -1,6 +1,7 @@
 import "server-only";
 import { promises as fs } from "fs";
 import path from "path";
+import { listInstalledItems } from "@/system/items/installed";
 
 // The Docs app is a READ-ONLY viewer of the project documentation tree that
 // lives in source control under `docs/` (NOT runtime state). Two audiences:
@@ -10,6 +11,18 @@ import path from "path";
 // so this module only reads. Under live-version-control a previewed candidate
 // runs from its own worktree, so process.cwd()/docs resolves to that version's
 // docs automatically.
+//
+// An INSTALLED ITEM ships its documentation with it, in the same two-audience
+// shape (`<item>/docs/usage/<Name>/**`, `<item>/docs/dev/<Name>/**`), and this
+// module OVERLAYS that onto the source tree at read time — one merged tree per
+// audience, so an installed app's pages sit alongside BOS's own. Deliberately an
+// overlay and not a symlink into `docs/`: installed state is ONE symlink at
+// `system/<id>` (035-install-by-symlink), and a second install artifact planted
+// inside the git-tracked source tree would dirty every worktree, be missing from
+// every feature-branch worktree that didn't create it, and survive an uninstall
+// that only removes the one link. Pre-035 there WAS such a symlink
+// (`docs/external-docs/<id>`) — it had no reader at all, which is exactly the
+// bug this replaces.
 
 const DOCS_ROOT = path.join(process.cwd(), "docs");
 
@@ -90,19 +103,56 @@ async function buildTree(absDir: string, relBase: string): Promise<DocNode[]> {
   return nodes.sort(compare);
 }
 
+// Every root that contributes pages to a section, in RESOLUTION ORDER: BOS's own
+// docs/ tree first, then each installed item's `docs/<section>/`. Items are
+// ordered by id so the merged tree is stable across requests, and BOS's own docs
+// win any path collision — an item can extend the tree, never shadow it.
+// A broken install (dangling symlink) contributes nothing.
+async function sectionRoots(section: DocSection): Promise<string[]> {
+  const items = await listInstalledItems().catch(() => []);
+  return [
+    path.join(DOCS_ROOT, section),
+    ...items
+      .filter((i) => i.facets.docs && !i.broken)
+      .sort((a, b) => a.id.localeCompare(b.id))
+      .map((i) => path.join(i.itemPath, "docs", section)),
+  ];
+}
+
+// Fold one root's nodes into the accumulated tree. Directories with the same
+// path merge (so an item could add a page to an existing folder); a file that
+// already exists at that path is dropped — the earlier root already provided it.
+function mergeNodes(base: DocNode[], extra: DocNode[]): DocNode[] {
+  if (extra.length === 0) return base;
+  const byPath = new Map(base.map((n) => [n.path, n]));
+  for (const node of extra) {
+    const existing = byPath.get(node.path);
+    if (!existing) {
+      base.push(node);
+      byPath.set(node.path, node);
+    } else if (existing.type === "dir" && node.type === "dir") {
+      existing.children = mergeNodes(existing.children ?? [], node.children ?? []);
+    }
+  }
+  return base.sort(compare);
+}
+
 // The full documentation tree, keyed by audience section.
 export async function docsTree(): Promise<Record<DocSection, DocNode[]>> {
   const out = {} as Record<DocSection, DocNode[]>;
   for (const section of SECTIONS) {
-    out[section] = await buildTree(path.join(DOCS_ROOT, section), "");
+    let nodes: DocNode[] = [];
+    for (const root of await sectionRoots(section)) {
+      nodes = mergeNodes(nodes, await buildTree(root, ""));
+    }
+    out[section] = nodes;
   }
   return out;
 }
 
-// Resolve a section-relative path to an absolute path, refusing traversal and
-// anything outside the section root or that is not a markdown file.
-function resolveDocPath(section: DocSection, relPath: string): string | null {
-  const sectionRoot = path.join(DOCS_ROOT, section);
+// Resolve a section-relative path against ONE root, refusing traversal and
+// anything outside that root or that is not a markdown file.
+function resolveDocPath(sectionRoot: string, relPath: string): string | null {
   const cleaned = relPath.replace(/^[/\\]+/, "");
   const abs = path.resolve(sectionRoot, cleaned);
   if (abs !== sectionRoot && !abs.startsWith(sectionRoot + path.sep)) return null;
@@ -111,12 +161,17 @@ function resolveDocPath(section: DocSection, relPath: string): string | null {
 }
 
 export async function getDoc(section: DocSection, relPath: string): Promise<Doc | undefined> {
-  const abs = resolveDocPath(section, relPath);
-  if (!abs) return undefined;
-  const content = await fs.readFile(abs, "utf8").catch(() => null);
-  if (content == null) return undefined;
-  const rel = relPath.replace(/^[/\\]+/, "").split(path.sep).join("/");
-  return { section, path: rel, title: headingOf(content) ?? prettify(path.basename(abs)), content };
+  // Same order the tree was built in, so a page always reads back from the root
+  // the tree took it from.
+  for (const root of await sectionRoots(section)) {
+    const abs = resolveDocPath(root, relPath);
+    if (!abs) continue;
+    const content = await fs.readFile(abs, "utf8").catch(() => null);
+    if (content == null) continue;
+    const rel = relPath.replace(/^[/\\]+/, "").split(path.sep).join("/");
+    return { section, path: rel, title: headingOf(content) ?? prettify(path.basename(abs)), content };
+  }
+  return undefined;
 }
 
 // Flattened list of every page across all sections (for the assistant's listDocs).

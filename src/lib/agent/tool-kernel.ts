@@ -112,7 +112,7 @@ function notifyActiveRuns(): void {
 // settles every newly-starting handler immediately with the stop detail —
 // the check CopilotKit's own machinery would have done had the signal reached
 // the handler. Cleared when a new run initializes (an explicit command:
-// send/regenerate) — see RunStopGuard in CopilotProvider.tsx.
+// send/regenerate). The v1 CopilotKit chat that hosted the original guard is gone.
 let stopRequested: string | null = null;
 
 /** User-initiated stop (Stop button, conversation switch): aborts every

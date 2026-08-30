@@ -14,8 +14,8 @@ building/modifying things, Settings, and live version control.
 Start at **[Introduction](usage/introduction.md)**.
 
 - **Desktop:** [windows & dock](usage/desktop/desktop-windows-and-dock.md)
-- **Apps:** [Files](usage/apps/files.md) · [Browser](usage/apps/browser.md) · [Assistant](usage/apps/assistant.md) · [Memory](usage/apps/memory.md) · [Docs](usage/apps/docs.md) · [Settings](usage/apps/settings.md) · [Workflow Manager](usage/apps/workflow-manager.md)
-- **Assistant:** [using it](usage/assistant/using-the-assistant.md) · [agents & personalities](usage/assistant/agents-and-personalities.md) · [delegation & sub‑agents](usage/assistant/delegation-and-sub-agents.md)
+- **Apps:** [Files](usage/apps/files.md) · [Browser](usage/apps/browser.md) · [Assistant](usage/apps/assistant.md) · [Memory](usage/apps/memory.md) · [Docs](usage/apps/docs.md) · [Settings](usage/apps/settings.md)
+- **Assistant:** [using it](usage/assistant/using-the-assistant.md) · [agents & personalities](usage/assistant/agents-and-personalities.md) · [delegation & sub‑agents](usage/assistant/delegation-and-sub-agents.md) · [previewing content](usage/assistant/web-view.md)
 - **Memory:** [how memory works](usage/memory/how-memory-works.md)
 - **Self‑improvement:** [learning from experience](usage/self-improvement/learning-from-experience.md) · [skills](usage/self-improvement/skills.md)
 - **Building & modifying:** [building apps](usage/building-and-modifying/building-apps.md) · [modifying BOS](usage/building-and-modifying/modifying-bos.md)
@@ -45,7 +45,6 @@ Start at **[Architecture overview](dev/architecture-overview.md)**.
 - [Memory](dev/memory/memory.md) · [Self‑improvement](dev/self-improvement/self-improvement.md)
 - [MCP](dev/mcp/mcp.md) · [Browser automation](dev/automation/browser-automation.md) · [Web proxy](dev/web-proxy/web-proxy.md)
 - **Self‑modification:** [live version control](dev/self-modification/live-version-control.md) · [DataFS](dev/self-modification/data-isolation-datafs.md) · [testing](dev/self-modification/testing.md)
-- [Workflows](dev/workflows/workflows.md)
 - [API reference](dev/api-reference.md) · [Extending BOS](dev/extending-bos.md) · [Design heuristics & gotchas](dev/design-heuristics.md)
 
 ---
@@ -58,3 +57,9 @@ When you add, change, or remove an app or feature:
    Docs app renders these automatically (there's no separate runtime copy).
 2. If the architecture changed, update `specs/` (and note any code↔spec divergence in
    `specs/discrepancies.md`).
+3. If the thing you changed is an **installed marketplace item**, its docs do NOT
+   belong here — they live inside the item (`<item>/docs/usage/<Name>/`,
+   `<item>/docs/dev/<Name>/`) and the Docs app overlays them onto these two trees
+   at read time. See [Installed apps](dev/apps/installed-apps.md) § "The `docs/`
+   facet". When a feature MOVES out of BOS core into an item, delete its pages
+   here in the same change — two copies is the failure mode, not a safety net.

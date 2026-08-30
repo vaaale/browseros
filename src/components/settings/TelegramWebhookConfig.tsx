@@ -308,11 +308,11 @@ export function TelegramWebhookConfig({ onChange }: TelegramWebhookConfigProps) 
             </label>
             <input
               type="password"
+              autoComplete="new-password"
               value={secretToken}
               onChange={(e) => setSecretToken(e.target.value)}
               placeholder="1–256 random chars — echoed by Telegram to prove authenticity"
               className="w-full rounded border border-white/10 bg-black/20 px-2 py-1 font-mono text-[11px] text-white/80 placeholder:text-white/25"
-              autoComplete="off"
               spellCheck={false}
             />
             <p className="text-[10px] text-white/40">

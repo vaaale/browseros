@@ -98,12 +98,17 @@ topic so the always-injected snapshot stays small.
   when it was added and its stable id.
 
 You can **Add Entry** (Ctrl+Enter to save), delete individual entries, or
-delete the whole topic. Adds are validated against the per-topic budget — if
-the entry wouldn't fit, the draft box flags it before you save.
+delete the whole topic. The draft box still estimates the entry's size
+against the per-topic budget as a heads-up, but going over budget no longer
+blocks the save — it succeeds and the topic is flagged for the slow loop to
+tidy on its next pass (merging, dropping stale entries, or splitting into a
+more focused topic). The assistant can also tidy a topic itself, updating or
+removing specific entries rather than appending endlessly.
 
 Most entries here are written by the **slow loop** from your episodes. Topics
 are also what powers `memory_recall("<slug>")` — the assistant can pull the
-full shard on demand.
+full shard on demand. An entry that's been superseded by a newer one is kept
+(not deleted) and shown as no longer current, so you can still see history.
 
 **Practical example.** You want to see what the assistant has learned about
 your Postgres migration patterns: open **Topics**, search "postgres" or
@@ -160,9 +165,14 @@ tick will use the new threshold.
 
 ## Search
 
-A single search box across every memory surface. Results are ranked by
-relevance (token match count for now — BM25 is a drop-in swap later) and
-grouped by source.
+A single search box across every memory surface. Results are ranked by a
+fused score of semantic (embedding) similarity, keyword (BM25) similarity,
+recency, and importance — so a paraphrase without shared words can still find
+the right entry, and a keyword-only query still works. Results are grouped by
+source; a superseded entry is labeled "not current" rather than hidden. If
+your AI provider isn't configured for embeddings, search still works — it
+just falls back to keyword + recency + importance ranking (see Settings → AI
+Provider → Embeddings).
 
 - Type at least 2 characters; results stream in with a short debounce.
 - Filter chips **All / Topics / Episodes / Memory** narrow by source; each chip

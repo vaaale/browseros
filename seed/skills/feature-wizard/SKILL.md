@@ -1,6 +1,6 @@
 ---
 name: Feature Wizard
-description: Proactive end-to-end guide that drives the user through building a BOS feature: Requirements → UI Design → Spec → Branch → Plan → Implementation → Tests → Promote/Discard.
+description: Proactive end-to-end guide that drives the user through building a BOS feature: Requirements → UI Design → Branch → Spec → Plan → Implementation → Tests → Promote/Discard.
 when_to_use: When the user wants to build a new feature from scratch and needs guided support through the full lifecycle, or when they say "I want to build X" without an existing spec.
 created_by: seed
 pinned: true
@@ -18,7 +18,7 @@ Iterate until you can clearly state:
   • Interaction model (UI, system behavior, or agent capability?)
   • Success criteria (measurable)
   • Out-of-scope items
-  • Constitution fit — read /Specs/bos-system-specs/.specify/memory/constitution.md; flag any conflicts
+  • Constitution fit — read bos-system-specs/.specify/memory/constitution.md; flag any conflicts
 GATE: Summarise requirements back to the user. Proceed only when they confirm.
 
 ═══════════════════════════════
@@ -28,35 +28,38 @@ See references/ui-design.md.
 GATE: User approves the UI design.
 
 ═══════════════════════════════
-PHASE 2 — SPECIFICATION
+PHASE 2 — FEATURE BRANCH
 ═══════════════════════════════
-1. Find the next feature ID: `file_list('/Specs/user-specs')`; next NNN = max existing + 1.
-2. Read `/Templates/commands/specify.md` and `/Templates/spec-template.md` with `file_read`.
-3. Write `/Specs/user-specs/<NNN-slug>/spec.md` with `file_write` following the template.
-   Feature Branch field: use `<NNN-slug>` (without bos/ prefix — the wizard adds it in Phase 3).
-   Include a summary of the approved UI design if one was produced.
-4. buildstudio_artifact_open('user-specs/<NNN-slug>/spec.md') + buildstudio_tree_refresh().
-5. Say: "Here is the full specification — please review it. Anything to change?"
-6. Edit with `file_edit` until the user explicitly approves.
-GATE: User approves the spec.
+See references/branch-setup.md. Do this BEFORE writing the spec: `user-specs` (where the
+spec is about to be written) is writable only on a real feature branch — the SAME `bos/*`
+branch this feature's eventual implementation lands on, one branch for both.
+GATE: Feature branch is active on this conversation (dev_branch_request returned success).
 
 ═══════════════════════════════
-PHASE 3 — FEATURE BRANCH
+PHASE 3 — SPECIFICATION
 ═══════════════════════════════
-See references/branch-setup.md.
-GATE: Feature branch is active on this conversation (dev_branch_request returned success).
+1. Pick a Project: `file_list('/Specs/user-specs')` — each top-level entry with a `project.json` is one (e.g. the default "user" project). Use an existing one, or start a new one for a distinct area of work by writing `/Specs/user-specs/<new-project-id>/project.json` (`{"label": "...", "description": "..."}`) — needs no active branch, a Project is a plain organizational folder.
+2. Find the next feature ID scoped to THAT Project: `file_list('/Specs/user-specs/<project-id>')`; next NNN = max existing + 1 (numbering resets per Project, not per store).
+3. Read `/Templates/commands/specify.md` and `/Templates/spec-template.md` with `file_read`.
+4. Write `/Specs/user-specs/<project-id>/<NNN-slug>/spec.md` with `file_write` following the template.
+   Feature Branch field: the branch activated in Phase 2 — it's the ONE branch for both this spec and its eventual implementation, not two separate ones.
+   Include a summary of the approved UI design if one was produced.
+5. buildstudio_artifact_open('user-specs/<project-id>/<NNN-slug>/spec.md') + buildstudio_tree_refresh().
+6. Say: "Here is the full specification — please review it. Anything to change?"
+7. Edit with `file_edit` until the user explicitly approves.
+GATE: User approves the spec.
 
 ═══════════════════════════════
 PHASE 4 — PLAN & TASKS
 ═══════════════════════════════
 1. Read `/Templates/commands/plan.md` and `/Templates/plan-template.md` with `file_read`.
-2. Write `/Specs/user-specs/<id>/plan.md` with `file_write`:
+2. Write `/Specs/user-specs/<project-id>/<id>/plan.md` with `file_write`:
    - Constitution check (quote the relevant principles and confirm compliance)
    - Technical context: which BOS files/systems are involved?
    - Real proposed file paths (not placeholders)
    - Design notes and trade-offs
 3. Read `/Templates/commands/tasks.md` and `/Templates/tasks-template.md` with `file_read`.
-4. Write `/Specs/user-specs/<id>/tasks.md` with `file_write`: T001, T002 … grouped by user story, dependency-ordered, [P] for parallelisable.
+4. Write `/Specs/user-specs/<project-id>/<id>/tasks.md` with `file_write`: T001, T002 … grouped by user story, dependency-ordered, [P] for parallelisable.
 5. Open both artifacts and refresh the tree.
 6. Say: "Here is the plan and task list. Review carefully — once you approve, I hand it to the Developer."
 GATE: User explicitly approves BOTH plan and tasks before delegation.
@@ -65,7 +68,7 @@ GATE: User explicitly approves BOTH plan and tasks before delegation.
 PHASE 5 — IMPLEMENTATION
 ═══════════════════════════════
 Call dev_delegate with a COMPLETE brief (the Developer has no other context):
-  "Read the spec at specs/user-specs/<id>/ — spec.md, plan.md, tasks.md.
+  "Read the spec at specs/user-specs/<project-id>/<id>/ — spec.md, plan.md, tasks.md.
    <Paste a concise summary of the spec and plan here.>
    Tasks to execute: <list from tasks.md>.
    Acceptance criteria: <from spec.md>.
@@ -86,12 +89,9 @@ GATE: All tests pass.
 PHASE 7 — PROMOTE / DISCARD
 ═══════════════════════════════
 Say: "The feature is implemented and all tests pass.
-To ship it:
-  • Promote the spec: click the Promote button in the Build Studio spec tree (left pane).
-  • Promote the code: in the topbar Active menu, promote the feature branch to main.
-To abandon it:
-  • Click Discard in the spec tree to remove spec changes.
-  • Delete the feature branch from the Active menu."
+The spec (user-specs) and the code ride the SAME feature branch, so there's one action either way:
+To ship it: in the topbar Active menu, promote the feature branch to main — this lands the spec and the code together.
+To abandon it: delete the feature branch from the Active menu — this discards both."
 Do NOT merge or delete branches yourself — the user controls Promote/Discard.
 
 ═══════════════════════════════

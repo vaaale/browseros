@@ -41,10 +41,13 @@ Each surface has a **character budget** (small by design — roughly a couple
 thousand characters for agent memory, less for the user profile). This forces
 **high‑signal, consolidated** entries instead of an ever‑growing log.
 
-If a new entry would exceed the budget, the write is **rejected** rather than
-silently truncated, and the assistant is prompted to **consolidate** — merge
-overlapping entries, shorten, or drop stale ones — and then add the new entry. It
-can do this as one atomic batch.
+If a new entry would exceed a topic's budget, the write still **succeeds** — it
+isn't rejected or silently truncated. The topic is instead flagged so the
+assistant's background consolidation pass reorganizes it (merging overlapping
+entries, dropping stale ones, or splitting it into a more focused topic) the
+next time it runs. The assistant can also tidy a topic itself at any time,
+using its own edit tools to update or remove specific entries rather than
+appending endlessly.
 
 ---
 
@@ -64,6 +67,32 @@ can do this as one atomic batch.
   error). Hardening these into memory would make the assistant wrongly refuse
   things later — so it captures the *fix*, not "X is broken."
 - Reusable procedures → those go to a **skill**.
+
+---
+
+## Finding things: search, not just recall
+
+When the assistant searches its memory, results are ranked by how relevant,
+recent, and important they are — not just whether a word matches. This
+combines a semantic (meaning-based) signal with a keyword signal, so a
+paraphrased question can still find the right memory even without shared
+words, while an exact-keyword search still works too. Irrelevant results are
+left out rather than guessed at.
+
+The semantic signal needs an **embeddings endpoint**, configured alongside
+your AI provider in Settings → AI Provider. If you leave its base URL and API
+key blank, it reuses your main provider's; you only need to set a model name
+to turn it on. If your provider doesn't support embeddings (e.g. a
+pure-Anthropic setup with no override), search still works — it just falls
+back to keyword + recency + importance ranking automatically, with no error.
+
+## Correcting the record
+
+When you tell the assistant something that contradicts an earlier memory (for
+example, your job changed), the assistant marks the older entry as no longer
+current rather than deleting it or leaving both side by side. Day-to-day, you
+only ever see the current one; the older entry is kept (labeled "not
+current") so history isn't lost.
 
 ---
 

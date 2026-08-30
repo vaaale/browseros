@@ -1,7 +1,9 @@
 import "server-only";
 import { promises as fs } from "fs";
 import path from "path";
-import { itemLinkPath, itemConfigDir, isItemInstalled, RESERVED_ITEM_IDS } from "@/system/items/installed";
+import { itemLinkPath, itemConfigDir, isItemInstalled, itemProvenanceKey, RESERVED_ITEM_IDS } from "@/system/items/installed";
+import { dataDir } from "@/os/data-dir";
+import { seedItemBundledAssets, type SeedBundledAssetsResult } from "./bundledAssets";
 
 /**
  * Installing = ONE symlink, plus seeding config (035-install-by-symlink).
@@ -39,8 +41,8 @@ function wrapFsError(err: unknown, action: string, target: string): Error {
  * item's defaults, and uninstall deliberately leaves this directory behind so a
  * reinstall keeps them.
  */
-export async function seedItemConfig(itemPath: string, itemId: string): Promise<void> {
-  const dest = itemConfigDir(itemId);
+export async function seedItemConfig(itemPath: string, itemId: string, root?: string): Promise<void> {
+  const dest = itemConfigDir(itemId, root);
   if (await pathExists(dest)) return;
 
   const src = path.join(itemPath, "config");
@@ -53,10 +55,20 @@ export async function seedItemConfig(itemPath: string, itemId: string): Promise<
 }
 
 /**
- * Install an item: create `system/<id>` → itemPath, then seed its config.
+ * Install an item: create `system/<id>` → itemPath, seed its config, then copy
+ * any bundled agents/skills into data/ (040-okf-knowledge-base).
+ *
+ * `root` targets a FEATURE BRANCH's data clone instead of this process's live
+ * root, so an install done from base lands where that branch's preview will
+ * read it (lib/devharness/branch-data-root.ts). Omitted = the live root.
+ *
  * Idempotent — a re-install replaces the link and leaves existing config alone.
+ *
+ * Returns the bundled-asset outcome so the caller can surface a keep-vs-replace
+ * prompt for anything that diverged locally. Nothing diverged is the common
+ * case, and it returns empty arrays; callers that don't care can ignore it.
  */
-export async function installItemLink(itemPath: string, itemId: string): Promise<void> {
+export async function installItemLink(itemPath: string, itemId: string, root?: string): Promise<SeedBundledAssetsResult> {
   if (RESERVED_ITEM_IDS.has(itemId)) {
     throw new Error(`"${itemId}" is a reserved item id — dataDir()/system/${itemId}/ is used by BOS itself.`);
   }
@@ -66,11 +78,15 @@ export async function installItemLink(itemPath: string, itemId: string): Promise
 
   // Two marketplaces can offer the same item id, but the flat system/ namespace
   // holds only one. Refuse rather than silently rebinding an existing install.
-  const link = itemLinkPath(itemId);
+  const link = itemLinkPath(itemId, root);
   const existing = await fs.readlink(link).catch(() => null);
   if (existing) {
     const resolved = path.resolve(path.dirname(link), existing);
-    if (resolved !== path.resolve(itemPath)) {
+    // By provenance, not absolute path — see itemProvenanceKey. `root` is the
+    // branch clone for a branch install; its inherited link points into base,
+    // which is the same item's pre-branch copy, not a different source.
+    const roots = [root ?? dataDir(), dataDir()];
+    if (itemProvenanceKey(resolved, roots) !== itemProvenanceKey(itemPath, roots)) {
       throw new Error(
         `"${itemId}" is already installed from a different source (${resolved}). ` +
         `Uninstall it first if you want to install this one instead.`,
@@ -86,7 +102,8 @@ export async function installItemLink(itemPath: string, itemId: string): Promise
     throw wrapFsError(err, "creating item symlink at", link);
   }
 
-  await seedItemConfig(itemPath, itemId);
+  await seedItemConfig(itemPath, itemId, root);
+  return seedItemBundledAssets(itemPath, itemId, undefined, root);
 }
 
 /**
@@ -115,8 +132,8 @@ export async function isInstalled(itemId: string): Promise<boolean> {
 // has a representation.
 
 /** Install the item that carries this app. */
-export async function createAppSymlink(itemPath: string, itemId: string): Promise<void> {
-  await installItemLink(itemPath, itemId);
+export async function createAppSymlink(itemPath: string, itemId: string, root?: string): Promise<void> {
+  await installItemLink(itemPath, itemId, root);
 }
 
 /** Uninstall the item that carries this app. */

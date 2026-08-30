@@ -83,7 +83,16 @@ Almost nothing, deliberately:
 - **One item, one click.** An item is a single thing even when it bundles several
   facets (the Terminal item ships both an app and a service), so `installItem()`
   installs every facet the item offers in one operation. Adopting a spec stays
-  separate — it forks a copy for editing rather than installing anything.
+  separate — it forks a copy for editing rather than installing anything. That's
+  distinct from an installed item's `spec/` facet showing up **in place** as its
+  own store in Build Studio (`src/lib/specs/item-stores.ts`) — adopting makes a
+  disconnected copy to build on top of; the in-place store is the live spec that
+  documents this exact installed item, editable only when the item is local. This
+  is also how a marketplace item's spec is *authored* in the first place — Build
+  Studio's `specify` step calls `installItem()` (via `createItemSpec()`/
+  `app_spec_create`) with just a `spec/spec.md` file, bringing the item into
+  existence — symlinked, git-committed — before any app/service/plugin code
+  exists at all.
 - **Every facet is installable, including the ones with no UI.** `voiceEngine`,
   `integration` and `serverPlugin` count via `hasPluginFacet()`. Leaving them out
   is what made Live Avatar unable to be installed at all once it stopped shipping

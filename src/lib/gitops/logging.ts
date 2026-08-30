@@ -185,6 +185,16 @@ export class GitLogger {
   private stream: WriteStream | null = null;
   private writeQueue: Promise<void> = Promise.resolve();
   private initialized = false;
+  /** Count of log lines that failed to persist to disk — there's no caller
+   *  waiting on a log write to surface this to, so it can't throw/reject
+   *  anywhere meaningful; exposed instead so a persistently-broken log sink
+   *  is at least visible somewhere inspectable rather than silently dropping
+   *  every line forever. */
+  private droppedWrites = 0;
+
+  getDroppedWriteCount(): number {
+    return this.droppedWrites;
+  }
 
   private get consoleLevel(): GitLogLevel {
     const env = (process.env.GITOPS_LOG_LEVEL || "warn").toLowerCase() as GitLogLevel;
@@ -212,8 +222,23 @@ export class GitLogger {
 
     await new Promise<void>((resolve, reject) => {
       const s = createWriteStream(filePath, { flags: "a" });
+      // The stream's own "error" event (e.g. the log directory vanished
+      // between init() and here — a real race under test harnesses that
+      // remove their sandboxed dataDir) is SEPARATE from write()'s callback
+      // error and fires asynchronously; without this listener it's an
+      // unhandled EventEmitter error, which Node surfaces as an uncaught
+      // exception that this function's own try/catch can never see — not a
+      // promise rejection the caller's .catch() on writeQueue can absorb.
+      let settled = false;
+      s.on("error", (err) => {
+        if (settled) return;
+        settled = true;
+        reject(err);
+      });
       s.write(line, (err) => {
         s.end(() => {
+          if (settled) return;
+          settled = true;
           if (err) reject(err);
           else resolve();
         });
@@ -243,8 +268,11 @@ export class GitLogger {
       ...(entry.error ? { error: entry.error } : {}),
     };
 
-    // Fire-and-forget file write.
-    this.writeQueue = this.writeQueue.then(() => this.writeRecord(record)).catch(() => {});
+    // Fire-and-forget file write — intentional (callers must never block on
+    // logging) — but a persistent failure is now counted, not just dropped.
+    this.writeQueue = this.writeQueue.then(() => this.writeRecord(record)).catch(() => {
+      this.droppedWrites += 1;
+    });
     // Don't block caller.
     void this.writeQueue;
 
@@ -299,4 +327,4 @@ export function gitLogger(): GitLogger {
 }
 
 // Export helpers for testing.
-export { sanitizeUrl as _sanitizeUrl, redactSensitiveStrings as _redactSensitiveStrings, throwIfSensitive as _throwIfSensitive, CONSOLE_LEVELS_SET, LEVEL_ORDER };
+export { sanitizeUrl as _sanitizeUrl, redactSensitiveStrings as _redactSensitiveStrings, throwIfSensitive as _throwIfSensitive, CONSOLE_LEVELS_SET as _CONSOLE_LEVELS_SET, LEVEL_ORDER as _LEVEL_ORDER };

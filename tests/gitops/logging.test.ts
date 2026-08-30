@@ -10,6 +10,7 @@ import {
   _throwIfSensitive,
   _CONSOLE_LEVELS_SET,
   _LEVEL_ORDER,
+  type GitLogEntry,
 } from "../../src/lib/gitops/logging";
 
 test.describe("GitLogger URL sanitization", () => {
@@ -102,7 +103,7 @@ test.describe("GitLogger sensitive detection (throwIfSensitive)", () => {
         _throwIfSensitive({
           op: "test",
           accessToken: "ghp_abc123",
-        } as any),
+        } as GitLogEntry),
       /sensitive field/,
     );
   });
@@ -113,7 +114,7 @@ test.describe("GitLogger sensitive detection (throwIfSensitive)", () => {
         _throwIfSensitive({
           op: "test",
           pat: "glpat-xxxx",
-        } as any),
+        } as GitLogEntry),
       /sensitive field/,
     );
   });
@@ -124,7 +125,7 @@ test.describe("GitLogger sensitive detection (throwIfSensitive)", () => {
         _throwIfSensitive({
           op: "test",
           sshKeyData: "-----BEGIN OPENSSH PRIVATE KEY-----",
-        } as any),
+        } as GitLogEntry),
       /sensitive field/,
     );
   });
@@ -135,7 +136,7 @@ test.describe("GitLogger sensitive detection (throwIfSensitive)", () => {
         _throwIfSensitive({
           op: "test",
           passphrase: "my-secret",
-        } as any),
+        } as GitLogEntry),
       /sensitive field/,
     );
   });

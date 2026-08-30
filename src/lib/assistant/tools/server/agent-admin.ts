@@ -3,7 +3,7 @@ import type { AssistantTool } from "../../tools";
 import { serverTool, schema, p } from "./util";
 import { getAgent, setAgentSystemPrompt } from "@/lib/agent/subagents/store";
 
-// The two agent self-editing tools (ported from DevActions.tsx): read/rewrite
+// The two agent self-editing tools (ported from the retired v1 chat): read/rewrite
 // THIS conversation's agent's editable personality (its base systemPrompt). The
 // composed prompt (core policy + memory + skills) is added at runtime and must
 // never be written back — agent_prompt_get returns only the editable text.

@@ -75,7 +75,7 @@ Most features expose something to the assistant or to other code. The canonical 
 
 ### Decide the context
 
-- `"action"` — client-only CopilotKit action (no server tool counterpart).
+- `"action"` — client-only FRONTEND tool, executed in the browser (no server tool counterpart).
 - `"tool"` — server tool only.
 - `"both"` — both server tool and client action.
 - `"deferred"` — server tool that must run outside the normal chat loop (e.g. `delegate_to_developer`).
@@ -87,7 +87,7 @@ Add an entry with a clear group, description, and schema. Group names become cat
 ### Implement the handler
 
 - Server tools live in `src/lib/assistant/tools/server/` (the single registry shared by the primary run and every delegation kind — `src/lib/agent/subagents/tools.ts` was retired, see [Sub-agents & delegation](../assistant/sub-agents-and-delegation.md)).
-- Client actions live in `src/components/agent/` and are wrapped in CopilotKit action components.
+- Frontend tools are declared in `src/lib/assistant/tools/frontend-declarations.ts` and executed by `src/components/agent/v2/FrontendToolsV2.tsx`.
 
 ### Progressive disclosure
 
@@ -170,7 +170,13 @@ The central logging feature (`specs/bos-system-specs/017-central-logging/`) demo
 - **Implementations**: `HttpLogSink`, `FileLogSink`.
 - **Service**: `LoggingService` (buffered, fire-and-forget, re-buffers on sink failure).
 - **Context**: `AsyncLocalStorage` for `withLogContext` / `getLogContext`.
-- **Client**: `browser-logger.ts` captures console errors and posts batches.
+- **Client**: `browser-logger.ts` captures console errors and posts batches. Two
+  known-benign Chromium notifications ("ResizeObserver loop completed with
+  undelivered notifications" and "ResizeObserver loop limit exceeded", with or
+  without a trailing period) are filtered out of `window.onerror` capture at
+  exact-match granularity — not lost, deliberately dropped, so a pane resize
+  doesn't flood the log; every other uncaught error and rejection is captured
+  unchanged (033-fix-pane-resize).
 - **Config**: `logging` namespace in `src/lib/config/registry.ts`.
 
 This same shape — interface + service + context + client + config — fits most new BOS subsystems.

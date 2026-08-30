@@ -91,6 +91,7 @@ export function Step1AiProvider({ provider, model, baseUrl, apiKey, availableMod
         <label className="text-xs text-white/60">API key</label>
         <input
           type="password"
+          autoComplete="new-password"
           value={apiKey}
           onChange={(e) => onApiKey(e.target.value)}
           placeholder={meta.keyRequired ? "Required" : "Optional for local"}

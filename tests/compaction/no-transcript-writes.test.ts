@@ -11,8 +11,8 @@ import { strict as assert } from "node:assert";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
-const COMPACTION_ROOT = path.resolve(__dirname, "..", "..", "src", "lib", "agent", "compaction");
-const API_ROOT = path.resolve(__dirname, "..", "..", "src", "app", "api", "compaction");
+const COMPACTION_ROOT = path.resolve(import.meta.dirname, "..", "..", "src", "lib", "agent", "compaction");
+const API_ROOT = path.resolve(import.meta.dirname, "..", "..", "src", "app", "api", "compaction");
 
 async function readSources(dir: string): Promise<{ file: string; text: string }[]> {
   const out: { file: string; text: string }[] = [];
@@ -42,6 +42,13 @@ describe("Task 4.6 — SC-006 no writes to /Documents/Chats", () => {
   it("compaction sidecar lives under data/memory/compaction, not under VFS", async () => {
     const sidecar = await fs.readFile(path.join(COMPACTION_ROOT, "sidecar.ts"), "utf8");
     assert.match(sidecar, /"memory", "compaction"/, "sidecar path is data/memory/compaction");
-    assert.equal(/\/Documents\//.test(sidecar), false, "sidecar file must not reference /Documents/");
+    // Strip comment lines first — the module's own docs legitimately explain
+    // what it does NOT touch (the VFS-backed /Documents/Chats transcript);
+    // this assertion is about the actual storage path in CODE, not prose.
+    const code = sidecar
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("//") && !line.trim().startsWith("*"))
+      .join("\n");
+    assert.equal(/\/Documents\//.test(code), false, "sidecar code must not reference /Documents/");
   });
 });

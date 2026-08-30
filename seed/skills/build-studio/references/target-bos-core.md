@@ -28,4 +28,4 @@ Relay immediately: `dev_delegate` with the user's report near-verbatim, plus wha
 
 - Relay exactly what changed and how to test it.
 - Run `analyze`/`converge` (see those references) only if the user wants a spec/architecture consistency check, or to record drift in `bos-system-specs/discrepancies.md`.
-- Ensure docs under `docs/usage`/`docs/dev` were updated as part of the change (the Developer's job, per the delegation brief) — flag it if they weren't.
+- Ensure docs under `docs/usage`/`docs/dev` were updated as part of the change (the Developer's job, per the delegation brief) — flag it if they weren't. These two trees are for BOS itself ONLY. If the change MOVED a feature out of BOS core into a marketplace item, the update is a DELETION here — the item carries its own docs inside itself now (see `target-marketplace-item.md` § "The `docs/` facet") and the Docs app renders both trees merged, so leaving the core pages behind shows the user two versions of the same documentation with no way to tell which is live.

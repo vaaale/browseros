@@ -4,7 +4,8 @@ import { useEffect, useState } from "react";
 import { LogOut } from "lucide-react";
 import { useOSStore } from "@/store/os-provider";
 import { VersionControls } from "./VersionControls";
-import { IntegrationsBadge } from "./IntegrationsBadge";
+import { EventBell } from "./EventBell";
+import { ConflictLaunch } from "./ConflictLaunch";
 
 interface SessionData { multiUser: boolean; username: string | null; }
 
@@ -97,7 +98,8 @@ export function Topbar() {
         <VersionControls />
       </div>
       <div className="flex items-center gap-2 justify-self-end">
-        <IntegrationsBadge />
+        <ConflictLaunch />
+        <EventBell />
         <Clock />
         <MultiUserControls />
       </div>

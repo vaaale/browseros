@@ -183,11 +183,11 @@ export function TelegramBotAuthSection({ onChange }: TelegramBotAuthSectionProps
           <div className="flex items-center gap-2">
             <input
               type="password"
+              autoComplete="new-password"
               value={token}
               onChange={(e) => setToken(e.target.value)}
               placeholder="123456789:AA…"
               spellCheck={false}
-              autoComplete="off"
               className="flex-1 rounded border border-white/15 bg-black/30 px-2 py-1.5 font-mono text-[11px] text-white placeholder-white/25 focus:border-violet-400 focus:outline-none"
             />
             <button

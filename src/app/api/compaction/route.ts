@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { readSidecar } from "@/lib/agent/compaction/sidecar";
-import { summarizeConversation } from "@/lib/agent/compaction/summarize";
+import { formNewBlocks } from "@/lib/agent/compaction/summarize";
 import { logger } from "@/lib/logging";
 
 export const dynamic = "force-dynamic";
@@ -32,12 +32,11 @@ export async function GET(req: NextRequest) {
       logEvent("info", conv, "api.get-miss");
       return NextResponse.json({ error: "no sidecar" }, { status: 404 });
     }
-    logEvent("info", conv, "api.get", { hasSummary: !!sidecar.summary, boundaryCount: sidecar.boundary?.count ?? null });
+    logEvent("info", conv, "api.get", { blockCount: sidecar.blockOrder.length });
     return NextResponse.json({
       conv,
-      boundary: sidecar.boundary,
-      summary: sidecar.summary,
-      clearWatermark: sidecar.clearWatermark,
+      blocks: sidecar.blockOrder.map((id) => sidecar.blocks[id]).filter(Boolean),
+      groupedMessageCount: Object.keys(sidecar.projections).length,
       lock: sidecar.lock,
       updatedAt: sidecar.updatedAt,
       stats: sidecar.stats,
@@ -47,7 +46,7 @@ export async function GET(req: NextRequest) {
   }
 }
 
-/** POST /api/compaction?conv=<id> — force a summarization now. */
+/** POST /api/compaction?conv=<id> — force block formation now. */
 export async function POST(req: NextRequest) {
   if (!requireSameOrigin(req)) {
     return NextResponse.json({ error: "cross-origin not allowed" }, { status: 403 });
@@ -56,7 +55,7 @@ export async function POST(req: NextRequest) {
   const conv = (url.searchParams.get("conv") || "").trim();
   if (!conv) return NextResponse.json({ error: "missing ?conv=<id>" }, { status: 400 });
   try {
-    const result = await summarizeConversation(conv, { manual: true });
+    const result = await formNewBlocks(conv, { manual: true });
     logEvent("info", conv, "api.post", { outcome: "skipped" in result ? result.reason : "applied" });
     return NextResponse.json(result);
   } catch (err) {

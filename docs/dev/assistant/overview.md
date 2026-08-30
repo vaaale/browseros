@@ -15,7 +15,13 @@ and the [Assistant API](api/assistant-api.md).
    mounts `FrontendToolsV2` (binds client tool handlers), renders `MessageListV2`
    from a per‑conversation store, and `ChatInputV2`. The Assistant app
    (`src/apps/chat`) and Build Studio embed it; surface‑scoped tools are passed via
-   the `tools` prop.
+   the `tools` prop. `MessageListV2`'s stick‑to‑bottom behavior (pinned lists
+   follow resizes/new content; scrolled‑up lists are left alone) is driven by a
+   `ResizeObserver` whose callback defers its `scrollTop` write to the next
+   animation frame instead of writing synchronously inside the callback — the
+   canonical trigger for the browser's benign "ResizeObserver loop" notification
+   — via the pure decision helper in `stick-to-bottom.ts` (033-fix-pane-resize).
+   Since this component is shared, that fix benefits every app embedding it.
 2. **Start a run** — `POST /api/assistant/runs { conversationId, agentId, message,
    editOfMessageId?, surfaceTools? }` → `src/lib/assistant/start-run.ts`. The
    **RunManager** (`run-manager.ts`, a `globalThis` singleton) owns one active run

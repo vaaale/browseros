@@ -22,6 +22,7 @@ import { useTestDataDir, resetServiceSingletons } from "./_test-env";
 import { RESPONSIVE_WORKER } from "./_worker-fixtures";
 
 function setupTest(label: string) {
+  // eslint-disable-next-line react-hooks/rules-of-hooks -- useTestDataDir is a test helper (temp-dir setup), not a React hook
   const { dir, cleanup } = useTestDataDir(label);
   resetServiceSingletons();
   return {
@@ -178,4 +179,77 @@ test.describe("local marketplace (dataDir()/user-apps/)", () => {
       dispose();
     }
   });
+});
+
+test("top-level skills/ in user-apps are catalogued as skill items (034 parity)", async () => {
+  const { dir, cleanup } = useTestDataDir("local-mkt-skills");
+  try {
+    // 034 says user-apps has the same layout as any marketplace clone, and a
+    // CLONE's skills are catalogued. The local scan only walked items/, so a
+    // skill sitting in user-apps/skills/ was git-tracked, present on disk, and
+    // completely invisible in the Marketplace — uninstallable from it.
+    const skillDir = join(dir, "user-apps", "skills", "gws-gmail");
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(
+      join(skillDir, "SKILL.md"),
+      ['---', 'name: gws-gmail', 'description: "Gmail: Send, read, and manage email."', "metadata:", "  version: 0.22.5", '---', "# Body"].join("\n"),
+    );
+    // A folder without SKILL.md is not installable, so it must not be offered.
+    mkdirSync(join(dir, "user-apps", "skills", "not-a-skill"), { recursive: true });
+
+    const catalog = await listCatalog();
+    const local = catalog.find((m) => m.items.some((i) => i.id === "gws-gmail"));
+    expect(local, "the local marketplace should offer the skill").toBeTruthy();
+
+    const item = local!.items.find((i) => i.id === "gws-gmail")!;
+    expect(item.skill?.path).toBe("skills/gws-gmail");
+    expect(item.skill?.version).toBe("0.22.5"); // read from the nested metadata block
+    expect(item.name).toBe("gws-gmail");
+    expect(item.description).toContain("Gmail");
+
+    expect(local!.items.some((i) => i.id === "not-a-skill")).toBe(false);
+  } finally {
+    cleanup();
+  }
+});
+
+test("a curated entry the local scanner can never re-emit is NOT pruned while its files exist", async () => {
+  const { dir, cleanup } = useTestDataDir("local-mkt-no-prune");
+  try {
+    // Regression for a real data loss: on 2026-08-25 BOS committed "sync
+    // marketplace manifest (21 removed)" against the user's own repo, deleting
+    // all 21 curated skill entries. The prune rule was "keep only ids the
+    // scanner rediscovered", and the scanner walks items/ only — so curation
+    // for anything it cannot produce was destroyed. 034 FR-004: merge only.
+    //
+    // The fixture is chosen so the scanners CANNOT put the entry back, which is
+    // what actually isolates the prune: `items/my-integration/` holds no app,
+    // spec, services or plugin, so scanLocalItems skips it as an unrecognised
+    // shape, and it is not under `skills/` so scanLocalSkills never sees it. If
+    // the prune drops it, it is gone for good.
+    const ua = join(dir, "user-apps");
+    mkdirSync(join(ua, "items", "my-integration"), { recursive: true });
+    writeFileSync(join(ua, "items", "my-integration", "README.md"), "# not a recognised shape\n");
+    writeFileSync(
+      join(ua, "marketplace.json"),
+      JSON.stringify({
+        id: "user-apps", name: "Mine", version: "1.0.0",
+        items: [
+          { id: "my-integration", name: "My Integration", description: "d", integration: { entrypoint: "items/my-integration", version: "1.0.0" } },
+          { id: "ghost", name: "Ghost", description: "d", skill: { path: "skills/ghost", version: "1.0.0" } },
+        ],
+      }, null, 2) + "\n",
+    );
+
+    await listCatalog();
+    const after = JSON.parse(readFileSync(join(ua, "marketplace.json"), "utf8")) as { items: { id: string }[] };
+    const ids = after.items.map((i) => i.id);
+
+    expect(ids, "curation the scanner cannot re-emit must survive").toContain("my-integration");
+    // ...but an entry whose files are genuinely gone still goes: the manifest
+    // must never advertise something that cannot be installed.
+    expect(ids, "entry with no surviving facet should be pruned").not.toContain("ghost");
+  } finally {
+    cleanup();
+  }
 });

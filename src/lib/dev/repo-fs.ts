@@ -1,6 +1,7 @@
 import "server-only";
 import { promises as fs } from "fs";
 import path from "path";
+import { searchTerms, lineMatchesTerms } from "./text-search";
 
 // Repo-scoped filesystem for the developer sub-agent. Unlike the VFS (sandboxed
 // to data/vfs), this operates on the actual BrowserOS source so the agent can
@@ -135,7 +136,8 @@ export async function search(query: string, opts?: { dir?: string; caseSensitive
   if (!query) return [];
   const start = resolveInRepo(opts?.dir || "src");
   assertReadable(start.rel);
-  const needle = opts?.caseSensitive ? query : query.toLowerCase();
+  const terms = searchTerms(query, opts?.caseSensitive);
+  if (!terms.length) return [];
   const hits: SearchHit[] = [];
 
   async function walk(absDir: string, relDir: string): Promise<void> {
@@ -161,8 +163,7 @@ export async function search(query: string, opts?: { dir?: string; caseSensitive
         }
         const lines = content.split("\n");
         for (let i = 0; i < lines.length; i++) {
-          const hay = opts?.caseSensitive ? lines[i] : lines[i].toLowerCase();
-          if (hay.includes(needle)) {
+          if (lineMatchesTerms(lines[i], terms, opts?.caseSensitive)) {
             hits.push({ path: relFile, line: i + 1, text: lines[i].trim().slice(0, 200) });
             if (hits.length >= MAX_SEARCH_RESULTS) return;
           }

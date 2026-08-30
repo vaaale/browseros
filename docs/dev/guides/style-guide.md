@@ -174,14 +174,25 @@ See `src/components/apps/settings/ConfigForm.tsx` for the full form + save flow
 
 ### Modal / dialog
 
-Fixed full-screen scrim + centred panel, high z-index, backdrop blur:
+Fixed full-screen scrim + centred panel, high z-index, backdrop blur — **always
+rendered via `createPortal(..., document.body)`**, never inline: every app
+window is CSS-`transform`-positioned (`Window.tsx`), which makes the window
+the containing block for `position: fixed` — an un-portalled modal (or a
+`fixed`-positioned context menu) renders offset by wherever the window has
+been dragged instead of centered on/at the real viewport (see
+[Design heuristics](../design-heuristics.md)):
 
 ```tsx
-<div className="fixed inset-0 z-[200000] flex items-center justify-center bg-black/60 backdrop-blur-sm">
-  <div className="w-[460px] max-w-[92vw] rounded-2xl border border-white/10 bg-[#15171e] p-6 text-sm shadow-2xl">
-    {/* content */}
-  </div>
-</div>
+import { createPortal } from "react-dom";
+
+createPortal(
+  <div className="fixed inset-0 z-[200000] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+    <div className="w-[460px] max-w-[92vw] rounded-2xl border border-white/10 bg-[#15171e] p-6 text-sm shadow-2xl">
+      {/* content */}
+    </div>
+  </div>,
+  document.body,
+);
 ```
 
 ### Sidebar / vertical tabs (Settings pattern)

@@ -9,7 +9,7 @@ Every integration exposes:
 - **Adapter(s)** — server-only classes that implement the service's methods
   (Gmail `messages_list`, `messages_send`, …). Each method is scope-gated via
   the base adapter's `withScope`.
-- **Assistant actions** — one CopilotKit action per adapter method, auto-
+- **Assistant tools** — one assistant tool per adapter method, auto-
   registered by `IntegrationActions.tsx` and gated by the user's effective
   scope set.
 - **Settings UI** — the Integrations tab in Settings (list → detail → per-
@@ -62,7 +62,7 @@ src/app/api/integrations/
 └── gsuite/whoami/route.ts
 
 src/components/apps/settings/integrations/   # UI (list, detail, config views)
-src/components/agent/IntegrationActions.tsx  # CopilotKit action registration
+src/lib/assistant/registry.ts               # assistant tool registration
 src/components/desktop/IntegrationsBadge.tsx # Topbar unread badge
 ```
 
@@ -403,7 +403,7 @@ it is posted as the visible reply.
 - ✅ Tokens live only in the SecretsStore (AES-256, key file chmod 600).
 - ✅ Per-integration state.json is atomically written with a per-integration
   mutex.
-- ✅ Every Gmail adapter method is exposed as a CopilotKit action, gated by
+- ✅ Every Gmail adapter method is exposed as an assistant tool, gated by
   the effective-scope set on BOTH client (`available`) and server
   (`withScope` in the invoke route).
 - ✅ Scope overrides in Settings live-update the assistant's available

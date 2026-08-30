@@ -164,7 +164,7 @@ This is the most complex subsystem, with multiple sub-components:
 |------|---------------|
 | `capabilities-registry.ts` | Unified capability definitions (80+ capabilities, 20+ groups) |
 
-**Capability Groups:** OS, Web, Files, Config, Agents, Memory, Skills, Scratchpad, MCP, Apps, Dev, Docs, Workflows, Specs, Build Studio, Gmail, Google Drive, Google Calendar, Google Contacts, Telegram.
+**Capability Groups:** OS, Web, Files, Config, Agents, Memory, Skills, Scratchpad, MCP, Apps, Dev, Docs, Specs, Build Studio, Gmail, Google Drive, Google Calendar, Google Contacts, Telegram.
 
 #### 8.3 Sub-agents (Delegation)
 
@@ -232,15 +232,19 @@ primitive, the depth guard, and the single tool gate that replaced
 | File | Responsibility |
 |------|---------------|
 | `stores.ts` | Spec store discovery |
+| `item-stores.ts` | Item-owned spec store discovery (an installed item's own `spec/` facet) |
+| `create.ts` | `createItemSpec()` — brings a marketplace item into existence from just a spec |
 | `store-git.ts` | Git operations for spec stores |
-| `seed.ts` | Spec store seeding |
-| `pipeline.ts` | Spec-kit pipeline orchestration |
+| `seed.ts` | Spec store seeding (incl. one-time migration of pre-Project content into default Projects) |
+| `projects.ts` | Project discovery/creation within a directory-scanned store (037-project-layer) — pure organizational folders, no git-activation of their own |
+| `pipeline.ts` | Spec-kit pipeline orchestration (recursive store → Project → feature-leaf walk) |
 | `types.ts` | Spec type definitions |
-| `dev/spec-fs.ts` | Multi-root spec filesystem |
+| `dev/spec-fs.ts` | Multi-root spec filesystem — Build Studio's own read/write path (`/api/specs`) |
+| `os/fs/spec-fs.ts` | The VFS `SpecFS` backend mounted at `/Specs/<store>` — the generic `file_*` tools' path; a SEPARATE implementation from `dev/spec-fs.ts` above, kept in sync with the same branch-coupled routing and its own `writable` gate |
 
-**Responsibilities:** External spec stores (system, user, marketplace), feature branch coupling, spec-kit pipeline (constitution → specify → clarify → plan → tasks → analyze → implement → converge), template system.
+**Responsibilities:** External spec stores (system, user, marketplace), a **Project** layer inside every directory-scanned store (037-project-layer: `<store>/<project-id>/...`, with arbitrary plain sub-folders below a Project — a directory is a feature leaf iff it directly contains `spec.md`; feature numbering resets per Project). A Project is a pure organizational folder with no independent git-activation — instead, each store reuses a PRE-EXISTING mechanism: `bos-system-specs` is **read-only, unconditionally**, everywhere (Build Studio's own `/api/specs` path AND the agent's generic `file_*` tools — both gate on the store's `writable` flag, `false` for this store); `user-specs` — a user's own customization to BOS core (including built-in apps) — is writable only on a real `bos/*` feature branch, the SAME branch used for BOS's own source code (selected via the assistant chat's "Active feature branch" dropdown, reused as-is — Build Studio has no separate picker). A fourth store kind, `owner: "item"`, is not a directory under `BOS_SPECS_ROOT` at all — it's an installed item's own `spec/` folder (`item-stores.ts`, sourced from `listInstalledItems()`), rooted so the item's `app/`/`services/`/`plugin/` siblings stay unreachable through spec-fs. It has no feature-id subfolder (the whole store IS the one spec) and is writable only when the item is the user's own (`user-apps`); writes there go through `commitScoped` (`src/lib/gitfs/store.ts`), not `commitAll`, since the store root is a subdirectory of an already-initialized repo rather than a repo root of its own. An item store has no Project, and no git-activation of its own: `data/user-apps` is a branch-COUPLED repo like every spec store (`coupled-repos.mjs`'s `coupledReposFor` mounts it on the active `bos/*` feature branch at `<previewDataDir>/user-apps`), so an item's spec travels with its app/service code AND with BOS's own source, and promotes or discards as one operation. Writes require that feature branch exactly as `user-specs` does — `prepareWrite` gates EVERY writable store unconditionally (only branch *routing* is Supervisor-conditional), so the agent hits the same `dev_branch_request` elicitation everywhere. Item stores need their own resolver (`branchItemStoreRoot`) only because `user-apps` is a different repo from the `<codeWorktree>/specs/<storeId>` mounts — a path difference, not a policy one. Anything addressing git by repo (history listing, `git show <ref>:<path>`, which resolves paths against the repo root) uses `store.repoRoot` + `storeRepoRelative()`, since an item store's root is a subdirectory of `user-apps` with no `.git` of its own. Item CONTENT follows the same rule as item specs: `installItem` resolves a data root with `branchDataRoot()` (`src/lib/devharness/branch-data-root.ts`), so `app_install`/`app_build`/`createItemSpec` run from BASE and land on the active feature branch — `dataDir()` stays a per-process constant and the redirect is explicit rather than ambient. The Supervisor's former global **app-candidate** branch — a second, in-place branch scheme over the same repo, surfaced as Build Studio's per-item Activate/Promote/Discard row and `VersionControls.tsx`'s "Promote app"/"Discard app" buttons — is **retired**, along with the `liveCheckoutOwners` registry that existed only to keep the two schemes from colliding. This is the **primary** authoring location for a marketplace item's spec, not just a viewer for an already-bundled one — `create.ts`'s `createItemSpec()` (exposed as the `app_spec_create` tool, `src/lib/assistant/tools/server/specs.ts`) calls `installItem()` (`src/lib/apps/store.ts`) to bring the item into existence directly from a spec, before any app/service/plugin code exists, deliberately overriding spec-kit's original "centralize everything in user-specs, classify via an App Target field" convention for this one target type. `app_spec_list/read/write/edit/patch` round out read/write access to item stores from any chat context, not just Build Studio's own window-scoped tools — scoped ONLY to `owner: "item"` stores; BOS-core/user specs are unaffected and keep using `file_*` on `/Specs/`. `createItemSpec()`'s id is validated against traversal (`isSafeItemId()`, `src/lib/apps/store.ts`, enforced inside `installItem()` itself so every caller — `app_install`/`app_build` included — is covered, not just this path) and preflight-checked against reserved ids and cross-origin collisions before any write, and concurrent calls for the same name/id are serialized (an in-process per-key lock) so two racing creates can't clobber each other. Display-name/origin-label lookups live in their own module, `src/lib/marketplace/item-manifest.ts` — deliberately independent of `src/lib/marketplace/client.ts`, whose own static imports would otherwise close a real circular-dependency chain back through `stores.ts`.
 
-**Path Format:** `<storeId>/<relPath>` — e.g., `bos-system-specs/000-browseros-core/spec.md`.
+**Path Format:** `<storeId>/<relPath>` — e.g., `bos-system-specs/core-platform/000-browseros-core/spec.md` (`core-platform` is one of several Projects `bos-system-specs` is organized into, 037-project-layer; `.specify/memory/constitution.md` stays at the store root, outside any Project). Item-owned stores have no Project segment (the whole store IS the one spec): `item-<id>/spec.md`.
 
 ---
 
@@ -300,7 +304,6 @@ primitive, the depth guard, and the single tool gate that replaced
 | `api/skills/` | Skills system |
 | `api/subagents/` | Sub-agents |
 | `api/specs/` | Specs system |
-| `api/workflows/` | Workflows system |
 | `api/integrations/` | Integrations system |
 | `api/mcp/` | MCP |
 | `api/proxy/` | Web proxy |
@@ -329,7 +332,6 @@ primitive, the depth guard, and the single tool gate that replaced
 | `actions/` | Action adapters (Gmail, Drive, Calendar, Contacts) |
 | `adapters/` | OAuth flows, token management |
 | `webhooks/` | Webhook handling |
-| `notifications/` | Push notifications |
 | `scheduler/` | Polling schedules |
 | `state/` | Integration state management |
 | `secrets/` | Client secret storage |
@@ -357,21 +359,53 @@ for the full mechanism and adoption checklist; the Bastion-side half
 
 ---
 
-### 14. Workflows (`src/lib/workflows/`)
+### 13.6. Event & Notification System (`src/lib/events/`)
 
-**Stability: LOW — execution engine is evolving**
+**Stability: MODERATE — new in 034-event-notification-system**
 
 | File | Responsibility |
 |------|---------------|
-| `store.ts` | Workflow CRUD |
-| `runner.ts` | Workflow execution engine |
-| `generate.ts` | Workflow generation from descriptions |
-| `validate.ts` | DAG validation |
-| `install.ts` | Workflow installation |
-| `types.ts` | Workflow type definitions |
-| `template/` | Workflow templates |
+| `types.ts` | Framework-free shared types (`EventRecord`, `EventState`, `HandlerRegistration`, ...) — imported by both server code and the client viewer |
+| `store.ts` | Persistence: per-month immutable JSONL shards + per-month mutable state + a warm-in-memory unbounded index, flushed on a checkpoint cadence (not per-emit) |
+| `kernel.ts` | The `globalThis`-backed daemon singleton — every public op (emit/ack/query/register/...), the two-axis state machine, boot re-dispatch |
+| `dispatch.ts` | Fan-out to headless handlers: per-handler FIFO queues (concurrent across handlers), retry/backoff, at-least-once re-dispatch, exactly-once-settle |
+| `stream.ts` | In-memory state-change stream backing `GET /api/events/stream` (NDJSON, replay-then-tail) |
+| `api.ts` | The single public API facade (request validation) — reached in-process, over same-origin HTTP, and over loopback HTTP (worker-thread services) |
+| `migrate-integrations.ts` | One-time, idempotent migration of the legacy GSuite/Telegram notification inbox onto this system |
+| `register-ui-handlers.ts` | Surfaces every app's manifest-declared `eventHandlers` into the registry at boot |
 
-**Responsibilities:** Multi-step workflows as DAGs, step-by-step streaming execution, natural language generation, cancellation, status tracking.
+A pub/sub broker, in-process (a daemon started from `instrumentation.ts`,
+sibling to the scheduler daemon in §1 — not a worker-thread service). Any
+component emits an event (type + JSON payload); the kernel durably records
+it (a single O(1) shard append) and fans out to matching **headless
+handlers** (invoked automatically, must ack, participate in a
+pending→processed state machine) without blocking the emitter. **UI
+handlers** are a separate, static, click-resolved layer (declared in
+`AppManifest.eventHandlers`, §5) that launch an app window when the user
+clicks an event in the built-in **Event Viewer** (`src/apps/event-viewer/`);
+they never ack and never affect processing. The topbar bell
+(`src/components/desktop/EventBell.tsx`) shows the unread count. Full
+reference: `docs/dev/events/events.md`.
+
+---
+
+### 14. Workflows — RETIRED from bos-core (042-workflow-manager-service)
+
+**Stability: N/A — the bos-core engine has been retired**
+
+The workflow engine that used to live at `src/lib/workflows/` (`store.ts`,
+`runner.ts`, `generate.ts`, `validate.ts`, `types.ts`), its `api/workflows/`
+routes, the `workflowTools()` server-tool set
+(`src/lib/assistant/tools/server/workflows.ts`), the `<WorkflowActions/>`
+frontend-tool bridge, and the 7 static `workflow_*` capability entries
+have all been **deleted** as a user-approved engine pivot. Workflow
+authoring/execution is being re-implemented as a **service-owned
+marketplace item** (`data/user-apps/items/workflows/`, 039-service-tool-exposure
+`deploymentMode: "tools"`) instead of bos-core, so the engine can evolve
+(dynamic routing, parallel execution, ephemeral agents) without shadowing
+service-declared tools. See
+`specs/user-specs/workflow-manager/001-workflow-manager-service-tools/` for
+the full spec, plan, and design of the replacement.
 
 ---
 
@@ -472,8 +506,7 @@ Apps System, depending only on the Core OS Layer the same way Apps does.)*
 6. Apps          — built-in + installed app management (moderate)
 6b. Services/Plugins — worker-thread daemons + agent-run hook pipeline (moderate)
 7. Agent         — capabilities, memory, skills, sub-agents (evolving)
-8. Workflows     — DAG automation (evolving)
-9. Specs         — spec-kit pipeline (evolving)
+8. Specs         — spec-kit pipeline (evolving)
 10. API Routes   — thin delegates to above (moderate)
 11. UI Shell     — Desktop, Windows, Dock (moderate)
 12. Deployment   — bastion, Docker (stable)

@@ -1,5 +1,5 @@
 import "server-only";
-import { emitNotification } from "../../notifications/store";
+import { emitIntegrationEvent } from "@/lib/events/from-integration-event";
 import type { IntegrationEvent } from "../../types";
 import { readChatsCache } from "./user-cache";
 
@@ -61,29 +61,27 @@ export async function filterMutedEvents(events: IntegrationEvent[]): Promise<Int
 }
 
 /**
- * Emit an IntegrationEvent respecting per-chat mute settings. Returns the
- * assigned notification id, or null when the event was dropped due to mute.
+ * Emit an IntegrationEvent respecting per-chat mute settings. Returns
+ * `true` once emitted, or `false` when the event was dropped due to mute.
  */
 export async function dispatchTelegramEvent(
   event: IntegrationEvent,
   opts: DispatchOpts = {},
-): Promise<number | null> {
+): Promise<boolean> {
   if (!opts.ignoreMute) {
     const chatId = chatIdFromEvent(event);
-    if (chatId && (await isChatMuted(chatId))) return null;
+    if (chatId && (await isChatMuted(chatId))) return false;
   }
-  return emitNotification(event);
+  await emitIntegrationEvent(event);
+  return true;
 }
 
 /**
- * Batch variant. Preserves the input order and skips muted-chat events. Returns
- * the array of assigned ids (null entries where events were dropped).
+ * Batch variant. Preserves the input order and skips muted-chat events.
+ * Returns whether each event was emitted (false where dropped by mute).
  */
-export async function dispatchTelegramEvents(
-  events: IntegrationEvent[],
-  opts: DispatchOpts = {},
-): Promise<Array<number | null>> {
-  const out: Array<number | null> = [];
+export async function dispatchTelegramEvents(events: IntegrationEvent[], opts: DispatchOpts = {}): Promise<boolean[]> {
+  const out: boolean[] = [];
   for (const ev of events) {
     out.push(await dispatchTelegramEvent(ev, opts));
   }

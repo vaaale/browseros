@@ -17,7 +17,7 @@ export interface ConfigRegistration {
   save: (patch: Record<string, unknown>) => Promise<void>;
 }
 
-const HARNESS_DEFAULT_URL = process.env.BOS_DEV_HARNESS_URL || "http://wingman.akhbar.lan:7272/mcp";
+const HARNESS_DEFAULT_URL = process.env.BOS_DEV_HARNESS_URL || "http://localhost:7272/mcp";
 const HARNESS_DEFAULT_COMMAND = "claude mcp serve";
 
 // Clamps tools.maxFindResults into the spec-mandated 5..25 range (default 10).
@@ -40,6 +40,15 @@ const MAX_AGENT_STEPS_DEFAULT = 32;
 function clampMaxAgentSteps(n: number): number {
   if (!Number.isFinite(n)) return MAX_AGENT_STEPS_DEFAULT;
   return Math.min(200, Math.max(4, Math.round(n)));
+}
+
+// Floors dev-harness.cliTimeoutSec at 60 seconds (default 1000), no upper bound.
+// Headless Claude/OpenCode CLI runs can take a while; this is how long
+// claude-runner.ts waits before killing the process and reporting a timeout.
+export const CLI_TIMEOUT_SEC_DEFAULT = 1000;
+export function clampCliTimeoutSec(n: number): number {
+  if (!Number.isFinite(n)) return CLI_TIMEOUT_SEC_DEFAULT;
+  return Math.max(60, Math.round(n));
 }
 
 const REGISTRATIONS: ConfigRegistration[] = [
@@ -88,11 +97,30 @@ const REGISTRATIONS: ConfigRegistration[] = [
       description: "Configuration for the Build Studio spec-authoring chat.",
       order: 12,
       customComponent: "build-studio",
-      fields: [],
+      // `customComponent` means Settings renders BuildStudioTab instead of the
+      // generic ConfigForm, so these declarations don't produce any UI. They
+      // are still REQUIRED: /api/config's PATCH coerces the incoming values
+      // against `fields` and silently drops anything undeclared — with an
+      // empty array this namespace's Save wrote nothing at all, so neither the
+      // BS chat agent nor the conflict agent could ever actually be changed.
+      fields: [
+        { key: "agent", label: "Agent", type: "text", description: "Sub-agent that powers the Build Studio chat." },
+        {
+          key: "conflictAgent",
+          label: "Conflict resolution agent",
+          type: "text",
+          description: "Agent the git reconciliation pipeline escalates a merge conflict to (default: devops).",
+        },
+      ],
     },
     load: async () => {
       const s = await readNamespace("build-studio");
-      return { agent: (s.agent as string) || "build-studio" };
+      return {
+        agent: (s.agent as string) || "build-studio",
+        // 035: which agent resolves git conflicts. Read on EVERY escalation
+        // (reconcile.ts step 5), so a change takes effect with no reload.
+        conflictAgent: (s.conflictAgent as string) || "devops",
+      };
     },
     save: async (patch) => {
       await patchNamespace("build-studio", patch);
@@ -235,11 +263,43 @@ const REGISTRATIONS: ConfigRegistration[] = [
         { key: "apiKey", label: "API key", type: "password", secret: true },
         { key: "maxTokens", label: "Max output tokens", type: "number", description: "Leave blank to use the provider's default." },
         { key: "maxInputTokens", label: "Context window", type: "number" },
+        // Embeddings (028-memory-curation-retrieval, T3/FR-009). Declared here
+        // as the config-registry redaction path (R8/S5) — distinct from the
+        // provider-view's `hasEmbeddingKey` boolean; `secret: true` is what
+        // makes config_list/config_set (and the generic /api/config GET/PATCH)
+        // blank the key rather than leak it. The real Settings UI is the
+        // custom "ai-provider" component (ProviderSettings.tsx), not the
+        // generic field renderer, so these dotted keys need load()/save() below
+        // to flatten/unflatten the nested `embeddings` object.
+        { key: "embeddings.baseUrl", label: "Embedding base URL", type: "text", description: "Leave blank to use the LLM provider's base URL." },
+        { key: "embeddings.apiKey", label: "Embedding API key", type: "password", secret: true, description: "Leave blank to use the LLM provider's API key." },
+        { key: "embeddings.model", label: "Embedding model", type: "text", description: "Blank disables embeddings (search degrades to keyword + recency + importance)." },
       ],
     },
-    load: async () => ({ ...(await getProviderConfig()) }),
+    load: async () => {
+      const c = await getProviderConfig();
+      return {
+        ...c,
+        "embeddings.baseUrl": c.embeddings?.baseUrl ?? "",
+        "embeddings.apiKey": c.embeddings?.apiKey ?? "",
+        "embeddings.model": c.embeddings?.model ?? "",
+      };
+    },
     save: async (patch) => {
-      await updateProviderConfig(patch as Partial<ProviderConfig>);
+      const flat = patch as Record<string, unknown>;
+      const p: Partial<ProviderConfig> = { ...flat } as Partial<ProviderConfig>;
+      const embeddings: Partial<ProviderConfig["embeddings"]> = {};
+      let hasEmbeddingsPatch = false;
+      for (const field of ["baseUrl", "apiKey", "model"] as const) {
+        const dotted = `embeddings.${field}`;
+        if (dotted in flat) {
+          embeddings[field] = flat[dotted] as string;
+          hasEmbeddingsPatch = true;
+          delete (p as Record<string, unknown>)[dotted];
+        }
+      }
+      if (hasEmbeddingsPatch) p.embeddings = embeddings;
+      await updateProviderConfig(p);
     },
   },
   {
@@ -357,6 +417,15 @@ const REGISTRATIONS: ConfigRegistration[] = [
           placeholder: "e.g. claude-opus-4-7 (blank = CLI default)",
           description: "Model id passed to OpenCode CLI via --model. Leave blank to use the CLI's own default.",
         },
+        // Shared by both CLI transports (Local run mode only — the MCP modes use
+        // their own Agent-tool call timeout, unaffected by this).
+        {
+          key: "cliTimeoutSec",
+          label: "CLI run timeout (seconds)",
+          type: "number",
+          description:
+            "Max time a headless Claude/OpenCode CLI run may take before it's killed and reported as a timeout. Minimum 60s, default 1000, no upper bound.",
+        },
       ],
     },
     load: async () => {
@@ -391,10 +460,15 @@ const REGISTRATIONS: ConfigRegistration[] = [
         opencodeCustomNpmPackage: opencode.customNpmPackage || "",
         opencodeCustomModelId: opencode.customModelId || "",
         opencodeModel,
+        cliTimeoutSec: clampCliTimeoutSec(typeof stored.cliTimeoutSec === "number" ? stored.cliTimeoutSec : CLI_TIMEOUT_SEC_DEFAULT),
       };
     },
     save: async (patch) => {
-      const next = { ...(await readNamespace("dev-harness")), ...patch };
+      const next: Record<string, unknown> = { ...(await readNamespace("dev-harness")), ...patch };
+      if (next.cliTimeoutSec !== undefined) {
+        const n = typeof next.cliTimeoutSec === "number" ? next.cliTimeoutSec : Number(next.cliTimeoutSec);
+        next.cliTimeoutSec = clampCliTimeoutSec(Number.isFinite(n) ? n : CLI_TIMEOUT_SEC_DEFAULT);
+      }
       delete next.cwd;
       // Only ever write the current field names going forward — the superseded
       // ones (transport/model/claudeProviderMode/opencodeProviderMode, and the
@@ -491,10 +565,33 @@ const REGISTRATIONS: ConfigRegistration[] = [
         "Live version control: preview, promote, and roll back BrowserOS versions via the Supervisor. Available when BrowserOS is served through `npm run supervisor`.",
       order: 36,
       customComponent: "self-modification",
-      fields: [],
+      fields: [
+        {
+          key: "gitName",
+          label: "Committer name",
+          type: "text",
+          placeholder: "BrowserOS",
+          description: "Name used for git commits BOS makes on your behalf (pulls, pushes, rebases, merges) across System Specs, User Specs, User Apps, and BOS Source. Blank falls back to \"BrowserOS\".",
+        },
+        {
+          key: "gitEmail",
+          label: "Committer email",
+          type: "text",
+          placeholder: "bos@localhost",
+          description: "Email paired with the committer name above. Blank falls back to \"bos@localhost\".",
+        },
+      ],
     },
-    load: async () => ({}),
-    save: async () => {},
+    load: async () => {
+      const s = await readNamespace("self-modification");
+      return {
+        gitName: (s.gitName as string) || "",
+        gitEmail: (s.gitEmail as string) || "",
+      };
+    },
+    save: async (patch) => {
+      await patchNamespace("self-modification", patch);
+    },
   },
   {
     schema: {
@@ -586,6 +683,41 @@ const REGISTRATIONS: ConfigRegistration[] = [
     },
     save: async (patch) => {
       await patchNamespace("logging", patch);
+    },
+  },
+  {
+    schema: {
+      namespace: "compaction",
+      title: "Context Compaction",
+      description:
+        "Server-side view transformation on what is sent to the model as a conversation grows. Layer 1 clears old tool results, Layer 2 summarizes old turns in small blocks, Layer 3 truncates as a last resort.",
+      order: 16,
+      customComponent: "compaction",
+      fields: [
+        { key: "enabled", label: "Enabled", type: "boolean", description: "Master switch. When off, the pipeline is a pass-through." },
+        { key: "assumedContextTokens", label: "Assumed context window (tokens)", type: "number", description: "Used when the provider does not declare a context size. Default 128000." },
+        { key: "clearThreshold", label: "Clear threshold", type: "number", description: "Fraction of the budget above which Layer 1 starts clearing old tool results. Default 0.50." },
+        { key: "summarizeThreshold", label: "Summarize threshold", type: "number", description: "Fraction of the budget above which Layer 2 schedules block summarization. Default 0.75." },
+        { key: "hardLimit", label: "Hard limit", type: "number", description: "Fraction of the budget above which Layer 3 truncates synchronously as a last resort. Default 0.92." },
+        { key: "keepToolResults", label: "Keep last N tool-result pairs", type: "number", description: "Tool results older than the newest N pairs are eligible for Layer 1 clearing. Default 2." },
+        { key: "keepTailTurns", label: "Keep tail turns", type: "number", description: "Minimum number of most-recent turns kept fully verbatim, never cleared/grouped. A floor — the token-based tail-budget fraction usually dominates in tool-heavy conversations. Default 3." },
+        { key: "tailBudgetFraction", label: "Tail budget fraction", type: "number", description: "Target size of the kept tail as a fraction of the effective budget. Default 0.20." },
+        { key: "unrecoverableTools", label: "Unrecoverable tools", type: "textarea", description: "Comma or newline separated tool names whose calls/results are never cleared or summarized away." },
+        { key: "model", label: "Summarizer model override", type: "text", description: "Optional cheaper model id for block summarization." },
+        { key: "lockStalenessMs", label: "Lock staleness (ms)", type: "number", description: "How long a stale block-formation lock is honored before being reclaimed. Default 600000 (10 min)." },
+        { key: "blockSize", label: "Block size (turns)", type: "number", description: "How many turns get folded into one summary at a time. Smaller blocks summarize faster and more often; larger blocks make fewer, longer-lived summaries. Default 5." },
+        { key: "maxRetainedBlocks", label: "Max retained blocks", type: "number", description: "How many block summaries are kept before the oldest is permanently discarded (no trace, no further degradation). Raising this keeps more distant history around at the cost of a larger prompt every turn. Default 8." },
+      ],
+    },
+    load: async () => {
+      const { readCompactionConfig } = await import("@/lib/agent/compaction/config");
+      return (await readCompactionConfig()) as unknown as Record<string, unknown>;
+    },
+    save: async (patch) => {
+      const { patchPluginConfig } = await import("@/lib/plugins/registry");
+      const { _resetCompactionConfigCache } = await import("@/lib/agent/compaction/config");
+      await patchPluginConfig("bos-compaction", patch);
+      _resetCompactionConfigCache();
     },
   },
   {

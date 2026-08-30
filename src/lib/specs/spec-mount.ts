@@ -11,11 +11,17 @@ import { logger } from "@/lib/logging/server-logger";
 // Wiring for BOS's system VFS mounts (027-vfs-specfs, extended to fold spec_*/
 // docs_* tool-layer special-casing into the VFS itself — agents reach all of
 // this through the ordinary file_* tools):
-//   /Specs/user-specs        → SpecFS, writable, branch-coupled
-//   /Specs/bos-system-specs  → SpecFS, writable, branch-coupled (no read-only
-//                               tool-layer gate anymore — a write with no
-//                               active feature branch simply fails, same as
-//                               any other spec write)
+//   /Specs/user-specs        → SpecFS, writable, branch-coupled (the same
+//                               `bos/*` feature branch used for BOS's own
+//                               source — a genuine customization to BOS core
+//                               eventually needs code, so its spec rides the
+//                               same branch)
+//   /Specs/bos-system-specs  → SpecFS, READ-ONLY — the specs BOS ships with;
+//                               never editable here, branch or not (a real
+//                               customization is written to user-specs
+//                               instead). Every write throws
+//                               SpecFSReadOnlyError regardless of an active
+//                               feature branch.
 //   /Templates                → ReadonlyFS(.specify/templates), read-only
 //   /Docs                     → DocsFS(docs/), writable, branch-coupled
 //
@@ -46,11 +52,11 @@ export async function ensureSystemMounts(): Promise<void> {
 
   const worktrees = path.join(specsRoot(), ".worktrees");
 
-  const userSpecFs = new SpecFS(userSpecRoot(), USER_STORE_ID, worktrees);
+  const userSpecFs = new SpecFS(userSpecRoot(), USER_STORE_ID, worktrees, true);
   registerMount("/Specs/user-specs", userSpecFs);
   void userSpecFs.runStartupSweep();
 
-  const systemSpecFs = new SpecFS(systemSpecRoot(), SYSTEM_STORE_ID, worktrees);
+  const systemSpecFs = new SpecFS(systemSpecRoot(), SYSTEM_STORE_ID, worktrees, false);
   registerMount("/Specs/bos-system-specs", systemSpecFs);
   void systemSpecFs.runStartupSweep();
 

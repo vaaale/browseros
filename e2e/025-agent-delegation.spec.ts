@@ -158,9 +158,11 @@ test.describe("agent delegation v2", () => {
     request,
   }) => {
     const conversationId = `e2e-025-stepcap-${Date.now()}`;
-    // The ephemeral default step cap is 12 (no dev/spec-style tools inherited
-    // from "assistant"'s own allowlist) — script more tool-call turns than that.
-    const turns: ScriptTurn[] = Array.from({ length: 15 }, (_, i) => ({
+    // The step cap is the shared tools.maxAgentSteps config (default 32, see
+    // getMaxAgentSteps in src/lib/config/registry.ts) — used for every
+    // delegation kind since the MAX_STEPS unification. Script more tool-call
+    // turns than that.
+    const turns: ScriptTurn[] = Array.from({ length: 35 }, (_, i) => ({
       text: `turn ${i}`,
       tools: [{ name: "memory_search", args: { query: `q${i}` } }],
     }));

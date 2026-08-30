@@ -28,11 +28,87 @@ import {
 } from "@/lib/gitops/git-credential-helper";
 import { gitLock } from "@/lib/gitops/lock";
 import { gitLogger } from "@/lib/gitops/logging";
-import { getGitFsInstance, SOURCE_FS_ID } from "@/lib/gitops/filesystems";
+import { getGitFsInstance, getSourceRepoRoot, SOURCE_FS_ID } from "@/lib/gitops/filesystems";
+import { reconcile } from "@/lib/gitops/reconcile";
+import type { RepoKind } from "@/lib/gitops/sessions/types";
 
 export const dynamic = "force-dynamic";
 
-const REPO_PATH = process.cwd();
+// 035-spec-promote-conflict-escalation (FR-013/FR-014): neither Pull nor
+// push-recovery may dead-end with a static `rebaseConflict: true` and no
+// agent. When the inline rebase conflicts, the operation routes through the
+// shared reconciliation pipeline with THIS repo's working context — which
+// creates a resolution session, launches the configured conflict agent
+// against this repo, and auto-launches the Build Studio conflict pane. The
+// response carries the session id so the caller can link straight into it.
+
+function repoKindFor(fsId: string): RepoKind {
+  if (fsId === SOURCE_FS_ID) return "source";
+  if (fsId === "user-apps") return "user-apps";
+  if (fsId.includes("specs")) return "user-specs";
+  return "vfs-mount";
+}
+
+/** Escalate a conflicted rebase against `<remote>/<branch>` and describe the
+ *  outcome for the HTTP response. Shared by "fetch" (Pull) and the "push"
+ *  non-fast-forward recovery, which differ only in what led them here. */
+async function escalateRebaseConflict(args: {
+  repoPath: string;
+  fsId: string;
+  remote: string;
+  branch: string;
+  ahead: number;
+  behind: number;
+  operationLabel: string;
+  context: string;
+}): Promise<Record<string, unknown>> {
+  const { repoPath, fsId, remote, branch, ahead, behind, operationLabel, context } = args;
+  const instance = await getGitFsInstance(fsId).catch(() => undefined);
+  const outcome = await reconcile({
+    repoPath,
+    sourceRef: `${remote}/${branch}`,
+    strategy: "merge",
+    repoKind: repoKindFor(fsId),
+    repoRoot: instance?.root ?? repoPath,
+    repoLabel: instance?.label ?? fsId,
+    mode: "working-tree",
+    operationLabel,
+    escalationContext: context,
+    completion: { kind: "merge", strategy: "merge" },
+  });
+
+  if (outcome.status === "success") {
+    return { ok: true, merged: true, message: `Reconciled with '${remote}/${branch}' via ${outcome.method}.` };
+  }
+  if (outcome.status === "escalated") {
+    return {
+      ok: true,
+      merged: false,
+      escalated: true,
+      sessionId: outcome.sessionId,
+      devopsConversationId: outcome.devopsConversationId,
+      sessionStatus: outcome.sessionStatus,
+      rollbackTag: outcome.rollbackTag,
+      ahead,
+      behind,
+      message: `Local and '${remote}/${branch}' have diverged (${ahead} ahead, ${behind} behind) and the automatic rebase conflicted. It was handed to the conflict-resolution agent — open the resolution to watch or answer it.`,
+    };
+  }
+  return {
+    ok: true,
+    merged: false,
+    escalated: true,
+    sessionId: outcome.sessionId,
+    devopsConversationId: outcome.devopsConversationId,
+    sessionStatus: outcome.sessionStatus ?? outcome.status,
+    rollbackTag: outcome.rollbackTag,
+    ahead,
+    behind,
+    message:
+      outcome.error?.message ??
+      `The conflict resolution did not complete. The repo was restored via ${outcome.rollbackTag}.`,
+  };
+}
 
 function err(code: string, message: string, suggestion?: string) {
   return NextResponse.json({ error: { code, message, suggestion } }, { status: 400 });
@@ -41,10 +117,14 @@ function err(code: string, message: string, suggestion?: string) {
 // Resolve the git repository a request targets. `filesystem` names a GitFS
 // instance (see filesystems.ts); when absent we operate on the BrowserOS source
 // repo, preserving the pre-filesystem behaviour used by the assistant tools.
+// Both paths resolve through getSourceRepoRoot() (not a bare process.cwd()) so
+// branch/remote operations always target the repo's main working tree, never
+// a detached preview/base worktree the currently-serving process happens to
+// be running from under the Supervisor.
 async function resolveRepoPath(filesystem?: string | null): Promise<string> {
-  if (!filesystem) return REPO_PATH;
+  if (!filesystem) return getSourceRepoRoot();
   const instance = await getGitFsInstance(filesystem);
-  return instance?.root ?? REPO_PATH;
+  return instance?.root ?? (await getSourceRepoRoot());
 }
 
 // Whether a config belongs to the given filesystem. Legacy configs (no tag)
@@ -330,15 +410,25 @@ export async function POST(req: NextRequest) {
                   return NextResponse.json({ ok: true, rebased: true, message: `Rebased local commit(s) onto '${name}/${targetBranch}' and pushed.` });
                 }
 
+                // FR-014: the recovery rebase conflicted. Instead of the old
+                // static dead-end, hand it to the pipeline. The repo lock is
+                // released FIRST — reconcile takes the same per-repo lock, and
+                // an escalation can park for a long time (`release` is
+                // idempotent, so the outer finally is a harmless no-op).
                 gitLogger().warn({ op: "api.git_push.recover", remote: name, error: { code: "REBASE_CONFLICT", message: "automatic rebase hit conflicts" } });
-                return NextResponse.json({
-                  ok: true,
-                  merged: false,
-                  rebaseConflict: true,
-                  ahead: ab.ahead,
-                  behind: ab.behind,
-                  message: `Local and '${name}/${targetBranch}' have diverged (${ab.ahead} ahead, ${ab.behind} behind). Automatic rebase hit conflicts — resolve manually, or force-push to make local win.`,
-                });
+                await release();
+                return NextResponse.json(
+                  await escalateRebaseConflict({
+                    repoPath,
+                    fsId,
+                    remote: name,
+                    branch: targetBranch,
+                    ahead: ab.ahead,
+                    behind: ab.behind,
+                    operationLabel: "push (non-fast-forward recovery)",
+                    context: `Push to "${name}/${targetBranch}" was rejected as non-fast-forward; the recovery rebase then conflicted.`,
+                  }),
+                );
               } catch {
                 // Recovery itself failed (e.g. remote unreachable) — fall
                 // through to reporting the original push error below.
@@ -374,6 +464,14 @@ export async function POST(req: NextRequest) {
         const lock = gitLock();
         return await lock.withLock(repoPath, "api.git_pull", async (release) => {
           try {
+            // BrowserOS's own checkout is periodically re-cloned shallow by the
+            // deployment platform (see docs/dev/deployment.md) — unshallow first
+            // so the ahead/behind check below can actually prove ancestry,
+            // mirroring the same recovery step the "push" case above falls back
+            // to on a rejected push.
+            if (await isShallowRepo(repoPath)) {
+              await unshallowRepo(repoPath, name, auth ?? undefined);
+            }
             const ab = await fetchRepo(repoPath, name, targetBranch, auth ?? undefined);
             updateRemoteConfig(name, { lastFetched: new Date().toISOString(), lastStatus: "connected", lastError: undefined }, fsId);
 
@@ -416,15 +514,23 @@ export async function POST(req: NextRequest) {
               });
             }
 
+            // FR-013: a diverged pull whose rebase conflicts is escalated, not
+            // dead-ended. Release the repo lock first (reconcile re-takes it,
+            // and the escalation may park for the user).
             gitLogger().warn({ op: "api.git_pull", remote: name, error: { code: "REBASE_CONFLICT", message: "automatic rebase hit conflicts" } });
-            return NextResponse.json({
-              ok: true,
-              merged: false,
-              rebaseConflict: true,
-              ahead: ab.ahead,
-              behind: ab.behind,
-              message: `Local and '${name}/${targetBranch}' have diverged (${ab.ahead} ahead, ${ab.behind} behind). Automatic rebase hit conflicts — resolve manually, or force-push to make local win.`,
-            });
+            await release();
+            return NextResponse.json(
+              await escalateRebaseConflict({
+                repoPath,
+                fsId,
+                remote: name,
+                branch: targetBranch,
+                ahead: ab.ahead,
+                behind: ab.behind,
+                operationLabel: "pull",
+                context: `Pull: local and "${name}/${targetBranch}" have diverged (${ab.ahead} ahead, ${ab.behind} behind) and the automatic rebase conflicted.`,
+              }),
+            );
           } catch (e) {
             updateRemoteConfig(name, { lastStatus: "error", lastError: (e as Error).message }, fsId);
             gitLogger().error({ op: "api.git_pull", remote: name, error: { code: "GIT_FETCH_FAILED", message: (e as Error).message } });

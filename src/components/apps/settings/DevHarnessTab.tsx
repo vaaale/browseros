@@ -54,6 +54,7 @@ interface Values {
   opencodeCustomNpmPackage: string;
   opencodeCustomModelId: string;
   opencodeModel: string;
+  cliTimeoutSec: number;
 }
 interface TestResult {
   ok: boolean;
@@ -151,6 +152,7 @@ function SecretInput({
   return (
     <input
       type="password"
+      autoComplete="new-password"
       value={value}
       onChange={(e) => onChange(e.target.value)}
       disabled={disabled}
@@ -277,6 +279,7 @@ export function DevHarnessTab() {
           opencodeCustomNpmPackage: vals.opencodeCustomNpmPackage || "",
           opencodeCustomModelId: vals.opencodeCustomModelId || "",
           opencodeModel: vals.opencodeModel || "",
+          cliTimeoutSec: typeof vals.cliTimeoutSec === "number" ? vals.cliTimeoutSec : 1000,
         });
         setSecretsSet((s?.secretsSet ?? {}) as Record<string, boolean>);
       })
@@ -720,6 +723,21 @@ export function DevHarnessTab() {
           require Supervisor isolation and run only in a feature-branch worktree.
         </p>
       </HarnessPanel>
+
+      <label className={rowLabelCls}>
+        <span className="text-white/60">CLI run timeout (sec)</span>
+        <input
+          type="number"
+          min={60}
+          value={v.cliTimeoutSec}
+          onChange={(e) => set({ cliTimeoutSec: Number(e.target.value) })}
+          className={fieldCls}
+        />
+      </label>
+      <p className="text-white/40">
+        Max time a headless Claude/OpenCode CLI run may take before it&apos;s killed and reported as a timeout (Local run
+        mode only — minimum 60s, default 1000, no upper bound).
+      </p>
 
       <p className="text-white/40">
         Want the active CLI to have an MCP server too? Check <b>&quot;Include in Dev Harness&quot;</b> on it under{" "}

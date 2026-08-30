@@ -1,3 +1,150 @@
+# BrowserOS v2.5 Release Notes
+
+## Overview
+
+This release is about BrowserOS noticing things and acting on them. A new **event and notification system** gives every app and background service a way to tell you something happened. The assistant can now **show** you images and video instead of describing them. Build Studio organizes work into **Projects**, each with its own branch and workspace. Git conflicts are now handed to a **resolution agent** instead of dead-ending with "fix this yourself". Memory gained real **search**. And Workflow Manager has moved out of BrowserOS core into the Marketplace.
+
+---
+
+## New Features
+
+### Events & Notifications
+
+Apps and background services can now raise events — a new email, a finished workflow run, a health warning, a completed assistant task — and you see them in one place.
+
+- **Bell icon in the toolbar** — shows a live unread count, no refresh needed. Click it to open the new **Event Viewer** app.
+- **Open with…** — clicking an event opens whichever app handles that event type. If several can handle it, you pick one, optionally as the default for that type from then on.
+- **Processing vs. read** — an event shows a spinner while background handlers are still working on it and a checkmark when they're done, updating live. That's separate from whether *you* have read it.
+- **Full history** — for events no app claims, the Event Viewer shows the payload and the complete processing history: which handlers ran, what they returned, and any failures.
+- **Mark all as read** in one click.
+
+**Documentation:** [docs/usage/features/events.md](docs/usage/features/events.md)
+
+### The assistant can show you things
+
+A new preview window (`web_view`) lets the assistant open content on your desktop rather than describing it in text.
+
+- **HTML, images, and video** — mockups, charts, screenshots, and clips open in an ordinary BOS window you can move and resize. Images scale to fit; video gets a normal player with seek, volume, and fullscreen.
+- **From anywhere** — your files, a web address, or generated on the spot.
+- **Works with plain `http://` machines on your network** — media is fetched through BrowserOS, so a clip from a render box or camera plays inside a page served over `https://` that browsers would otherwise block.
+- **Playback options in plain language** — "loop it", "start it muted", "autoplay it".
+
+**Documentation:** [docs/usage/assistant/web-view.md](docs/usage/assistant/web-view.md)
+
+### The assistant can see images and video
+
+Beyond showing you media, the assistant can now read it: inspect an image directly, pull keyframes out of a video to understand what happens in it, and convert documents (PDF, Office files, web pages) to markdown it can actually reason over.
+
+### Projects in Build Studio
+
+Specs are now organized into **Projects** rather than one flat list.
+
+- **Group related features** — a Project holds everything for one app or area, with plain sub-folders allowed underneath for further organization. Feature numbering (`001-…`, `002-…`) restarts within each Project.
+- **Activate a Project to work on it** — right-click → **Activate** creates a dedicated git branch and workspace, so in-progress work never collides with anyone else's. The tree shows each Project's active branch, or "inactive".
+- **Per-Project controls** — Discard, Push feature branch, Rename/Delete, and View history with one-click Restore (history works even when the Project is inactive).
+
+**Documentation:** [docs/usage/apps/build-studio.md](docs/usage/apps/build-studio.md)
+
+### Git conflicts get resolved, not reported
+
+When a merge or rebase conflicts anywhere BOS manages git — its own source, a spec store, `user-apps`, a mounted repo — the operation no longer stops with a "resolve manually" message.
+
+- **A resolution agent takes over** — it works inside the affected repo and resolves what it can on its own.
+- **A conflict pane opens in Build Studio** — you only get asked about the decisions the agent genuinely can't make.
+- **Sessions survive restarts** — an interrupted resolution is picked back up rather than lost.
+
+**Documentation:** [docs/dev/features/git-conflict-resolution.md](docs/dev/features/git-conflict-resolution.md)
+
+### Memory that can actually be searched
+
+- **Meaning-based search** — the assistant finds relevant memories even when your wording doesn't match theirs, combining a semantic signal with keyword matching and ranking by relevance, recency, and importance.
+- **Optional and graceful** — semantic search uses an embeddings endpoint configured alongside your AI provider (Settings → AI Provider); leave the URL and key blank to reuse your main provider. If your provider has no embeddings support, search still works on keywords, recency, and importance with no error.
+- **Self-tidying topics** — a memory write never fails or gets silently truncated for being too large. The topic is flagged and reorganized by a background consolidation pass instead.
+- **Corrections keep history** — when you say something that contradicts an earlier memory, the old entry is marked "not current" rather than deleted. You only see the current one day-to-day.
+
+**Documentation:** [docs/usage/memory/how-memory-works.md](docs/usage/memory/how-memory-works.md)
+
+### Installed apps can drive the assistant
+
+Marketplace apps run sandboxed for safety, which previously cut them off from the assistant entirely. A new **assistant capability** lets an app that asks for it start and stream an assistant run through BrowserOS itself — no security relaxation required. Apps can also query and call installed services the same way.
+
+**Documentation:** [docs/dev/assistant/assistant-broker.md](docs/dev/assistant/assistant-broker.md)
+
+### Google Workspace app
+
+A built-in **GSuite** app joins the existing integration, giving Gmail, Drive, and Calendar a proper window rather than assistant-only access.
+
+---
+
+## Improvements
+
+- **Faster assistant turns** — the assistant now runs independent tool calls in parallel instead of one at a time, and streams tool activity as it happens rather than after the fact.
+- **Visible reasoning** — a reasoning card in the Assistant window shows what the assistant is thinking through on models that support it.
+- **Long conversations hold up better** — the conversation-compaction system was redesigned, fixing several cases where very long conversations lost context or hit provider limits.
+- **Services expose their own tools** — an installed service can publish tools directly to the assistant, so installing a service extends what the assistant can do without any BOS change.
+- **Marketplace and app installs** — installing an item on a feature branch no longer collides with the same item installed on your main line, and a service's id is validated before anything is written.
+- **Build Studio** — the file tree, resizable panes, and HTML artifact rendering all follow the branch you're actually working on; pane sizes persist across sessions.
+- **Files** — upload and download files directly in the Files app.
+- **Voice** — live avatar support is more tightly integrated with the assistant, and voice output is more reliable when toggling between modes.
+- **Dev Harness** — improved configuration for both Claude Code and OpenCode, including model auto-complete and token-based authentication.
+- **Promote and update pipeline** — the supervisor that builds and promotes BOS's own source was rebuilt into focused modules, with more reliable pull, push, worktree, and promotion handling.
+- **Logging and log viewers** — clearer messages and better viewers throughout.
+
+---
+
+## Bug Fixes
+
+- Fixed out-of-memory crashes in long-running deployments.
+- Fixed voice mode being spoken after it was turned off, or spoken twice.
+- Fixed the `.next` build cache going stale after "Update Source", which broke API routes.
+- Fixed several feature-branch bugs: branch creation, branch elicitation, worktree handling, and missing branches in Build Studio.
+- Fixed spec reads and writes following different branches, which could show stale content.
+- Fixed OAuth token refresh, GSuite integration, and Telegram webhook handling.
+- Fixed marketplace install buttons missing for non-app item types.
+- Fixed the plugin loader failing under the Next.js bundler.
+- Fixed a race condition when updating source in multi-user deployments.
+- Fixed UI sluggishness, window resizing, blurry dialogs, and desktop icon placement.
+
+---
+
+## Breaking Changes
+
+### Workflow Manager is now a Marketplace app
+
+Workflow Manager has been removed from BrowserOS core and now ships as a Marketplace item. Its API routes and built-in tools are gone from the core product.
+
+**What to do:** install **Workflow Manager** from the Marketplace to keep using workflows. Your existing workflow definitions are unaffected.
+
+### Sub-agents no longer delegate further
+
+A sub-agent can no longer spin up its own sub-agents. Delegation is one level deep, which makes runs easier to follow and stops runaway agent chains. If you had an agent relying on nested delegation, restructure it to delegate from the main assistant instead.
+
+---
+
+## Migration Guide
+
+### For Users
+
+- **Install Workflow Manager from the Marketplace** if you use workflows.
+- **Turn on semantic memory search (optional)** — set an embeddings model in Settings → AI Provider. Leave the base URL and API key blank to reuse your main provider's.
+- **Activate a Project before editing its specs** in Build Studio — right-click the Project → Activate. Existing specs are organized into Projects automatically.
+- **Nothing else is required.** Existing installs upgrade in place.
+
+### For Bastion Admins
+
+- **Pull the latest image** — this release includes the out-of-memory fix and the `.next` cache fix for "Update Source".
+- **Expect a rebuilt supervisor** — promote, pull, and push are handled by new modules; check the System Monitor page after upgrading to confirm containers are serving normally.
+
+---
+
+## Support
+
+- **Documentation** — [docs/](docs/)
+- **Issue Reports** — GitHub Issues
+- **Architecture Guide** — [docs/dev/architecture-overview.md](docs/dev/architecture-overview.md)
+
+---
+
 # BrowserOS v2.0 Release Notes
 
 ## Overview

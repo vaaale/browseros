@@ -290,6 +290,24 @@ export function selectConversation(id: string): void {
   setState({ ...current, activeByAgent: { ...current.activeByAgent, [conv.agentId]: id } });
 }
 
+/** Select a conversation that may not be in the client's list yet, re-reading
+ *  it from the VFS first if needed.
+ *
+ *  035-spec-promote-conflict-escalation: the conflict-resolution conversation
+ *  is created SERVER-side by the reconciliation pipeline's escalation, so a
+ *  browser that was already open has never seen it. The Build Studio conflict
+ *  pane calls this to bind its (existing) chat to that conversation — which is
+ *  what makes the agent↔user channel the existing chat rather than a second
+ *  mechanism (FR-007a). */
+export async function selectConversationById(id: string): Promise<void> {
+  await ensureLoading();
+  if (!(state ?? get()).conversations.some((c) => c.id === id)) {
+    loadPromise = loadFromVfs();
+    await loadPromise;
+  }
+  selectConversation(id);
+}
+
 export async function deleteConversation(id: string): Promise<void> {
   await ensureLoading();
   const current = state ?? get();

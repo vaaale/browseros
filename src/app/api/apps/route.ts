@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { listInstalledApps, installItem, uninstallApp, purgeApp, pickIcon } from "@/lib/apps/store";
+import { getConversationActiveFeatureBranch } from "@/lib/agent/conversations-server";
 
 export const dynamic = "force-dynamic";
 
@@ -23,8 +24,23 @@ export async function POST(req: NextRequest) {
     const entry = typeof body.entry === "string" && body.entry.trim() ? body.entry.trim() : undefined;
 
     const icon = body.icon ? String(body.icon) : pickIcon(String(body.name));
-    // draft: install onto the app-candidate branch (previewable) instead of live.
-    const result = await installItem({ name: String(body.name), icon, files, entry }, { draft: body.draft === true });
+    // Authoring an app through this endpoint is always branch work, so the
+    // branch is always required and the install always drafts. `draft` used to
+    // be read from the request body, which made the branch requirement
+    // client-optional: any caller could send `draft:false` and install straight
+    // onto the live root, defeating the gate. It is not a client decision.
+    //
+    // The branch is resolved from the conversation SERVER-side — a
+    // client-supplied branch name is never trusted, matching the rule that
+    // branch selection is not a tool parameter.
+    const branch = await getConversationActiveFeatureBranch(String(body.conversationId ?? ""));
+    if (!branch) {
+      return NextResponse.json(
+        { error: "Installing an app needs an active feature branch — call dev_branch_request to set one up, then retry." },
+        { status: 400 },
+      );
+    }
+    const result = await installItem({ name: String(body.name), icon, files, entry }, { draft: true, branch });
     return NextResponse.json(result);
   } catch (err) {
     return NextResponse.json({ error: (err as Error).message }, { status: 400 });

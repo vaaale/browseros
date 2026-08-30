@@ -1,7 +1,7 @@
 import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
-import { DEFAULT_MAX_TOKENS, getProviderConfig, type ProviderConfig } from "./provider";
+import { DEFAULT_MAX_TOKENS, getProviderConfig, resolveEmbeddingConfig, type ProviderConfig } from "./provider";
 import { familyOf, normalizeApiBase } from "./provider-meta";
 
 // OpenAI deprecated `max_tokens` in favor of `max_completion_tokens` (and
@@ -40,6 +40,43 @@ function openaiClient(c: ProviderConfig): OpenAI {
   const apiKey = c.apiKey || (c.provider === "openai-compatible" || c.provider === "openai-responses" ? "local" : "MISSING");
   const baseURL = c.baseUrl ? normalizeApiBase(c.baseUrl) : undefined;
   return new OpenAI({ apiKey, baseURL });
+}
+
+export type ResolvedEmbeddingConfig = ReturnType<typeof resolveEmbeddingConfig>;
+
+// embed() is a best-effort dense signal for search (FR-016: an unreachable or
+// non-embedding endpoint must degrade to sparse + recency + importance, not
+// hang the request) — bound it well under a typical HTTP request's patience
+// and skip the SDK's default retry/backoff, which would otherwise multiply
+// the wait on a dead endpoint for no benefit (the caller just wants null fast).
+const EMBEDDING_TIMEOUT_MS = 8_000;
+
+/** An OpenAI-compatible client for the RESOLVED embedding endpoint, or `null`
+ *  when embeddings are disabled (028-memory-curation-retrieval, T3). The
+ *  `openai` SDK works against any OpenAI-compatible `/embeddings` endpoint —
+ *  local, OpenAI, or a custom base URL a user pointed at from an Anthropic
+ *  primary provider (the Edge Case workaround; see resolveEmbeddingConfig). */
+function embeddingClient(resolved: ResolvedEmbeddingConfig): OpenAI | null {
+  if (!resolved.enabled) return null;
+  const baseURL = resolved.baseUrl ? normalizeApiBase(resolved.baseUrl) : undefined;
+  return new OpenAI({ apiKey: resolved.apiKey || "local", baseURL, timeout: EMBEDDING_TIMEOUT_MS, maxRetries: 0 });
+}
+
+/** Compute a single text embedding against the resolved embedding config.
+ *  Returns `null` — NOT a thrown error — when embeddings are disabled, the
+ *  model is unset, or the endpoint can't serve embeddings (404/auth/other
+ *  failure): this is the graceful-degradation signal callers (search.ts)
+ *  branch on, per FR-016. */
+export async function embed(resolved: ResolvedEmbeddingConfig, text: string): Promise<number[] | null> {
+  if (!resolved.enabled || !resolved.model) return null;
+  const client = embeddingClient(resolved);
+  if (!client) return null;
+  try {
+    const res = await client.embeddings.create({ model: resolved.model, input: text });
+    return res.data?.[0]?.embedding ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /** Per-request options carrying X-Correlation-Id when a caller has an
@@ -205,7 +242,7 @@ export async function complete(opts: { system?: string; prompt: string; maxToken
   let content = "";
   let reasoning = "";
   for await (const chunk of stream) {
-    const delta = chunk.choices[0]?.delta as { content?: string | null; reasoning_content?: string } | undefined;
+    const delta = chunk.choices?.[0]?.delta as { content?: string | null; reasoning_content?: string } | undefined;
     if (delta?.content) content += delta.content;
     else if (delta?.reasoning_content) reasoning += delta.reasoning_content;
   }
@@ -328,7 +365,7 @@ async function openaiToolLoop(
     let reasoning = "";
     const toolCallsAcc: OpenAI.Chat.Completions.ChatCompletionMessageFunctionToolCall[] = [];
     for await (const chunk of stream) {
-      const choice = chunk.choices[0];
+      const choice = chunk.choices?.[0];
       if (!choice) continue;
       const delta = choice.delta as {
         content?: string | null;

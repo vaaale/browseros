@@ -1,5 +1,56 @@
 # Changelog
 
+## 2026-08-30
+
+### Highlights
+
+- **BrowserOS can now tell you when something happens.** A bell in the toolbar shows a live unread count, and a new Event Viewer collects everything apps and background services raise — a finished run, a new message, a health warning. Click an event and the app that handles it opens.
+- **The assistant can show you things, and see them.** It can open images, video, and HTML in a preview window on your desktop instead of describing them — and it can read them too, inspecting an image or pulling keyframes out of a video to understand what's in it.
+- **Specs are organized into Projects.** Group related features under one Project, activate it to get its own branch and workspace, and work without colliding with anything else in progress.
+- **Git conflicts get resolved instead of reported.** When a merge or rebase conflicts anywhere BOS manages git, a resolution agent takes over and only asks you about decisions it genuinely can't make.
+- **Memory can be searched by meaning.** Ask a question in your own words and the assistant finds the relevant memory even when the wording doesn't match. Contradictions mark the old entry as no longer current rather than deleting it.
+
+### Added
+
+- An **Event Viewer** app and a toolbar bell with a live unread count, including "open with…" routing so the right app handles each event type.
+- A **preview window** the assistant opens to show HTML, images, and video — from your files, a web address, or generated on the spot, with playback options in plain language.
+- The ability for the assistant to **read images and video** directly, and to convert PDFs, Office documents, and web pages to text it can reason over.
+- **Projects** in Build Studio, with per-Project activation, branch and workspace, push, discard, and file history with one-click restore.
+- An **agent-driven git conflict resolution** flow with a conflict pane in Build Studio, and sessions that survive a restart.
+- **Semantic memory search** alongside keyword search, with automatic fallback when your provider has no embeddings support.
+- Automatic **memory consolidation** — oversized topics are reorganized in the background instead of rejecting or truncating writes.
+- A built-in **Google Workspace app** for Gmail, Drive, and Calendar.
+- The ability for installed Marketplace apps to **drive the assistant** and call installed services, without weakening their sandbox.
+- **Upload and download** in the Files app.
+- A **reasoning card** in the Assistant window on models that support it.
+
+### Changed
+
+- The assistant now runs **independent tool calls in parallel** and streams tool activity live, so turns finish noticeably faster.
+- **Conversation compaction was redesigned**, fixing cases where very long conversations lost context or hit provider limits.
+- **Installed services can publish their own tools** to the assistant, so installing a service extends what the assistant can do.
+- Installing an item **on a feature branch** no longer conflicts with the same item installed on your main line.
+- The **promote / pull / push pipeline** was rebuilt into focused modules for more reliable source updates and promotions.
+- Build Studio's tree, panes, and HTML rendering now consistently follow the branch you're working on, and pane sizes persist across sessions.
+
+### Removed
+
+- **Workflow Manager is no longer part of BrowserOS core** — it ships as a Marketplace app. Install it from the Marketplace to keep using workflows; existing workflow definitions are unaffected.
+- **Sub-agents can no longer delegate to further sub-agents.** Delegation is one level deep, which keeps runs followable and prevents runaway agent chains.
+
+### Fixed
+
+- Out-of-memory crashes in long-running deployments.
+- Voice replies being spoken after voice was turned off, or spoken twice.
+- A stale build cache after "Update Source" that broke API routes.
+- Several feature-branch bugs: branch creation, elicitation, worktree handling, and branches missing from Build Studio.
+- Spec reads and writes following different branches, which could show stale content.
+- OAuth token refresh, Google Workspace integration, and Telegram webhook handling.
+- Missing install buttons in the Marketplace for items that aren't apps.
+- A plugin loader failure under the Next.js bundler.
+- A race condition when updating source in multi-user deployments.
+- UI sluggishness, window resizing, blurry dialogs, and desktop icon placement.
+
 ## 2026-07-11
 
 ### Highlights

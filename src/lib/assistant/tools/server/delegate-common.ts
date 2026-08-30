@@ -4,6 +4,7 @@ import type { Agent } from "@/lib/agent/subagents/types";
 import { getAgent } from "@/lib/agent/subagents/store";
 import { getConversationActiveFeatureBranch } from "@/lib/agent/conversations-server";
 import { runSubAgent } from "@/lib/agent/subagents/runner";
+import { resolveStoreRoot, resolveAbsolutePath } from "@/lib/dev/spec-fs";
 import { encodeNested } from "@/lib/agent/nested-events";
 import { gateFor } from "../../gate";
 import { runManager, type SurfaceAgentEntry } from "../../run-manager";
@@ -33,13 +34,36 @@ export async function delegateToAgent(
   ctx: ToolContext,
   contentOnly: boolean,
   toolName: string,
+  specPath?: string,
 ): Promise<string> {
   if (def.type === "claude") {
     const featureBranch = await getConversationActiveFeatureBranch(ctx.conversationId).catch(() => undefined);
     if (!contentOnly && !featureBranch) {
       return `Error: ${toolName}: the Developer harness requires an active feature branch. Call dev_branch_request to set one up (it prompts the user for a name), then retry the delegation.`;
     }
-    const result = await runSubAgent(def, task, {
+
+    // contentOnly runs provision no worktree at all (see runClaudeAgent), so
+    // nothing under a spec store is otherwise reachable by the Developer's own
+    // filesystem tools — resolve `specPath` to a real absolute path HERE and
+    // point the Developer at it, instead of making the delegating agent
+    // distill the spec's content into `task` by hand (lossy, and duplicates
+    // work the Developer would do again anyway by reading the spec itself).
+    let effectiveTask = task;
+    if (contentOnly && specPath) {
+      try {
+        const { store } = await resolveStoreRoot(specPath);
+        // Item-owned stores (marketplace items) reject an explicit branch
+        // context outright (resolveInStore's own guard) — only directory-
+        // scanned stores (bos-system-specs/user-specs) route through the
+        // active feature branch's mounted worktree.
+        const abs = await resolveAbsolutePath(specPath, store.owner === "item" ? undefined : featureBranch ? { branch: featureBranch } : undefined);
+        effectiveTask = `${task}\n\n---\nSPEC: Before implementing, read the spec (and any sibling plan.md/design.md/tasks.md/mockup.html in the same directory) at: ${abs}`;
+      } catch (e) {
+        return `Error: ${toolName}: specPath "${specPath}" could not be resolved: ${(e as Error).message}`;
+      }
+    }
+
+    const result = await runSubAgent(def, effectiveTask, {
       onEvent: (ev) => ctx.onEvent(ev),
       contentOnly,
       featureBranch,
@@ -67,6 +91,7 @@ export async function delegateToAgent(
     const composeSystem = ephemeralComposeSystem(def.systemPrompt, {
       skills: parentAgent?.skills,
       mcp: parentAgent?.mcp,
+      kbs: parentAgent?.kbs,
     });
     const maxSteps = await getMaxAgentSteps();
     return runLocalDelegation(run, ctx, "ephemeral", def.name, { systemPrompt: composeSystem, gate }, maxSteps, task);

@@ -31,6 +31,29 @@ export interface AppManifest {
   origin?: "builtin" | "local" | "marketplace";
   /** For marketplace apps: the marketplace they came from. */
   marketplaceId?: string;
+  /** 034-event-notification-system (FR-013): UI event handlers this app
+   *  declares statically — launched when the user clicks a matching event in
+   *  the Event Viewer. Surfaced into the handler registry at boot
+   *  (src/lib/events/register-ui-handlers.ts). Headless handlers are NOT
+   *  declared here — they are runtime-declared by running services (ADR-3). */
+  eventHandlers?: AppEventHandlerDeclaration[];
+  /** 034-event-notification-system (FR-023): statically-granted event-type
+   *  namespace prefixes (each a "prefix.*" pattern or exact type) this app
+   *  may register handlers for, beyond its own owned root
+   *  (`com.bos.<id>.*`). Absent ⇒ no extra grants. */
+  eventNamespaces?: string[];
+}
+
+/** One statically-declared UI event handler (AppManifest.eventHandlers). */
+export interface AppEventHandlerDeclaration {
+  /** Unique within this app — combined with the app id to form the global handlerId. */
+  id: string;
+  /** Event type this handler is launched for — exact type or a "prefix.*" pattern. */
+  type: string;
+  displayName: string;
+  description?: string;
+  /** lucide-react icon name; defaults to the app's own icon. */
+  icon?: string;
 }
 
 /** A BOS SDK capability that can be granted to a user-installed iframe app. */
@@ -41,10 +64,18 @@ export type AppCapability =
   | "notify"         // Show desktop notifications via postMessage response
   | "window:title"   // Set the window title
   | "storage"        // Per-app persistent key/value store (backs the localStorage shim, 028)
-  | "services:read"; // Read a service's config/runtime state (e.g. its bound port) — an
-                      // opaque-origin app can't reach /api/services/* directly (no CORS,
-                      // by design — see docs/dev/apps/services.md); this is the broker path
-                      // a service's own bundled app (e.g. Terminal) needs to find its port.
+  | "services:read"  // Read a service's config/runtime state (e.g. its bound port) — an
+                     // opaque-origin app can't reach /api/services/* directly (no CORS,
+                     // by design — see docs/dev/apps/services.md); this is the broker path
+                     // a service's own bundled app (e.g. Terminal) needs to find its port.
+  | "assistant";     // Drive the BOS assistant (040-assistant-broker-capability): start
+                     // runs, stream their events, and answer frontend tool calls through
+                     // the broker — the only path an opaque-origin app has to
+                     // /api/assistant/* (same no-CORS reason as services:read). The app
+                     // sees the events of runs IT starts (per-app run ownership), so this
+                     // is a strictly stronger trust grant than the caps above: it is
+                     // DECLARATION-GATED (grantable only if the app's app.json asks for
+                     // it) — see docs/dev/assistant/assistant-broker.md.
 
 export type WallpaperFit = "cover" | "contain";
 

@@ -21,6 +21,7 @@ const SERVICE_A = "test-example-protocol-a";
 const SERVICE_B = "test-example-protocol-b";
 
 function setupTest(label: string) {
+  // eslint-disable-next-line react-hooks/rules-of-hooks -- useTestDataDir is a test helper (temp-dir setup), not a React hook
   const { dir, cleanup } = useTestDataDir(label);
   _resetKeyCache();
   return {

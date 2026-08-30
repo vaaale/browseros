@@ -1,10 +1,10 @@
 import "server-only";
-import type { LanguageModelV3Prompt } from "@ai-sdk/provider";
+import type { ChatMessage } from "@/lib/assistant/messages";
 
-// Pure token estimator for the compaction middleware (spec 022 FR-001).
-// The heuristic is deliberately isolated behind these two functions so a real
-// tokenizer (tiktoken, @anthropic-ai/tokenizer, etc.) can be dropped in later
-// without changing any caller signature.
+// Pure token estimator, native to BOS's ChatMessage transcript shape (no more
+// AI-SDK v3 prompt intermediate — see v2.ts). Isolated behind these two
+// functions so a real tokenizer can be dropped in later without changing any
+// caller signature.
 
 // Anthropic + OpenAI docs both put English tokens near ~4 characters each; the
 // same rule of thumb holds for JSON-serialized tool payloads (which dominate a
@@ -16,8 +16,6 @@ const CHARS_PER_TOKEN = 4;
 // is the ceiling `complete()` uses for Anthropic when no cap is configured.
 const DEFAULT_MAX_TOKENS = 65535;
 
-export type CompactionPrompt = LanguageModelV3Prompt;
-
 function textLength(v: unknown): number {
   if (v == null) return 0;
   if (typeof v === "string") return v.length;
@@ -28,43 +26,19 @@ function textLength(v: unknown): number {
   }
 }
 
-/** Char-count of a single V3 message. Roles, text parts, tool-call arguments
- *  and tool-result outputs all count — attachments and reasoning parts are
- *  serialized as JSON so their weight lands somewhere sensible. */
-function messageChars(msg: CompactionPrompt[number]): number {
-  let total = msg.role.length;
-  if (msg.role === "system") {
-    total += textLength(msg.content);
-    return total;
-  }
-  for (const part of msg.content) {
-    switch (part.type) {
-      case "text":
-      case "reasoning":
-        total += textLength(part.text);
-        break;
-      case "tool-call":
-        total += part.toolName.length + textLength(part.input);
-        break;
-      case "tool-result":
-        total += part.toolName.length + textLength(part.output);
-        break;
-      case "file":
-        // Files are usually references (URL / small base64 header) — approximate
-        // by their JSON footprint rather than the decoded byte size.
-        total += textLength(part);
-        break;
-      default:
-        total += textLength(part);
-    }
-  }
+/** Char-count of a single ChatMessage: role, content, tool-call name+args,
+ *  and attachments (base64 payload counted directly, not JSON-wrapped). */
+function messageChars(m: ChatMessage): number {
+  let total = m.role.length + textLength(m.content);
+  for (const tc of m.toolCalls ?? []) total += tc.function.name.length + textLength(tc.function.arguments);
+  for (const a of m.attachments ?? []) total += a.mimeType.length + a.data.length;
   return total;
 }
 
-/** Estimate the number of tokens in a serialized message array. Returns a
+/** Estimate the number of tokens in a system prompt + message array. Returns a
  *  non-negative integer. Pure — no I/O, no side effects. */
-export function estimateTokens(messages: CompactionPrompt): number {
-  let chars = 0;
+export function estimateChatTokens(system: string, messages: ChatMessage[]): number {
+  let chars = system.length;
   for (const m of messages) chars += messageChars(m);
   return Math.ceil(chars / CHARS_PER_TOKEN);
 }

@@ -12,10 +12,15 @@ data/specs/  (BOS_SPECS_ROOT)    External spec stores — GITIGNORED, not tracke
                                  Supervisor sets it to a preview's <worktree>/specs (020).
   bos-system-specs/              BOS-owned system store — READ-ONLY at runtime (Option B, 027):
                                  seeded/synced from seed/spec-store/; edited as SOURCE via the
-                                 Developer agent. Holds NNN-feature specs, overview.md,
-                                 discrepancies.md, .specify/memory/constitution.md
+                                 Developer agent. Organized into Projects (037) — a "bos" Project
+                                 holds the NNN-feature specs (e.g. bos/000-browseros-core/); the
+                                 store root itself still holds overview.md, discrepancies.md, and
+                                 .specify/memory/constitution.md, outside any Project.
   user-specs/                    User-owned, writable store (own git repo); backs the
-                                 Documents/Specs VFS mount (027 SpecFS)
+                                 Documents/Specs VFS mount (027 SpecFS). Also organized into
+                                 Projects (037) — pre-existing content lives under the default
+                                 "user" Project; a Project must be active (its own feature branch
+                                 + git worktree under .worktrees/, below) before it can be edited.
 docs/
   usage/                        End-user documentation (this guide's user half)
   dev/                          Developer/agent documentation (this tree)
@@ -107,7 +112,7 @@ data/                           ALL runtime state (gitignored) — see below
 | Path | Contents |
 |---|---|
 | `data/vfs/` | The user VFS (Documents, Pictures, Desktop). Chat history at `data/vfs/Documents/Chats/<id>.json` — each file carries `agentId` (the sole partition key), `title`, `createdAt`, optional `activeFeatureBranch`, and the message array. Old files with a `group` field are migrated to `agentId` on first read. Active conversation per agent is tracked in `localStorage` as `bos.activeConversation.<agentId>`. Workflows at `data/vfs/Workflows/`. |
-| `data/specs/` | External spec stores (`BOS_SPECS_ROOT`, 027). `bos-system-specs/` (read-only, seeded from `seed/spec-store/`) + `user-specs/` (writable, backs the `Documents/Specs` SpecFS mount). `.worktrees/` holds SpecFS self-provisioned feature-branch worktrees. |
+| `data/specs/` | External spec stores (`BOS_SPECS_ROOT`, 027), each organized into Projects (037-project-layer, `<store>/<project-id>/...` — pure organizational folders, no git-activation of their own). `bos-system-specs/` (**read-only, unconditionally**, seeded from `seed/spec-store/`) + `user-specs/` (writable only on a real `bos/*` feature branch — the same one used for BOS's own source; backs the `Documents/Specs` SpecFS mount). `.worktrees/<storeId>/<branch>` holds `os/fs/spec-fs.ts`'s self-provisioned 020 feature-branch worktrees (used when the Supervisor isn't running). |
 | `data/settings.json` | OS settings (wallpaper, accent, theme). |
 | `data/config/<ns>.json` | Generic per‑namespace config (e.g. `dev-harness`, `browser-automation`, `datafs`, `assistant`, `build-studio`). `plugins.json` holds the hook-pipeline's active set + order + per-plugin config. |
 | `data/user-apps/` | The user's own private **marketplace** repo (002-service-daemons, 034) — the same layout as any marketplace clone: `marketplace.json` + `items/<id>/`. BOS ensures it's a git repo (`ensureRepo()` at boot, a no-op if the user already cloned their own remote) and maintains `marketplace.json` by merge, but never populates or deletes item content. Each `items/<id>/` is a service/app item source (`services/`, `config/`, optional `app/`/`spec/`/`doc/`/`hooks/`); `dataDir()/system/*` symlinks point at `items/<id>/…` once installed. Keyed internally as `LOCAL_MARKETPLACE_ID = "user-apps"` — a location, not the repo's identity. |

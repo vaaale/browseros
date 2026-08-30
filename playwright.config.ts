@@ -12,7 +12,11 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
-  workers: process.env.CI ? 1 : undefined,
+  // `npm run dev` is a single-process Next.js dev server that compiles routes
+  // on demand — Playwright's CPU-based default worker count (e.g. 40 on this
+  // 80-core box) overwhelms it and causes mass spurious timeouts. Cap workers
+  // regardless of core count so the dev server can actually keep up.
+  workers: process.env.CI ? 1 : 2,
   reporter: [["list"], ["html", { open: "never" }]],
   outputDir: "test-results",
   use: {
@@ -29,5 +33,13 @@ export default defineConfig({
     url: BASE_URL,
     reuseExistingServer: true,
     timeout: 120_000,
+    // Required for every spec using the `@@e2e {...}` scripted-turn format
+    // (src/lib/assistant/e2e-provider.ts) — without it, the directive is sent
+    // to a REAL model instead of being intercepted, which silently produces
+    // nondeterministic (and often much slower) runs rather than a clean
+    // failure. Only takes effect when Playwright starts the server itself;
+    // reusing an already-running `npm run dev` (reuseExistingServer above)
+    // needs this exported in that process's own environment instead.
+    env: { BOS_E2E_SCRIPTED: "1" },
   },
 });

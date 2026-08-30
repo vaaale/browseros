@@ -6,6 +6,8 @@ import { memorySnapshotForAgent } from "./memory/agent-memory";
 import { listMcpServers } from "@/lib/mcp/store";
 import { filterAllowed, isAllowed } from "./capabilities";
 import type { McpServerConfig } from "@/lib/mcp/types";
+import { listKnowledgeBases } from "./kb-catalog";
+import type { KnowledgeBaseCatalogEntry } from "./kb-catalog";
 
 function mcpDescription(s: McpServerConfig): string {
   return s.description?.trim() || `${s.transport ?? "http"} MCP server`;
@@ -40,6 +42,17 @@ export function buildMcpIndexBlock(allowedMcp: string[] | undefined, mcpServers:
   return `\n\n## MCP servers\nExternal tools are available through MCP servers — their tools are NOT listed as direct functions. To use one: call searchMcpTools to find the right tool, getMcpToolSchema to inspect its input schema, then callMcpTool with arguments matching that schema. You can also listMcpServerTools for a full server listing.\n${index}`;
 }
 
+/** The "## Knowledge bases" block for the KBs allowed by `allowedKbs` (unset ⇒
+ *  all), or "" if none are allowed (038-knowledge-base; mirrors
+ *  buildSkillsIndexBlock — the agent is told which KBs are available so its
+ *  kbs_tool_search/kbs_tool_retrieve are limited to those, by availability). */
+export function buildKbIndexBlock(allowedKbs: string[] | undefined, kbs: KnowledgeBaseCatalogEntry[]): string {
+  const allowed = filterAllowed(allowedKbs, kbs, (kb) => kb.id);
+  if (allowed.length === 0) return "";
+  const index = allowed.map((kb) => `- ${kb.name}${kb.description ? `: ${kb.description}` : ""}`).join("\n");
+  return `\n\n## Knowledge bases\nYou have access to the following knowledge bases via kbs_tool_search / kbs_tool_retrieve. Only these are queryable — a knowledge base not listed here is not available to you.\n${index}`;
+}
+
 export function currentDateTimeBlock(): string {
   return `Current date/time: ${new Date().toISOString().replace("T", " ").replace(/\.\d+Z$/, " UTC")}`;
 }
@@ -58,12 +71,13 @@ export function currentDateTimeBlock(): string {
 export async function composeInstructions(agentId: string): Promise<string> {
   const id = (agentId ?? "").trim();
   if (!id) throw new Error("composeInstructions requires an agentId (no active-agent fallback).");
-  const [agent, defaultAgent, skills, memory, mcpServers] = await Promise.all([
+  const [agent, defaultAgent, skills, memory, mcpServers, kbs] = await Promise.all([
     getAgent(id),
     getDefaultPromptAgent(),
     listSkills(),
     memorySnapshotForAgent(id),
     listMcpServers(),
+    listKnowledgeBases(),
   ]);
   const personality = agent?.systemPrompt?.trim() || "";
   const includeDefault = agent?.useDefaultPrompt ?? true;
@@ -80,5 +94,6 @@ export async function composeInstructions(agentId: string): Promise<string> {
   // searches/lists tools (with schemas) and calls them on demand, so context stays
   // small regardless of how many tools a server exposes.
   out += buildMcpIndexBlock(agent?.mcp, mcpServers);
+  out += buildKbIndexBlock(agent?.kbs, kbs);
   return out;
 }

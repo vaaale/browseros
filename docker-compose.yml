@@ -113,7 +113,6 @@ services:
               capabilities: [ gpu ]
 
 
-
 # BOS user containers are spawned at runtime by the bastion.
 # They are NOT defined here — the bastion creates them via the Docker API.
 
@@ -127,3 +126,4 @@ volumes:
   user-data:
   openai_voice_profiles:
   speaches-huggingface:
+  falkordb-data:

@@ -82,6 +82,7 @@ repo, is marketplace-sourced, or authored by hand — is a self-contained folder
 | `configSchema` | no | JSON Schema rendered by `ServiceConfigPanel`; also validated at install time. |
 | `dependencies` | no | Array of other service ids that should start first (advisory, not blocking — see §7). |
 | `settingsRegistration` | no | Metadata only today — `configApp` is not yet wired to a real component lookup. |
+| `deploymentMode` | no | `"default"` (implicit) or `"tools"` — opts the service into exposing native assistant tools. See §15. |
 
 ### Choosing a port — default to `0`, always
 
@@ -237,11 +238,14 @@ Services run as `worker_threads` — not child processes, not containers — wit
 managed by `src/core/service/ServiceManager.ts`.
 
 **Main → worker**: `{ type: "initialize", configDirPath, logsPath, serviceId }`,
-`{ type: "dispose" }`, `{ type: "restart", reason }`.
+`{ type: "dispose" }`, `{ type: "restart", reason }`, `{ type: "tool_call", payload }`
+(only for a `deploymentMode: "tools"` service — see §15).
 
 **Worker → main**: `{ type: "initialized" }`, `{ type: "bound", port, host }`,
 `{ type: "error", message, stack? }`, `{ type: "disposed" }`,
-`{ type: "log", level, message }`, `{ type: "crash", error, stack? }`.
+`{ type: "log", level, message }`, `{ type: "crash", error, stack? }`,
+`{ type: "tool_declare", payload }`, `{ type: "tool_result", payload }`,
+`{ type: "tool_error", payload }` (§15).
 
 Your worker script (the `entry` file) MUST:
 
@@ -578,17 +582,225 @@ installer passes `dataDir()/system/<id>/services`.
 - No port auto-retry — a configured port already in use is a hard failure; the
   user must change it in Settings.
 - No direct function exports from a service — everything is the `postMessage`
-  IPC protocol in §6.
+  IPC protocol in §6 (native tool exposure, §15, is no exception — a tool call
+  is still `tool_call`/`tool_result`/`tool_error` over the same channel, just a
+  message shape the kernel treats specially).
 - `hooks/` is inert (§8).
 - A service's bundled `app/` runs like any other installed app once installed
   through the Marketplace — including the `marketplace`-origin opaque sandbox.
   If it needs to talk to its own service (or any BOS API), it must go through
-  the `window.__bos` broker with a granted capability (e.g. `services:read`),
-  not a direct `fetch()` — see
+  the `window.__bos` broker with a granted capability, not a direct `fetch()`
+  — see
   [Design heuristics](../design-heuristics.md#opaque-origin-sandboxed-apps-cant-fetch-bos-apis-directly)
   and [Apps guide](../guides/apps.md#trust-tiers-the-sdk--sandbox-028). The
   user must explicitly grant that capability in Settings → Apps after
-  installing — it is never granted automatically.
+  installing — it is never granted automatically. Three broker methods share
+  the `services:read` capability: `services.getConfig(id)` (config files +
+  runtime state, e.g. the bound port), `services.status(id)` (`{ service:
+  { state, boundPort, ... } }` — is it actually running), and `services.call(id,
+  path, init?)` (proxy an HTTP call to the service's own REST bridge — the
+  ONLY way an opaque-origin app's bundled UI can actually invoke its service's
+  API, not just read its config; resolves the same `wsPath`/`httpPath`-if-
+  present-else-direct-port base as `getConfig`/§11, then performs the real
+  request from the trusted parent frame and relays the parsed JSON body back).
+  A companion app should try a direct same-origin `fetch()` first (works when
+  installed "local") and fall back to these broker methods on failure —
+  see `bridge.ts` in the `workflows` marketplace item for a worked example.
 - `settingsRegistration.configApp` is metadata only — there's no registry that
   resolves it to an actual React component; every service uses the generic
   `ServiceConfigPanel` today.
+
+---
+
+## 15. Services as native assistant tools (`deploymentMode: "tools"`, 039-service-tool-exposure)
+
+A service can expose one or more agent-callable tools **without standing up an
+MCP server** — the tools surface as ordinary `AssistantTool` entries
+(`execution: "server"`) alongside every built-in, gated by the exact same
+allowlist/deferred rules. Spec: `user-specs/039-service-tool-exposure`
+(FR-001–FR-010 below). This is opt-in and fully backward compatible: a service
+that never sets `deploymentMode` behaves exactly as in §1–§14.
+
+### Opting in (FR-010)
+
+Set `"deploymentMode": "tools"` in `service.json` (§3). Anything else, or the
+field's absence, means `"default"` — no tools, current behavior. Validated by
+`src/core/service/manifestValidator.ts` (enum `"default" | "tools"`; an
+unrecognized value is rejected at install/start).
+
+### Declaring tools — `tool_declare` (Worker→Main, FR-001)
+
+After sending `{ type: "initialized" }`, a `"tools"`-mode worker posts one
+`tool_declare` message per tool it wants to expose:
+
+```js
+parentPort.postMessage({
+  type: "tool_declare",
+  payload: {
+    callId: "declare-my_tool",
+    declaration: {
+      name: "my_tool",
+      description: "What this tool does, for the model.",
+      inputSchema: { type: "object", properties: { text: { type: "string" } }, required: ["text"] },
+    },
+  },
+});
+```
+
+`ServiceManager.handleWorkerMessage` (`src/core/service/ServiceManager.ts`)
+checks the service's own manifest: if `deploymentMode !== "tools"`, the
+declaration is rejected and logged (`tool_declare:rejected`) — a service
+can't grant itself tools by simply sending the message. Otherwise it calls
+`serviceToolBridge().registerTool(serviceId, declaration)`
+(`src/lib/agent/service-tool-bridge.ts`), which:
+
+- validates the shape (`name`, `description` present; `inputSchema` compiles
+  as a JSON Schema via Ajv — the same `new Ajv({ strict: false })` config
+  `manifestValidator.ts` already uses) and rejects/logs a malformed
+  declaration or an exact `serviceId:name` duplicate without registering it;
+- stores the tool keyed `serviceId:name` and bumps an internal `version`
+  counter so `src/lib/assistant/registry.ts`'s `assistantTools()` cache
+  re-composes on the very next call (no stale-cache window);
+- registers a **capability descriptor** with `src/lib/agent/
+  capabilities-registry.ts`'s `registerAdditionalCapabilities()`, under the
+  `"Service Tools"` group, using **the tool's own name as the capability id**
+  (not a namespaced id) — this is what makes gating (below) actually apply to
+  a live tool, not just to a hand-simulated one in a test.
+
+Declarations are static per process — a service declares its tools once at
+startup; there is no mechanism to add/remove a tool without restarting the
+service (spec assumption, v1).
+
+### Registry surfacing (FR-002)
+
+`src/lib/assistant/registry.ts`'s `assistantTools()` merges every bridge-
+registered tool in ahead of the static tool tables, but **a built-in always
+wins a name collision** (service tools are spread first, built-ins after) —
+a service cannot shadow an existing tool by declaring the same name.
+
+### Invocation — `tool_call` / `tool_result` / `tool_error` (Main→Worker /
+Worker→Main, FR-003, FR-008)
+
+When the agent loop dispatches a call to a service tool (`runServerTool` in
+`src/lib/assistant/agent-loop.ts`, same code path as every other server
+tool), the generated `execute` hands off to
+`serviceToolBridge().invoke(serviceId, name, args, signal)`, which:
+
+1. **Validates `args` against the tool's compiled `inputSchema` first**
+   (FR-004) — a failing validation returns an in-band error string
+   immediately and **never sends a `tool_call`** to the worker at all (the
+   worker never even sees the malformed call).
+2. On valid args, dispatches through a `ToolDispatcher` that `ServiceManager`
+   wires into the bridge at module load: `sendToolCall`/`waitForToolResult`
+   in `src/core/service/workerIpc.ts` post a `{ type: "tool_call", payload:
+   { callId, name, args } }` and wait for the **matching `callId`** on a
+   `tool_result`/`tool_error` reply — concurrent calls never cross-talk
+   because each waits on its own `callId`, not a bare message-type match.
+3. The worker answers `{ type: "tool_result", payload: { callId, result } }`
+   on success or `{ type: "tool_error", payload: { callId, error: { code,
+   message, stack? } } }` on failure; either resolves the pending waiter.
+
+The v1 transport is worker IPC only (`ServiceTool.transport === "worker-ipc"`
+in `src/core/service/serviceToolTypes.ts`); a `"loopback-http"` transport
+value is reserved in the type for a future child-process backend but has no
+route wired up in v1 (FR-008's backend-agnostic contract is the type, not a
+shipped HTTP path).
+
+### Gating — allowlist + deferred, exactly like a built-in (FR-005)
+
+Service tools are governed by **the same two gates** as every built-in:
+- **Allowlist** (`agent.tools`) — an agent must explicitly list the tool's
+  name to see it.
+- **Deferred discovery** — a service tool can be hidden until revealed by a
+  prior `find_tools` call in the same conversation, same as any built-in.
+
+This works because `src/lib/assistant/gate.ts` (`gateFromAgent`, per-call)
+and `src/lib/agent/tool-gate.ts` (`withToolGate`'s `transformParams`,
+re-derived **per model step**, not a module-level constant) both source their
+`registryIds` from `listCapabilities()` — which includes every dynamically
+registered capability, not just the static `CAPABILITIES` table. **This is
+why `registerTool` above also calls `registerAdditionalCapabilities()`**: a
+tool name that never lands in `listCapabilities()` falls into
+`tool-gate.ts`'s "not in the registry ⇒ always allowed" branch (the same
+branch that lets non-registry things like consent/AGUI tools always pass
+through) and would bypass allowlist/deferred gating entirely, regardless of
+the agent's configuration. The capability id **must** equal the tool's
+model-facing name (not a namespaced id) for this to line up — see
+`tests/services/tool-integration.test.ts`'s "a real worker's declared tool is
+gated by allowlist exactly like a built-in" test for the end-to-end proof
+(unlike `tests/services/gate.test.ts`/`tool-gate.test.ts`, which register the
+capability by hand to unit-test the gate logic in isolation).
+
+Two different services may independently declare a tool of the same name;
+`unregisterTool`/`unregisterServiceTools` only drop the shared capability
+descriptor once **no** registered service tool still needs it, so one
+service stopping never silently un-gates another's still-running tool of the
+same name.
+
+### Lifecycle cleanup (FR-006)
+
+`ServiceToolBridge.unregisterServiceTools(serviceId)` — removing every tool
+(and, per above, any capability descriptor no longer needed) the service
+owns — is called from:
+- `ServiceManager.stop()`, before the worker is torn down;
+- the crash path (`src/core/service/CrashRecovery.ts`'s unexpected-`exit`
+  handling) — a crash unregisters immediately; a subsequent restart
+  re-declares and re-registers via a fresh `tool_declare`;
+- `service:uninstalled` (emitted by `src/system/marketplace/install/
+  serviceInstaller.ts`'s uninstall orchestration).
+
+Because `assistantTools()` re-composes lazily off the bridge's `version`
+counter, a **new** run started after unregistration never sees the removed
+tool. A run already **in flight** snapshotted its own `tools` map at start
+(`Object.assign(run.tools, assistantTools())` in
+`src/lib/assistant/start-run.ts`) and keeps dispatching against that
+snapshot for the rest of the run — a call to a since-stopped tool within that
+same run degrades to an in-band tool error (next section), not a crash and
+not silently ignored.
+
+### Errors are always in-band, never a crash (FR-007)
+
+A `tool_error` from the worker, an IPC-level failure (timeout, or the worker
+exiting mid-call), or a kernel-side schema rejection (FR-004) all end up as a
+thrown `Error` from `ServiceToolBridge.invoke()` — `runServerTool` (agent-
+loop.ts) already converts any server-tool exception into an in-band `Error:
+<tool>: <message>` string returned to the model. BOS itself never crashes and
+the run continues.
+
+### Trust (FR-009)
+
+The worker-IPC transport is trusted by construction: only `ServiceManager`
+holds the `Worker` reference, and only BOS ever posts a `MainToWorkerMessage`
+to it — there is no path for anything outside BOS to send a `tool_call`. The
+reserved `"loopback-http"` transport (above) would be gated by
+`isLoopbackOnly()` (`src/lib/secrets/auth-scope.ts`), the same boundary
+`/api/secrets/[service]/verify` uses, if/when it's actually wired up.
+
+### Key files
+
+| Path | Role |
+|---|---|
+| `src/core/service/serviceToolTypes.ts` | Framework-free types: `ToolDeclaration`, `ServiceTool`, `ToolInvocation`/`ToolInvocationResult`, the `services.tool-bridge` log component constant. |
+| `src/lib/agent/service-tool-bridge.ts` | `ServiceToolBridge` — register/unregister/invoke, Ajv validation, capability-registry sync, structured logging. |
+| `src/core/service/workerIpc.ts` | `sendToolCall`/`waitForToolResult` — `callId`-keyed dispatch and timeout/cancellation. |
+| `src/core/service/ServiceManager.ts` | `tool_declare` handling (opt-in check), lifecycle wiring (register on declare, unregister on stop/crash/uninstall), the `ToolDispatcher` wired into the bridge. |
+| `src/core/service/manifestValidator.ts` | `deploymentMode` schema validation. |
+| `src/lib/assistant/registry.ts` | Merges bridge-registered tools into `assistantTools()`. |
+| `src/lib/assistant/gate.ts`, `src/lib/agent/tool-gate.ts` | Source `registryIds` from `listCapabilities()` so dynamically-registered tools are gated like built-ins. |
+| `tests/services/_tool-service-fixtures.ts`, `tests/services/_worker-fixtures.ts` (`TOOL_DECLARING_WORKER`) | Shared stub service (declares `echo_tool`) reused by unit, integration, and e2e tests. |
+| `e2e/039-service-tool-exposure.spec.ts` | End-to-end self-test: install → start → the assistant calls the declared tool → the real result comes back. |
+
+### FR → implementation quick reference
+
+| FR | Covered by |
+|---|---|
+| FR-001 (declare at startup) | `tool_declare` handling, `ServiceManager.ts` |
+| FR-002 (surface into `AssistantTool` registry) | `registry.ts`'s `assistantTools()` merge |
+| FR-003 (invoke, get a result) | `workerIpc.ts` + `service-tool-bridge.ts`'s `invoke()` |
+| FR-004 (schema validation before dispatch) | `service-tool-bridge.ts`'s Ajv check in `invoke()` |
+| FR-005 (gated like a built-in) | `registerAdditionalCapabilities()` in `registerTool`/`unregisterTool` + `listCapabilities()`-sourced `registryIds` in `gate.ts`/`tool-gate.ts` |
+| FR-006 (removed on stop/uninstall) | `unregisterServiceTools()` called from `stop`/crash/`service:uninstalled` |
+| FR-007 (errors in-band, no crash) | thrown `Error` from `invoke()` → `runServerTool`'s existing catch-all |
+| FR-008 (IPC contract, backend-agnostic) | `tool_call`/`tool_result`/`tool_error` message types + reserved `"loopback-http"` transport value |
+| FR-009 (trust boundary) | worker-IPC trusted by construction; `isLoopbackOnly()` reserved for the HTTP transport |
+| FR-010 (manifest opt-in) | `deploymentMode` in `manifestValidator.ts` |

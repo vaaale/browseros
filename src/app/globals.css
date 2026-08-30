@@ -23,18 +23,29 @@ body {
 /* Desktop chrome (icons, dock, topbar, window titlebars) opts out of selection
    via the `select-none` utility; app content stays selectable by default. */
 
-/* Thin, unobtrusive scrollbars inside OS windows. */
+/* Unobtrusive but grabbable scrollbars inside OS windows. `scrollbar-width:
+   thin` (Firefox) caps at a fixed, non-adjustable thin value, so it's dropped
+   in favor of `auto` now that the webkit thumb is wide enough to grab. */
 * {
-  scrollbar-width: thin;
+  scrollbar-width: auto;
   scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
 }
 *::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 14px;
+  height: 14px;
 }
 *::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.2);
   border-radius: 9999px;
+}
+
+/* Chrome paints autofilled inputs with an opaque yellow background that
+   ignores background-color — a transition delay is the only way to override
+   it, since -webkit-autofill only exposes color via transition properties. */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus {
+  transition: background-color 600000s 0s, color 600000s 0s;
 }
 
 /* CopilotKit chat: lighter blue links for readability on the dark theme.

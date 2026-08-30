@@ -2,6 +2,7 @@
 
 import { useCallback, useState } from "react";
 import { AlertCircle, FileWarning, GitMerge, Loader2, X } from "lucide-react";
+import { ConflictSessionBadge } from "@/components/gitops/ConflictSessionBadge";
 
 export type MergeStrategy = "merge-squash" | "merge" | "commit";
 
@@ -12,6 +13,11 @@ export interface ConflictResolutionDialogProps {
   ahead: number;
   behind: number;
   conflictingFiles?: string[];
+  /** 035 (FR-019): when the divergence was escalated, this is the live
+   *  resolution session — the dialog shows its state and links into the
+   *  Build Studio conflict pane instead of only offering blind strategies. */
+  sessionId?: string;
+  devopsConversationId?: string;
   onResolve: (strategy: MergeStrategy) => Promise<void>;
   onAbort: () => void;
 }
@@ -23,6 +29,8 @@ export function ConflictResolutionDialog({
   ahead,
   behind,
   conflictingFiles = [],
+  sessionId,
+  devopsConversationId,
   onResolve,
   onAbort,
 }: ConflictResolutionDialogProps) {
@@ -100,7 +108,13 @@ export function ConflictResolutionDialog({
           </div>
         </div>
 
-        {conflictingFiles.length > 0 && (
+        {(sessionId || devopsConversationId) && (
+          <div className="mb-3">
+            <ConflictSessionBadge variant="block" sessionId={sessionId} conversationId={devopsConversationId} />
+          </div>
+        )}
+
+        {conflictingFiles.length > 0 && !sessionId && (
           <div className="mb-3">
             <p className="mb-1.5 text-[11px] font-medium text-white/60">
               Conflicting files ({conflictingFiles.length}):
@@ -120,7 +134,9 @@ export function ConflictResolutionDialog({
         )}
 
         <p className="mb-2 text-[11px] text-white/50">
-          Choose a resolution strategy to merge the remote changes:
+          {sessionId
+            ? "The agent is on it. You can still force a deterministic strategy instead — that abandons the agent's in-progress resolution:"
+            : "Choose a resolution strategy to merge the remote changes:"}
         </p>
 
         <div className="space-y-2">

@@ -93,23 +93,39 @@ export async function getRemoteSshKey(
 
 // ── Lifecycle helpers (remove / rename a remote) ─────────────────────────────
 
-/** Delete every per-remote credential (token + ssh) for a remote. */
+/** Delete every per-remote credential (token + ssh) for a remote. A failed
+ *  delete leaves a live credential on disk — that must be reported as a
+ *  failure, not logged as success, so a caller (or an operator reading the
+ *  log) can tell the difference between "actually deleted" and "still
+ *  there". */
 export async function deleteRemoteCredentials(remoteName: string): Promise<void> {
   const store = getSecretsStore();
-  await store.delete(STORE_ID, `token:${remoteName}`).catch(() => {});
-  await store.delete(STORE_ID, `ssh:${remoteName}`).catch(() => {});
+  const failures: string[] = [];
+  await store.delete(STORE_ID, `token:${remoteName}`).catch((e) => failures.push(`token: ${(e as Error).message}`));
+  await store.delete(STORE_ID, `ssh:${remoteName}`).catch((e) => failures.push(`ssh: ${(e as Error).message}`));
+  if (failures.length) {
+    gitLogger().error({ op: "auth.deleteRemoteCredentials", remote: remoteName, success: false, error: { code: "CRED_DELETE_FAILED", message: failures.join("; ") } });
+    throw new Error(`failed to delete credentials for "${remoteName}": ${failures.join("; ")}`);
+  }
   gitLogger().info({ op: "auth.deleteRemoteCredentials", remote: remoteName, success: true });
 }
 
-/** Move per-remote credentials from one remote name to another (on rename). */
+/** Move per-remote credentials from one remote name to another (on rename).
+ *  A failed delete of the OLD entry leaves an orphaned duplicate credential
+ *  behind — reported as a failure rather than logged as success. */
 export async function renameRemoteCredentials(oldName: string, newName: string): Promise<void> {
   const store = getSecretsStore();
+  const failures: string[] = [];
   for (const kind of ["token", "ssh"] as const) {
     const val = await store.get<Record<string, unknown>>(STORE_ID, `${kind}:${oldName}`).catch(() => null);
     if (val) {
       await store.set(STORE_ID, `${kind}:${newName}`, val);
-      await store.delete(STORE_ID, `${kind}:${oldName}`).catch(() => {});
+      await store.delete(STORE_ID, `${kind}:${oldName}`).catch((e) => failures.push(`${kind}: ${(e as Error).message}`));
     }
+  }
+  if (failures.length) {
+    gitLogger().error({ op: "auth.renameRemoteCredentials", remote: `${oldName} → ${newName}`, success: false, error: { code: "CRED_RENAME_CLEANUP_FAILED", message: failures.join("; ") } });
+    throw new Error(`renamed credentials for "${oldName}" → "${newName}" but failed to remove the old entry: ${failures.join("; ")}`);
   }
   gitLogger().info({ op: "auth.renameRemoteCredentials", remote: `${oldName} → ${newName}`, success: true });
 }
@@ -144,7 +160,11 @@ export async function ensureCredentialHelperScript(): Promise<string> {
   if (current !== HELPER_SOURCE) {
     await fs.writeFile(scriptPath, HELPER_SOURCE, { mode: 0o700 });
   }
-  await fs.chmod(scriptPath, 0o700).catch(() => {});
+  // Restrictive permissions on this script are security-relevant (it echoes
+  // credentials back to git) — a failed chmod must not be silently ignored,
+  // since the file could then be left at looser permissions than intended
+  // (e.g. an existing file from before a permissions-tightening change).
+  await fs.chmod(scriptPath, 0o700);
 
   cachedScriptPath = scriptPath;
   return scriptPath;

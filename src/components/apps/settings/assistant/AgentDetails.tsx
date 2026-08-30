@@ -6,6 +6,7 @@ import { useAutoSave, type AutoSaveStatus as AutoSaveStatusValue } from "../hook
 import { DangerZone } from "./DangerZone";
 import { DetailsHeader } from "./DetailsHeader";
 import { InstructionsSection } from "./InstructionsSection";
+import { KnowledgeBasesGrid } from "./KnowledgeBasesGrid";
 import { McpGrid } from "./McpGrid";
 import { SkillsGrid } from "./SkillsGrid";
 import { ToolAccordions } from "./ToolAccordions";
@@ -26,12 +27,12 @@ interface MetaPatch {
   description?: string;
 }
 
-type Tab = "instructions" | "skills" | "tools" | "mcp";
+type Tab = "instructions" | "skills" | "tools" | "mcp" | "kb";
 
 /**
- * Right pane of the Agents tab: per-agent editor split into four sub-tabs
- * (Instructions / Skills / Tools / MCP). Every field auto-saves; a single
- * indicator top-right shows the combined save state.
+ * Right pane of the Agents tab: per-agent editor split into five sub-tabs
+ * (Instructions / Skills / Tools / MCP / Knowledge bases). Every field
+ * auto-saves; a single indicator top-right shows the combined save state.
  */
 export function AgentDetails({ agent, catalog, onSaved, onDeleted }: AgentDetailsProps) {
   const [tab, setTab] = useState<Tab>("instructions");
@@ -129,6 +130,7 @@ export function AgentDetails({ agent, catalog, onSaved, onDeleted }: AgentDetail
         <TabButton active={tab === "skills"} onClick={() => setTab("skills")}>Skills</TabButton>
         <TabButton active={tab === "tools"} onClick={() => setTab("tools")}>Tools</TabButton>
         <TabButton active={tab === "mcp"} onClick={() => setTab("mcp")}>MCP</TabButton>
+        <TabButton active={tab === "kb"} onClick={() => setTab("kb")}>Knowledge bases</TabButton>
         <div className="ml-auto pr-2">
           <AutoSaveStatus status={combinedStatus} />
         </div>
@@ -181,6 +183,13 @@ export function AgentDetails({ agent, catalog, onSaved, onDeleted }: AgentDetail
             all={catalog.mcp}
             allowed={agent.mcp}
             onChange={(mcp) => capsSave.save({ mcp })}
+          />
+        )}
+        {tab === "kb" && (
+          <KnowledgeBasesGrid
+            all={catalog.kbs}
+            allowed={agent.kbs}
+            onChange={(kbs) => capsSave.save({ kbs })}
           />
         )}
       </div>

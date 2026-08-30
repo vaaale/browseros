@@ -8,6 +8,9 @@ export interface AgentMeta {
   tools: string[];
   skills: string[];
   mcp: string[];
+  /** Knowledge base ids this agent may query (038-knowledge-base). Empty
+   *  array = all KBs the Knowledge Base item knows about. */
+  kbs: string[];
   /** Tool ids this agent hides from its initial context. The sole source of
    *  deferred-ness — there is no registry-wide default. */
   deferredTools: string[];
@@ -35,6 +38,15 @@ export interface CatalogMcp {
   endpoint: string;
 }
 
+// One knowledge base entry in the catalog (038-knowledge-base), sourced from
+// the installed Knowledge Base item's own KB list — [] when the item isn't
+// installed.
+export interface CatalogKb {
+  id: string;
+  name: string;
+  description: string;
+}
+
 // One capability entry — mirrors src/lib/agent/capabilities-registry.ts so the
 // client renders the ToolAccordions without importing server-only code.
 export interface CatalogTool {
@@ -48,6 +60,7 @@ export interface Catalog {
   tools: CatalogTool[];
   skills: CatalogSkill[];
   mcp: CatalogMcp[];
+  kbs: CatalogKb[];
 }
 
 // The subset of capability arrays this UI writes back to the agent. Undefined
@@ -56,6 +69,7 @@ export interface CapabilitiesPatch {
   tools?: string[];
   skills?: string[];
   mcp?: string[];
+  kbs?: string[];
   deferredTools?: string[];
 }
 

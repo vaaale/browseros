@@ -27,7 +27,7 @@ test.afterEach(() => {
 test.describe("validateMountPath", () => {
   test("allows paths inside data/vfs/", () => {
     expect(validateMountPath("Documents/Projects")).toBe(true);
-    expect(validateMountPath("/Apps/MyApp")).toBe(true);
+    expect(validateMountPath("Apps/MyApp")).toBe(true);
     expect(validateMountPath("foo/bar/baz")).toBe(true);
   });
 

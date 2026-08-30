@@ -92,6 +92,33 @@ export async function register(): Promise<void> {
 
     const { startDaemon } = await import("@/lib/scheduler/daemon");
     startDaemon();
+
+    // Event & notification kernel (034-event-notification-system): migrate
+    // the legacy notifications inbox BEFORE the kernel starts serving, so the
+    // first dispatch cycle already sees migrated events (R6), then start the
+    // kernel (loads the store, rebuilds/repairs the index, re-dispatches any
+    // un-acked events — FR-005a).
+    const { migrateIntegrationsToEvents } = await import("@/lib/events/migrate-integrations");
+    await migrateIntegrationsToEvents().catch((err) => {
+      console.error("[instrumentation] legacy notifications migration failed:", err);
+    });
+    const { startEventKernel } = await import("@/lib/events/kernel");
+    await startEventKernel();
+    const { registerAllUiHandlers } = await import("@/lib/events/register-ui-handlers");
+    await registerAllUiHandlers().catch((err) => {
+      console.error("[instrumentation] registering UI event handlers failed:", err);
+    });
+
+    // Git conflict-resolution sessions (035, FR-024). Must run AFTER the event
+    // kernel and the UI-handler registration: the sweep re-emits
+    // com.bos.gitops.conflict.escalated for every session that survived the
+    // restart, which is what re-opens the Build Studio conflict pane. A
+    // `working` session's agent run died with the previous process and is
+    // re-launched here; an `awaiting-user` one is restored and left parked.
+    const { recoverSessions } = await import("@/lib/gitops/sessions/recover");
+    await recoverSessions().catch((err) => {
+      console.error("[instrumentation] conflict-session recovery failed:", err);
+    });
   } catch (err) {
     // Never let a startup failure crash server boot.
     console.error("[instrumentation] server-boot hook failed:", err);

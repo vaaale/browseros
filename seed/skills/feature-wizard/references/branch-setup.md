@@ -1,14 +1,18 @@
-Phase 3 — Feature Branch Setup.
+Phase 2 — Feature Branch Setup.
 
-The spec.md Feature Branch field holds the bare branch slug (e.g. "001-my-feature", no bos/ prefix).
+This runs BEFORE the spec is written (Phase 3): `user-specs` (where the spec is about to
+land) is writable only on a real feature branch, and it's the SAME `bos/*` branch this
+feature's eventual implementation lands on — one branch for both, set up once, here.
 
 Steps:
-1. Read the Feature Branch field from the spec you just wrote (`file_read '/Specs/user-specs/<id>/spec.md'`).
+1. From the requirements gathered in Phase 0, derive a short kebab-case slug for the
+   feature (e.g. "voice-command-palette").
 2. Call dev_branch_request with:
-     task: "<feature name> — BOS feature branch for implementation"
-     suggestedBranch: "<value from spec's Feature Branch field>"
+     task: "<feature name> — feature branch for its spec and implementation"
+     suggestedBranch: "<the slug>"
    The elicitation card will pre-fill the input with the suggested name (normalised to bos/<slug>).
    The user confirms or edits the name, then the branch is created and activated on this conversation.
-3. If the user changed the branch name, update the Feature Branch field in spec.md with `file_edit` to keep them in sync.
+3. Remember the confirmed branch name — it goes in the spec's Feature Branch field in Phase 3.
 
-Only proceed to Phase 4 (Plan & Tasks) after dev_branch_request returns a success message confirming the branch is active.
+Only proceed to Phase 3 (Specification) after dev_branch_request returns a success message
+confirming the branch is active.

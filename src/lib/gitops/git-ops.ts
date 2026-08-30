@@ -1,11 +1,13 @@
 import "server-only";
 import { spawn, type ChildProcess } from "node:child_process";
 import { promises as fs } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { gitLogger } from "./logging";
 import type { GitAuth } from "./auth";
 import { buildCredentialConfig } from "./git-credential-helper";
+import { getGitIdentity } from "@/lib/config/store";
 
 // Core git operations — thin wrappers around the git CLI. Auth and locking are
 // the caller's responsibility. All functions use `spawn` (not `exec`) for
@@ -60,6 +62,10 @@ async function runGit(
     cwd?: string;
     auth?: GitAuth;
     timeout?: number;
+    /** Extra environment for this ONE invocation (e.g. `GIT_INDEX_FILE` for a
+     *  plumbing merge against a scratch index). Passed per-spawn rather than
+     *  set on `process.env`, which would race every concurrent git call. */
+    env?: Record<string, string>;
   } = {},
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   // Wire up the credential helper so HTTPS token/OAuth auth works for
@@ -71,7 +77,7 @@ async function runGit(
   return new Promise((resolve, reject) => {
     const child: ChildProcess = spawn("git", finalArgs, {
       cwd: opts.cwd,
-      env: { ...process.env, ...authEnv(opts.auth), ...cred.env },
+      env: { ...process.env, ...authEnv(opts.auth), ...cred.env, ...(opts.env ?? {}) },
       timeout: opts.timeout,
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -104,7 +110,7 @@ async function runGit(
  *  step) as well as remote-tracking refs. Callers own their own logging. */
 export async function runGitCommand(
   args: string[],
-  opts: { cwd?: string; auth?: GitAuth; timeout?: number } = {},
+  opts: { cwd?: string; auth?: GitAuth; timeout?: number; env?: Record<string, string> } = {},
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   return runGit(args, opts);
 }
@@ -143,6 +149,36 @@ function isAuthFailure(stderr: string): boolean {
 
 export function isMergeConflict(stderr: string): boolean {
   return /CONFLICT/i.test(stderr) || /merge failed/i.test(stderr);
+}
+
+/**
+ * A committer identity for a history-writing git command, used ONLY when the
+ * repo (and the environment) doesn't already have one.
+ *
+ * Every repo BOS manages that BOS itself created — a spec store, `user-apps`,
+ * a VFS mount clone — is a bare `git init` with no `user.email`, and a
+ * container image typically has no global identity either. `git tag -a`,
+ * `git commit` and `git merge` all HARD-FAIL in that state ("Committer
+ * identity unknown"), which would take out the reconciliation pipeline at its
+ * very first step: creating the rollback tag. That tag is the feature's whole
+ * safety guarantee (FR-017), so it must not depend on the host's git config.
+ *
+ * Never overrides a real configured identity — a user who has set one keeps
+ * getting their own name on BOS-made commits. The fallback identity itself is
+ * user-configurable (Settings → Versions → Git identity, namespace
+ * "self-modification"), defaulting to "BrowserOS" <bos@localhost> when unset.
+ */
+export async function gitIdentityEnv(repoPath: string): Promise<Record<string, string>> {
+  const configured = await runGit(["config", "user.email"], { cwd: repoPath });
+  if (configured.exitCode === 0 && configured.stdout.trim()) return {};
+  if (process.env.GIT_AUTHOR_EMAIL || process.env.GIT_COMMITTER_EMAIL || process.env.EMAIL) return {};
+  const { name, email } = await getGitIdentity();
+  return {
+    GIT_AUTHOR_NAME: name,
+    GIT_AUTHOR_EMAIL: email,
+    GIT_COMMITTER_NAME: name,
+    GIT_COMMITTER_EMAIL: email,
+  };
 }
 
 // ── Operations ───────────────────────────────────────────────────────────────
@@ -203,14 +239,29 @@ export async function fetchRepo(
     throw makeError(code, stderr || stdout, suggestion);
   }
 
-  // Compute ahead/behind against the remote.
+  // Compute ahead/behind against the remote. A failure here must NOT default
+  // to {ahead:0, behind:0} — that reads to callers as "already up to date"
+  // and skips the fast-forward/rebase below, silently leaving a genuinely
+  // behind branch untouched (a real fetch had just succeeded moments before,
+  // so this looks identical to "nothing new" from the caller's side).
   const target = remote ?? "origin";
   const branchArg = branch ?? await getCurrentBranch(repoPath);
   const ab = await runGit(
     ["rev-list", "--left-right", "--count", `${target}/${branchArg}...HEAD`],
     { cwd: repoPath, auth },
   );
-  const result = ab.exitCode === 0 ? parseAheadBehind(ab.stdout) : { ahead: 0, behind: 0 };
+  if (ab.exitCode !== 0) {
+    gitLogger().error({
+      op,
+      repoPath,
+      remote: target,
+      durationMs,
+      success: false,
+      error: { code: "GIT_REV_LIST_FAILED", message: ab.stderr || ab.stdout },
+    });
+    throw makeError("GIT_REV_LIST_FAILED", ab.stderr || ab.stdout);
+  }
+  const result = parseAheadBehind(ab.stdout);
 
   gitLogger().info({ op, repoPath, remote: target, durationMs, success: true });
   return result;
@@ -614,7 +665,7 @@ export async function mergeBranch(
       }
       await runGit(
         ["commit", "-m", `Fetch remote changes from ${remote}/${branch}`],
-        { cwd: repoPath },
+        { cwd: repoPath, env: await gitIdentityEnv(repoPath) },
       );
     } finally {
       await popStash(repoPath);
@@ -624,7 +675,11 @@ export async function mergeBranch(
       ? ["merge", "--squash", `${remote}/${branch}`]
       : ["merge", `${remote}/${branch}`];
 
-    const { stderr, exitCode } = await runGit(args, { cwd: repoPath });
+    // "merge-squash" only stages — no commit, so no identity is needed for
+    // it — but the plain "merge" strategy auto-commits on a non-fast-forward,
+    // so it needs the same fallback identity as every other commit-writing
+    // call here. Harmless to pass unconditionally either way.
+    const { stderr, exitCode } = await runGit(args, { cwd: repoPath, env: await gitIdentityEnv(repoPath) });
     const durationMs = Date.now() - t0;
 
     if (exitCode !== 0 && isMergeConflict(stderr)) {
@@ -656,14 +711,168 @@ export async function mergeBranch(
 /** Create an annotated tag on the current HEAD of `repoPath` — used as a
  *  rollback anchor before the reconciliation pipeline (US6) attempts any
  *  merge/rebase, so the pre-reconciliation state is always recoverable. */
-export async function createTag(repoPath: string, tagName: string, message: string): Promise<void> {
+export async function createTag(repoPath: string, tagName: string, message: string, ref?: string): Promise<void> {
   const op = "git.createTag";
-  const { stderr, exitCode } = await runGit(["tag", "-a", tagName, "-m", message], { cwd: repoPath });
+  // `ref` matters for the no-working-tree (plumbing) reconciliation path: HEAD
+  // there belongs to whatever else has the primary checkout busy, so the
+  // rollback anchor must be pinned to the branch actually being advanced.
+  const { stderr, exitCode } = await runGit(["tag", "-a", tagName, "-m", message, ...(ref ? [ref] : [])], {
+    cwd: repoPath,
+    env: await gitIdentityEnv(repoPath),
+  });
   if (exitCode !== 0) {
     gitLogger().error({ op, repoPath, success: false, error: { code: "GIT_TAG_FAILED", message: stderr } });
     throw makeError("GIT_TAG_FAILED", stderr);
   }
   gitLogger().info({ op, repoPath, success: true });
+}
+
+// ── Three-way snapshot reads (035-spec-promote-conflict-escalation) ──────────
+//
+// The conflict snapshot is derived from REFS, never from `:1:`/`:2:`/`:3:`
+// merge-index stages: `reconcile.ts` ABORTS the merge/rebase before it
+// escalates, so by the time a session is created the stages no longer exist.
+// Refs always do — which is also what makes a session restart-safe (the same
+// three reads re-derive identical content after a process restart).
+
+/** Raw (untrimmed, byte-exact) `git` invocation. `runGitCommand` trims its
+ *  stdout, which is right for status/porcelain output and wrong for file
+ *  content — a trailing newline is part of the file. */
+async function runGitBuffer(
+  args: string[],
+  opts: { cwd?: string } = {},
+): Promise<{ stdout: Buffer; stderr: string; exitCode: number }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn("git", args, {
+      cwd: opts.cwd,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const chunks: Buffer[] = [];
+    let stderr = "";
+    child.stdout?.on("data", (c: Buffer) => chunks.push(c));
+    child.stderr?.on("data", (c: Buffer) => { stderr += c.toString(); });
+    child.on("error", (err) => reject(makeError("GIT_SPAWN_FAILED", `git spawn failed: ${err.message}`)));
+    child.on("close", (code) => resolve({ stdout: Buffer.concat(chunks), stderr: stderr.trim(), exitCode: code ?? 1 }));
+  });
+}
+
+/** Read `<rel>`'s content at `<ref>` — the three-way snapshot primitive.
+ *
+ *  Returns `null` when the path does not exist at that ref. That is NOT an
+ *  error condition: for an **add/add** conflict (the reported repro's shape)
+ *  the merge-base is a perfectly valid commit that simply doesn't contain the
+ *  file, so `git show <base>:<rel>` fails — the base side of the hunk is
+ *  genuinely empty and the pane renders it as "(empty)".
+ *
+ *  NOTE: this is deliberately NOT `store-git.ts`'s same-named helper — that
+ *  one is bound to the spec store; this one takes an arbitrary repo path. */
+export async function readFileAtRef(repoPath: string, ref: string, rel: string): Promise<string | null> {
+  const buf = await readFileAtRefBuffer(repoPath, ref, rel);
+  return buf === null ? null : buf.toString("utf8");
+}
+
+/** Byte-exact variant — lets a caller detect a binary conflict (FR-022) by
+ *  looking for a NUL byte instead of round-tripping through UTF-8. */
+export async function readFileAtRefBuffer(repoPath: string, ref: string, rel: string): Promise<Buffer | null> {
+  if (!ref) return null;
+  const { stdout, exitCode } = await runGitBuffer(["show", `${ref}:${rel}`], { cwd: repoPath });
+  if (exitCode !== 0) return null; // "path does not exist in <ref>" — add/add base side
+  return stdout;
+}
+
+/** A blob with a NUL byte in its first 8k is binary as far as git (and this
+ *  feature) is concerned — the agent must never "merge" one (FR-022). */
+export function looksBinary(buf: Buffer | null): boolean {
+  if (!buf) return false;
+  return buf.subarray(0, 8000).includes(0);
+}
+
+export interface MergeTreeConflicts {
+  /** Conflicting repo-relative paths. */
+  files: string[];
+  /** path → conflict kind, when git named one ("CONFLICT (add/add): …"). */
+  types: Record<string, string>;
+  /** Raw merge-tree output, for the escalation's context text. */
+  raw: string;
+}
+
+/** Parse `git merge-tree --write-tree` output into the conflicting-file list.
+ *
+ *  Two independent signals are unioned so a rename/mode-only conflict that
+ *  only shows up in one of them is never missed:
+ *   - the "Conflicted file info" section: `<mode> <oid> <stage>\t<path>`
+ *   - the informational messages: `CONFLICT (<kind>): Merge conflict in <path>`
+ *     (and the `… in <path>` variants git emits for add/add and delete/modify). */
+export function parseMergeTreeConflicts(output: string): MergeTreeConflicts {
+  const files = new Set<string>();
+  const types: Record<string, string> = {};
+  for (const line of output.split("\n")) {
+    const stage = /^(\d{6}) ([0-9a-f]{40,64}) ([123])\t(.+)$/.exec(line.trim());
+    if (stage) {
+      files.add(stage[4]);
+      continue;
+    }
+    const conflict = /^CONFLICT \(([^)]+)\)(?:\s*\[[^\]]*\])?:\s*(?:Merge conflict in|.*\bin)\s+(.+?)\s*$/.exec(line.trim());
+    if (conflict) {
+      const kind = conflict[1].toLowerCase();
+      const p = conflict[2];
+      files.add(p);
+      types[p] = kind;
+    }
+  }
+  return { files: [...files], types, raw: output };
+}
+
+/** Run the `merge-tree --write-tree` dry-run and report the conflicts, without
+ *  touching the working tree. Used both by the pre-check call sites and by the
+ *  snapshot capture on the plumbing path (where there is no working tree at
+ *  all, so `diff --diff-filter=U` has nothing to report). */
+export async function mergeTreeConflicts(
+  repoPath: string,
+  base: string,
+  ours: string,
+  theirs: string,
+): Promise<MergeTreeConflicts | null> {
+  const args = ["merge-tree", "--write-tree"];
+  if (base) args.push(`--merge-base=${base}`);
+  args.push(ours, theirs);
+  const { stdout, stderr, exitCode } = await runGit(args, { cwd: repoPath });
+  if (exitCode === 0) return null; // clean merge
+  return parseMergeTreeConflicts(`${stdout}\n${stderr}`);
+}
+
+/** Produce a conflict-marker rendering of a three-way merge WITHOUT touching
+ *  the repo — `git merge-file --diff3` over three temp files. This is what
+ *  gives the pane real hunk granularity (FR-008) for a snapshot whose merge
+ *  has already been aborted. Returns null if git couldn't run it. */
+export async function mergeFileWithMarkers(
+  base: string | null,
+  ours: string,
+  theirs: string,
+  labels: { ours: string; base: string; theirs: string },
+): Promise<string | null> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "bos-conflict-"));
+  try {
+    const oursPath = path.join(dir, "ours");
+    const basePath = path.join(dir, "base");
+    const theirsPath = path.join(dir, "theirs");
+    await fs.writeFile(oursPath, ours);
+    await fs.writeFile(basePath, base ?? "");
+    await fs.writeFile(theirsPath, theirs);
+    const { stdout, exitCode } = await runGitBuffer(
+      ["merge-file", "-p", "--diff3", "-L", labels.ours, "-L", labels.base, "-L", labels.theirs, oursPath, basePath, theirsPath],
+      { cwd: dir },
+    );
+    // Exit code is the number of conflicts (>=0); only a negative/failed spawn
+    // means it genuinely couldn't run.
+    if (exitCode < 0) return null;
+    return stdout.toString("utf8");
+  } catch {
+    return null;
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
 }
 
 /** Discard a failed `merge --squash` attempt. `merge --squash` never sets
@@ -707,7 +916,15 @@ export async function rebaseOntoRemote(
   const dirty = await hasUncommittedChanges(repoPath);
   if (dirty) await stashChanges(repoPath);
   try {
-    const { stdout, stderr, exitCode } = await runGit(["rebase", `${remote}/${branch}`], { cwd: repoPath });
+    // Rebase re-commits every replayed commit under the CURRENT committer
+    // identity — unlike a fast-forward, it always writes, so a repo/container
+    // with no git identity configured hard-fails here ("Committer identity
+    // unknown") without this fallback. This was the actual cause of the
+    // reported Pull failure: attemptRebaseFallback (reconcile.ts) already
+    // passed gitIdentityEnv to its own rebase; this call site — the one the
+    // Settings → Versions Pull button and Push's non-fast-forward recovery
+    // both go through — did not.
+    const { stdout, stderr, exitCode } = await runGit(["rebase", `${remote}/${branch}`], { cwd: repoPath, env: await gitIdentityEnv(repoPath) });
     const durationMs = Date.now() - t0;
 
     if (exitCode !== 0) {
@@ -756,6 +973,57 @@ export async function switchBranch(
   gitLogger().info({ op, repoPath, durationMs, success: true });
 }
 
+/** Create a new branch WITHOUT checking it out (unlike switchBranch, which
+ *  checks out an EXISTING one). `from` defaults to the repo's current HEAD. */
+export async function createBranch(repoPath: string, branch: string, from?: string): Promise<void> {
+  const op = "git.createBranch";
+  const args = from ? ["branch", branch, from] : ["branch", branch];
+  const { stderr, exitCode } = await runGit(args, { cwd: repoPath });
+  if (exitCode !== 0) {
+    gitLogger().error({ op, repoPath, success: false, error: { code: "GIT_CREATE_BRANCH_FAILED", message: stderr } });
+    throw makeError("GIT_CREATE_BRANCH_FAILED", stderr);
+  }
+  gitLogger().info({ op, repoPath, success: true });
+}
+
+/** Check out an EXISTING branch into a new linked worktree at `worktreePath`.
+ *  The branch must not already be checked out in another worktree. */
+export async function addWorktree(repoPath: string, worktreePath: string, branch: string): Promise<void> {
+  const op = "git.addWorktree";
+  const { stderr, exitCode } = await runGit(["worktree", "add", worktreePath, branch], { cwd: repoPath });
+  if (exitCode !== 0) {
+    gitLogger().error({ op, repoPath, success: false, error: { code: "GIT_ADD_WORKTREE_FAILED", message: `${worktreePath}: ${stderr}` } });
+    throw makeError("GIT_ADD_WORKTREE_FAILED", stderr);
+  }
+  gitLogger().info({ op, repoPath, success: true });
+}
+
+/** Remove a linked worktree (deletes its directory and its registration in
+ *  the main repo). `force` is required when the worktree has uncommitted
+ *  changes or is otherwise "locked" by git's own safety check. */
+export async function removeWorktree(repoPath: string, worktreePath: string, opts: { force?: boolean } = {}): Promise<void> {
+  const op = "git.removeWorktree";
+  const args = ["worktree", "remove", ...(opts.force ? ["--force"] : []), worktreePath];
+  const { stderr, exitCode } = await runGit(args, { cwd: repoPath });
+  if (exitCode !== 0) {
+    gitLogger().error({ op, repoPath, success: false, error: { code: "GIT_REMOVE_WORKTREE_FAILED", message: `${worktreePath}: ${stderr}` } });
+    throw makeError("GIT_REMOVE_WORKTREE_FAILED", stderr);
+  }
+  gitLogger().info({ op, repoPath, success: true });
+}
+
+/** Delete a branch. `force` (`-D`) is required for a branch not fully merged
+ *  into HEAD, or one whose only worktree was just force-removed. */
+export async function deleteBranch(repoPath: string, branch: string, opts: { force?: boolean } = {}): Promise<void> {
+  const op = "git.deleteBranch";
+  const { stderr, exitCode } = await runGit(["branch", opts.force ? "-D" : "-d", branch], { cwd: repoPath });
+  if (exitCode !== 0) {
+    gitLogger().error({ op, repoPath, success: false, error: { code: "GIT_DELETE_BRANCH_FAILED", message: stderr } });
+    throw makeError("GIT_DELETE_BRANCH_FAILED", stderr);
+  }
+  gitLogger().info({ op, repoPath, success: true });
+}
+
 export async function stashChanges(repoPath: string): Promise<void> {
   const op = "git.stash";
   const { stderr, exitCode } = await runGit(
@@ -783,18 +1051,56 @@ export async function popStash(repoPath: string): Promise<void> {
   gitLogger().info({ op, repoPath, success: true });
 }
 
+/**
+ * A failed status read must never be silently treated as "clean" — this
+ * gates whether callers stash before a destructive rebase/reset, so
+ * misreading "unreadable" as "nothing to stash" risks losing uncommitted
+ * work. Throws on a genuine read failure instead of returning `false`.
+ */
 export async function hasUncommittedChanges(repoPath: string): Promise<boolean> {
   const op = "git.hasUncommittedChanges";
-  const { stdout, exitCode } = await runGit(
+  const { stdout, stderr, exitCode } = await runGit(
     ["status", "--porcelain"],
     { cwd: repoPath },
   );
   if (exitCode !== 0) {
-    gitLogger().debug({ op, repoPath, success: false, error: { code: "GIT_STATUS_FAILED", message: "status check failed; reporting no uncommitted changes" } });
-    return false;
+    gitLogger().error({ op, repoPath, success: false, error: { code: "GIT_STATUS_FAILED", message: stderr } });
+    throw makeError("GIT_STATUS_FAILED", stderr);
   }
   gitLogger().debug({ op, repoPath, success: true });
   return stdout.length > 0;
+}
+
+/**
+ * Resolve `cwd` to the root of its MAIN working tree. Under the Supervisor
+ * (live version control, specs/005), the process actually serving HTTP
+ * requests runs `next start` from inside a LINKED, DETACHED-HEAD git worktree
+ * (`bos-worktrees/base` or a candidate's own worktree) — `process.cwd()` there
+ * is not the canonical checkout. A branch/remote operation (fetch, push,
+ * fast-forward merge) run against a detached worktree only ever moves that
+ * worktree's own throwaway commit pointer; it can never advance
+ * `refs/heads/<branch>` in the shared repository, since detached HEAD isn't
+ * "on" any branch. That silently no-ops branch pulls/pushes while still
+ * reporting success (the git commands themselves genuinely succeed).
+ *
+ * `git rev-parse --git-common-dir` always resolves to the ONE shared `.git`
+ * directory, regardless of which linked worktree `cwd` is in (in the main
+ * worktree itself, `--git-common-dir` and `--git-dir` are the same path, so
+ * this is a no-op there) — its parent directory is always the true
+ * main-worktree root. Falls back to `cwd` itself on any failure (bare repo,
+ * not a git repo, git not on PATH, etc.) so callers can treat this as a
+ * best-effort upgrade, never a hard requirement.
+ */
+export async function resolveMainWorktreeRoot(cwd: string): Promise<string> {
+  try {
+    const { stdout, exitCode } = await runGit(["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd });
+    if (exitCode !== 0 || !stdout) return cwd;
+    const gitDir = path.resolve(stdout);
+    const parent = path.dirname(gitDir);
+    return path.basename(gitDir) === ".git" ? parent : cwd;
+  } catch {
+    return cwd;
+  }
 }
 
 export async function hasGitDir(repoPath: string): Promise<boolean> {
@@ -832,8 +1138,13 @@ export async function updateBareCache(
     await runGit(["clone", "--bare", url, cachePath], { auth });
   }
 
-  // Fetch latest.
-  await runGit(["fetch", "origin", branch], { cwd: cachePath, auth });
+  // Fetch latest — checked, not fire-and-forget: a failed fetch here left
+  // the bare cache silently stale while this function still reported success.
+  const { stderr, exitCode } = await runGit(["fetch", "origin", branch], { cwd: cachePath, auth });
+  if (exitCode !== 0) {
+    gitLogger().error({ op, repoPath: cachePath, remote: url, success: false, error: { code: "GIT_FETCH_FAILED", message: stderr } });
+    throw makeError("GIT_FETCH_FAILED", stderr);
+  }
   gitLogger().debug({ op, repoPath: cachePath, remote: url, success: true });
 }
 

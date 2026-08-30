@@ -342,7 +342,7 @@ export function VoiceTab() {
           <div>
             <label className={LABEL}>Speaches URL</label>
             <div className="flex gap-2">
-              <input className={INPUT} value={cfg.sttUrl} onChange={(e) => update("sttUrl", e.target.value)} placeholder="http://wizzo.akhbar.lan:8082" />
+              <input className={INPUT} value={cfg.sttUrl} onChange={(e) => update("sttUrl", e.target.value)} placeholder="http://localhost:8082" />
               <button
                 className={`${BTN} shrink-0 ${sttTestStatus === "ok" ? "text-emerald-400" : sttTestStatus === "error" ? "text-rose-400" : ""}`}
                 onClick={() => void testStt()}
@@ -452,7 +452,7 @@ export function VoiceTab() {
               </div>
               <div>
                 <label className={LABEL}>API Key</label>
-                <input type="password" className={INPUT} value={cfg.openai.apiKey} onChange={(e) => updateOpenAI("apiKey", e.target.value)} placeholder="sk-… (leave empty for self-hosted)" />
+                <input type="password" autoComplete="new-password" className={INPUT} value={cfg.openai.apiKey} onChange={(e) => updateOpenAI("apiKey", e.target.value)} placeholder="sk-… (leave empty for self-hosted)" />
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>

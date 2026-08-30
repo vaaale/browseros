@@ -8,7 +8,7 @@ import type { VoiceConfig, VoiceOutputMode } from "./types";
 const CONFIG_PATH = path.join(dataDir(), "voice-config.json");
 
 export const DEFAULT_VOICE_CONFIG: VoiceConfig = {
-  sttUrl: "http://wizzo.akhbar.lan:8082",
+  sttUrl: "http://localhost:8082",
   sttModel: "Systran/faster-distil-whisper-small.en",
   language: "en",
   activationMode: "button",
@@ -27,7 +27,7 @@ export const DEFAULT_VOICE_CONFIG: VoiceConfig = {
     responseFormat: "mp3",
   },
   omnivoice: {
-    url: "http://wizzo.akhbar.lan:7861",
+    url: "http://localhost:7861",
     voiceSource: "design",
     voice: "nova",
     designGender: "female",

@@ -16,7 +16,7 @@
 import type { ChatMessage, ToolCallRef, Attachment } from "./messages";
 import { newMessageId, truncateForEdit, deriveRevealedIds } from "./messages";
 import type { RunEventInput } from "./run-events";
-import type { AssistantTool, ToolDeclaration, ToolGateConfig, ToolContext } from "./tools";
+import type { AssistantTool, ToolDeclaration, ToolGateConfig, ToolContext, ToolExecuteResult } from "./tools";
 import { visibleTools } from "./tools";
 import type { FrontendOutcome } from "./run-manager";
 import type { RunHooks, HookContext } from "./hooks";
@@ -83,6 +83,11 @@ export interface AgentLoopDeps {
    *  threaded through to every server tool's ToolContext so agent_delegate/
    *  dev_delegate can enforce a depth guard uniformly. */
   delegationDepth?: number;
+  /** Ceiling on how many `parallelSafe` tool calls run concurrently in one
+   *  batch. Bounds resource use when a model emits a large fan-out (10 web
+   *  fetches, 8 sub-agent delegations) — without it a single turn could open
+   *  arbitrarily many sockets/sub-runs at once. */
+  maxParallelTools?: number;
 }
 
 export interface AgentLoopInput {
@@ -99,8 +104,58 @@ export const STEP_LIMIT_TEXT = (maxSteps: number) =>
 
 const CANCELLED_RESULT = "Cancelled by user.";
 
+/** Default ceiling on concurrent parallel-safe tool calls (see maxParallelTools). */
+export const DEFAULT_MAX_PARALLEL_TOOLS = 6;
+
 function toolError(tool: string, detail: string, hint?: string): string {
   return `Error: ${tool}: ${detail}${hint ? ` — ${hint}` : ""}`;
+}
+
+interface CallOutcome {
+  result: string;
+  attachments?: Attachment[];
+}
+
+/**
+ * Group a turn's tool calls into execution batches.
+ *
+ * A batch is a maximal run of ADJACENT calls whose tools opted into
+ * `parallelSafe`, capped at `maxParallel`. Anything else is a batch of one.
+ *
+ * Adjacency is the safety property that makes this sound: relative order is
+ * never changed, so a write can never be reordered around a read. Given
+ * [read, read, write, read] the batches are [read, read], [write], [read] —
+ * the two leading reads overlap, but the write still happens strictly after
+ * them and the trailing read strictly after the write. Grouping every safe
+ * call in the turn regardless of position would break exactly that.
+ *
+ * Exported for tests.
+ */
+export function batchToolCalls(
+  calls: TurnToolCall[],
+  tools: Record<string, AssistantTool>,
+  maxParallel: number,
+): TurnToolCall[][] {
+  const limit = Math.max(1, maxParallel);
+  const batches: TurnToolCall[][] = [];
+  let current: TurnToolCall[] = [];
+  const flush = () => {
+    if (current.length) batches.push(current);
+    current = [];
+  };
+  for (const call of calls) {
+    // An unknown tool is never parallel-safe — it resolves to an in-band error,
+    // and keeping it sequential keeps the "unknown tool" path exactly as it was.
+    if (tools[call.name]?.parallelSafe !== true) {
+      flush();
+      batches.push([call]);
+      continue;
+    }
+    current.push(call);
+    if (current.length >= limit) flush();
+  }
+  flush();
+  return batches;
 }
 
 /** Run a server tool with kernel guarantees: always settles, in-band errors,
@@ -120,13 +175,13 @@ async function runServerTool(
   onProgress: (event: unknown) => void,
   awaitFrontendResult: (callId: string, timeout: number) => Promise<FrontendOutcome>,
   emitEvent: (e: RunEventInput) => void,
-): Promise<string> {
+): Promise<string | ToolExecuteResult> {
   if (!tool.execute) return toolError(tool.name, "tool has no server executor", "this is a BOS bug");
   const callAbort = new AbortController();
-  return await new Promise<string>((resolve) => {
+  return await new Promise<string | ToolExecuteResult>((resolve) => {
     let done = false;
     let timer: ReturnType<typeof setTimeout>;
-    const settle = (result: string) => {
+    const settle = (result: string | ToolExecuteResult) => {
       if (done) return;
       done = true;
       clearTimeout(timer);
@@ -183,7 +238,7 @@ async function runServerTool(
     };
     tool
       .execute!(input, { ...ctx, signal: callAbort.signal, onEvent, elicit })
-      .then((out) => settle(typeof out === "string" ? out : JSON.stringify(out)))
+      .then((out) => settle(out))
       .catch((e) => settle(toolError(tool.name, (e as Error).message)));
   });
 }
@@ -308,77 +363,123 @@ export async function runAgentLoop(deps: AgentLoopDeps, input: AgentLoopInput): 
         return finish({ reason: "completed" });
       }
 
-      // ── Execute tool calls sequentially. Once the assistant message is
-      // persisted, EVERY call gets an answer — execution, in-band error, or
-      // "Cancelled by user." — before the loop can end. ──
+      // ── Execute tool calls. Adjacent parallel-safe calls run CONCURRENTLY;
+      // everything else runs one at a time exactly as it always did. Once the
+      // assistant message is persisted, EVERY call gets an answer — execution,
+      // in-band error, or "Cancelled by user." — before the loop can end. ──
       let cancelledMidTools = false;
-      for (const call of turn.toolCalls) {
-        let result: string;
+
+      /** Run one call to a settled result string. Never throws. */
+      const executeCall = async (call: TurnToolCall): Promise<CallOutcome> => {
         const tool = deps.tools[call.name];
-        const execution = tool?.execution ?? "frontend";
+        const decision = await hooks?.beforeToolCall?.(call, hookCtx);
+        if (decision && decision.allow === false) {
+          return { result: toolError(call.name, `blocked${decision.reason ? `: ${decision.reason}` : " by policy"}`) };
+        }
+        if (!tool) {
+          return { result: toolError(call.name, "unknown tool", "use find_tools to discover available tools") };
+        }
+        if (tool.execution === "server") {
+          let parsed: Record<string, unknown> = {};
+          try {
+            parsed = call.arguments ? (JSON.parse(call.arguments) as Record<string, unknown>) : {};
+          } catch {
+            /* leave {} — the tool reports its own validation error */
+          }
+          const serverOut = await runServerTool(
+            tool,
+            parsed,
+            {
+              signal,
+              conversationId: deps.conversationId,
+              agentId: deps.agentId,
+              delegationDepth: deps.delegationDepth ?? 0,
+              runId: deps.runId,
+            },
+            deps.toolTimeoutMs,
+            (event) => emit({ type: "tool_progress", callId: call.id, event }),
+            deps.awaitFrontendResult,
+            emit,
+          );
+          return typeof serverOut === "string"
+            ? { result: serverOut }
+            : { result: serverOut.text, attachments: serverOut.attachments };
+        }
+        const outcome = await deps.awaitFrontendResult(call.id, deps.toolTimeoutMs);
+        return {
+          result:
+            outcome.kind === "result"
+              ? outcome.result
+              : outcome.kind === "timeout"
+                ? toolError(
+                    call.name,
+                    `no client executed the tool within ${Math.round(deps.toolTimeoutMs / 1000)}s`,
+                    "the user's browser may be closed; the task can continue without this tool or be retried later",
+                  )
+                : CANCELLED_RESULT,
+        };
+      };
+
+      for (const batch of batchToolCalls(turn.toolCalls, deps.tools, deps.maxParallelTools ?? DEFAULT_MAX_PARALLEL_TOOLS)) {
+        const outcomes: CallOutcome[] = [];
 
         if (cancelledMidTools || signal.aborted) {
           cancelledMidTools = true;
-          emit({ type: "tool_cancelled", callId: call.id });
-          result = CANCELLED_RESULT;
-        } else {
-          emit({ type: "tool_call", callId: call.id, name: call.name, args: call.arguments, execution });
-          const decision = await hooks?.beforeToolCall?.(call, hookCtx);
-          if (decision && decision.allow === false) {
-            result = toolError(call.name, `blocked${decision.reason ? `: ${decision.reason}` : " by policy"}`);
-          } else if (!tool) {
-            result = toolError(call.name, "unknown tool", "use find_tools to discover available tools");
-          } else if (tool.execution === "server") {
-            let parsed: Record<string, unknown> = {};
-            try {
-              parsed = call.arguments ? (JSON.parse(call.arguments) as Record<string, unknown>) : {};
-            } catch {
-              /* leave {} — the tool reports its own validation error */
-            }
-            result = await runServerTool(
-              tool,
-              parsed,
-              {
-                signal,
-                conversationId: deps.conversationId,
-                agentId: deps.agentId,
-                delegationDepth: deps.delegationDepth ?? 0,
-                runId: deps.runId,
-              },
-              deps.toolTimeoutMs,
-              (event) => emit({ type: "tool_progress", callId: call.id, event }),
-              deps.awaitFrontendResult,
-              emit,
-            );
-          } else {
-            const outcome = await deps.awaitFrontendResult(call.id, deps.toolTimeoutMs);
-            result =
-              outcome.kind === "result"
-                ? outcome.result
-                : outcome.kind === "timeout"
-                  ? toolError(
-                      call.name,
-                      `no client executed the tool within ${Math.round(deps.toolTimeoutMs / 1000)}s`,
-                      "the user's browser may be closed; the task can continue without this tool or be retried later",
-                    )
-                  : CANCELLED_RESULT;
+          for (const call of batch) {
+            emit({ type: "tool_cancelled", callId: call.id });
+            outcomes.push({ result: CANCELLED_RESULT });
           }
+        } else {
+          // Announce the whole batch before awaiting any of it: the browser
+          // needs to see every frontend tool_call to dispatch them together,
+          // and the UI shows them starting at once rather than trickling.
+          for (const call of batch) {
+            emit({
+              type: "tool_call",
+              callId: call.id,
+              name: call.name,
+              args: call.arguments,
+              execution: deps.tools[call.name]?.execution ?? "frontend",
+            });
+          }
+          // executeCall never throws, so allSettled isn't needed — but a
+          // rejection here would strand tool_use ids with no tool_result and
+          // wedge the next model turn, so map defensively anyway.
+          outcomes.push(
+            ...(await Promise.all(
+              batch.map((call) =>
+                executeCall(call).catch((e) => ({ result: toolError(call.name, (e as Error).message) })),
+              ),
+            )),
+          );
           if (signal.aborted) cancelledMidTools = true;
-          if (result === CANCELLED_RESULT) emit({ type: "tool_cancelled", callId: call.id });
+          batch.forEach((call, i) => {
+            if (outcomes[i].result === CANCELLED_RESULT) emit({ type: "tool_cancelled", callId: call.id });
+          });
         }
 
-        await hooks?.afterToolCall?.(call, result, hookCtx);
-        const toolMessage: ChatMessage = {
-          id: newMessageId(),
-          role: "tool",
-          content: result,
-          toolCallId: call.id,
-        };
-        messages = [...messages, toolMessage];
-        contextMessages = [...contextMessages, toolMessage];
+        // Append in the ORIGINAL call order, never completion order, so the
+        // transcript is deterministic and a replay of the same run reads the
+        // same way regardless of which tool happened to finish first.
+        for (let i = 0; i < batch.length; i++) {
+          const call = batch[i];
+          const { result, attachments } = outcomes[i];
+          await hooks?.afterToolCall?.(call, result, hookCtx);
+          const toolMessage: ChatMessage = {
+            id: newMessageId(),
+            role: "tool",
+            content: result,
+            toolCallId: call.id,
+            ...(attachments?.length ? { attachments } : {}),
+          };
+          messages = [...messages, toolMessage];
+          contextMessages = [...contextMessages, toolMessage];
+          emit({ type: "tool_result", callId: call.id, result });
+          emit({ type: "message", message: toolMessage });
+        }
+        // One save per batch (a batch of 1 — every sequential tool — is exactly
+        // the per-tool save this always did).
         await io.saveMessages(messages);
-        emit({ type: "tool_result", callId: call.id, result });
-        emit({ type: "message", message: toolMessage });
       }
       if (cancelledMidTools || signal.aborted) return finish({ reason: "cancelled" });
     }

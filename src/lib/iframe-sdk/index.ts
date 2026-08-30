@@ -19,6 +19,31 @@ interface Pending {
   reject: (e: Error) => void;
 }
 
+/** One run event pushed by the parent (040-assistant-broker-capability). This is
+ *  the ONE unsolicited parent→child message: it carries no `seq` correlation
+ *  because it answers no call. The event is the server's own RunEvent, relayed
+ *  verbatim — `{seq, ts, runId, type, ...}`. Typed loosely here to keep the SDK
+ *  dependency-free (it must not import BOS's server types). */
+interface BosRunEventMessage {
+  __bos_event?: true;
+  runId: string;
+  event: { seq: number; type: string; [key: string]: unknown };
+}
+
+/** Options for `assistant.startRun` — mirrors POST /api/assistant/runs. */
+interface StartRunOptions {
+  conversationId: string;
+  agentId: string;
+  message: string;
+  /** Tools the app implements locally. They ride the run start, exactly as a
+   *  direct-HTTP caller's would, and arrive back as `tool_call` events with
+   *  `execution: "frontend"` for the app to execute and answer. */
+  surfaceTools?: { name: string; description: string; parameters: Record<string, unknown> }[];
+  attachments?: unknown[];
+}
+
+type RunEventCallback = (event: { seq: number; type: string; [key: string]: unknown }) => void;
+
 interface BosApi {
   fs: {
     list: (path: string) => Promise<unknown>;
@@ -29,10 +54,23 @@ interface BosApi {
   settings: { get: () => Promise<unknown> };
   window: { setTitle: (title: string) => Promise<unknown> };
   notify: (message: string, opts?: Record<string, unknown>) => Promise<unknown>;
-  /** Requires the "services:read" capability — a service's config files +
-   *  runtime state (e.g. its bound port), for apps bundled with their own
-   *  service (e.g. Terminal) that need to find where it's listening. */
-  services: { getConfig: (id: string) => Promise<unknown> };
+  /** Requires the "services:read" capability. */
+  services: {
+    /** A service's config files + runtime state (e.g. its bound port), for
+     *  apps bundled with their own service (e.g. Terminal) that need to find
+     *  where it's listening. */
+    getConfig: (id: string) => Promise<unknown>;
+    /** `{ service: { state, boundPort, ... } }` — the status-check
+     *  counterpart to getConfig (e.g. "is my own service actually running?"). */
+    status: (id: string) => Promise<unknown>;
+    /** Proxy an HTTP call to a service's own REST bridge (list/create/run/...).
+     *  The ONLY channel an opaque-origin app has to actually INVOKE a service's
+     *  API, not just read its config — a direct fetch() to the service's own
+     *  port/path fails the same no-CORS way services:getConfig's direct path
+     *  does. Resolves with the parsed JSON body; throws (with the service's own
+     *  error message when available) on a non-2xx response. */
+    call: (id: string, path: string, init?: { method?: string; body?: unknown }) => Promise<unknown>;
+  };
   /** Per-app persistent key/value store (requires the "storage" capability).
    *  Also backs the localStorage/sessionStorage shim. */
   storage: {
@@ -40,6 +78,28 @@ interface BosApi {
     set: (key: string, value: string) => Promise<unknown>;
     remove: (key: string) => Promise<unknown>;
     keys: () => Promise<string[]>;
+  };
+  /** Drive the BOS assistant (requires the "assistant" capability, which is
+   *  grantable only if this app's app.json declares it — 040). Every method
+   *  resolves with the equivalent HTTP API's response body; on an API error the
+   *  body carries `error` and `status` instead of throwing, so structured
+   *  detail (e.g. a 409's `activeRunId`) survives. An UNGRANTED call rejects.
+   *  See docs/dev/assistant/assistant-broker.md. */
+  assistant: {
+    /** GET /api/assistant/agent — `{agents, catalog}`. */
+    listAgents: () => Promise<unknown>;
+    /** Start a run; resolves with `{runId}` (or `{error, status, activeRunId?}`). */
+    startRun: (opts: StartRunOptions) => Promise<unknown>;
+    /** Subscribe to a run's events. The parent replays anything this app has not
+     *  seen yet (tracked per run, so a dropped listener resumes exactly where it
+     *  left off) and then streams live. Returns an unsubscribe function. */
+    onRunEvent: (runId: string, cb: RunEventCallback) => () => void;
+    /** Answer a frontend `tool_call`. First claim wins, server-side. */
+    postToolResult: (runId: string, callId: string, result: string) => Promise<unknown>;
+    /** The conversation's active run, if any — the reconnect probe. */
+    getActiveRun: (conversationId: string) => Promise<unknown>;
+    /** Server-side stop. Idempotent. */
+    cancelRun: (runId: string) => Promise<unknown>;
   };
 }
 
@@ -70,6 +130,57 @@ type BosWindow = Window & { __bos?: BosApi };
     });
   }
 
+  // --- Assistant run events (040-assistant-broker-capability) ---------------
+  //
+  // The parent owns the run's NDJSON stream (an opaque-origin app can't open one)
+  // and pushes each event in as an unsolicited `__bos_event` message. We keep the
+  // last-seen seq per run so a re-subscribe resumes at the right cursor; a full
+  // reload wipes this map back to 0, which is exactly the signal the parent uses
+  // to replay from the server's authoritative log instead of its own cache.
+  const runListeners = new Map<string, Set<RunEventCallback>>();
+  const runCursors = new Map<string, number>();
+
+  window.addEventListener("message", (e: MessageEvent) => {
+    const d = e.data as BosRunEventMessage | null;
+    if (!d || d.__bos_event !== true || typeof d.runId !== "string" || !d.event) return;
+    const event = d.event;
+    if (typeof event.seq === "number") {
+      const seen = runCursors.get(d.runId) ?? 0;
+      // Ordering is guaranteed by the parent's single tail + FIFO postMessage;
+      // this guard just makes a redundant push (a re-attach race) idempotent.
+      if (event.seq <= seen) return;
+      runCursors.set(d.runId, event.seq);
+    }
+    for (const cb of [...(runListeners.get(d.runId) ?? [])]) {
+      try {
+        cb(event);
+      } catch {
+        /* an app's handler throwing must not stop the other listeners */
+      }
+    }
+  });
+
+  function onRunEvent(runId: string, cb: RunEventCallback): () => void {
+    let set = runListeners.get(runId);
+    const fresh = !set;
+    if (!set) {
+      set = new Set<RunEventCallback>();
+      runListeners.set(runId, set);
+    }
+    set.add(cb);
+    // One attach per run — the parent holds one tail per run, so asking twice
+    // buys nothing and a second replay would duplicate events.
+    if (fresh) {
+      void call("assistant:events-attach", { runId, since: runCursors.get(runId) ?? 0 }).catch(() => undefined);
+    }
+    return () => {
+      const s = runListeners.get(runId);
+      if (!s) return;
+      s.delete(cb);
+      if (s.size === 0) runListeners.delete(runId);
+    };
+  }
+
   w.__bos = {
     fs: {
       list: (path) => call("fs:list", { path }),
@@ -80,12 +191,31 @@ type BosWindow = Window & { __bos?: BosApi };
     settings: { get: () => call("settings:get", {}) },
     window: { setTitle: (title) => call("window:title", { title }) },
     notify: (message, opts) => call("notify", { message, ...(opts ?? {}) }),
-    services: { getConfig: (id) => call("services:config", { id }) },
+    services: {
+      getConfig: (id) => call("services:config", { id }),
+      status: (id) => call("services:status", { id }),
+      call: (id, path, init) => call("services:call", { id, path, method: init?.method, body: init?.body }),
+    },
     storage: {
       get: (key) => call("storage:get", { key }) as Promise<string | null>,
       set: (key, value) => call("storage:set", { key, value }),
       remove: (key) => call("storage:remove", { key }),
       keys: () => call("storage:keys", {}) as Promise<string[]>,
+    },
+    assistant: {
+      listAgents: () => call("assistant:list-agents", {}),
+      startRun: (opts) =>
+        call("assistant:start-run", {
+          conversationId: opts.conversationId,
+          agentId: opts.agentId,
+          message: opts.message,
+          surfaceTools: opts.surfaceTools,
+          attachments: opts.attachments,
+        }),
+      onRunEvent,
+      postToolResult: (runId, callId, result) => call("assistant:tool-result", { runId, callId, result }),
+      getActiveRun: (conversationId) => call("assistant:active-run", { conversationId }),
+      cancelRun: (runId) => call("assistant:cancel-run", { runId }),
     },
   };
 

@@ -20,15 +20,26 @@ interface SubAgent {
 }
 ```
 
-**Seeded defaults** (only when `data/agents` is empty):
+**Seeded defaults** — every subfolder of `seed/agents/` is **reconciled** into
+`data/agents/` per id on boot (`applySeedAgent`): seeded when absent, refreshed
+when BOS's own copy is provably untouched and the shipped version has changed,
+and archived to `data/agents/.archive/` when the seed drops the id. A locally
+edited agent is never written to. See
+[Seed reconciliation](../self-improvement/self-improvement.md#seed-reconciliation)
+for the `.seed-rev` stamp, the one-time migration it needs, and why skills work
+the same way.
 
 | id | type | role |
 |---|---|---|
 | `assistant` | local | the default main‑chat **personality** |
+| `default_agent` | template | shared prompt prepended to agents with "include default prompt" on |
 | `researcher` | local | web research + summaries |
-| `file-organizer` | local | tidy the VFS |
-| `writer` | local | drafting/editing |
-| `planner` | local | produce a plan with acceptance criteria |
+| `build-studio` | local | authors specs with spec-kit; delegates implementation |
+| `architect` | local | writes `design.md` for a spec, grounded in BOS's own subsystems |
+| `architect-reviewer` | local | independent second pass on a design, verified against real source |
+| `ui-designer` | local | turns a spec into a visual mockup inside the spec directory |
+| `conversation-reviewer` | local | reviews a past conversation for behavioral problems |
+| `devops` | local | resolves git conflicts the scripted pipeline couldn't; escalation only |
 | `developer` | **claude** | build apps / modify BOS source (repo‑scoped tools) |
 
 Each conversation carries its own agent id (per‑conversation, the ONLY source of
@@ -71,6 +82,19 @@ There are now two distinct entry points into `runSubAgent(agent, task, opts)`
   (`registry.ts → subagents.ts → delegate-common.ts → runner.ts → registry.ts`).
   `type:"claude"` still goes to `runClaudeAgent`, same as the chat path.
 
+  **Headless ephemeral tool fidelity (ADR-12, Workflow Manager service-tools):** a
+  `type:"local"` EPHEMERAL agent (supplied inline, never persisted) gets a gate built
+  from its in-memory object — `gateFromAgent(agent)`, not `gateFor(id)` (a `getAgent(id)`
+  lookup is undefined for it). It honors its declared `deferredTools` (so `find_tools` can
+  discover them — see the onEvent note below for how the gate reaches the discovery tool),
+  and any frontend-execution VFS tool it declares (`file_read` / `file_write` / `file_list` /
+  `file_mkdir` / `file_delete` / `file_rename`) is bridged to a direct server-side VFS call
+  (`subagents/ephemeral-tools.ts`) so it is genuinely usable headlessly — there is no browser
+  to dispatch a frontend tool to. A NAMED agent takes the exact pre-patch path (unbridged
+  tools, server-only allowlist, empty deferred set): its gate and `find_tools` are
+  byte-identical to pre-patch — the change is scoped to the ephemeral branch
+  (design.md §9.8 risk #1, the highest blast-radius surface).
+
 Three delegation **kinds** share the same `runInnerLoop` primitive and only
 differ in how their gate/system-prompt are resolved
 (`src/lib/assistant/delegation-gate.ts`):
@@ -93,8 +117,21 @@ differ in how their gate/system-prompt are resolved
 `/api/subagents/delegate` for headless callers; forwarded as nested
 tool-call/tool-result events for the chat path — see
 [Actions & tools](actions-and-tools.md)'s `nested-events.ts`/`NestedEventList`
-rendering). `featureBranch` still drives source-edit ownership for the
-`type:"claude"` path — see below.
+rendering). The headless (`runLocalHeadless`) path additionally emits enriched
+events so a consuming service can log the full agent-execution stream —
+`{ type:"tool_result", name, result, ok }` (ok/error forwarded from the loop's
+in-band `Error: …` convention, not re-derived), `{ type:"reasoning_delta", delta }`,
+and `{ type:"final_text", text }` (ADR-13, Workflow Manager service-tools).
+`/api/subagents/delegate` forwards these as NDJSON lines alongside the legacy
+`{type:"tool"}` (per tool call) and the terminal `{type:"done", result, text}` /
+`{type:"error"}` lines — the `done` line also carries the agent's final response
+text as `text` (additive; `result` is unchanged) — preserving the pre-patch
+`{type:"tool"}` shape for backward compatibility.
+The headless run also registers the ephemeral agent in a tiny runId-keyed in-run
+registry (`subagents/in-run-agents.ts`) so `find_tools` (tools/server/discovery.ts)
+can resolve its gate from that object; named runs are never registered, so named
+discovery still resolves via `gateFor(agentId)`. `featureBranch` still drives
+source-edit ownership for the `type:"claude"` path — see below.
 
 Every delegation's start/finish is logged to `assistant.delegate` (kind,
 agentId, depth, steps, reason — never the task string or tool
@@ -219,7 +256,7 @@ provider- or MCP-only setup (no pasted credentials) still gets redirected correc
   again from the toolbar.
 - **`contentOnly:true`** (e.g. generating an app's HTML — a *content* op) MUST NOT
   provision a code candidate; the result is installed via `app_install` onto the
-  GitFS `app-candidate` branch instead.
+  feature branch's coupled `user-apps` worktree instead.
 - BrowserOS source analysis or implementation MUST NOT use `contentOnly:true`.
   `contentOnly` is reserved for standalone app content generation, and the
   runner refuses source-shaped tasks submitted through that bypass.

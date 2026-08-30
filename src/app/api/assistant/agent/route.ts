@@ -9,7 +9,8 @@ import {
 import { composeInstructions } from "@/lib/agent/instructions";
 import { listSkills } from "@/lib/agent/skills/store";
 import { listMcpServers } from "@/lib/mcp/store";
-import { CAPABILITIES } from "@/lib/agent/capabilities-registry";
+import { listCapabilities } from "@/lib/agent/capabilities-registry";
+import { listKnowledgeBases } from "@/lib/agent/kb-catalog";
 
 export const dynamic = "force-dynamic";
 
@@ -18,17 +19,22 @@ export const dynamic = "force-dynamic";
 // contexts — server tools (toolsFor) and main-chat actions (gated server-side by
 // `/api/copilotkit`). Each item is { id, group, description, context }.
 async function buildCatalog() {
-  const [skills, mcp] = await Promise.all([listSkills(), listMcpServers()]);
+  const [skills, mcp, kbs] = await Promise.all([listSkills(), listMcpServers(), listKnowledgeBases()]);
   return {
     // The unified capability registry (016): one allowlist governs an agent in both
-    // contexts. Each item is { id, group, description, context }.
-    tools: CAPABILITIES,
+    // contexts. Each item is { id, group, description, context }. listCapabilities()
+    // (039-service-tool-exposure) so a running marketplace service's declared
+    // tools appear in the picker alongside built-ins.
+    tools: listCapabilities(),
     skills: skills.map((s) => ({ id: s.id, name: s.name, description: s.description ?? "" })),
     mcp: mcp.map((m) => ({
       name: m.name,
       description: m.description ?? "",
       endpoint: m.endpoint || [m.command, ...(m.args ?? [])].filter(Boolean).join(" "),
     })),
+    // The Knowledge Base item's own KB list (038-knowledge-base) — [] when the
+    // item isn't installed, so the picker just renders empty.
+    kbs: kbs.map((kb) => ({ id: kb.id, name: kb.name, description: kb.description ?? "" })),
   };
 }
 
@@ -51,6 +57,7 @@ export async function GET(req: NextRequest) {
       tools: a.tools ?? [],
       skills: a.skills ?? [],
       mcp: a.mcp ?? [],
+      kbs: a.kbs ?? [],
       deferredTools: a.deferredTools ?? [],
       systemPrompt: a.systemPrompt ?? "",
       useDefaultPrompt: a.useDefaultPrompt ?? true,
@@ -74,11 +81,12 @@ export async function PATCH(req: NextRequest) {
         return NextResponse.json({ error: `No agent found with id "${body.agentId}"` }, { status: 404 });
       }
     }
-    if (body.tools || body.skills || body.mcp || body.deferredTools) {
+    if (body.tools || body.skills || body.mcp || body.kbs || body.deferredTools) {
       const updated = await setAgentCapabilities(body.agentId, {
         tools: Array.isArray(body.tools) ? body.tools.map(String) : undefined,
         skills: Array.isArray(body.skills) ? body.skills.map(String) : undefined,
         mcp: Array.isArray(body.mcp) ? body.mcp.map(String) : undefined,
+        kbs: Array.isArray(body.kbs) ? body.kbs.map(String) : undefined,
         deferredTools: Array.isArray(body.deferredTools) ? body.deferredTools.map(String) : undefined,
       });
       if (!updated) {

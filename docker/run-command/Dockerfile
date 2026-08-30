@@ -4,6 +4,7 @@
 #   - python3 + ipython, markitdown[pptx], Pillow  (docx/pptx/xlsx/pdf skills)
 #   - node + pptxgenjs                             (pptx "create from scratch")
 #   - LibreOffice (soffice) + poppler (pdftoppm)   (document -> pdf -> image)
+#   - ffmpeg                                       (video -> keyframes, for ingestion)
 #   - common fonts
 #
 # Runs as an ARBITRARY uid:gid, chosen at container-creation time by the
@@ -27,6 +28,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       python3 python3-pip python3-venv \
       libreoffice \
       poppler-utils \
+      ffmpeg \
       fonts-dejavu fonts-liberation \
       ca-certificates \
  && rm -rf /var/lib/apt/lists/*

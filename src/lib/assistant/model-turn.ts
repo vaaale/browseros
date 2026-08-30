@@ -24,9 +24,13 @@ export const streamModelTurn: StreamTurn = async (opts) => {
   // Compaction (022) runs here — v2 feeds the provider directly, so it can't go
   // through the ai-sdk middleware. Applied to the transcript before provider
   // conversion; the compacted view is ephemeral (never persisted).
-  const messages = await compactChatMessages(opts.conversationId, opts.system, opts.messages, c.maxTokens).catch(
-    () => opts.messages,
-  );
+  const messages = await compactChatMessages(
+    opts.conversationId,
+    opts.system,
+    opts.messages,
+    c.maxTokens,
+    c.maxInputTokens,
+  ).catch(() => opts.messages);
   const turnOpts = { ...opts, messages };
   if (familyOf(c.provider) === "anthropic") return anthropicTurn(c, turnOpts);
   if (c.provider === "openai-responses") return responsesTurn(c, turnOpts);
@@ -129,6 +133,17 @@ function anthropicAttachmentBlocks(msg: ChatMessage): Anthropic.ContentBlockPara
   return blocks;
 }
 
+// tool_result's content-block-array form only accepts text/image blocks (no
+// document/PDF) — narrower than the general attachment converter above.
+function anthropicImageBlocks(msg: ChatMessage): (Anthropic.TextBlockParam | Anthropic.ImageBlockParam)[] {
+  return (msg.attachments ?? [])
+    .filter((a) => a.type === "image" && a.mimeType.startsWith("image/"))
+    .map((a) => ({
+      type: "image" as const,
+      source: { type: "base64" as const, media_type: a.mimeType as "image/png", data: a.data },
+    }));
+}
+
 function toAnthropicMessages(messages: ChatMessage[]): Anthropic.MessageParam[] {
   const out: Anthropic.MessageParam[] = [];
   const pushUser = (blocks: Anthropic.ContentBlockParam[]) => {
@@ -150,7 +165,18 @@ function toAnthropicMessages(messages: ChatMessage[]): Anthropic.MessageParam[] 
       }
       if (content.length) out.push({ role: "assistant", content });
     } else if (m.role === "tool" && m.toolCallId) {
-      pushUser([{ type: "tool_result", tool_use_id: m.toolCallId, content: m.content ?? "" }]);
+      const images = anthropicImageBlocks(m);
+      pushUser([
+        {
+          type: "tool_result",
+          tool_use_id: m.toolCallId,
+          // Plain string when there's nothing else to attach (the overwhelmingly
+          // common case) — only switch to the content-block-array form when a
+          // tool actually attached an image, so most tool results keep the exact
+          // shape they've always had.
+          content: images.length ? [{ type: "text", text: m.content ?? "" }, ...images] : m.content ?? "",
+        },
+      ]);
     }
   }
   return out;
@@ -242,6 +268,17 @@ function toOpenAiMessages(system: string, messages: ChatMessage[]): OpenAI.Chat.
       });
     } else if (m.role === "tool" && m.toolCallId) {
       out.push({ role: "tool", tool_call_id: m.toolCallId, content: m.content ?? "" });
+      // Chat Completions' tool-message content is text-only — there's no way to
+      // attach an image to the tool_call_id result itself. Fall back to a
+      // synthetic follow-up user turn carrying just the image(s), so the model
+      // still sees them immediately after the tool result they belong to.
+      const images = (m.attachments ?? []).filter((a) => a.type === "image" && a.mimeType.startsWith("image/"));
+      if (images.length) {
+        out.push({
+          role: "user",
+          content: images.map((a) => ({ type: "image_url" as const, image_url: { url: `data:${a.mimeType};base64,${a.data}` } })),
+        });
+      }
     }
   }
   // Jinja chat templates on some local servers require ≥1 user message.
@@ -275,7 +312,7 @@ async function openaiChatTurn(c: ProviderConfig, opts: TurnOpts): Promise<TurnRe
   let text = "";
   const byIndex = new Map<number, TurnToolCall>();
   for await (const chunk of stream) {
-    const delta = chunk.choices[0]?.delta as
+    const delta = chunk.choices?.[0]?.delta as
       | { content?: string | null; reasoning_content?: string; tool_calls?: Array<{ index: number; id?: string; function?: { name?: string; arguments?: string } }> }
       | undefined;
     if (!delta) continue;
@@ -326,6 +363,16 @@ function toResponsesInput(messages: ChatMessage[]): unknown[] {
       }
     } else if (m.role === "tool" && m.toolCallId) {
       input.push({ type: "function_call_output", call_id: m.toolCallId, output: m.content ?? "" });
+      // Same limitation as Chat Completions above — function_call_output.output
+      // here is text-only, so an attached image rides a synthetic follow-up
+      // user turn instead.
+      const images = (m.attachments ?? []).filter((a) => a.type === "image" && a.mimeType.startsWith("image/"));
+      if (images.length) {
+        input.push({
+          role: "user",
+          content: images.map((a) => ({ type: "input_image", image_url: `data:${a.mimeType};base64,${a.data}` })),
+        });
+      }
     }
   }
   return input;

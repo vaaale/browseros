@@ -19,7 +19,7 @@ A path to the spec directory (e.g. `/Specs/user-specs/<id>/`). Read, in this ord
 1. `spec.md` — the requirements the design is supposed to satisfy. Note every User Story and FR; you'll check the design against each one, not just skim it.
 2. `design.md` — must exist; if it doesn't, that's an immediate finding, not something to work around by designing it yourself.
 3. `plan.md`/`tasks.md` if present (a later-stage review may have them).
-4. If `design.md` references a UI mockup path (a plain path like `/mockups/<feature-id>.html`, never under `/Specs`), `file_read` it too — you can't judge whether the design's Component section actually covers the mockup's screens without seeing both.
+4. If `design.md` references a UI mockup, `file_read` it too — it's `mockup.html` inside the SAME spec directory (sibling to `spec.md`/`design.md`), unless it's a live A2UI surface instead (no file — `design.md` will say so). You can't judge whether the design's Component section actually covers the mockup's screens without seeing both.
 
 # What you're actually checking
 

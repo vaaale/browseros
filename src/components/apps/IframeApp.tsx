@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import { useOSStore } from "@/store/os-provider";
 import type { AppCapability } from "@/os/types";
+import { getBroker, isAssistantBrokerMethod, releaseBroker, retainBroker } from "./assistant-broker";
 import type { AppProps } from "./types";
 
 // Renders a runtime-installed app in a sandboxed iframe. If the app's manifest
@@ -37,6 +38,20 @@ const CAP_FOR_METHOD: Record<string, AppCapability> = {
   "storage:remove": "storage",
   "storage:keys":   "storage",
   "services:config": "services:read",
+  "services:status": "services:read",
+  "services:call":   "services:read",
+  // 040-assistant-broker-capability. All six map to the single "assistant"
+  // capability, so the existing synchronous pre-dispatch gate below rejects
+  // every one of them at once when the grant is missing (SC-002). Their
+  // implementations live in assistant-broker.ts, not dispatch(), because they
+  // need per-run state (a live NDJSON tail + an event buffer) that a stateless
+  // request/response dispatcher cannot hold.
+  "assistant:list-agents":   "assistant",
+  "assistant:start-run":     "assistant",
+  "assistant:events-attach": "assistant",
+  "assistant:tool-result":   "assistant",
+  "assistant:active-run":    "assistant",
+  "assistant:cancel-run":    "assistant",
 };
 
 async function dispatch(
@@ -75,6 +90,41 @@ async function dispatch(
       // iframe fails with a network error; this call runs here, in the
       // trusted parent frame, and relays the result back over postMessage.
       return fetch(`/api/services/${encodeURIComponent(String(params.id ?? ""))}/config`).then((r) => r.json());
+    case "services:status":
+      // Read-only: `{ service: { state, boundPort, ... } }` for ANY service —
+      // same coarse-grained model as services:config above. The status-check
+      // counterpart to it (a service's own bundled app polling "is it up?").
+      return fetch(`/api/services/${encodeURIComponent(String(params.id ?? ""))}`).then((r) => r.json());
+    case "services:call": {
+      // The ONLY channel an opaque-origin app has to actually INVOKE a
+      // service's own REST bridge (list/create/run/... — not just read its
+      // config): resolve the same wsPath/httpPath-if-present-else-direct-port
+      // base services:config exposes, then perform the real request HERE, in
+      // the trusted same-origin parent frame, and relay the parsed JSON body
+      // back over postMessage (docs/dev/apps/services.md §11/§14).
+      const id = String(params.id ?? "");
+      const subpath = String(params.path ?? "");
+      const config = (await fetch(`/api/services/${encodeURIComponent(id)}/config`).then((r) => r.json())) as {
+        runtime: { port: number; host: string } | null;
+        httpPath: string | null;
+      };
+      let base: string;
+      if (config.httpPath) base = `${window.location.origin}${config.httpPath}`;
+      else if (config.runtime?.port) base = `${window.location.protocol}//${window.location.hostname}:${config.runtime.port}/`;
+      else throw new Error(`service "${id}" has no bound port yet — is it running?`);
+      if (!base.endsWith("/")) base = `${base}/`;
+      const url = new URL(subpath.replace(/^\//, ""), base).toString();
+      const method = params.method ? String(params.method) : "GET";
+      const hasBody = params.body !== undefined;
+      const res = await fetch(url, {
+        method,
+        headers: hasBody ? { "Content-Type": "application/json" } : undefined,
+        body: hasBody ? JSON.stringify(params.body) : undefined,
+      });
+      const body = await res.json().catch(() => null);
+      if (!res.ok) throw new Error((body && (body as { error?: string }).error) || `${method} ${subpath}: HTTP ${res.status}`);
+      return body;
+    }
     case "notify":
       // Lightweight: post a notification message back to the iframe for display.
       // A full notification system would hook into OS-level toasts.
@@ -100,8 +150,31 @@ async function dispatch(
   }
 }
 
+/** 034-event-notification-system (R4/T041): deliver a UI-handler launch's
+ *  event reference `{id, type, seq}` to an installed (iframe) app via URL
+ *  query params — the one delivery mechanism that works uniformly for both
+ *  same-origin and opaque-origin (marketplace) apps with no new broker
+ *  protocol. The iframe reads `bosEvent`/`bosEventType`/`bosEventSeq`/
+ *  `bosHandler` off `window.location.search` and fetches the full event via
+ *  `GET /api/events/:id` (public read) if it needs more than the id/type.
+ *  `bos*`-prefixed names avoid colliding with the app's own query params. */
+function withEventParams(base: string, params: Record<string, unknown> | undefined): string {
+  const event = params?.event as { id?: unknown; type?: unknown; seq?: unknown } | undefined;
+  if (!event?.id || typeof window === "undefined") return base;
+  try {
+    const u = new URL(base, window.location.origin);
+    u.searchParams.set("bosEvent", String(event.id));
+    if (event.type != null) u.searchParams.set("bosEventType", String(event.type));
+    if (event.seq != null) u.searchParams.set("bosEventSeq", String(event.seq));
+    if (params?.handler != null) u.searchParams.set("bosHandler", String(params.handler));
+    return `${u.pathname}${u.search}${u.hash}`;
+  } catch {
+    return base;
+  }
+}
+
 export function IframeApp({ windowId, appId, params }: AppProps) {
-  const url = typeof params?.url === "string" ? params.url : "about:blank";
+  const url = withEventParams(typeof params?.url === "string" ? params.url : "about:blank", params);
   const capabilities = params?.capabilities as AppCapability[] | undefined;
   const capSet = new Set<AppCapability>(capabilities ?? []);
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -117,6 +190,18 @@ export function IframeApp({ windowId, appId, params }: AppProps) {
   const sandbox = untrusted
     ? "allow-scripts allow-forms allow-popups"
     : "allow-scripts allow-forms allow-popups allow-same-origin";
+
+  // Assistant broker refcount (040). Deliberately its OWN effect keyed only on
+  // [appId, windowId]: the message-listener effect below re-runs whenever the
+  // capability set changes, and doing the refcount there would tear the app's
+  // last-window broker down — killing an in-flight run's tail — the moment the
+  // user toggled a permission. Keeping them separate is what makes the spec's
+  // "capability revoked mid-run" case behave: in-flight deliveries continue
+  // (the run is server-owned) while new calls reject at the gate.
+  useEffect(() => {
+    retainBroker(appId);
+    return () => releaseBroker(appId, windowId);
+  }, [appId, windowId]);
 
   useEffect(() => {
     // Always register the listener, even with zero grants — an app that
@@ -144,6 +229,23 @@ export function IframeApp({ windowId, appId, params }: AppProps) {
       if (method === "window:title" && windowId) {
         setTitle(windowId, String(msgParams.title ?? ""));
         respond({ ok: true });
+        return;
+      }
+
+      // 040-assistant-broker-capability: assistant methods are stateful (a live
+      // per-run NDJSON tail + an event buffer that survives an iframe reload),
+      // so they go to the app's module-level broker instead of dispatch(). The
+      // push target is resolved LAZILY from the ref: an iframe reload keeps the
+      // same element but gets a brand-new contentWindow, and a captured stale
+      // one would silently swallow every event afterwards.
+      if (isAssistantBrokerMethod(method)) {
+        getBroker(appId)
+          .handle(method, msgParams, {
+            windowId,
+            push: (message) => iframeRef.current?.contentWindow?.postMessage(message, "*"),
+          })
+          .then((result) => respond(result))
+          .catch((err: Error) => respond(null, err.message));
         return;
       }
 

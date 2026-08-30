@@ -3,7 +3,7 @@ import { promises as fs } from "fs";
 import path from "path";
 import { dataDir } from "@/os/data-dir";
 import { writeFileAtomic } from "@/os/atomic-write";
-import { CAPABILITIES, type Capability } from "@/lib/agent/capabilities-registry";
+import { listCapabilities, type Capability } from "@/lib/agent/capabilities-registry";
 
 // Persistent per-tool metadata overrides edited from Settings → Tools. A user
 // can rewrite the LLM-facing description of any tool; the previous global
@@ -30,7 +30,10 @@ export interface ToolMetadataOverride {
 export type ToolMetadataOverrides = Record<string, ToolMetadataOverride>;
 
 function baseCapability(id: string): Capability | undefined {
-  return CAPABILITIES.find((c) => c.id === id);
+  // 039-service-tool-exposure: listCapabilities() (not the static CAPABILITIES
+  // array), so a dynamically-registered service tool has a base capability to
+  // merge overrides against, same as gate.ts's registryIds.
+  return listCapabilities().find((c) => c.id === id);
 }
 
 function baseDescription(id: string): string {
@@ -163,5 +166,5 @@ function mergeEffective(base: Capability, override: ToolMetadataOverride | undef
 /** Effective view of every capability in the registry (sorted by registry order). */
 export async function getEffectiveCatalog(): Promise<EffectiveTool[]> {
   const overrides = await readMetadataOverrides();
-  return CAPABILITIES.map((c) => mergeEffective(c, overrides[c.id]));
+  return listCapabilities().map((c) => mergeEffective(c, overrides[c.id]));
 }

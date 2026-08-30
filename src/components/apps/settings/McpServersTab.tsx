@@ -393,6 +393,7 @@ export function McpServersTab() {
               <label className={labelCls}>Bearer token (optional)</label>
               <input
                 type="password"
+                autoComplete="new-password"
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
                 placeholder="sent as Authorization: Bearer …"

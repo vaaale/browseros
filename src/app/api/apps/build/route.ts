@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { installItem, pickIcon } from "@/lib/apps/store";
 import { readProjectDir } from "@/lib/apps/build";
+import { getConversationActiveFeatureBranch } from "@/lib/agent/conversations-server";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
@@ -10,8 +11,8 @@ export const maxDuration = 120;
 // top-level layout is app/, services/, config/, etc., matching the on-disk
 // item layout exactly (user-specs/002-service-daemons). The server reads that
 // dir, bundles any app facet's entry with esbuild, installs/activates any
-// service facet, and installs the whole item (as a draft so it lands on the
-// app-candidate branch under the Supervisor). This is the orchestration behind
+// service facet, and installs the whole item (as a draft, so it lands on the
+// caller's active feature branch and promotes with it). This is the orchestration behind
 // the assistant's buildApp — and it is NOT app-only: a services-only item (no
 // app/ at all) is a fully valid build.
 export async function POST(req: NextRequest) {
@@ -38,7 +39,14 @@ export async function POST(req: NextRequest) {
     if (entry) delete files["app/index.html"];
 
     const icon = body.icon ? String(body.icon) : pickIcon(name);
-    const result = await installItem({ name, icon, files, entry }, { draft: true });
+    const branch = await getConversationActiveFeatureBranch(String(body.conversationId ?? ""));
+    if (!branch) {
+      return NextResponse.json(
+        { error: "Building an app needs an active feature branch — call dev_branch_request to set one up, then retry." },
+        { status: 400 },
+      );
+    }
+    const result = await installItem({ name, icon, files, entry }, { draft: true, branch });
     return NextResponse.json(result);
   } catch (err) {
     return NextResponse.json({ error: (err as Error).message }, { status: 400 });

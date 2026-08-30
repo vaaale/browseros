@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { harnessCredentialEnv } from "@/lib/devharness/harness-config";
+import { getSourceRepoRoot } from "@/lib/gitops/filesystems";
 import CLAUDE_MODELS from "@/lib/devharness/claude-models.json";
 
 // Model lists for the Dev Harness settings tab's model autocomplete.
@@ -27,6 +28,10 @@ function claudeModels(): string[] {
 async function openCodeModels(): Promise<string[]> {
   try {
     const { stdout } = await execFileAsync("opencode", ["models"], {
+      // Not a bare process.cwd() — see getHarnessConfig's cwd comment: the
+      // server process serving this request may be running from a detached
+      // preview worktree that no longer exists.
+      cwd: await getSourceRepoRoot(),
       env: { ...process.env, ...harnessCredentialEnv() },
       timeout: OPENCODE_TIMEOUT_MS,
     });

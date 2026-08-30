@@ -1,7 +1,7 @@
 "use client";
 
 // Build Studio's surface-scoped tools for the v2 embeddable Assistant
-// (AssistantChatV2 `tools` prop). Same three tools as AgentTools.tsx, but as
+// (AssistantChatV2 `tools` prop). Same three tools the retired v1 AgentTools.tsx had, but as
 // declaration+handler pairs: declarations ride on each run start; handlers are
 // bound while the app is mounted and dispatched back here by the server loop.
 
@@ -14,6 +14,9 @@ export function buildStudioSurfaceTools(opts: {
   onOpen: (path: string) => Promise<string>;
   onHighlight: (anchor: string) => string | Promise<string>;
   onRefresh: () => void;
+  // The real feature branch (if any) a write to `path` should land on — same
+  // rule as spec-fs writes elsewhere (only non-empty for a user-specs path).
+  getBranch: (path: string) => string;
 }): SurfaceTool[] {
   return [
     {
@@ -85,10 +88,11 @@ export function buildStudioSurfaceTools(opts: {
         const p = String(featurePath ?? "").trim();
         if (!p) return "No featurePath provided.";
         try {
+          const branch = opts.getBranch(p);
           const res = await fetch("/api/specs/run-tests", {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ featurePath: p }),
+            body: JSON.stringify({ featurePath: p, ...(branch ? { branch } : {}) }),
           }).then((r) => r.json());
           opts.onRefresh();
           if (res.error) return `Error: ${res.error}`;

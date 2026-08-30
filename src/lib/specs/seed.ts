@@ -3,7 +3,8 @@ import { promises as fs } from "fs";
 import path from "path";
 import { specsRoot } from "@/os/specs-dir";
 import { ensureRepo, commitAll } from "@/lib/gitfs/store";
-import { STORE_MANIFEST, type StoreManifest } from "@/lib/specs/stores";
+import { STORE_MANIFEST, PROJECT_MANIFEST, type StoreManifest } from "@/lib/specs/stores";
+import type { ProjectManifest } from "@/lib/specs/projects";
 
 // Seed the built-in spec stores under specsRoot() (018-external-spec-store;
 // relocated to <dataDir>/specs by 027). The system store is seeded ADDITIVELY
@@ -92,11 +93,67 @@ async function ensureSystemStore(dir: string): Promise<void> {
 async function ensureUserStore(dir: string): Promise<void> {
   const fresh = !(await pathExists(path.join(dir, ".git")));
   await ensureRepo(dir);
-  if (!(await pathExists(path.join(dir, STORE_MANIFEST)))) await writeManifest(dir, USER_MANIFEST);
+  // Enforce this store's own identity (owner/writable/requiresPromote) on
+  // every boot, not just when no manifest exists yet — a manifest file being
+  // PRESENT here doesn't mean it's actually a user-specs manifest. E.g.
+  // copying bos-system-specs' entire directory content into user-specs/ (to
+  // get a working copy of its specs) brings its spec-store.json along too
+  // (`owner: "system", writable: false`), which would otherwise permanently
+  // mislabel this store as the read-only system store. Only a legitimately
+  // customized `label` is worth preserving; the rest is this store's fixed
+  // identity, same principle as the system store's "single source of truth"
+  // manifest above.
+  const existingLabel = await fs
+    .readFile(path.join(dir, STORE_MANIFEST), "utf8")
+    .then((raw) => (JSON.parse(raw) as Partial<StoreManifest>).label)
+    .catch(() => undefined);
+  const label = typeof existingLabel === "string" && existingLabel.trim() ? existingLabel.trim() : USER_MANIFEST.label;
+  await writeManifest(dir, { ...USER_MANIFEST, label });
   // Always commit — a pre-existing (non-fresh) repo may still have just received
   // migrated content, which must be committed by the seed rather than left for
   // the SpecFS startup sweep. commitAll no-ops when the tree is clean.
   await commitAll(dir, fresh ? "init user spec store" : "sync user spec store");
+}
+
+// Store-root entries that are never part of a Project (033) — sibling
+// metadata to the feature tree, not specs themselves. Dotfiles/dirs (.git,
+// .specify) are skipped separately below.
+const STORE_ROOT_KEEP = new Set([STORE_MANIFEST, "overview.md", "discrepancies.md"]);
+
+/** Coarse, one-time migration (033-project-layer): wrap every existing
+ *  top-level entry of a store into ONE default Project, so pre-Project
+ *  content (a flat NNN-feature layout, or even older un-numbered feature
+ *  dirs) doesn't just disappear from discovery once the pipeline only looks
+ *  for Projects at the top level. Idempotent — once everything is already
+ *  under `projectId`, there's nothing left to move and this is a no-op. A
+ *  finer-grained reorganization is explicitly deferred to later. */
+async function migrateToDefaultProject(dir: string, projectId: string, projectLabel: string): Promise<boolean> {
+  const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => [] as import("fs").Dirent[]);
+  // Already reorganized into one or more real Projects (any top-level dir
+  // owning a project.json) — nothing left to migrate, regardless of what
+  // they're named or how many there are. Without this check, a later manual
+  // reorganization that renames/splits the default Project looks identical
+  // to "never migrated" and gets silently re-wrapped into a fresh
+  // `projectId` dir on the next server start.
+  for (const e of entries) {
+    if (!e.isDirectory() || e.name.startsWith(".")) continue;
+    if (await pathExists(path.join(dir, e.name, PROJECT_MANIFEST))) return false;
+  }
+  const toMove = entries
+    .filter((e) => !e.name.startsWith(".") && !STORE_ROOT_KEEP.has(e.name) && e.name !== projectId)
+    .map((e) => e.name);
+  if (toMove.length === 0) return false;
+  const projectDir = path.join(dir, projectId);
+  await fs.mkdir(projectDir, { recursive: true });
+  for (const name of toMove) {
+    await fs.rename(path.join(dir, name), path.join(projectDir, name));
+  }
+  const manifest: ProjectManifest = { label: projectLabel };
+  const manifestPath = path.join(projectDir, PROJECT_MANIFEST);
+  if (!(await pathExists(manifestPath))) {
+    await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
+  }
+  return true;
 }
 
 /** NON-DESTRUCTIVE relocation of legacy <cwd>/specs/<id> content into the new
@@ -132,6 +189,16 @@ export async function ensureStores(): Promise<void> {
   // Seed / normalize both stores in place.
   await ensureSystemStore(path.join(root, SYSTEM_STORE_ID));
   await ensureUserStore(path.join(root, USER_STORE_ID));
+  // Coarse Project-layer migration (033): wrap pre-existing content into one
+  // default Project per store. A no-op once already migrated.
+  const systemDir = path.join(root, SYSTEM_STORE_ID);
+  const userDir = path.join(root, USER_STORE_ID);
+  if (await migrateToDefaultProject(systemDir, "bos", "BOS")) {
+    await commitAll(systemDir, "migrate specs under the default BOS project");
+  }
+  if (await migrateToDefaultProject(userDir, "user", "User")) {
+    await commitAll(userDir, "migrate specs under the default User project");
+  }
 }
 
 // Run the seed at most once per server process — cheap to await everywhere the

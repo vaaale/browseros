@@ -4,6 +4,7 @@ import { promisify } from "node:util";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { logger } from "@/lib/logging/server-logger";
+import { getGitIdentity } from "@/lib/config/store";
 
 // Git worktree + commit helpers for SpecFS (027-vfs-specfs). This is a FRAGILE
 // path: worktree provisioning, pruning, and merges are orchestration over the
@@ -15,13 +16,19 @@ import { logger } from "@/lib/logging/server-logger";
 // Reuses the local-identity + init discipline of src/lib/gitfs/store.ts.
 
 const exec = promisify(execFile);
-const IDENTITY = ["-c", "user.name=BrowserOS", "-c", "user.email=bos@localhost"];
 const COMPONENT = "specfs.git";
+
+// A local identity so commits never fail on a machine with no global git
+// config. Sourced from Settings → Versions (defaults to "BrowserOS" <bos@localhost>).
+async function identityArgs(): Promise<string[]> {
+  const { name, email } = await getGitIdentity();
+  return ["-c", `user.name=${name}`, "-c", `user.email=${email}`];
+}
 
 /** Run a git command in `cwd`, returning trimmed stdout. Throws with context. */
 export async function git(cwd: string, args: string[]): Promise<string> {
   try {
-    const { stdout } = await exec("git", [...IDENTITY, ...args], {
+    const { stdout } = await exec("git", [...(await identityArgs()), ...args], {
       cwd,
       timeout: 20_000,
       maxBuffer: 8 * 1024 * 1024,

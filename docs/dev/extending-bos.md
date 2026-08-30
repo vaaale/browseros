@@ -53,6 +53,32 @@ responses. Stream with NDJSON if long‑running.
 
 ---
 
+## Add an event handler
+
+**UI handler** (launched when the user clicks a matching event in the Event Viewer):
+
+1. Add an `eventHandlers` entry to your app's `AppManifest` (built-in
+   `manifest.ts` or installed `app.json`): `{ id, type, displayName, description?, icon? }`.
+2. `type` must be under your own namespace (`com.bos.<appId>.*`) or a
+   granted one (`AppManifest.eventNamespaces`).
+3. Your app's window receives `params.event = { id, type, seq }` on launch —
+   fetch `GET /api/events/:id` for the full payload if you need it.
+
+**Headless handler** (invoked automatically on emission, from a background service):
+
+1. At service startup, post `handler_declare` over your existing worker-IPC
+   channel with `{ callId, handlerId, eventType, displayName, timeoutMs? }`.
+2. On invocation (`event_dispatch`), process the event **idempotently** (at-
+   least-once delivery), then ack over loopback HTTP:
+   `POST http://127.0.0.1:$PORT/api/events/:id/ack` with `{ handlerId, callerId, callId, result? }`.
+
+**To emit an event yourself:** `api.emit({ type, payload, source })` — same
+API in-process, over `fetch("/api/events")`, or over loopback HTTP.
+
+→ [Event & Notification System](events/events.md)
+
+---
+
 ## Add a sub-agent / make one able to edit source
 
 - `agent_create` (action) or a `DEFAULTS` entry in

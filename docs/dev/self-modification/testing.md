@@ -26,7 +26,7 @@ Run: `npm run test:e2e`.
 | `desktop.spec.ts` | desktop renders; **no hydration mismatch** (the SSR/CSR baseline) |
 | `no-uncommanded-run.spec.ts` | reopening a chat never resumes an in‑flight turn (`trimToSettledTail`) |
 | `card-collapse.spec.ts` | event cards auto‑collapse (timers live outside React) |
-| `app-candidate.spec.ts`, `app-candidate-live.spec.ts` | GitFS app candidate preview/promote/discard |
+| _(removed)_ `app-candidate.spec.ts`, `app-candidate-live.spec.ts` | Covered the retired GitFS app candidate; user-apps preview/promote/discard is now part of the feature-branch coupling tests |
 | `app-project-live.spec.ts` | project‑app build + serve |
 
 Treat these as **regression baselines** — when you change the shell, chat

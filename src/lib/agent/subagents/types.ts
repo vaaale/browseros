@@ -14,6 +14,10 @@ export interface Agent {
   skills?: string[];
   /** MCP server names/endpoints this agent may use. Unset/empty = all. */
   mcp?: string[];
+  /** Knowledge base ids this agent may query (038-knowledge-base). Unset/empty
+   *  = all KBs the Knowledge Base item knows about; a non-empty list scopes
+   *  the agent's kbs_tool_search/kbs_tool_retrieve to only these ids. */
+  kbs?: string[];
   /** Tool ids this agent should treat as deferred (hidden from its initial
    *  context, discoverable via find_tools). This is the ONLY source of
    *  deferred-ness — there is no registry-wide default. Unset/empty ⇒ nothing
@@ -40,3 +44,16 @@ export interface AgentRunResult {
   toolCalls: { tool: string; input: unknown }[];
   error?: string;
 }
+
+/** Events a (headless) sub-agent run forwards to its caller via `runSubAgent`'s
+ *  `onEvent`. The first member is the LEGACY tool-call shape (`{ tool, input }`,
+ *  unchanged, emitted by both the local and Claude runners). ADR-13 (Workflow
+ *  Manager service-tools) adds the enriched members so a consuming service can
+ *  log the full agent-execution stream (tool results with ok/error, reasoning,
+ *  and the final text) without round-trip reconstruction. The enriched members
+ *  are only emitted by the local headless path (`runLocalHeadless`). */
+export type SubAgentEvent =
+  | { tool: string; input: unknown }
+  | { type: "tool_result"; name: string; result: string; ok: boolean }
+  | { type: "reasoning_delta"; delta: string }
+  | { type: "final_text"; text: string };

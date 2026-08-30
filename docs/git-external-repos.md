@@ -408,7 +408,7 @@ Client credentials (for OAuth apps) are stored as:
 **GitLab:**
 1. Go to GitLab → Preferences → Applications → New Application
 2. Set **Redirect URI** to `<BOS_BASE_URL>/api/git-remotes/oauth/callback`
-3. Select scopes: `api`, `read_user`, `read_repository`, `write_repository`
+3. Select scopes: `api`, `read_user`, `read_repository`, `write_repository` — **all four**, not a subset. GitLab's OAuth app registration lets you check individual scopes; BrowserOS always requests this exact set (`GITLAB_MANIFEST.scopes`), so if even one box is left unchecked the authorize request fails with `The requested scope is invalid, unknown, or malformed`, since the requested scopes aren't a subset of what the app is allowed to request.
 4. Copy the Application ID and Secret
 5. Store them in BrowserOS Settings → Integrations → Git Providers → Connect
 

@@ -84,6 +84,7 @@ function AutocompleteInput({ value, allSuggestions, onCommit, placeholder, class
   // Keep draft in sync when the committed value changes from outside.
   useEffect(() => {
     draftRef.current = value;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- sync the local draft to the externally-committed value
     setDraft(value);
   }, [value]);
 
@@ -233,6 +234,7 @@ export function LogsTab() {
   // Accumulate unique component/conversation values from each load result.
   useEffect(() => {
     if (allRecords.length === 0) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- accumulate filter options as records load
     setKnownComponents((prev) => {
       const s = new Set(prev);
       for (const r of allRecords) if (r.component) s.add(r.component);

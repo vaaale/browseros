@@ -11,25 +11,27 @@ import {
   workingDiff,
 } from "./git-fs";
 import { ensureRepo } from "@/lib/gitfs/store";
-import { STORE_MANIFEST } from "@/lib/specs/stores";
+import { STORE_MANIFEST, PROJECT_MANIFEST } from "@/lib/specs/stores";
 import { boundDiff, deterministicMessage } from "./commit-message";
 import { encodeBranchDir } from "@/lib/specs/feature-id";
 import { getActiveBranch } from "@/lib/specs/feature-context";
-import { supervisorEnabled, supervisorBegin } from "@/lib/devharness/supervisor";
+import { supervisorEnabled, supervisorBeginOrThrow } from "@/lib/devharness/supervisor";
 import { logger } from "@/lib/logging/server-logger";
 import type { FSBackend } from "../fs-types";
 import type { VfsEntry } from "../types";
 
 // SpecFS (027-vfs-specfs): the FSBackend mounted at /Specs/<store-id> (one
-// instance per spec store — user-specs and bos-system-specs). It ADOPTS the
-// 020 branch-coupled worktree model rather than
-// forking it — NO base `git checkout`, ever:
-//   * Writes require an active Feature Context and land in a WORKTREE on that
-//     feature's branch (Supervisor-provisioned when a preview exists, else a
-//     SpecFS-self-provisioned worktree under <worktreesBase>).
-//   * Reads come from the active worktree (so uncommitted writes are visible),
-//     or the base checkout when no feature is active.
-//   * Commits are debounced and coalesced; a promote/flush forces them out.
+// instance per spec store — user-specs and bos-system-specs).
+//
+// Root resolution: the 020 branch-coupled Feature Context (getActiveBranch) —
+// the SAME `bos/*` feature branch used for BOS's own source code. Writes
+// require an active one (SpecFSNoContextError otherwise); reads fall back to
+// the base checkout when none is active. There is no separate per-Project
+// git-activation mechanism (037-project-layer's lightweight flow, retired) —
+// a genuine customization to BOS core eventually needs code, so the spec
+// rides the same branch as the code, for both stores this class mounts.
+// `bos-system-specs` is additionally read-only outright (see `writable`
+// below) — it is never editable, branch or not.
 //
 // This is FRAGILE orchestration (git worktrees + a Supervisor that may hold the
 // same branch), so the worktree-resolution and hand-off paths log at DEBUG.
@@ -44,6 +46,16 @@ export class SpecFSNoContextError extends Error {
       "No active feature context — start or resume a feature before writing to /Specs.",
     );
     this.name = "SpecFSNoContextError";
+  }
+}
+
+/** Thrown when a write is attempted against a non-writable store
+ *  (`bos-system-specs`) — refused unconditionally, regardless of any active
+ *  feature branch. */
+export class SpecFSReadOnlyError extends Error {
+  constructor(storeId: string) {
+    super(`Spec store "${storeId}" is read-only; it cannot be edited.`);
+    this.name = "SpecFSReadOnlyError";
   }
 }
 
@@ -70,6 +82,10 @@ export class SpecFS implements FSBackend {
     private readonly storeId: string,
     /** Base dir for self-provisioned worktrees (data/specs/.worktrees). */
     private readonly worktreesBase: string,
+    /** Whether this store can be written to at all. `false` for
+     *  bos-system-specs — every write throws SpecFSReadOnlyError regardless
+     *  of any active feature branch. */
+    private readonly writable: boolean,
   ) {}
 
   setCommitMessageFn(fn: CommitMessageFn | null): void {
@@ -86,32 +102,34 @@ export class SpecFS implements FSBackend {
     return fs.access(dir).then(() => true).catch(() => false);
   }
 
-  /** Where a WRITE on `branch` should land (provisioning the worktree). Prefers
-   *  the Supervisor's worktree; otherwise self-provisions. Includes the N1
-   *  hand-off: if a Supervisor worktree appears for a branch we previously
-   *  self-provisioned, flush + prune ours first. */
+  /** Where a WRITE on `branch` should land. Under the Supervisor, this is
+   *  ALWAYS its mounted worktree (`<codeWorktree>/specs/<storeId>`) — never a
+   *  self-provisioned one. Self-provisioning is reserved for standalone dev
+   *  (no Supervisor at all); doing it under the Supervisor "just in case" the
+   *  mount wasn't ready yet was itself the bug (see handOffSelfWorktree's
+   *  doc comment) — a race where BOTH mechanisms `git worktree add` the SAME
+   *  branch, and whichever loses fails with "already used by worktree"
+   *  forever after, permanently splitting this store's content between two
+   *  worktrees that no reader agrees on. Any stale self-worktree from before
+   *  this fix (or from a Supervisor outage) is cleared FIRST so the
+   *  Supervisor's own mount always gets a fair, uncontested attempt. */
   private async writeRoot(branch: string): Promise<string> {
     if (supervisorEnabled()) {
-      const begun = await supervisorBegin(branch).catch((err) => {
-        logger().debug(COMPONENT, "supervisorBegin failed; using self worktree", {
-          branch,
-          err: String(err),
-        });
-        return null;
-      });
-      const wt = begun && typeof begun.worktree === "string" ? begun.worktree : "";
-      if (wt) {
-        const supRoot = path.join(wt, "specs", this.storeId);
-        if (await SpecFS.dirExists(supRoot)) {
-          await this.handOffSelfWorktree(branch);
-          logger().debug(COMPONENT, "using supervisor worktree", { branch, supRoot });
-          return supRoot;
-        }
-        logger().debug(COMPONENT, "supervisor worktree lacks store dir; self-provisioning", {
-          branch,
-          supRoot,
-        });
+      await this.handOffSelfWorktree(branch);
+      // Let a real failure here propagate with its actual cause (a broken
+      // git credential, a network blip, a malformed response) rather than
+      // being discarded and replaced by a generic guess — that guess is
+      // exactly what turned a real "GitLab auth failed" production incident
+      // into a misleading "may be busy, retry" message that retrying
+      // couldn't actually fix.
+      const { worktree, mountErrors } = await supervisorBeginOrThrow(branch);
+      const supRoot = path.join(worktree, "specs", this.storeId);
+      if (await SpecFS.dirExists(supRoot)) {
+        logger().debug(COMPONENT, "using supervisor worktree", { branch, supRoot });
+        return supRoot;
       }
+      const cause = mountErrors?.[this.storeId] ?? "mount did not complete for an unknown reason";
+      throw new Error(`Spec store "${this.storeId}" is not mounted on branch "${branch}": ${cause}`);
     }
     const wtPath = this.selfWorktreePath(branch);
     await ensureRepo(this.repoRoot);
@@ -119,40 +137,58 @@ export class SpecFS implements FSBackend {
     return wtPath;
   }
 
-  /** N1 hand-off: flush + prune a self-provisioned worktree once the Supervisor
-   *  owns the branch, so `git worktree add` can't collide. Commits are on the
-   *  branch ref, so pruning the worktree loses nothing. */
+  /** Clear a self-provisioned worktree so `git worktree add` (the Supervisor's
+   *  mount, or a future retry) can't collide with it. Commits are on the
+   *  branch ref itself, so flushing pending edits then pruning the worktree
+   *  directory loses nothing — every commit remains reachable once the SAME
+   *  branch is checked out elsewhere. */
   private async handOffSelfWorktree(branch: string): Promise<void> {
     const wtPath = this.selfWorktreePath(branch);
     if (!(await SpecFS.dirExists(wtPath))) return;
-    logger().debug(COMPONENT, "N1 hand-off: flushing + pruning self worktree", { branch, wtPath });
-    await this.flushDir(branch, wtPath).catch((err) =>
+    logger().debug(COMPONENT, "clearing self worktree before supervisor mount", { branch, wtPath });
+    await this.flushDir(`branch:${branch}`, wtPath).catch((err) =>
       logger().warn(COMPONENT, "hand-off flush failed", { branch, err: String(err) }),
     );
     await pruneWorktree(this.repoRoot, wtPath);
   }
 
-  /** Where a READ resolves: the active worktree if materialized (shows pending
-   *  writes), else the base checkout. Never provisions. */
+  /** Where a READ resolves: the active Feature Context's worktree if
+   *  materialized (shows pending writes), else the base checkout. Never
+   *  provisions. Under the Supervisor, its mounted worktree is authoritative
+   *  and checked first — a self-provisioned worktree is only ever consulted
+   *  as a fallback (legacy state from before a fix to writeRoot, or the
+   *  Supervisor being transiently unavailable), never preferred over it. */
   private async readRoot(): Promise<string> {
     const branch = await getActiveBranch();
     if (!branch) return this.repoRoot;
-    const self = this.selfWorktreePath(branch);
-    if (await SpecFS.dirExists(self)) return self;
     if (supervisorEnabled()) {
-      const begun = await supervisorBegin(branch).catch(() => null);
-      const wt = begun && typeof begun.worktree === "string" ? begun.worktree : "";
-      const supRoot = wt ? path.join(wt, "specs", this.storeId) : "";
+      // A read intentionally falls back to the base checkout when nothing's
+      // mounted yet (an unwritten branch is a normal, expected state) — but
+      // that fallback must not also swallow a REAL failure (auth, network)
+      // without a trace, or a genuinely broken mount looks identical to "not
+      // written yet" in every log.
+      const supRoot = await supervisorBeginOrThrow(branch)
+        .then(({ worktree }) => path.join(worktree, "specs", this.storeId))
+        .catch((err) => {
+          logger().warn(COMPONENT, "supervisorBegin failed on read; falling back", { branch, err: String(err) });
+          return "";
+        });
       if (supRoot && (await SpecFS.dirExists(supRoot))) return supRoot;
     }
+    const self = this.selfWorktreePath(branch);
+    if (await SpecFS.dirExists(self)) return self;
     return this.repoRoot; // branch not materialized yet → base
   }
 
-  private async requireWriteBackend(): Promise<{ backend: LocalFS; branch: string; root: string }> {
+  /** Refused outright for a non-writable store, regardless of branch.
+   *  Otherwise requires an active Feature Context (the same `bos/*` branch
+   *  used for BOS's own source) — throws SpecFSNoContextError without one. */
+  private async requireWriteBackend(): Promise<{ backend: LocalFS; commitKey: string; root: string }> {
+    if (!this.writable) throw new SpecFSReadOnlyError(this.storeId);
     const branch = await getActiveBranch();
     if (!branch) throw new SpecFSNoContextError();
     const root = await this.writeRoot(branch);
-    return { backend: new LocalFS(root), branch, root };
+    return { backend: new LocalFS(root), commitKey: `branch:${branch}`, root };
   }
 
   private async readBackend(): Promise<LocalFS> {
@@ -162,23 +198,23 @@ export class SpecFS implements FSBackend {
 
   // ---- commit scheduling ---------------------------------------------------
 
-  private schedule(branch: string, root: string): void {
-    const existing = this.pending.get(branch);
+  private schedule(commitKey: string, root: string): void {
+    const existing = this.pending.get(commitKey);
     if (existing) clearTimeout(existing.timer);
     const timer = setTimeout(() => {
-      void this.flushDir(branch, root).catch((err) =>
-        logger().error(COMPONENT, "debounced commit failed", err, { branch, root }),
+      void this.flushDir(commitKey, root).catch((err) =>
+        logger().error(COMPONENT, "debounced commit failed", err, { commitKey, root }),
       );
     }, DEBOUNCE_MS);
     (timer as { unref?: () => void }).unref?.();
-    this.pending.set(branch, { timer, root });
+    this.pending.set(commitKey, { timer, root });
   }
 
-  private async flushDir(branch: string, root: string): Promise<void> {
-    const p = this.pending.get(branch);
+  private async flushDir(commitKey: string, root: string): Promise<void> {
+    const p = this.pending.get(commitKey);
     if (p) {
       clearTimeout(p.timer);
-      this.pending.delete(branch);
+      this.pending.delete(commitKey);
     }
     if (!(await hasUncommitted(root))) return;
     const message = await this.buildCommitMessage(root);
@@ -186,12 +222,14 @@ export class SpecFS implements FSBackend {
   }
 
   /** Force any pending writes for `branch` to commit now. Precondition for any
-   *  read of the branch's COMMITTED state (e.g. promote). */
+   *  read of the branch's COMMITTED state (e.g. promote) — branch-keyed,
+   *  matching the 020 promote flow this exists for. */
   async flushPending(branch: string): Promise<void> {
-    const p = this.pending.get(branch);
+    const commitKey = `branch:${branch}`;
+    const p = this.pending.get(commitKey);
     const root = p?.root ?? this.selfWorktreePath(branch);
     if (!(await SpecFS.dirExists(root))) return;
-    await this.flushDir(branch, root);
+    await this.flushDir(commitKey, root);
   }
 
   private async buildCommitMessage(root: string): Promise<string> {
@@ -231,9 +269,9 @@ export class SpecFS implements FSBackend {
 
   async list(relPath: string): Promise<VfsEntry[]> {
     const entries = await (await this.readBackend()).list(relPath).catch(() => []);
-    // Hide git internals and the store manifest from the file view (matches the
-    // pre-027 spec listing behaviour).
-    return entries.filter((e) => !e.name.startsWith(".") && e.name !== STORE_MANIFEST);
+    // Hide git internals and the store/Project manifests from the file view
+    // (matches the pre-027 spec listing behaviour, extended for Projects).
+    return entries.filter((e) => !e.name.startsWith(".") && e.name !== STORE_MANIFEST && e.name !== PROJECT_MANIFEST);
   }
   async stat(relPath: string): Promise<VfsEntry> {
     return (await this.readBackend()).stat(relPath);
@@ -248,31 +286,31 @@ export class SpecFS implements FSBackend {
     return (await this.readBackend()).exists(relPath);
   }
 
-  // ---- FSBackend: writes (require an active Feature Context) ---------------
+  // ---- FSBackend: writes (require a writable store + an active Feature Context) ----
 
   async writeText(relPath: string, content: string): Promise<void> {
-    const { backend, branch, root } = await this.requireWriteBackend();
+    const { backend, commitKey, root } = await this.requireWriteBackend();
     await backend.writeText(relPath, content);
-    this.schedule(branch, root);
+    this.schedule(commitKey, root);
   }
   async writeBuffer(relPath: string, data: Buffer): Promise<void> {
-    const { backend, branch, root } = await this.requireWriteBackend();
+    const { backend, commitKey, root } = await this.requireWriteBackend();
     await backend.writeBuffer(relPath, data);
-    this.schedule(branch, root);
+    this.schedule(commitKey, root);
   }
   async mkdir(relPath: string): Promise<void> {
     const { backend } = await this.requireWriteBackend();
     await backend.mkdir(relPath);
   }
   async remove(relPath: string): Promise<void> {
-    const { backend, branch, root } = await this.requireWriteBackend();
+    const { backend, commitKey, root } = await this.requireWriteBackend();
     await backend.remove(relPath);
-    this.schedule(branch, root);
+    this.schedule(commitKey, root);
   }
   async rename(fromRel: string, toRel: string): Promise<void> {
-    const { backend, branch, root } = await this.requireWriteBackend();
+    const { backend, commitKey, root } = await this.requireWriteBackend();
     await backend.rename(fromRel, toRel);
-    this.schedule(branch, root);
+    this.schedule(commitKey, root);
   }
 
   // ---- lifecycle hooks used by the mount initializer -----------------------

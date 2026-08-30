@@ -27,6 +27,17 @@ export async function PATCH(req: NextRequest) {
     if ("maxInputTokens" in body) {
       patch.maxInputTokens = typeof body.maxInputTokens === "number" ? body.maxInputTokens : undefined;
     }
+    // Embeddings forward PER-FIELD, mirroring the flat fields above — a field
+    // present as a string (possibly "") is forwarded; an absent field is left
+    // unchanged by updateProviderConfig's per-field merge.
+    if (body.embeddings && typeof body.embeddings === "object") {
+      const eb = body.embeddings as Record<string, unknown>;
+      patch.embeddings = {
+        ...(typeof eb.baseUrl === "string" ? { baseUrl: eb.baseUrl } : {}),
+        ...(typeof eb.apiKey === "string" ? { apiKey: eb.apiKey } : {}),
+        ...(typeof eb.model === "string" ? { model: eb.model } : {}),
+      };
+    }
     const config = await updateProviderConfig(patch);
     return NextResponse.json({ config });
   } catch (err) {

@@ -166,7 +166,7 @@ test.describe("validateManifestAtStart", () => {
 
   test("fails when the entrypoint does not exist", async () => {
     const dir = freshItemDir("at-start-missing");
-    const result = await validateManifestAtStart(VALID as any, dir);
+    const result = await validateManifestAtStart(VALID as unknown as { id: string; entry: string } & typeof VALID, dir);
     expect(result.valid).toBe(false);
     expect(result.errors[0]).toMatch(/entrypoint not found/);
   });
@@ -176,7 +176,7 @@ test.describe("validateManifestAtStart", () => {
     const serviceDir = join(dir, "services");
     mkdirSync(serviceDir, { recursive: true });
     writeFileSync(join(serviceDir, "index.js"), "throw new Error('boom');");
-    const result = await validateManifestAtStart(VALID as any, serviceDir);
+    const result = await validateManifestAtStart(VALID as unknown as { id: string; entry: string } & typeof VALID, serviceDir);
     expect(result.valid).toBe(false);
     expect(result.errors[0]).toMatch(/entrypoint failed to load/);
   });

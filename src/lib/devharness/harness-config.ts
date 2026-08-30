@@ -3,7 +3,8 @@ import fs from "fs";
 import path from "path";
 import { getRegistration } from "@/lib/config/registry";
 import { dataDir } from "@/os/data-dir";
-import { resolveHarnessSelection } from "./provider";
+import { getSourceRepoRoot } from "@/lib/gitops/filesystems";
+import { resolveHarnessSelection, normalizeOpenCodeProvider, openCodeModelProviderId } from "./provider";
 import type { McpServerConfig } from "@/lib/mcp/types";
 
 // ── Harness credential storage (010/026) ────────────────────────────────────
@@ -146,19 +147,38 @@ export function harnessCredentialEnv(): Record<string, string> {
 // Supervisor preview worktree by `claude-runner.ts`. The configured namespace does
 // not expose a cwd knob because users must not choose where BOS source edits land.
 export type HarnessConfig =
-  | { mode: "cli"; tool: "claude" | "opencode"; cwd: string; model?: string }
+  | { mode: "cli"; tool: "claude" | "opencode"; cwd: string; model?: string; timeoutMs: number }
   | { mode: "mcp"; server: McpServerConfig };
+
+// Fallback only for the defensive `reg` missing case below (the "dev-harness"
+// namespace is always registered in registry.ts, so this never actually fires).
+// The real default/clamp lives in registry.ts's clampCliTimeoutSec, applied at
+// load() time — by the time it reaches here, v.cliTimeoutSec is already valid.
+const CLI_TIMEOUT_SEC_FALLBACK = 1000;
 
 export async function getHarnessConfig(): Promise<HarnessConfig> {
   const reg = getRegistration("dev-harness");
   const v = (reg ? await reg.load() : {}) as Record<string, unknown>;
   const { harness, claudeRunMode, claudeModel, opencodeModel } = resolveHarnessSelection(v);
-  const cwd = process.cwd();
-  const model = typeof v.model === "string" && v.model.trim() ? v.model.trim() : undefined;
+  // NOT a bare process.cwd() — under the Supervisor, the process serving this
+  // request may be running from a detached, linked preview worktree rather
+  // than the main repo (see filesystems.ts's getSourceRepoRoot doc comment).
+  // A stale/removed worktree there previously surfaced as CLI probes failing
+  // with "the current working directory was deleted".
+  const cwd = await getSourceRepoRoot();
+  const timeoutMs = (typeof v.cliTimeoutSec === "number" ? v.cliTimeoutSec : CLI_TIMEOUT_SEC_FALLBACK) * 1000;
 
-  if (harness === "opencode") return { mode: "cli", tool: "opencode", cwd, model: opencodeModel || undefined };
+  if (harness === "opencode") {
+    // The `--model` CLI flag must be provider-qualified ("<providerId>/<model>"),
+    // same as opencode.json's own `model` field (generate-config.ts) — a bare
+    // model id (e.g. "Qwen3.8-27B") can't be resolved to a provider by OpenCode
+    // and fails at request time with a generic "Unexpected server error".
+    const providerId = openCodeModelProviderId(normalizeOpenCodeProvider(v));
+    const model = opencodeModel && providerId ? `${providerId}/${opencodeModel}` : opencodeModel || undefined;
+    return { mode: "cli", tool: "opencode", cwd, model, timeoutMs };
+  }
   // harness === "claude"
-  if (claudeRunMode === "cli") return { mode: "cli", tool: "claude", cwd, model: claudeModel || undefined };
+  if (claudeRunMode === "cli") return { mode: "cli", tool: "claude", cwd, model: claudeModel || undefined, timeoutMs };
   if (claudeRunMode === "stdio") {
     return {
       mode: "mcp",

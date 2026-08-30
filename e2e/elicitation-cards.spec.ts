@@ -2,11 +2,21 @@ import { test, expect } from "./fixtures";
 
 // Elicitation cards (dev_branch_request → FeatureBranchCard) must appear in
 // the Build Studio chat on every path that can raise one: a direct model
-// call, a server tool's ctx.elicit (spec_write without a branch), a delegated
-// inner loop, after another chat window registered/unregistered the shared
-// global handlers (regression: last-write-wins Map dropped them), and after
-// the window was minimized while the call arrived (regression: unmounted
-// handlers meant the dispatch was silently dropped with no retry).
+// call, a delegated inner loop, after another chat window
+// registered/unregistered the shared global handlers (regression:
+// last-write-wins Map dropped them), and after the window was minimized while
+// the call arrived (regression: unmounted handlers meant the dispatch was
+// silently dropped with no retry).
+//
+// NOTE: there used to be a "server tool raises the card itself via
+// ctx.elicit" case here (spec_write without an active branch). Commit
+// 183caa1 ("Unified file tools") retired spec_write and folded spec writes
+// into the generic file_edit/file_patch tools, which have no ctx.elicit path
+// at all (grep finds zero ctx.elicit call sites in src/) — writing under
+// /Specs with no active branch now just throws a plain SpecFSNoContextError
+// string, and the tool description tells the MODEL to call dev_branch_request
+// itself in response. That's a model-driven recovery, not an automatic card,
+// so it isn't deterministically scriptable here the way the other cases are.
 const script = (turns: unknown[]) => `@@e2e ${JSON.stringify({ turns })}`;
 
 async function openBuildStudio(page: import("@playwright/test").Page) {
@@ -23,18 +33,6 @@ test("direct call: dev_branch_request shows the branch card", async ({ page }) =
   await textarea.fill(
     script([
       { text: "setting up a branch", tools: [{ name: "dev_branch_request", args: { task: "repro test" } }] },
-      { text: "done" },
-    ]),
-  );
-  await win.getByTestId("chat-send-button").click();
-  await expect(win.getByTestId("branch-card")).toBeVisible({ timeout: 30000 });
-});
-
-test("server-tool elicit: spec_write without a branch shows the branch card", async ({ page }) => {
-  const { win, textarea } = await openBuildStudio(page);
-  await textarea.fill(
-    script([
-      { text: "writing spec", tools: [{ name: "spec_write", args: { path: "user-specs/999-repro/spec.md", content: "# repro" } }] },
       { text: "done" },
     ]),
   );

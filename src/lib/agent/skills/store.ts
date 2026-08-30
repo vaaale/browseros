@@ -4,6 +4,8 @@ import path from "path";
 import { dataDir } from "@/os/data-dir";
 import { writeFileAtomic } from "@/os/atomic-write";
 import { parseFrontmatter, buildFrontmatter, asString } from "@/lib/agent/subagents/markdown";
+import { reconcileInstalledItemAssets } from "@/system/marketplace/install/bundledAssets";
+import { archiveSeededDir, decideSeedAction, readSeedStamp, seedRev, writeSeedStamp } from "@/lib/agent/seed-sync";
 
 const DIR = path.join(dataDir(), "skills");
 // Root of the seed directory. Each subfolder contains a SKILL.md (+ optional
@@ -50,6 +52,43 @@ function safeAssetName(name: string): string {
   return base;
 }
 
+/**
+ * The bytes a skill is made of, for hashing. A skill isn't one file — its
+ * references and scripts are as much a part of it as SKILL.md, and this
+ * session's real case was a change confined entirely to a reference document
+ * (`build-studio/references/target-marketplace-item.md`), which a SKILL.md-only
+ * hash would have missed. Names are included so adding or renaming an asset
+ * counts as a change.
+ */
+function skillRevParts(skillMd: string, scripts: SkillAsset[], references: SkillAsset[]): string[] {
+  const parts = [skillMd];
+  for (const [kind, assets] of [["scripts", scripts], ["references", references]] as const) {
+    for (const a of [...assets].sort((x, y) => x.name.localeCompare(y.name))) {
+      parts.push(`${kind}/${a.name}`, a.content);
+    }
+  }
+  return parts;
+}
+
+/** Hash of the skill as it currently sits in data/skills/<id>/. */
+async function liveSkillRev(dirPath: string): Promise<string | undefined> {
+  const skillMd = await fs.readFile(path.join(dirPath, SKILL_FILE), "utf8").catch(() => null);
+  if (skillMd === null) return undefined;
+  return seedRev(
+    skillRevParts(skillMd, await readAssetsDir(path.join(dirPath, SCRIPTS_DIR)), await readAssetsDir(path.join(dirPath, REFERENCES_DIR))),
+  );
+}
+
+/**
+ * Reconcile one seed skill into data/skills/: write it when absent, refresh it
+ * when BOS's own copy is untouched and the seed has moved on, and never touch
+ * one that was edited locally — `skill_improve`'s reflective optimizer rewrites
+ * content and score in place, and that must always win over the shipped text.
+ *
+ * Unlike agents, a seeded skill is RE-SERIALIZED rather than copied verbatim
+ * (`writeSkill` adds `created_by`, splits assets into subfolders), so the
+ * revision is hashed over what BOS actually writes, not over the seed file.
+ */
 async function seedFromDiskPath(skillDir: string): Promise<void> {
   const skillFile = path.join(skillDir, SKILL_FILE);
   let raw: string;
@@ -62,11 +101,8 @@ async function seedFromDiskPath(skillDir: string): Promise<void> {
   const name = asString(meta.name) || path.basename(skillDir);
   const id = slugify(name);
   const dirPath = path.join(DIR, id);
-  // additive — never overwrite an existing skill of this id, in EITHER on-disk
-  // form: the directory form (dirPath/SKILL.md) or the legacy flat-file form
-  // (DIR/id.md). A skill may have evolved past its seed content (e.g. via
-  // skill_improve's reflective optimizer), so re-seeding must never shadow it.
-  if (await pathExists(path.join(dirPath, SKILL_FILE))) return;
+  // The legacy flat-file form (DIR/id.md) is never reconciled — it predates
+  // both the directory layout and the stamp, so it can only be treated as local.
   if (await pathExists(path.join(DIR, `${id}.md`))) return;
   const scripts = await readAssetsDir(path.join(skillDir, SCRIPTS_DIR));
   const references = await readAssetsDir(path.join(skillDir, REFERENCES_DIR));
@@ -81,7 +117,56 @@ async function seedFromDiskPath(skillDir: string): Promise<void> {
     scripts,
     references,
   };
+  // Two distinct hashes (see seed-sync.ts): what the SEED holds, and what BOS
+  // actually writes. They differ for every skill, because writeSkill
+  // re-serializes the frontmatter rather than copying the seed file.
+  const seedContentRev = seedRev(skillRevParts(raw, scripts, references));
+  const action = decideSeedAction({
+    inSeed: true,
+    liveRev: await liveSkillRev(dirPath),
+    stamp: await readSeedStamp(dirPath),
+    seedRev: seedContentRev,
+  });
+  if (action !== "seed" && action !== "update") return;
   await writeSkill(skill);
+  // Nothing rewrites a skill after this point (unlike agents), so the written
+  // bytes can be hashed straight back.
+  const live = await liveSkillRev(dirPath);
+  if (live) await writeSeedStamp(dirPath, { seed: seedContentRev, live });
+}
+
+/**
+ * Archive skills BOS seeded that the seed no longer ships. Same contract as the
+ * agent side: only a stamped, unedited copy is ever moved, and an empty seed
+ * listing is treated as "couldn't read it", never as "everything was deleted".
+ */
+async function archiveDroppedSeedSkills(seedIds: Set<string>): Promise<void> {
+  if (seedIds.size === 0) return;
+  const entries = await fs.readdir(DIR, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
+    if (seedIds.has(entry.name)) continue;
+    const dirPath = path.join(DIR, entry.name);
+    const action = decideSeedAction({
+      inSeed: false,
+      liveRev: await liveSkillRev(dirPath),
+      stamp: await readSeedStamp(dirPath),
+    });
+    if (action === "archive") await archiveSeededDir(dirPath, ARCHIVE_DIR, entry.name);
+  }
+}
+
+/** The ids `seed/skills/` currently ships, resolved the same way seeding does. */
+async function listSeedSkillIds(): Promise<Set<string>> {
+  const ids = new Set<string>();
+  const entries = await fs.readdir(SEED_DIR, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const raw = await fs.readFile(path.join(SEED_DIR, entry.name, SKILL_FILE), "utf8").catch(() => null);
+    if (raw === null) continue;
+    ids.add(slugify(asString(parseFrontmatter(raw).meta.name) || entry.name));
+  }
+  return ids;
 }
 
 let seeded = false;
@@ -89,14 +174,21 @@ async function ensureSeed(): Promise<void> {
   if (seeded) return;
   seeded = true;
   await fs.mkdir(DIR, { recursive: true });
-  // Every subfolder of seed/skills/ is seeded additively into data/skills/ (never
-  // overwrites an existing skill of the same id — whether from a prior seed, or
-  // one a user/agent created independently). Mirrors subagents/store.ts's agent
-  // seeding exactly: no fresh-install-only distinction, just per-id backfill.
+  // Every subfolder of seed/skills/ is reconciled into data/skills/: seeded when
+  // absent, refreshed when BOS's own copy is untouched and the shipped version
+  // has changed, archived when the seed drops it, and left strictly alone once
+  // anything local has edited it. Mirrors subagents/store.ts's agent seeding
+  // exactly — see seed-sync.ts for why a stamp is needed to tell those apart.
   const entries = await fs.readdir(SEED_DIR, { withFileTypes: true }).catch(() => []);
   for (const entry of entries) {
     if (entry.isDirectory()) await seedFromDiskPath(path.join(SEED_DIR, entry.name));
   }
+  await archiveDroppedSeedSkills(await listSeedSkillIds());
+  // Marketplace items may bundle their own skills (040-okf-knowledge-base) —
+  // reconciled here for the same reason the agent store does it: an
+  // already-installed item that gains a skill would otherwise never surface it.
+  // Memoized across both stores, so this scan runs once per process.
+  await reconcileInstalledItemAssets();
 }
 
 function toMarkdown(s: Skill): string {

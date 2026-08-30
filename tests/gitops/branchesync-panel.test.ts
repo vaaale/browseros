@@ -15,8 +15,9 @@ function statusColor(s: SyncStatusEntry): string {
   if (s.conflict) return "text-red-400";
   if (s.localAhead > 0 && s.localBehind > 0) return "text-orange-400";
   if (s.localBehind > 0) return "text-amber-400";
-  if (s.localAhead === 0 && s.localBehind === 0) return "text-emerald-400";
-  return "text-white/50";
+  // Nothing blocking and no risk of losing work either way: in sync
+  // (nothing to push) or ahead-only (safe to push) are both "healthy".
+  return "text-emerald-400";
 }
 
 function statusLabel(s: SyncStatusEntry): string {

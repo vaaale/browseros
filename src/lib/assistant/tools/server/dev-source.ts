@@ -29,7 +29,7 @@ export function devSourceTools(): Record<string, AssistantTool> {
     ),
     bos_source_search: serverTool(
       "bos_source_search",
-      "Search BrowserOS source files for a string. Returns matching path:line:text. Optionally restrict to a subdirectory.",
+      "Search BrowserOS source files for a string. Returns matching path:line:text. Multiple space-separated words all must appear on the same line, in any order (e.g. \"promote blocked\" matches a line containing both words, not just that exact phrase). Optionally restrict to a subdirectory.",
       schema(
         { query: p.str("Search string"), dir: p.str("Subdir to search, defaults to 'src'") },
         ["query"],

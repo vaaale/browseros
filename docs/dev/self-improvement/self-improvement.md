@@ -22,12 +22,62 @@ into instructions; full bodies load **on demand** (`skill_load`) so the prompt s
 small, and a skill's bundled scripts are run via `run_command` (pass `skill=<id>` to
 stage them into the sandbox workspace).
 
-**Seeded skills** (when `data/skills` is empty):
+**Seeded skills** live in `seed/skills/<id>/` (SKILL.md + optional `scripts/`,
+`references/`) and are reconciled into `data/skills/` on boot — see below.
+`develop-in-browseros`, `bos-app` and `build-studio` are the load-bearing ones;
+`build-studio`'s `references/target-*.md` carry the per-target build rules.
 
-- `summarize-web-page` — fetch a URL and summarize faithfully.
-- `develop-in-browseros` — triage *build an app* vs *modify BOS*, delegating to the
-  Claude `developer` agent. References (`building-apps`, `modifying-bos-features`)
-  are stored as skill references.
+---
+
+## Seed reconciliation (`src/lib/agent/seed-sync.ts`)
+
+`seed/` is BOS source; `data/skills/` and `data/agents/` are the deployment's.
+Seeding used to be **additive only** — an id was written when absent and never
+again — which made `seed/` a first-boot template rather than an update channel:
+a shipped fix to an existing skill, a corrected reference document, or a
+deletion could never reach a deployment that had already booted once.
+
+It can't simply overwrite, either: `skill_improve`'s reflective optimizer
+rewrites a skill's body and score in place, and Settings edits do the same for
+agents. So each copy carries a sidecar stamp, `data/<store>/<id>/.seed-rev`,
+holding **two** hashes:
+
+| field | covers | answers |
+|---|---|---|
+| `seed` | the seed content it was materialized from | has the shipped version moved on? |
+| `live` | the bytes BOS itself last wrote | has anything touched it since? |
+
+Both are needed because **what BOS writes is not the seed content byte-for-byte**:
+an agent is rewritten by the allowlist/conflict-tool backfills right after
+seeding, and a skill is re-serialized by `writeSkill` (which adds `created_by`
+and splits assets into subfolders). A single hash made every id look locally
+modified the instant it was written, so nothing ever updated.
+
+Per id, on boot (`decideSeedAction`):
+
+| state | action |
+|---|---|
+| no `data/` copy | **seed** it |
+| `live` matches disk, `seed` differs from the current seed | **update** in place |
+| `live` matches disk, id gone from `seed/` | **archive** to `.archive/<id>` |
+| `live` doesn't match, or no stamp | **leave alone** — it's local now |
+
+A skill's hash covers its `references/` and `scripts/` too, not just SKILL.md —
+a change confined to one reference document is a real change.
+
+Guardrails: an empty/unreadable seed listing never reads as "everything was
+deleted"; dropped ids are archived, never deleted; the default-prompt agent is
+never archived; and an agent refresh clears the one-shot migration markers so
+the tool-allowlist backfill re-applies (the seed's own frontmatter has no
+`tools` field, and under *empty allowlist = zero tools* an updated agent would
+otherwise come back mute).
+
+**One-time migration.** A deployment seeded before this existed has no stamp
+anywhere, so every seeded copy reads as local and stays frozen. There is no way
+around it — no record of which seed revision those copies came from was ever
+kept, so "untouched" is unprovable and guessing would overwrite real edits. To
+adopt the shipped version of a given id once, delete `data/skills/<id>/` (or
+`data/agents/<id>/`) and restart; it re-seeds stamped, and tracks from then on.
 
 ---
 

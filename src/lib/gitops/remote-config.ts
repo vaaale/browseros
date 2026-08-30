@@ -28,20 +28,28 @@ export interface GitRemoteConfig {
   updatedAt: string
 }
 
-const CONFIG_PATH = join(dataDir(), "config", "git-remotes.json")
+// Resolved fresh on every call, never cached at module scope — dataDir() is
+// itself override-able per-process (BOS_DATA_DIR), and a module-level const
+// would freeze this to whatever was active the first time this module
+// happened to load, silently reading/writing the wrong file afterward.
+function configPath(): string {
+  return join(dataDir(), "config", "git-remotes.json")
+}
 
 export function readRemoteConfigs(): GitRemoteConfig[] {
-  if (!existsSync(CONFIG_PATH)) return []
-  const content = readFileSync(CONFIG_PATH, "utf-8")
+  const cfgPath = configPath()
+  if (!existsSync(cfgPath)) return []
+  const content = readFileSync(cfgPath, "utf-8")
   return JSON.parse(content)
 }
 
 function writeRemoteConfigs(configs: GitRemoteConfig[]): void {
+  const cfgPath = configPath()
   const dir = join(dataDir(), "config")
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-  const tempPath = `${CONFIG_PATH}.tmp`
+  const tempPath = `${cfgPath}.tmp`
   writeFileSync(tempPath, JSON.stringify(configs, null, 2))
-  renameSync(tempPath, CONFIG_PATH)
+  renameSync(tempPath, cfgPath)
   gitLogger().info({ op: "write_remote_config" })
 }
 

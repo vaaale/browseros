@@ -74,6 +74,21 @@ export function ServiceConfigPanel({ serviceId }: ServiceConfigPanelProps) {
   if (loading) return <p className="text-xs text-white/40">Loading configuration…</p>;
   if (!data) return <p className="text-xs text-red-400">Failed to load configuration.</p>;
 
+  // A service can register its own self-contained HTML config UI
+  // (manifest.settingsRegistration.configApp) instead of the generic
+  // schema-driven panel below — served same-origin through
+  // /api/services/<id>/config-app so it renders as the panel's main content.
+  if (configApp) {
+    return (
+      <iframe
+        key={configApp}
+        src={`/api/services/${encodeURIComponent(serviceId)}/config-app`}
+        title={`${serviceId} configuration`}
+        className="h-full min-h-[600px] w-full rounded-md border border-white/10"
+      />
+    );
+  }
+
   return (
     <div className="space-y-4">
       <h4 className="text-sm font-semibold text-white">Configuration</h4>
@@ -81,13 +96,6 @@ export function ServiceConfigPanel({ serviceId }: ServiceConfigPanelProps) {
       {data.readOnly && (
         <p className="rounded bg-yellow-500/10 px-3 py-2 text-xs text-yellow-300">
           This service&apos;s config comes from a read-only marketplace source. Adopt it into user-apps to edit.
-        </p>
-      )}
-
-      {configApp && (
-        <p className="rounded bg-blue-500/10 px-3 py-2 text-xs text-blue-300">
-          This service registers a custom config component (&quot;{configApp}&quot;). Custom settings components
-          aren&apos;t loadable yet — showing the default schema-driven panel below.
         </p>
       )}
 

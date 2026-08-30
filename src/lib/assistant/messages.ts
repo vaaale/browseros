@@ -9,11 +9,14 @@ export interface ToolCallRef {
   function: { name: string; arguments: string };
 }
 
-// A multimodal attachment on a user message. `data` is raw base64 (no data: URI
-// prefix). `image` renders inline and is sent to the model as an image block;
-// `file` (e.g. application/pdf) is sent as a document block where the provider
-// supports it. Non-model-supported types (audio/video) are still uploaded to the
-// VFS and kept for reference but are not sent to the model.
+// A multimodal attachment on a user message OR a tool-result message (a server
+// tool that read/generated an image can attach it to its own result so the
+// model actually sees it, not just a text description — see ToolExecuteResult
+// in tools.ts). `data` is raw base64 (no data: URI prefix). `image` renders
+// inline and is sent to the model as an image block; `file` (e.g.
+// application/pdf) is sent as a document block where the provider supports it.
+// Non-model-supported types (audio/video) are still uploaded to the VFS and
+// kept for reference but are not sent to the model.
 export interface Attachment {
   type: "image" | "file";
   mimeType: string;
@@ -31,7 +34,9 @@ export interface ChatMessage {
   toolCalls?: ToolCallRef[];
   /** role:"tool" only — the assistant toolCall this message answers. */
   toolCallId?: string;
-  /** role:"user" only — multimodal attachments sent with the message. */
+  /** role:"user" — multimodal attachments sent with the message. Also valid on
+   *  role:"tool" — a server tool's own result can attach an image it read or
+   *  generated (see ToolExecuteResult). */
   attachments?: Attachment[];
   /** Thumbs feedback stamped by the UI; consumed by the memory fast loop. */
   feedback?: { rating: "up" | "down"; at: number };

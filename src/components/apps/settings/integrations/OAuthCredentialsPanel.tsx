@@ -42,6 +42,13 @@ export interface OAuthCredentialsPanelProps {
    * resolved against the public origin. Omit to hide the section.
    */
   redirectUriPath?: string;
+  /**
+   * Scopes BrowserOS requests during the OAuth flow (e.g. the provider's
+   * manifest `scopes`). When supplied, shown so the user enables every one of
+   * them on the provider's OAuth app — providers like GitLab reject the
+   * entire request if even one requested scope isn't allowed for the app.
+   */
+  requiredScopes?: string[];
 }
 
 /**
@@ -59,6 +66,7 @@ export function OAuthCredentialsPanel({
   onSaved,
   onSubmit,
   redirectUriPath,
+  requiredScopes,
 }: OAuthCredentialsPanelProps) {
   const isGitLab = integrationId === "gitlab";
 
@@ -200,6 +208,28 @@ export function OAuthCredentialsPanel({
     </div>
   ) : null;
 
+  // Shown alongside the redirect URI: the scopes BOS will request, so the
+  // user enables all of them on the provider's OAuth app before connecting.
+  const scopesSection = requiredScopes?.length ? (
+    <div className="mt-4 space-y-2">
+      <div className="text-[11px] font-medium text-white/60">Required scopes</div>
+      <p className="text-[10.5px] text-white/40">
+        Enable every one of these on your {providerName} OAuth app. If even one is missing, {providerName}{" "}
+        will reject the whole authorization request with a scope error:
+      </p>
+      <div className="flex flex-wrap gap-1.5">
+        {requiredScopes.map((scope) => (
+          <code
+            key={scope}
+            className="rounded border border-white/15 bg-white/[0.05] px-1.5 py-0.5 text-[10.5px] text-white/80"
+          >
+            {scope}
+          </code>
+        ))}
+      </div>
+    </div>
+  ) : null;
+
   // Compact "already configured" view with an Edit button.
   if (!editing) {
     return (
@@ -227,6 +257,7 @@ export function OAuthCredentialsPanel({
           </div>
         )}
         {redirectSection}
+        {scopesSection}
       </div>
     );
   }
@@ -262,10 +293,10 @@ export function OAuthCredentialsPanel({
           <span className="mb-1 block text-[11px] font-medium text-white/60">Client Secret</span>
           <input
             type="password"
+            autoComplete="new-password"
             value={clientSecret}
             onChange={(e) => setClientSecret(e.target.value)}
             disabled={busy}
-            autoComplete="off"
             spellCheck={false}
             placeholder="••••••••••••••••"
             className="w-full rounded border border-white/15 bg-white/[0.05] px-2.5 py-1.5 text-[12px] text-white outline-none transition-colors placeholder:text-white/25 focus:border-violet-400/60 disabled:opacity-50"
@@ -295,6 +326,7 @@ export function OAuthCredentialsPanel({
       </div>
 
       {redirectSection}
+      {scopesSection}
 
       {error && <div className="mt-2 text-[11px] text-red-300">{error}</div>}
 

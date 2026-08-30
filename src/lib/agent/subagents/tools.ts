@@ -9,7 +9,7 @@ import type { LlmTool } from "@/lib/agent/llm";
 import { SCHEDULER_TOOLS } from "@/lib/scheduler/agent-tools";
 import { listSkills, getSkill, readSkillFile, listSkillFiles } from "@/lib/agent/skills/store";
 import { readMetadataOverrides } from "@/lib/agent/tool-metadata-overrides";
-import { CAPABILITIES, groupDescription } from "@/lib/agent/capabilities-registry";
+import { listCapabilities, groupDescription } from "@/lib/agent/capabilities-registry";
 import { scoreCapability, scoreAgent } from "@/lib/agent/discovery-score";
 import { listSubAgents } from "./store";
 
@@ -127,7 +127,7 @@ export const DEV_TOOLS: Record<string, LlmTool> = {
     execute: async (input) => repo.readFile(input.path as string),
   },
   bos_source_search: {
-    description: "Search BrowserOS source files for a string. Returns matching path:line:text. Optionally restrict to a subdirectory.",
+    description: "Search BrowserOS source files for a string. Returns matching path:line:text. Multiple space-separated words all must appear on the same line, in any order (e.g. \"promote blocked\" matches a line containing both words, not just that exact phrase). Optionally restrict to a subdirectory.",
     parameters: {
       type: "object",
       properties: { query: { type: "string" }, dir: { type: "string", description: "Subdir to search, defaults to 'src'" } },
@@ -187,7 +187,7 @@ export function makeSpecTools(branch?: string): Record<string, LlmTool> {
       execute: async (input) => `Edited ${await specfs.editFile(input.path as string, input.find as string, (input.replace as string) ?? "", ctx)}`,
     },
     spec_search: {
-      description: "Search spec content across all stores for a string. Returns matching path:line:text. Optionally restrict to a store-prefixed subdirectory.",
+      description: "Search spec content across all stores for a string. Returns matching path:line:text. Multiple space-separated words all must appear on the same line, in any order (e.g. \"promote blocked\" matches a line containing both words, not just that exact phrase). Optionally restrict to a store-prefixed subdirectory.",
       parameters: {
         type: "object",
         properties: { query: { type: "string" }, dir: { type: "string", description: "Store-prefixed subdir to search (e.g. 'user-specs'); omit to search all stores." } },
@@ -356,7 +356,7 @@ export function makeDiscoveryTools(args: {
 
         // Score every capability that is deferred FOR THIS AGENT and that the
         // agent could actually call under its strict allowlist.
-        const candidates = CAPABILITIES
+        const candidates = listCapabilities()
           .filter((c) => effectiveDeferred.has(c.id))
           .filter((c) => allowSet.has(c.id))
           .filter((c) => tools[c.id] !== undefined || getToolSchema(c.id) !== undefined);

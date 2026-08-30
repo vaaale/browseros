@@ -64,7 +64,9 @@ build-studio/`) for the full guidance a spec/plan should follow here.
 - The **Files** app (`src/apps/files/index.tsx`) is a thin UI over `fsClient`.
 - **Conversations** (`src/lib/agent/conversations.ts`) store chat threads at
   `/Documents/Chats/<id>.json` through `fsClient`.
-- **Workflows** (`src/lib/workflows/store.ts`) store under `/Workflows/`.
+- **Workflows** — the bos-core engine that stored under `/Workflows/` has
+  been retired; its service-owned replacement (`data/user-apps/items/workflows/`)
+  uses the same `/Workflows/` location via the loopback `/api/fs` bridge.
 - Sub‑agents get VFS tools (`file_list`/`file_read`/`file_write`/`file_mkdir`)
   as their **default** toolset — see
   [Sub‑agents](../assistant/sub-agents-and-delegation.md).

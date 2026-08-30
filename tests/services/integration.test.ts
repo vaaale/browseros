@@ -18,6 +18,7 @@ import { useTestDataDir, resetServiceSingletons } from "./_test-env";
 import { RESPONSIVE_WORKER } from "./_worker-fixtures";
 
 function setupTest(label: string) {
+  // eslint-disable-next-line react-hooks/rules-of-hooks -- useTestDataDir is a test helper (temp-dir setup), not a React hook
   const { dir, cleanup } = useTestDataDir(label);
   resetServiceSingletons();
   return {

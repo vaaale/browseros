@@ -76,7 +76,7 @@ async function invokeSubagent(prompt: string, signal: AbortSignal): Promise<Reco
     },
     { signal },
   );
-  const call = res.choices[0]?.message?.tool_calls?.[0];
+  const call = res.choices?.[0]?.message?.tool_calls?.[0];
   if (!call || call.type !== "function") return null;
   try {
     return JSON.parse(call.function.arguments) as Record<string, unknown>;

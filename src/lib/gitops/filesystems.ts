@@ -2,7 +2,7 @@ import "server-only";
 import path from "path";
 import { listStores } from "@/lib/specs/stores";
 import { dataDir } from "@/os/data-dir";
-import { hasGitDir } from "./git-ops";
+import { hasGitDir, resolveMainWorktreeRoot } from "./git-ops";
 import { ensureRepo } from "@/lib/gitfs/store";
 
 // Central registry of the GitFS instances configured in BOS. Any git-backed
@@ -35,9 +35,15 @@ export interface GitFsInstance {
 export async function getAvailableGitFsInstances(): Promise<GitFsInstance[]> {
   const instances: GitFsInstance[] = [];
 
-  // Spec stores — each is an independent git repo under BOS_SPECS_ROOT.
+  // Spec stores — each directory-scanned store is an independent git repo
+  // under BOS_SPECS_ROOT, but an item-owned store (owner: "item") is rooted at
+  // a bare subdirectory of the shared user-apps repo instead (item-stores.ts)
+  // — it owns no `.git` of its own. Without this guard, a remote add/push/pull
+  // against its `root` would silently walk up and act on the WHOLE user-apps
+  // repo while the UI presents it as scoped to one item's spec.
   try {
     for (const store of await listStores()) {
+      if (!(await hasGitDir(store.root))) continue;
       instances.push({
         id: store.id,
         label: store.label,
@@ -64,13 +70,31 @@ export async function getAvailableGitFsInstances(): Promise<GitFsInstance[]> {
     // user-apps dir absent or not a repo — fine.
   }
 
-  // BrowserOS source repo (the checkout BOS itself runs from).
-  const src = process.cwd();
+  // BrowserOS source repo. NOT simply process.cwd() — under the Supervisor,
+  // the process serving this very request may be running from a detached,
+  // linked worktree (bos-worktrees/base), where branch/remote git operations
+  // (Settings -> Versions -> Pull/Push) would silently no-op against a
+  // throwaway detached HEAD instead of the real `refs/heads/<branch>`. See
+  // resolveMainWorktreeRoot's doc comment for the full explanation.
+  const src = await getSourceRepoRoot();
   if (await hasGitDir(src)) {
     instances.push({ id: SOURCE_FS_ID, label: "BrowserOS Source", vfsPath: "/", root: src });
   }
 
   return instances;
+}
+
+let cachedSourceRepoRoot: string | undefined;
+
+/** The BrowserOS source repo's MAIN working tree root — resolved once per
+ *  process and cached, since it never changes for the lifetime of a running
+ *  server. Exported so callers that need the source repo path without going
+ *  through a specific filesystem id (e.g. the git-remotes API route's
+ *  no-filesystem-specified legacy path) resolve it the same way. */
+export async function getSourceRepoRoot(): Promise<string> {
+  if (cachedSourceRepoRoot) return cachedSourceRepoRoot;
+  cachedSourceRepoRoot = await resolveMainWorktreeRoot(process.cwd());
+  return cachedSourceRepoRoot;
 }
 
 /** Look up a single GitFS instance by id. */

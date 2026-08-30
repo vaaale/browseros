@@ -43,13 +43,37 @@ export async function status(): Promise<{ branch: string; files: { status: strin
   return { branch, files };
 }
 
-/** List existing `bos/*` feature branch refs (read-only, allowed under the
- *  Supervisor since the worktrees share one `.git`). Used to offer resumable
- *  branches in the Assistant. */
+async function remoteNames(): Promise<string[]> {
+  const out = await git(["remote"]).catch(() => "");
+  return out ? out.split("\n").map((l) => l.trim()).filter(Boolean) : [];
+}
+
+/** Every remote's fetched `<remote>/bos/*` tracking ref, as `<remote>/bos/<slug>`
+ *  (`for-each-ref`'s glob doesn't expand a bare `*` remote-name segment the way
+ *  a fixed prefix does, so remotes are queried one at a time instead). */
+async function remoteFeatureBranchRefs(): Promise<string[]> {
+  const refs: string[] = [];
+  for (const remote of await remoteNames()) {
+    const out = await git(["for-each-ref", "--format=%(refname:short)", `refs/remotes/${remote}/bos`]).catch(() => "");
+    if (out) refs.push(...out.split("\n").map((l) => l.trim()).filter(Boolean));
+  }
+  return refs;
+}
+
+/** List existing `bos/*` feature branches — local refs (read-only, allowed
+ *  under the Supervisor since the worktrees share one `.git`) PLUS every
+ *  remote's already-fetched tracking refs, so a branch created elsewhere
+ *  (another checkout, another contributor, a fresh clone of this repo) and
+ *  pushed shows up here too, not just ones already checked out locally.
+ *  Used to offer resumable branches in the Assistant. */
 export async function listFeatureBranches(): Promise<string[]> {
   try {
-    const out = await git(["for-each-ref", "--format=%(refname:short)", "refs/heads/bos"]);
-    return out ? out.split("\n").map((l) => l.trim()).filter(Boolean) : [];
+    const local = await git(["for-each-ref", "--format=%(refname:short)", "refs/heads/bos"]);
+    const localNames = local ? local.split("\n").map((l) => l.trim()).filter(Boolean) : [];
+    // A remote-tracking short name is "<remote>/bos/<slug>" — strip the
+    // leading remote-name segment to get the bare "bos/<slug>" branch name.
+    const remoteAsLocalNames = (await remoteFeatureBranchRefs()).map((r) => r.split("/").slice(1).join("/"));
+    return Array.from(new Set([...localNames, ...remoteAsLocalNames])).sort();
   } catch {
     return [];
   }
@@ -60,17 +84,35 @@ function featureBranchName(name: string): string {
   return slug.startsWith("bos/") ? slug : `bos/${slug}`;
 }
 
-/** Create (or switch to) a `bos/<name>` feature branch. Refused under the
- *  Supervisor — switching the live checkout's branch breaks the running base. */
+/** Create (or resume) a `bos/<name>` feature branch. Refused under the
+ *  Supervisor — switching the live checkout's branch breaks the running base.
+ *  Resuming prefers, in order: an existing LOCAL branch of that name; a
+ *  remote's fetched tracking ref of that name (checked out with `--track`,
+ *  so it starts from the remote's actual history instead of silently
+ *  diverging from a fresh branch off current HEAD — `origin` is preferred
+ *  when more than one remote has it); otherwise a genuinely new branch. */
 export async function createFeatureBranch(name: string): Promise<string> {
   if (supervised()) throw new Error(SUPERVISOR_OWNS_GIT);
   const branch = featureBranchName(name);
+  // Only the existence probe is allowed to fail silently (a missing branch
+  // is the expected, common case) — the checkout itself is NOT inside this
+  // try/catch, so a real checkout failure on an EXISTING branch surfaces as
+  // its own error instead of being masked and retried as "create", which
+  // then failed with a confusing "already exists" instead of the true cause.
+  let exists = true;
   try {
     await git(["rev-parse", "--verify", branch]);
-    await git(["checkout", branch]);
   } catch {
-    await git(["checkout", "-b", branch]);
+    exists = false;
   }
+  if (exists) {
+    await git(["checkout", branch]);
+    return branch;
+  }
+  const remoteRefs = (await remoteFeatureBranchRefs()).filter((r) => r.split("/").slice(1).join("/") === branch);
+  const remoteRef = remoteRefs.find((r) => r.startsWith("origin/")) ?? remoteRefs[0];
+  if (remoteRef) await git(["checkout", "-b", branch, "--track", remoteRef]);
+  else await git(["checkout", "-b", branch]);
   return branch;
 }
 

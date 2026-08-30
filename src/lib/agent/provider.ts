@@ -3,11 +3,20 @@ import { promises as fs } from "fs";
 import path from "path";
 import { dataDir } from "@/os/data-dir";
 import { writeFileAtomic } from "@/os/atomic-write";
-import { PROVIDERS, type ProviderType } from "./provider-meta";
+import { familyOf, PROVIDERS, type ProviderType } from "./provider-meta";
 
 const FILE = path.join(dataDir(), "provider.json");
 
 export const DEFAULT_MAX_TOKENS = 65535;
+
+/** Embedding endpoint config (028-memory-curation-retrieval, T3/FR-009). Every
+ *  field independently falls back per-field (empty ⇒ use the LLM provider's
+ *  value) — see resolveEmbeddingConfig. */
+export interface EmbeddingConfig {
+  baseUrl?: string;
+  apiKey?: string;
+  model?: string;
+}
 
 export interface ProviderConfig {
   provider: ProviderType;
@@ -18,6 +27,7 @@ export interface ProviderConfig {
   maxTokens?: number;
   /** Context window (max input tokens) used for trimming. Optional. */
   maxInputTokens?: number;
+  embeddings?: EmbeddingConfig;
 }
 
 export interface ProviderConfigView {
@@ -27,6 +37,37 @@ export interface ProviderConfigView {
   hasApiKey: boolean;
   maxTokens?: number;
   maxInputTokens?: number;
+  /** The RESOLVED embedding base URL (safe to show — not a secret): the
+   *  configured embeddings.baseUrl, or the LLM base URL when left blank. */
+  embedBaseUrl: string;
+  /** Whether a SEPARATE embedding API key is set (never the key itself). When
+   *  false, the embedding client falls back to the LLM provider's key (whose
+   *  own presence is `hasApiKey`). */
+  hasEmbeddingKey: boolean;
+  /** The configured embedding model (independent of the LLM model; blank ⇒ disabled). */
+  embedModel: string;
+  /** Resolved: a non-blank model AND a non-anthropic-family provider. */
+  embeddingsEnabled: boolean;
+}
+
+/** Per-field embedding fallback resolution (FR-010, design §5.1):
+ *    baseUrl  = embeddings.baseUrl  || llm.baseUrl
+ *    apiKey   = embeddings.apiKey   || llm.apiKey
+ *    model    = embeddings.model    || undefined   (independent; no fallback)
+ *    enabled  = model is non-blank AND NOT (falling back to an Anthropic base
+ *               URL with no /embeddings) — a pure-Anthropic provider with no
+ *               embedding-base-URL override has nothing to fall back to
+ *               (spec Edge Case: "pure-Anthropic provider"), but a custom
+ *               embeddings.baseUrl pointed at an OpenAI-compatible server
+ *               re-enables it (the edge case's documented workaround) even
+ *               while the LLM stays on Anthropic. */
+export function resolveEmbeddingConfig(c: ProviderConfig): { baseUrl?: string; apiKey?: string; model?: string; enabled: boolean } {
+  const baseUrl = c.embeddings?.baseUrl || c.baseUrl || undefined;
+  const apiKey = c.embeddings?.apiKey || c.apiKey || undefined;
+  const model = c.embeddings?.model || undefined;
+  const fallingBackToAnthropic = !c.embeddings?.baseUrl && familyOf(c.provider) === "anthropic";
+  const enabled = !!model && !fallingBackToAnthropic;
+  return { baseUrl, apiKey, model, enabled };
 }
 
 // Backwards-compatible defaults derived from environment variables.
@@ -60,15 +101,17 @@ export async function getProviderConfig(modelOverride?: string): Promise<Provide
         ? (saved.maxTokens && saved.maxTokens > 0 ? saved.maxTokens : undefined)
         : base.maxTokens,
       maxInputTokens: saved.maxInputTokens ?? base.maxInputTokens,
+      embeddings: saved.embeddings,
     };
   } catch {
     return modelOverride ? { ...base, model: modelOverride } : base;
   }
 }
 
-/** Safe view for the UI — never exposes the API key. */
+/** Safe view for the UI — never exposes either API key (FR-011). */
 export async function getProviderConfigView(): Promise<ProviderConfigView> {
   const c = await getProviderConfig();
+  const resolved = resolveEmbeddingConfig(c);
   return {
     provider: c.provider,
     baseUrl: c.baseUrl ?? "",
@@ -76,12 +119,28 @@ export async function getProviderConfigView(): Promise<ProviderConfigView> {
     hasApiKey: !!c.apiKey,
     maxTokens: c.maxTokens,
     maxInputTokens: c.maxInputTokens,
+    embedBaseUrl: resolved.baseUrl ?? "",
+    hasEmbeddingKey: !!c.embeddings?.apiKey,
+    embedModel: c.embeddings?.model ?? "",
+    embeddingsEnabled: resolved.enabled,
   };
 }
 
 export async function updateProviderConfig(patch: Partial<ProviderConfig>): Promise<ProviderConfigView> {
   const current = await getProviderConfig();
   const provider = patch.provider ?? current.provider;
+  // Embeddings merge PER-FIELD (design S3) — "" clears that field, undefined
+  // leaves it unchanged — mirroring the flat apiKey/baseUrl convention below.
+  // NOT `patch.embeddings ?? current.embeddings` (all-or-nothing), which would
+  // force a full-object send and break independent per-field fallback.
+  const embeddingsPatch = patch.embeddings;
+  const nextEmbeddings: EmbeddingConfig | undefined = embeddingsPatch
+    ? {
+        baseUrl: embeddingsPatch.baseUrl === undefined ? current.embeddings?.baseUrl : embeddingsPatch.baseUrl || undefined,
+        apiKey: embeddingsPatch.apiKey === undefined ? current.embeddings?.apiKey : embeddingsPatch.apiKey || undefined,
+        model: embeddingsPatch.model === undefined ? current.embeddings?.model : embeddingsPatch.model || undefined,
+      }
+    : current.embeddings;
   const next: ProviderConfig = {
     provider,
     // An explicit empty string clears the key; undefined leaves it unchanged.
@@ -94,6 +153,7 @@ export async function updateProviderConfig(patch: Partial<ProviderConfig>): Prom
       : current.maxTokens,
     maxInputTokens:
       patch.maxInputTokens === undefined ? current.maxInputTokens : patch.maxInputTokens || undefined,
+    embeddings: nextEmbeddings,
   };
   await fs.mkdir(path.dirname(FILE), { recursive: true });
   await writeFileAtomic(FILE, JSON.stringify(next, null, 2));

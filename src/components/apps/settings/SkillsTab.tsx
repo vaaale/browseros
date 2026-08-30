@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowLeft, ChevronRight, FileText, Plus, Save, Trash2 } from "lucide-react";
 import type { Skill, SkillAsset } from "@/lib/agent/skills/store";
+import { BundledAssetConflicts } from "@/components/apps/settings/BundledAssetConflicts";
 
 type AssetKind = "scripts" | "references";
 
@@ -90,6 +91,7 @@ export function SkillsTab() {
 function SkillsList({ skills, onSelect, onNew }: { skills: Skill[]; onSelect: (id: string) => void; onNew: () => void }) {
   return (
     <div className="space-y-3 text-sm">
+      <BundledAssetConflicts kind="skill" />
       <div className="flex items-center justify-between">
         <p className="text-xs text-white/50">
           Skills are named procedures the assistant can load on demand. Click one to edit its instructions, scripts, and

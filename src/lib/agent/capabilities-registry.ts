@@ -1,14 +1,15 @@
 // Single source of truth for agent capabilities (016-unified-agents).
 //
 // One "agent" has one allowlist (`tools`) that governs it in BOTH contexts:
-//  - context "action" → a main-chat CopilotKit action (id = the useCopilotAction
-//    name); gated server-side in the CopilotKit route's language-model wrapper.
+//  - context "action" → a FRONTEND tool, executed in the browser (id = its name
+//    in tools/frontend-declarations.ts, run by components/agent/v2/
+//    FrontendToolsV2.tsx); gated server-side in the assistant run's registry.
 //  - context "tool"   → a server sub-agent tool (id = the toolsFor() key); gated
 //    server-side in runner.ts.
 //  - context "both"   → exists in both (e.g. spec ops: a client action + a server tool).
 //
 // Framework-free (no react, no server-only) so client gating, the server tool
-// resolver, the Settings catalog, and the InfoPanel all read the same list.
+// resolver, the Settings catalog, and InfoPanelV2 all read the same list.
 
 import { actionNameFor } from "@/lib/integrations/actions/dispatcher";
 import { GMAIL_METHOD_DESCRIPTORS } from "@/lib/integrations/services/gsuite/adapters/gmail-methods";
@@ -69,7 +70,12 @@ export const CAPABILITIES: Capability[] = [
   // Web
   { id: "web_search", group: "Web", context: "both", description: "Search the web with Anthropic native web search." },
   { id: "web_fetch", group: "Web", context: "both", description: "Fetch a URL's readable text content." },
-  { id: "web_view", group: "Web", context: "action", description: "Open an HTML document or URL in a sandboxed preview window." },
+  {
+    id: "web_view",
+    group: "Web",
+    context: "action",
+    description: "Open an HTML document, URL, image, or video in a sandboxed preview window.",
+  },
 
   // Files (VFS) — one id per op, used by the main chat and delegated sub-agents.
   { id: "file_list", group: "Files", context: "both", description: "List a virtual file system directory." },
@@ -77,10 +83,14 @@ export const CAPABILITIES: Capability[] = [
   { id: "file_write", group: "Files", context: "both", description: "Create or overwrite a text file." },
   { id: "file_mkdir", group: "Files", context: "both", description: "Create a directory." },
   { id: "file_delete", group: "Files", context: "action", description: "Delete a file or folder." },
+  { id: "file_rename", group: "Files", context: "action", description: "Rename or move a file or folder." },
   { id: "file_edit", group: "Files", context: "both", description: "Find and replace a unique string in a VFS file." },
   { id: "file_patch", group: "Files", context: "both", description: "Apply multiple find/replace hunks atomically to a VFS file." },
   { id: "file_search", group: "Files", context: "both", description: "Search file content across a VFS subtree." },
   { id: "file_glob", group: "Files", context: "both", description: "Find files matching a glob pattern in a VFS subtree." },
+  { id: "file_to_markdown", group: "Files", context: "both", description: "Convert a PDF/DOCX/PPTX/XLSX file under /workspace to markdown (via the sandbox's markitdown)." },
+  { id: "view_image", group: "Files", context: "both", description: "View an image at a VFS path as a real vision content block (not OCR)." },
+  { id: "video_keyframes", group: "Files", context: "both", description: "Sample keyframes from a video under /workspace (via ffmpeg) and view them as images." },
 
   // Config
   { id: "config_list", group: "Config", context: "action", description: "List configurable settings." },
@@ -105,6 +115,8 @@ export const CAPABILITIES: Capability[] = [
   // Memory
   { id: "memory_save", group: "Memory", context: "action", description: "Save to persistent memory." },
   { id: "memory_recall", group: "Memory", context: "action", description: "Read live persistent memory entries or a topic shard." },
+  { id: "memory_replace", group: "Memory", context: "action", description: "Update an existing memory entry's text in place." },
+  { id: "memory_remove", group: "Memory", context: "action", description: "Delete a memory entry from a topic." },
   { id: "memory_search", group: "Memory", context: "action", description: "Search topic shards + recent episodes for matching entries." },
 
   // Skills
@@ -137,6 +149,14 @@ export const CAPABILITIES: Capability[] = [
   { id: "app_list", group: "Apps", context: "action", description: "List runtime-installed apps." },
   { id: "app_uninstall", group: "Apps", context: "action", description: "Uninstall an app." },
 
+  // Specs (marketplace-item specs only — BOS-core/user specs use file_* on /Specs/)
+  { id: "app_spec_create", group: "Specs", context: "both", description: "Create a marketplace item's spec, bringing the item into existence even before any code does." },
+  { id: "app_spec_list", group: "Specs", context: "both", description: "List a marketplace item's spec artifacts." },
+  { id: "app_spec_read", group: "Specs", context: "both", description: "Read a marketplace item's spec artifact." },
+  { id: "app_spec_write", group: "Specs", context: "both", description: "Replace a marketplace item's spec artifact's entire content." },
+  { id: "app_spec_edit", group: "Specs", context: "both", description: "Find-and-replace a unique snippet in a marketplace item's spec artifact." },
+  { id: "app_spec_patch", group: "Specs", context: "both", description: "Apply several find/replace edits to a marketplace item's spec artifact atomically." },
+
   // Dev (repo + harness)
   { id: "dev_git_status", group: "Dev", context: "both", description: "Show git branch and changes (read-only)." },
   { id: "dev_branch_request", group: "Dev", context: "action", description: "Set up the active feature branch needed to modify BOS source." },
@@ -146,14 +166,17 @@ export const CAPABILITIES: Capability[] = [
   { id: "bos_source_search", group: "Dev", context: "both", description: "Search BOS source (read-only, sub-agent)." },
   { id: "run_command", group: "Dev", context: "both", description: "Run a shell command in a sandboxed environment (python3, node, pip3, etc.)." },
 
-  // Workflows
-  { id: "workflow_create", group: "Workflows", context: "action", description: "Generate a workflow from a description." },
-  { id: "workflow_modify", group: "Workflows", context: "action", description: "Apply a JSON-merge patch to a workflow." },
-  { id: "workflow_run", group: "Workflows", context: "action", description: "Execute a workflow and stream step events." },
-  { id: "workflow_status", group: "Workflows", context: "action", description: "Read a workflow's execution state." },
-  { id: "workflow_cancel", group: "Workflows", context: "action", description: "Cancel a running workflow." },
-  { id: "workflow_export", group: "Workflows", context: "action", description: "Return a workflow's full JSON." },
-  { id: "workflow_validate", group: "Workflows", context: "action", description: "Validate a workflow's DAG." },
+  // Git conflict resolution (035-spec-promote-conflict-escalation). The whole
+  // access mechanism the conflict-resolution agent gets: repo-scoped, gated to
+  // the session's own working context, identical for every managed repo. An
+  // agent selected as the conflict agent (Settings -> Build Studio) MUST list
+  // these, or its escalation fails loudly at the first tool call.
+  { id: "conflict_read", group: "Conflict Resolution", context: "tool", description: "Read the ours/base/theirs content and marker hunks of a conflicting file in the active conflict-resolution session." },
+  { id: "conflict_write", group: "Conflict Resolution", context: "tool", description: "Write the resolved (markers-removed) content of a conflicting file back into the session's repo." },
+  { id: "conflict_decision", group: "Conflict Resolution", context: "tool", description: "Ask the user to decide a genuinely ambiguous conflict; parks the session until they answer." },
+  { id: "conflict_status", group: "Conflict Resolution", context: "tool", description: "Report the conflict session's status, per-file progress, and decision timeline." },
+  { id: "conflict_complete", group: "Conflict Resolution", context: "tool", description: "Declare the conflict resolved and complete the underlying git operation." },
+  { id: "conflict_abandon", group: "Conflict Resolution", context: "tool", description: "Abandon the resolution and roll the repo back to its pre-reconciliation state." },
 
   // Scheduler (025-agent-delegation-v2, Phase 4 — ported natively into v2's
   // registry; these existed only in the legacy engine before, so no agent's
@@ -216,8 +239,8 @@ export const GROUP_DEFINITIONS: Record<string, { description: string }> = {
   "Scratchpad": { description: "Conversation-scoped notes and scratchpad: creating, reading, editing, and deleting temporary notes tied to the current conversation." },
   "MCP": { description: "Model Context Protocol server integration: connecting servers, listing and searching their tools, inspecting schemas, and invoking tools." },
   "Apps": { description: "Runtime-installed application management: installing, listing, building, and uninstalling BrowserOS apps." },
+  "Specs": { description: "Marketplace-item specifications: creating, listing, reading, and editing the spec that lives inside an item's own folder — distinct from BOS-core/user specs, which use the file_* tools on /Specs/ instead." },
   "Dev": { description: "Repo and developer operations: reading and searching BrowserOS source, git status, delegating implementation work, and running sandboxed shell commands." },
-  "Workflows": { description: "Multi-step workflow authoring and execution: creating, modifying, running, cancelling, validating, and exporting workflows." },
   "Build Studio": { description: "Build Studio app control: opening spec artifacts in the viewer and refreshing the spec tree." },
   "UI Preview": { description: "Live A2UI mockup design surface: opening the UI Preview window, generating and pushing A2UI operations, and scrolling the paired spec viewer to a requirement." },
   "Gmail": { description: "Gmail integration: listing, reading, sending, replying, modifying, labeling, searching, and downloading attachments from messages." },

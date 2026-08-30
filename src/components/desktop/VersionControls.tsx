@@ -2,45 +2,11 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { FileText } from "lucide-react";
-import { sessionHeader } from "@/lib/logging/client/session";
 import { useLogContextMenu } from "@/components/logging/useLogContextMenu";
 import { useOSStore } from "@/store/os-provider";
+import { supervisorPost, promoteIssues, type SupState, type Branches } from "@/lib/supervisor/client";
+import { ConflictSessionBadge } from "@/components/gitops/ConflictSessionBadge";
 
-type PreviewState = "not-built" | "idle" | "building" | "ready" | "failed" | "stopped" | "escalated" | string;
-
-interface Ver {
-  role: string;
-  branch?: string;
-  state: PreviewState;
-  buildError?: string;
-  /** Present while state is "escalated" — a promote's reconciliation pipeline
-   *  handed a conflict to the DevOps Agent. Points at the (persisted,
-   *  resumable) conversation so the user can watch/stop/interact with it,
-   *  even after a browser refresh. */
-  devopsConversationId?: string;
-}
-interface SupState {
-  base: Ver | null;
-  previews: Ver[];
-  appCandidate: { branch: string; base: string } | null;
-  serving?: { role: string; branch?: string } | null;
-}
-interface Branches {
-  branches: string[];
-  base: string;
-}
-interface PostResult {
-  ok?: boolean;
-  error?: string;
-  state?: string;
-  /** Reuse/dev-mode promote: base's `next dev` needs a manual restart (deps/config changed). */
-  needsRestart?: boolean;
-  message?: string;
-  /** Per-remote push outcome from a promote (origin + any autoPush remotes). A
-   *  "failed" entry means the promote itself succeeded but the push didn't —
-   *  never silent, always surfaced. */
-  pushResults?: { remoteName: string; status: "success" | "failed"; error?: string }[];
-}
 interface LogRecord {
   ts?: number;
   level?: string;
@@ -186,7 +152,17 @@ export function VersionControls() {
       setBranches(nextBranches);
       setState(nextState);
       const servingBranch = nextState.serving?.branch;
-      setSelectedBranch((current) => current || servingBranch || nextBranches.base);
+      setSelectedBranch((current) => {
+        if (current && nextBranches.branches.includes(current)) return current;
+        // Either nothing selected yet, or the previously-selected branch no
+        // longer exists (deleted by a promote/discard, possibly from another
+        // tab/session) — fall back to whichever version this session is
+        // actually being served. Never keep pointing at a gone branch: doing
+        // so let the dropdown re-select it, which silently resurrected an
+        // empty branch of the same name (_provisionPreview creates a fresh
+        // one when asked to provision a branch that no longer exists).
+        return servingBranch || nextBranches.base;
+      });
     } catch {
       // Supervisor endpoints do not exist when BOS is not served through it.
     }
@@ -201,17 +177,10 @@ export function VersionControls() {
     };
   }, [load]);
 
-  const post = useCallback(async (path: string, body?: Record<string, unknown>): Promise<PostResult> => {
+  const post = useCallback(async (path: string, body?: Record<string, unknown>) => {
     setBusy(true);
     try {
-      const r = await fetch(`/__supervisor/${path}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...sessionHeader() },
-        body: JSON.stringify(body ?? {}),
-      });
-      return (await r.json()) as PostResult;
-    } catch (e) {
-      return { ok: false, error: (e as Error).message };
+      return await supervisorPost(path, body);
     } finally {
       setBusy(false);
     }
@@ -242,7 +211,6 @@ export function VersionControls() {
   const escalated = preview?.state === "escalated";
   const hasFeatureSelection = !isBaseSelection && !!selectedBranch;
   const selectDisabled = busy || building;
-  const app = state.appCandidate;
 
   const onSelect = async (branch: string) => {
     setSelectedBranch(branch);
@@ -283,6 +251,7 @@ export function VersionControls() {
     }
   };
   const discardPreview = async () => {
+    if (!window.confirm(`Discard ${selectedBranch}? This destroys its worktree and deletes the branch — any uncommitted work is lost.`)) return;
     setErr(null);
     const r = await post("discard", { branch: selectedBranch });
     if (r.ok) window.location.reload();
@@ -295,12 +264,9 @@ export function VersionControls() {
     setErr(null);
     const r = await post("promote", { branch: selectedBranch });
     if (r.ok) {
-      const pushFailures = (r.pushResults ?? []).filter((p) => p.status === "failed");
-      if (pushFailures.length > 0) {
-        window.alert(
-          `Promoted, but push failed for: ${pushFailures.map((p) => `${p.remoteName} (${p.error || "unknown error"})`).join("; ")}\n\n` +
-            "The promoted code is live on base but NOT pushed to the remote(s) above — push manually from Settings → Versions once resolved.",
-        );
+      const issues = promoteIssues(r);
+      if (issues) {
+        window.alert(`Promoted ${selectedBranch}, but with issues:\n\n${issues.join("\n")}`);
       } else if (r.needsRestart) {
         window.alert(r.message || "Promoted. Restart your dev server so base picks up the changes.");
       }
@@ -316,13 +282,6 @@ export function VersionControls() {
     if (!r.ok) setErr(r.error || "Build failed.");
     await load();
   };
-  const onApp = async (path: "app-promote" | "app-discard") => {
-    setErr(null);
-    const r = await post(path);
-    if (!r.ok) setErr(r.error || `${path === "app-promote" ? "Promote" : "Discard"} app failed.`);
-    await load();
-  };
-
   const btn = "rounded px-1.5 py-0.5 transition-colors disabled:cursor-default disabled:opacity-40";
 
   return (
@@ -330,14 +289,9 @@ export function VersionControls() {
       <span className={`px-2 text-sm font-semibold tracking-wide ${viewingBase ? "text-sky-200" : "text-amber-200"}`}>
         {stateText}
       </span>
-      {app && (
-        <>
-          <span className="text-white/55" title={`app preview on branch ${app.branch} (base ${app.base})`}>app preview</span>
-          <button disabled={busy} onClick={() => void onApp("app-promote")} className={`${btn} bg-emerald-500/25 hover:bg-emerald-500/40`}>Promote app</button>
-          <button disabled={busy} onClick={() => void onApp("app-discard")} className={`${btn} bg-white/10 hover:bg-white/20`}>Discard app</button>
-          <span className="mx-0.5 text-white/20">|</span>
-        </>
-      )}
+      {/* No separate "app preview" slot: marketplace/app content lives in
+          `user-apps`, a branch-coupled repo, so it is promoted and discarded by
+          the feature-branch controls below together with code and specs. */}
       <select
         value={selectedBranch || baseBranch}
         disabled={selectDisabled}
@@ -345,7 +299,7 @@ export function VersionControls() {
         title={viewingBase ? "Base version - pick a feature branch to build or preview it" : "Preview version - pick a running branch or base"}
         className="max-w-[220px] truncate rounded bg-white/10 px-1.5 py-0.5 text-white/90 outline-none transition-colors hover:bg-white/20 disabled:opacity-40"
       >
-        {(branches.branches.includes(selectedBranch) || !selectedBranch ? branches.branches : [selectedBranch, ...branches.branches]).map((b) => (
+        {branches.branches.map((b) => (
           <option key={b} value={b} className="bg-neutral-900 text-white">
             {b === baseBranch ? `${b} (base)` : b}
           </option>
@@ -362,23 +316,21 @@ export function VersionControls() {
           )}
           {stopped && <span className="text-white/50">stopped</span>}
           {escalated && (
-            <span className="flex items-center gap-1 text-amber-300/90" title="A merge conflict during promote was handed to the DevOps Agent — the conversation is live, stoppable, and resumable.">
-              escalated to DevOps Agent
-              <button
-                onClick={() => launch("chat")}
-                className={`${btn} bg-amber-500/25 hover:bg-amber-500/40`}
-                title="Open the Assistant app — find the conversation in the list (it's titled after the conflict being resolved)"
-              >
-                Open Assistant
-              </button>
-            </span>
+            // 035 (FR-019): was a static "escalated to DevOps Agent" string
+            // whose only affordance was "go find the conversation yourself".
+            // Now the live session: status, unresolved file count, and a
+            // button straight into the Build Studio conflict pane.
+            <ConflictSessionBadge
+              sessionId={preview?.conflictSessionId}
+              conversationId={preview?.devopsConversationId}
+            />
           )}
           {!previewingSelected && (
             <button disabled={busy || (!ready && !stopped)} onClick={pinPreview} className={`${btn} bg-sky-500/25 hover:bg-sky-500/40`}>Preview</button>
           )}
           {previewingSelected && <span className="text-emerald-300/90">previewing</span>}
           {failed && <button disabled={busy} onClick={retryBuild} className={`${btn} bg-amber-500/25 hover:bg-amber-500/40`}>Retry</button>}
-          <button disabled={busy || building || failed} onClick={promotePreview} title="Build if needed, then make this branch the base version" className={`${btn} bg-emerald-500/25 hover:bg-emerald-500/40`}>Promote</button>
+          <button disabled={busy || building || failed} onClick={promotePreview} title="Build if needed, then merge this feature branch — code, specs, and user-apps content — into base." className={`${btn} bg-emerald-500/25 hover:bg-emerald-500/40`}>Promote</button>
           <button disabled={busy || building || stopped || notBuilt} onClick={stopPreview} title="Stop the preview server but keep the branch/worktree" className={`${btn} bg-white/10 hover:bg-white/20`}>Stop</button>
           <button disabled={busy || building} onClick={discardPreview} title="Destroy the worktree and delete the feature branch" className={`${btn} bg-red-500/20 hover:bg-red-500/35`}>Discard</button>
         </>

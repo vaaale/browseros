@@ -47,6 +47,12 @@ export async function getBrowserAutomationServer(): Promise<McpServerConfig | nu
   const args: string[] = [];
   if (cfg.headless) args.push("--headless");
   if (cfg.isolated) args.push("--isolated");
+  // The user container has no CAP_SYS_ADMIN and no seccomp override for
+  // Chromium's own setuid sandbox, so it fails to initialize without this —
+  // observed as browser processes crashing/wedging on launch (never a clean
+  // error), which piled up as zombies and made agent browser-tool calls hang
+  // for minutes waiting on a wedged process instead of failing fast.
+  args.push("--no-sandbox");
   // Reuse the installed Playwright Chromium (the MCP server otherwise wants a
   // separate chrome-for-testing build). The probe resolves the bundled binary.
   if (caps.chromiumExecutable) args.push("--executable-path", caps.chromiumExecutable);

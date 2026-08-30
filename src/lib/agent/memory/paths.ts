@@ -59,3 +59,10 @@ export function agentLockFile(agentId: string): string {
 export function agentFeedbackScanFile(agentId: string): string {
   return `${agentMemoryRoot(agentId)}/.feedback-scan.json`;
 }
+
+/** Per-agent embedding cache (028-memory-curation-retrieval, ADR-3). Keyed by
+ *  entry content-hash id; never inlined into a topic .md (would pollute the
+ *  human-readable file and count toward its budget). */
+export function agentEmbeddingsFile(agentId: string): string {
+  return `${agentMemoryRoot(agentId)}/.embeddings.json`;
+}

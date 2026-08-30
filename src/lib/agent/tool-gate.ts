@@ -1,7 +1,7 @@
 import "server-only";
 import { wrapLanguageModel, type LanguageModel } from "ai";
 import type { LanguageModelV3, LanguageModelV3Middleware } from "@ai-sdk/provider";
-import { CAPABILITIES, deferredCapabilityIds } from "@/lib/agent/capabilities-registry";
+import { listCapabilities, deferredCapabilityIds } from "@/lib/agent/capabilities-registry";
 
 // Server-side tool gate for the main agent (025-deferred-tool-discovery +
 // 016-unified-agents). This is the SINGLE choke point that decides which tools
@@ -24,7 +24,6 @@ import { CAPABILITIES, deferredCapabilityIds } from "@/lib/agent/capabilities-re
 // sees the user's edited description without any client involvement.
 
 const DISCOVERY_TOOLS = new Set(["find_tools", "find_agent"]);
-const REGISTRY_IDS = new Set(CAPABILITIES.map((c) => c.id));
 
 export interface ToolGateOptions {
   /** The agent's `tools` allowlist. Empty ⇒ zero registry tools. */
@@ -96,13 +95,17 @@ export function withToolGate(model: LanguageModel, opts: ToolGateOptions): Langu
       if (!Array.isArray(tools) || tools.length === 0) return params;
 
       const revealed = deriveRevealedIds(params.prompt);
+      // 039-service-tool-exposure: derived PER STEP (not a module-level frozen
+      // Set) so a service tool registered after import time — or after this
+      // middleware was constructed — is still gated on every subsequent step.
+      const registryIds = new Set(listCapabilities().map((c) => c.id));
 
       const filtered = tools.filter((t) => {
         const name = (t as { name?: string }).name;
         if (!name) return true;
         // Always-available: discovery + anything not in the capability registry
         // (consent, elicitation, AGUI state tools, …).
-        if (DISCOVERY_TOOLS.has(name) || !REGISTRY_IDS.has(name)) return true;
+        if (DISCOVERY_TOOLS.has(name) || !registryIds.has(name)) return true;
         // Allowlist gate (016).
         if (!allowSet.has(name)) return false;
         // Deferred gate (025).

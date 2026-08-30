@@ -3,7 +3,7 @@
 Spec: `user-specs/scratchpad/spec.md` (external spec store). User‑facing:
 `docs/usage/features/scratchpad.md`.
 
-Conversation‑scoped, tool‑only note‑taking. Four CopilotKit actions —
+Conversation‑scoped, tool‑only note‑taking. Four assistant tools —
 `scratchpad_write`, `scratchpad_read`, `scratchpad_edit`, `scratchpad_delete` —
 operate on a per‑conversation `Map<title, Note>`. There is no dedicated storage
 layer: the conversation's own `messages[]` history is the source of truth, and
@@ -24,7 +24,7 @@ the Map is rebuilt from it lazily on first access.
   `ensureInitialized` (idempotent hydration that swallows loader errors).
 - `src/lib/agent/scratchpad/handlers.ts` — pure `writeNote` / `readNotes` /
   `editNote` / `deleteNote`. Return `ToolResult` values; do no I/O.
-- `src/components/agent/ScratchpadActions.tsx` — CopilotKit action wrappers.
+- `src/lib/assistant/tools/server/scratchpad.ts` — the server tools (the retired v1 `ScratchpadActions.tsx` wrappers are gone).
   Reads the active conversationId via `useActiveConversationId(agentId)`,
   keeps it in a ref (mirrors `SubAgentActions`); `/api/copilotkit` applies the
   016 unified allowlist and 025 deferred visibility server-side.

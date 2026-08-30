@@ -31,6 +31,8 @@ const MIME: Record<string, string> = {
   ".webm": "video/webm",
   ".m4a": "audio/mp4",
   ".mov": "video/quicktime",
+  ".m4v": "video/mp4",
+  ".avi": "video/x-msvideo",
 };
 
 // Streams raw file bytes without buffering the whole file in memory (vfs.ts's

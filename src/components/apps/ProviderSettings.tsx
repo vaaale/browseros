@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Loader2, CheckCircle2, XCircle, RefreshCw } from "lucide-react";
-import { PROVIDERS, PROVIDER_LIST, type ProviderType } from "@/lib/agent/provider-meta";
+import { Loader2, CheckCircle2, XCircle, RefreshCw, KeyRound, Link as LinkIcon, AlertTriangle, HelpCircle } from "lucide-react";
+import { PROVIDERS, PROVIDER_LIST, type ProviderType, type EmbedAvailability } from "@/lib/agent/provider-meta";
 
 interface ConfigView {
   provider: ProviderType;
@@ -11,6 +11,22 @@ interface ConfigView {
   hasApiKey: boolean;
   maxTokens?: number;
   maxInputTokens?: number;
+  embedBaseUrl: string;
+  hasEmbeddingKey: boolean;
+  embedModel: string;
+  embeddingsEnabled: boolean;
+}
+
+const EMBED_STATUS: Record<EmbedAvailability, { label: string; className: string }> = {
+  available: { label: "embeddings: available", className: "text-emerald-300" },
+  unsupported: { label: "embeddings: not supported from this endpoint", className: "text-amber-300" },
+  unknown: { label: "embeddings: status unknown — test the connection", className: "text-white/50" },
+};
+
+function EmbedStatusIcon({ status }: { status: EmbedAvailability }) {
+  if (status === "available") return <CheckCircle2 size={13} />;
+  if (status === "unsupported") return <AlertTriangle size={13} />;
+  return <HelpCircle size={13} />;
 }
 
 export function ProviderSettings() {
@@ -24,10 +40,23 @@ export function ProviderSettings() {
   const [modelsError, setModelsError] = useState<string | null>(null);
   const fetchSeq = useRef(0);
 
+  // Embeddings subsection — the base URL / key inputs follow the same
+  // "blank = unchanged, type-to-set" contract as the LLM API key above: the
+  // resolved (fallback-applied) value comes back from the server, never the
+  // raw override, so we track "touched" locally rather than prefilling.
+  const [embedUrlDraft, setEmbedUrlDraft] = useState("");
+  const [embedUrlTouched, setEmbedUrlTouched] = useState(false);
+  const [embedKeyDraft, setEmbedKeyDraft] = useState("");
+  const [embedAvailability, setEmbedAvailability] = useState<EmbedAvailability>("unknown");
+  const [embedTestError, setEmbedTestError] = useState<string | null>(null);
+
   useEffect(() => {
     fetch("/api/agent/provider")
       .then((r) => r.json())
-      .then((d) => setCfg(d.config))
+      .then((d) => {
+        setCfg(d.config);
+        setEmbedAvailability(PROVIDERS[d.config.provider as ProviderType]?.embedAvailability ?? "unknown");
+      })
       .catch(() => {});
   }, []);
 
@@ -72,10 +101,21 @@ export function ProviderSettings() {
 
   const onProviderChange = (provider: ProviderType) => {
     const m = PROVIDERS[provider];
-    setCfg({ ...cfg, provider, model: m.defaultModel, baseUrl: m.defaultBaseUrl ?? "" });
+    setCfg({
+      ...cfg,
+      provider,
+      model: m.defaultModel,
+      baseUrl: m.defaultBaseUrl ?? "",
+      embedModel: m.defaultEmbedModel ?? "",
+    });
     setStatus(null);
     setAvailableModels([]);
     setModelsError(null);
+    setEmbedUrlDraft("");
+    setEmbedUrlTouched(false);
+    setEmbedKeyDraft("");
+    setEmbedTestError(null);
+    setEmbedAvailability(m.embedAvailability);
   };
 
   const save = async () => {
@@ -93,12 +133,23 @@ export function ProviderSettings() {
           maxTokens: cfg.maxTokens ?? null,
           maxInputTokens: cfg.maxInputTokens ?? null,
           ...(apiKey ? { apiKey } : {}),
+          embeddings: {
+            // Model is always known raw (bound directly, like the main model
+            // field) — always send it. Base URL / key are only sent when the
+            // user actually touched them this session (per-field fallback).
+            model: cfg.embedModel,
+            ...(embedUrlTouched ? { baseUrl: embedUrlDraft } : {}),
+            ...(embedKeyDraft ? { apiKey: embedKeyDraft } : {}),
+          },
         }),
       }).then((r) => r.json());
       if (res.error) setStatus({ ok: false, msg: res.error });
       else {
         setCfg(res.config);
         setApiKey("");
+        setEmbedUrlDraft("");
+        setEmbedUrlTouched(false);
+        setEmbedKeyDraft("");
         setStatus({ ok: true, msg: "Saved." });
       }
     } finally {
@@ -116,12 +167,19 @@ export function ProviderSettings() {
           ? { ok: true, msg: `Connected to ${res.provider} (${res.model}). Reply: ${res.sample || "—"}` }
           : { ok: false, msg: res.error || "Test failed" },
       );
+      if (res.embeddings) {
+        setEmbedAvailability(res.embeddings.available ? "available" : "unsupported");
+        setEmbedTestError(res.embeddings.available ? null : res.embeddings.error ?? null);
+      }
     } finally {
       setTesting(false);
     }
   };
 
   const refreshModels = () => fetchModels(cfg.provider, cfg.baseUrl, apiKey);
+
+  const embedKeySet = cfg.hasEmbeddingKey || !!embedKeyDraft;
+  const embedStatusMeta = EMBED_STATUS[embedAvailability];
 
   return (
     <div className="space-y-3">
@@ -184,6 +242,7 @@ export function ProviderSettings() {
         <label className="text-xs text-white/60">API key</label>
         <input
           type="password"
+          autoComplete="new-password"
           value={apiKey}
           onChange={(e) => setApiKey(e.target.value)}
           placeholder={cfg.hasApiKey ? "•••••••• (saved — type to replace)" : meta.keyRequired ? "Required" : "Optional for local"}
@@ -211,6 +270,105 @@ export function ProviderSettings() {
         />
       </div>
 
+      {/* ============ Embeddings subsection (028-memory-curation-retrieval) ============ */}
+      <div className="rounded-lg border border-white/10 bg-white/[0.02] p-3">
+        <div className="mb-2 flex items-center gap-2">
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-white/50">Embeddings</h3>
+          <span className="rounded border border-dashed border-sky-400/40 bg-sky-400/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-sky-300">
+            new
+          </span>
+          <span className={`ml-auto flex items-center gap-1 text-[11px] ${embedStatusMeta.className}`}>
+            <EmbedStatusIcon status={embedAvailability} />
+            {embedStatusMeta.label}
+          </span>
+        </div>
+
+        <div className="space-y-2">
+          <div className="grid grid-cols-[120px_1fr] items-center gap-2">
+            <label className="text-xs text-white/60">Base URL</label>
+            <input
+              value={embedUrlDraft}
+              onChange={(e) => {
+                setEmbedUrlDraft(e.target.value);
+                setEmbedUrlTouched(true);
+              }}
+              placeholder={`Uses: ${cfg.embedBaseUrl || "(none set above)"}`}
+              className="rounded border border-white/10 bg-black/30 px-2 py-1.5 text-xs outline-none focus:border-white/30"
+            />
+          </div>
+          <div className="grid grid-cols-[120px_1fr] items-start gap-2">
+            <span />
+            <p className="text-[11px] text-white/40">
+              {embedUrlTouched && embedUrlDraft
+                ? "Custom endpoint — requests go to the URL above, not the LLM base URL."
+                : "Leave blank to use the LLM provider's base URL above."}
+            </p>
+          </div>
+
+          <div className="grid grid-cols-[120px_1fr] items-center gap-2">
+            <label className="text-xs text-white/60">API key</label>
+            <div className="flex items-center gap-2">
+              <input
+                type="password"
+                autoComplete="new-password"
+                value={embedKeyDraft}
+                onChange={(e) => setEmbedKeyDraft(e.target.value)}
+                placeholder={embedKeySet ? "•••••••• (set — type to replace)" : "Blank — uses the LLM provider's API key"}
+                className="flex-1 rounded border border-white/10 bg-black/30 px-2 py-1.5 text-xs outline-none focus:border-white/30"
+              />
+              <span className="shrink-0 text-[11px]">
+                {embedKeySet ? (
+                  <span className="flex items-center gap-1 text-emerald-300">
+                    <KeyRound size={12} /> set
+                  </span>
+                ) : (
+                  <span className="flex items-center gap-1 text-white/40">
+                    <LinkIcon size={12} /> fallback
+                  </span>
+                )}
+              </span>
+            </div>
+          </div>
+          <div className="grid grid-cols-[120px_1fr] items-start gap-2">
+            <span />
+            <p className="text-[11px] text-white/40">
+              {embedKeySet
+                ? "A separate embedding key is in use. Stored as a secret; the value is never displayed."
+                : "Leave blank to use the LLM provider's API key above."}
+            </p>
+          </div>
+
+          <div className="grid grid-cols-[120px_1fr] items-center gap-2">
+            <label className="flex items-center gap-1.5 text-xs text-white/60">
+              Model
+              <span className="rounded bg-white/10 px-1 text-[10px] font-normal text-white/50">required</span>
+            </label>
+            <input
+              value={cfg.embedModel}
+              onChange={(e) => setCfg({ ...cfg, embedModel: e.target.value })}
+              placeholder={meta.embedModelPlaceholder || meta.defaultEmbedModel || "embedding model"}
+              className="rounded border border-white/10 bg-black/30 px-2 py-1.5 text-xs outline-none focus:border-white/30"
+            />
+          </div>
+          <div className="grid grid-cols-[120px_1fr] items-start gap-2">
+            <span />
+            <p className="text-[11px] text-white/40">
+              {cfg.embedModel && cfg.embedModel !== meta.defaultEmbedModel ? (
+                <>Custom model — <code className="text-white/60">{cfg.embedModel}</code> in use.</>
+              ) : meta.defaultEmbedModel ? (
+                <>Required — defaults to <code className="text-white/60">{meta.defaultEmbedModel}</code> for {meta.label}.</>
+              ) : (
+                <span className="text-amber-200/80">{meta.embedModelNote || "Required — set a model served by your endpoint."}</span>
+              )}
+            </p>
+          </div>
+          {embedTestError && (
+            <p className="text-[11px] text-amber-300/80">{embedTestError}</p>
+          )}
+        </div>
+      </div>
+      {/* ============ /Embeddings ============ */}
+
       <div className="flex items-center gap-2">
         <button
           onClick={save}
@@ -234,7 +392,9 @@ export function ProviderSettings() {
         )}
       </div>
       <p className="text-[11px] text-white/40">
-        Used by the Assistant chat, sub-agents, memory reflection, and the dev harness fallback.
+        Used by the Assistant chat, sub-agents, memory reflection, and the dev harness fallback. The{" "}
+        <span className="text-white/60">embeddings</span> endpoint powers dense (semantic) memory retrieval; if the
+        provider can&apos;t serve embeddings, retrieval degrades to keyword + recency + importance.
       </p>
     </div>
   );

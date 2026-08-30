@@ -3,6 +3,7 @@ import { startReconcileJob, getReconcileJob } from "@/lib/gitops/reconcile-jobs"
 import type { ReconcileOptions } from "@/lib/gitops/reconcile";
 import { gitLogger } from "@/lib/gitops/logging";
 import type { MergeStrategy } from "@/lib/gitops/git-ops";
+import type { RepoKind, WorkMode } from "@/lib/gitops/sessions/types";
 import { resolveAuth, type AuthType } from "@/lib/gitops/auth";
 import { readRemoteConfigs } from "@/lib/gitops/remote-config";
 import { SOURCE_FS_ID } from "@/lib/gitops/filesystems";
@@ -24,6 +25,7 @@ export const dynamic = "force-dynamic";
 // whether anything polls it.
 
 const MERGE_STRATEGIES: MergeStrategy[] = ["merge-squash", "merge", "commit"];
+const REPO_KINDS: RepoKind[] = ["source", "user-specs", "user-apps", "vfs-mount", "generic"];
 
 function err(code: string, message: string, status = 400) {
   return NextResponse.json({ error: { code, message } }, { status });
@@ -84,6 +86,21 @@ export async function POST(req: NextRequest) {
   const filesystem = typeof body.filesystem === "string" && body.filesystem ? body.filesystem : SOURCE_FS_ID;
   const auth = await resolveRemoteAuth(remote, filesystem);
 
+  // 035: the escalation's WORKING CONTEXT, passed straight through from the
+  // caller. This is what lets the Supervisor (a separate Node process that
+  // never imports BOS `@/` source) route a spec-store or user-apps conflict
+  // into the same pipeline with the right repo parameters — the access
+  // mechanism is identical, only these values differ (FR-003/FR-004).
+  const repoKind = REPO_KINDS.includes(body.repoKind as RepoKind) ? (body.repoKind as RepoKind) : undefined;
+  const repoRoot = typeof body.repoRoot === "string" && body.repoRoot ? body.repoRoot : undefined;
+  const repoLabel = typeof body.repoLabel === "string" && body.repoLabel ? body.repoLabel : undefined;
+  const mode = body.mode === "plumbing" || body.mode === "working-tree" ? (body.mode as WorkMode) : undefined;
+  const operationLabel = typeof body.operationLabel === "string" && body.operationLabel ? body.operationLabel : undefined;
+  const completion =
+    body.completion && typeof body.completion === "object"
+      ? (body.completion as ReconcileOptions["completion"])
+      : undefined;
+
   const opts: ReconcileOptions = {
     repoPath,
     remote,
@@ -94,6 +111,12 @@ export async function POST(req: NextRequest) {
     featureBranchForDelegate,
     escalationContext,
     maxEscalationWaitMs,
+    repoKind,
+    repoRoot,
+    repoLabel,
+    mode,
+    operationLabel,
+    completion,
   };
 
   gitLogger().info({ op, repoPath, remote, success: true, error: undefined });
@@ -113,6 +136,7 @@ export async function GET(req: NextRequest) {
     jobId: job.id,
     phase: job.phase,
     devopsConversationId: job.devopsConversationId,
+    sessionId: job.sessionId,
     outcome: job.outcome,
   });
 }

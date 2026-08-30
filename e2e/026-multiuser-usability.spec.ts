@@ -16,13 +16,13 @@ import { test as base, expect } from "@playwright/test";
 
 // Extend the base fixture so tests can optionally intercept /api/system/session.
 const test = base.extend<{ page: ReturnType<typeof base.use> }>({
-  page: async ({ page }, use) => {
+  page: async ({ page }, provide) => {
     await page.goto("/");
     const skip = page.getByRole("button", { name: "Skip" });
     if (await skip.isVisible().catch(() => false)) {
       await skip.click().catch(() => {});
     }
-    await use(page);
+    await provide(page);
   },
 });
 

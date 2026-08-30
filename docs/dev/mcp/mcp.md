@@ -82,7 +82,7 @@ previously left the chat with **no** MCP tools at all.)
 ## MCP-UI (`src/lib/mcp/ui.ts`)
 
 Helpers to detect and render **MCP‑UI** results — tools that return interactive
-HTML. `ChatToolRenderer` shows these in a **sandboxed iframe** in the chat.
+HTML. The v2 tool-call card (`components/agent/v2/ToolCallCard.tsx`) shows these in a **sandboxed iframe** in the chat.
 
 ---
 

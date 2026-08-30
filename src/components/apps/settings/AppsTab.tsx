@@ -5,13 +5,25 @@ import { Trash2, PackageX, ExternalLink, Puzzle, ShieldCheck, ChevronDown, Chevr
 import type { AppManifest, AppCapability } from "@/os/types";
 import { useOSStore } from "@/store/os-provider";
 
-const ALL_CAPABILITIES: { id: AppCapability; label: string; description: string }[] = [
+const ALL_CAPABILITIES: {
+  id: AppCapability;
+  label: string;
+  description: string;
+  /** 040-assistant-broker-capability (ADR-6): a capability the app has to ASK
+   *  for in its own app.json before it can be granted. The rows without this
+   *  flag are deliberately flat — any app can be given any of them — but
+   *  driving the assistant is a stronger trust jump, so its row appears only
+   *  where the app declared it (and PUT /api/apps/[id]/capabilities rejects it
+   *  otherwise, so this is presentation, not the enforcement point). */
+  requiresDeclaration?: boolean;
+}[] = [
   { id: "fs:read",       label: "Read files",        description: "Read files from your VFS" },
   { id: "fs:write",      label: "Write files",       description: "Create and modify files in your VFS" },
   { id: "settings:read", label: "Read settings",     description: "Read OS settings (theme, accent, etc.)" },
   { id: "notify",        label: "Notifications",     description: "Send desktop notifications" },
   { id: "window:title",  label: "Set window title",  description: "Update the window title bar" },
   { id: "services:read", label: "Read services",     description: "Read a service's config (e.g. its bound port) — needed by an app bundled with its own service, like Terminal" },
+  { id: "assistant",     label: "Assistant",         description: "Drive the BOS assistant — start runs and see the assistant's replies for runs this app starts", requiresDeclaration: true },
 ];
 
 interface InstalledItemView {
@@ -31,6 +43,9 @@ interface ManagedApp {
   icon: string;
   status: "installed" | "uninstalled";
   capabilities?: AppCapability[];
+  /** What the app's own app.json ASKS for, as opposed to what BOS has granted
+   *  (`capabilities`). Only declaration-gated rows consult it (040, ADR-6). */
+  declared?: AppCapability[];
   /** Absent/"local" = the user authored it; "marketplace" = its files belong to a marketplace. */
   origin?: "local" | "marketplace";
   marketplaceId?: string;
@@ -60,9 +75,10 @@ export function AppsTab() {
     const withCaps = await Promise.all(
       rawApps.map(async (a) => {
         if (a.status !== "installed") return a;
-        const caps = await fetch(`/api/apps/${encodeURIComponent(a.id)}/capabilities`)
-          .then((r) => r.json()).then((d) => d.capabilities as AppCapability[]).catch(() => []);
-        return { ...a, capabilities: caps };
+        const res = await fetch(`/api/apps/${encodeURIComponent(a.id)}/capabilities`)
+          .then((r) => r.json() as Promise<{ capabilities?: AppCapability[]; declared?: AppCapability[] }>)
+          .catch(() => ({}) as { capabilities?: AppCapability[]; declared?: AppCapability[] });
+        return { ...a, capabilities: res.capabilities ?? [], declared: res.declared ?? [] };
       }),
     );
     setApps(withCaps);
@@ -92,7 +108,11 @@ export function AppsTab() {
       body: JSON.stringify({ capabilities: next }),
     }).then((r) => r.json());
     if (res.app) registerApp(res.app as AppManifest);
-    setApps((prev) => prev.map((a) => (a.id === id ? { ...a, capabilities: next } : a)));
+    // Trust the SERVER's grant set, not `next`: a declaration-gated capability
+    // (040, ADR-6) can come back rejected, and echoing `next` would leave the
+    // checkbox ticked for a grant that was never written.
+    const granted = (res.app as AppManifest | undefined)?.capabilities ?? next;
+    setApps((prev) => prev.map((a) => (a.id === id ? { ...a, capabilities: granted } : a)));
   };
 
   const purge = async (id: string, name: string) => {
@@ -174,7 +194,9 @@ export function AppsTab() {
               {expanded === a.id && (
                 <div className="ml-4 mt-0.5 rounded border border-white/10 bg-white/[0.02] p-3 space-y-2">
                   <p className="text-[10px] text-white/40 mb-2">BOS SDK capability grants — only checked permissions are available to this app.</p>
-                  {ALL_CAPABILITIES.map((cap) => (
+                  {ALL_CAPABILITIES.filter(
+                    (cap) => !cap.requiresDeclaration || (a.declared ?? []).includes(cap.id),
+                  ).map((cap) => (
                     <label key={cap.id} className="flex items-start gap-2.5 cursor-pointer group">
                       <input
                         type="checkbox"

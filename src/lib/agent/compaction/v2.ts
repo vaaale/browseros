@@ -1,152 +1,136 @@
 import "server-only";
 import type { ChatMessage } from "@/lib/assistant/messages";
-import type { CompactionPrompt } from "./estimate";
-import { compactPrompt } from "./middleware";
+import { logger } from "@/lib/logging";
+import { hasCredentials } from "@/lib/agent/provider";
+import { readCompactionConfig, type CompactionConfig } from "./config";
+import { estimateChatTokens, estimateBudget } from "./estimate";
+import { readSidecar, emptySidecar } from "./sidecar";
+import { renderView } from "./render";
+import { truncateChatTail, forceClearAll } from "./truncate";
 
-// v2 compaction adapter. Server-owned runs feed the model through a raw provider
-// SDK (model-turn.ts), not the ai-sdk LanguageModel the compaction middleware
-// wraps — so this converts the v2 ChatMessage transcript to the v3 prompt shape
-// the tested compaction core operates on, runs it, and converts back. The result
-// is EPHEMERAL: it feeds one provider call only and is never persisted (the loop
-// persists the original, uncompacted transcript), so synthetic message ids are
-// fine and lossy round-tripping of dropped/summarized spans is intended.
+// v2 compaction entry point: the ONLY caller (src/lib/assistant/model-turn.ts)
+// feeds the provider directly, so this operates natively on ChatMessage[] —
+// no AI-SDK v3 prompt intermediate (that conversion, and the raw ai-sdk
+// `withCompaction()` LanguageModel-wrapping path it existed for, are gone;
+// nothing in the live app reaches that path anymore). The result is EPHEMERAL:
+// it feeds one provider call only and is never persisted (the loop persists
+// the original, uncompacted transcript).
 
-function safeParseArgs(raw: string): unknown {
+const COMPONENT = "compaction";
+
+function log(level: "debug" | "info" | "warn" | "error", convId: string, msg: string, data?: Record<string, unknown>, err?: unknown): void {
+  logger().log({
+    level,
+    component: COMPONENT,
+    conversation: convId,
+    msg,
+    ...(data ? { data } : {}),
+    ...(err ? { err: err instanceof Error ? { message: err.message, ...(err.stack ? { stack: err.stack } : {}) } : { message: String(err) } } : {}),
+  });
+}
+
+async function scheduleBlockFormation(convId: string): Promise<void> {
   try {
-    return raw ? JSON.parse(raw) : {};
-  } catch {
-    return {};
+    // Dynamic import so the summarizer module (which pulls in the LLM stack)
+    // is only loaded when actually needed.
+    const mod = (await import("./summarize")) as {
+      formNewBlocks?: (id: string, opts: { manual: boolean }) => Promise<unknown>;
+    };
+    if (!mod.formNewBlocks) return;
+    void mod.formNewBlocks(convId, { manual: false }).catch((err: unknown) => log("error", convId, "blocks.form failed", undefined, err));
+    log("info", convId, "blocks.scheduled");
+  } catch (err) {
+    log("error", convId, "blocks.import failed", undefined, err);
   }
-}
-
-/** ChatMessage[] → v3 prompt. A leading system message (the composed prompt) is
- *  included so the budget estimate reflects real context size; it is stripped on
- *  the way back. */
-function toPrompt(system: string, messages: ChatMessage[]): CompactionPrompt {
-  const toolNames = new Map<string, string>();
-  for (const m of messages) {
-    if (m.role === "assistant") for (const tc of m.toolCalls ?? []) toolNames.set(tc.id, tc.function.name);
-  }
-  const out: CompactionPrompt = [{ role: "system", content: system }];
-  for (const m of messages) {
-    if (m.role === "user") {
-      // Attachments ride along as v3 `file` parts so compaction estimates and
-      // preserves them (the estimator has a dedicated `file` case).
-      const fileParts = (m.attachments ?? []).map((a) => ({
-        type: "file",
-        data: a.data,
-        mediaType: a.mimeType,
-        filename: a.name,
-        // carry v2 attachment fields so fromPrompt can rebuild the Attachment
-        _bosType: a.type,
-        _bosVfsPath: a.vfsPath,
-      }));
-      out.push({ role: "user", content: [{ type: "text", text: m.content ?? "" }, ...fileParts] as never });
-    } else if (m.role === "assistant") {
-      const parts: unknown[] = [];
-      if (m.content?.trim()) parts.push({ type: "text", text: m.content });
-      for (const tc of m.toolCalls ?? []) {
-        parts.push({ type: "tool-call", toolCallId: tc.id, toolName: tc.function.name, input: safeParseArgs(tc.function.arguments) });
-      }
-      out.push({ role: "assistant", content: parts as never });
-    } else if (m.role === "tool" && m.toolCallId) {
-      out.push({
-        role: "tool",
-        content: [
-          {
-            type: "tool-result",
-            toolCallId: m.toolCallId,
-            toolName: toolNames.get(m.toolCallId) ?? "tool",
-            output: { type: "text", value: m.content ?? "" },
-          },
-        ] as never,
-      });
-    }
-  }
-  return out;
-}
-
-function partsText(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  return content
-    .filter((p) => (p as { type?: string }).type === "text" || (p as { type?: string }).type === "reasoning")
-    .map((p) => String((p as { text?: string }).text ?? ""))
-    .join("");
-}
-
-let synthSeq = 0;
-function synthId(): string {
-  return `compacted-${Date.now().toString(36)}-${synthSeq++}`;
-}
-
-/** v3 prompt → ChatMessage[] (system messages dropped; ids synthetic). */
-function fromPrompt(prompt: CompactionPrompt): ChatMessage[] {
-  const out: ChatMessage[] = [];
-  for (const m of prompt) {
-    if (m.role === "system") continue;
-    if (m.role === "user") {
-      const parts = Array.isArray(m.content) ? m.content : [];
-      const attachments = parts
-        .filter((p) => (p as { type?: string }).type === "file")
-        .map((p) => {
-          const f = p as { data?: unknown; mediaType?: string; filename?: string; _bosType?: string; _bosVfsPath?: string };
-          return {
-            type: (f._bosType === "image" ? "image" : "file") as "image" | "file",
-            mimeType: f.mediaType ?? "application/octet-stream",
-            data: typeof f.data === "string" ? f.data : "",
-            name: f.filename,
-            vfsPath: f._bosVfsPath,
-          };
-        })
-        .filter((a) => a.data);
-      out.push({
-        id: synthId(),
-        role: "user",
-        content: partsText(m.content),
-        ...(attachments.length ? { attachments } : {}),
-      });
-    } else if (m.role === "assistant") {
-      const parts = Array.isArray(m.content) ? m.content : [];
-      const toolCalls = parts
-        .filter((p) => (p as { type?: string }).type === "tool-call")
-        .map((p) => {
-          const tc = p as { toolCallId: string; toolName: string; input: unknown };
-          return {
-            id: tc.toolCallId,
-            type: "function" as const,
-            function: { name: tc.toolName, arguments: typeof tc.input === "string" ? tc.input : JSON.stringify(tc.input ?? {}) },
-          };
-        });
-      out.push({
-        id: synthId(),
-        role: "assistant",
-        content: partsText(m.content),
-        ...(toolCalls.length ? { toolCalls } : {}),
-      });
-    } else if (m.role === "tool") {
-      for (const p of Array.isArray(m.content) ? m.content : []) {
-        const tr = p as { type?: string; toolCallId?: string; output?: { value?: unknown } };
-        if (tr.type !== "tool-result" || !tr.toolCallId) continue;
-        const value = tr.output?.value;
-        out.push({ id: synthId(), role: "tool", toolCallId: tr.toolCallId, content: typeof value === "string" ? value : JSON.stringify(value ?? "") });
-      }
-    }
-  }
-  return out;
 }
 
 /** Compact a v2 transcript for one provider call. Returns the input unchanged
- *  when compaction is disabled / below threshold / errors. */
+ *  when compaction is disabled / below threshold / errors. Never throws. */
 export async function compactChatMessages(
   convId: string,
   system: string,
   messages: ChatMessage[],
   maxOutputTokens?: number,
+  maxInputTokens?: number,
 ): Promise<ChatMessage[]> {
   if (!convId || messages.length === 0) return messages;
-  const prompt = toPrompt(system, messages);
-  const compacted = await compactPrompt(convId, prompt, maxOutputTokens);
-  if (compacted === prompt) return messages; // unchanged (identity signal from core)
-  return fromPrompt(compacted);
+
+  let config: CompactionConfig;
+  try {
+    config = await readCompactionConfig();
+  } catch (err) {
+    log("error", convId, "config.read failed", undefined, err);
+    return messages;
+  }
+  if (!config.enabled) return messages;
+
+  const budget = estimateBudget({ maxTokens: maxOutputTokens, maxInputTokens, assumedContextTokens: config.assumedContextTokens });
+  if (budget <= 0) {
+    log("warn", convId, "budget.exhausted", { maxOutputTokens, maxInputTokens, assumedContextTokens: config.assumedContextTokens });
+    return messages;
+  }
+
+  const initialEst = estimateChatTokens(system, messages);
+  const clearThresholdTokens = Math.floor(budget * config.clearThreshold);
+  if (initialEst < clearThresholdTokens) return messages;
+
+  try {
+    const sidecar = (await readSidecar(convId)) ?? emptySidecar();
+    const rendered = renderView(messages, sidecar, { keepToolResults: config.keepToolResults, unrecoverableTools: config.unrecoverableTools });
+    let finalMessages = rendered.messages;
+
+    const layerOneEst = estimateChatTokens(system, finalMessages);
+    const summarizeThresholdTokens = Math.floor(budget * config.summarizeThreshold);
+    const hardLimitTokens = Math.floor(budget * config.hardLimit);
+
+    const canSummarize = await hasCredentials().catch(() => false);
+    if (canSummarize && layerOneEst >= summarizeThresholdTokens) {
+      void scheduleBlockFormation(convId);
+    }
+
+    // Layer 3: hard-limit fallback. Synchronous — a prompt over budget must
+    // never reach the provider. Single pass then truncate, no recursion: if
+    // truncating still isn't enough, one emergency force-clear pass, then
+    // whatever that yields is sent — block formation (Layer 2/2b) never runs
+    // synchronously inline here, only ever scheduled for the next render.
+    if (layerOneEst >= hardLimitTokens) {
+      const target = Math.max(1, Math.floor(budget * config.summarizeThreshold));
+      let truncated = truncateChatTail(finalMessages, config.keepTailTurns, target);
+      let afterEst = estimateChatTokens(system, truncated);
+
+      let forceCleared = 0;
+      if (afterEst >= hardLimitTokens) {
+        const result = forceClearAll(truncated, config.unrecoverableTools);
+        forceCleared = result.cleared;
+        truncated = result.messages;
+        afterEst = estimateChatTokens(system, truncated);
+      }
+
+      log(afterEst >= hardLimitTokens ? "error" : "warn", convId, "fallback.applied", {
+        est: layerOneEst,
+        afterEst,
+        budget,
+        messagesBefore: finalMessages.length,
+        messagesAfter: truncated.length,
+        ...(forceCleared > 0 ? { forceCleared, overBudget: afterEst >= hardLimitTokens } : {}),
+      });
+      finalMessages = truncated;
+      if (canSummarize) void scheduleBlockFormation(convId);
+    }
+
+    log("info", convId, "compaction.applied", {
+      estBefore: initialEst,
+      estAfter: estimateChatTokens(system, finalMessages),
+      budget,
+      clearedResults: rendered.stats.clearedResults,
+      blocksRendered: rendered.stats.blocksRendered,
+      hardLimitFallback: layerOneEst >= hardLimitTokens,
+      messagesBefore: messages.length,
+      messagesAfter: finalMessages.length,
+    });
+    return finalMessages;
+  } catch (err) {
+    log("error", convId, "compactChatMessages.error", undefined, err);
+    return messages;
+  }
 }

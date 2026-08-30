@@ -15,6 +15,7 @@ import {
   normalizeOpenCodeProvider,
   resolveHarnessSelection,
   openCodeProviderEnv,
+  openCodeModelProviderId,
   type ClaudeProviderConfig,
   type OpenCodeProviderConfig,
 } from "./provider";
@@ -113,15 +114,6 @@ function claudeEnvBlock(cfg: ClaudeProviderConfig): Record<string, string> {
     };
   }
   return {};
-}
-
-// OpenCode: the provider id to prefix `model` with, e.g. "amazon-bedrock/<model>"
-// or "<custom id>/<model>" — undefined when there's no provider selected at all
-// (credential-file, or Custom with no id typed yet).
-function openCodeModelProviderId(cfg: OpenCodeProviderConfig): string | undefined {
-  if (cfg.mode === "credential-file") return undefined;
-  if (cfg.mode === "custom") return cfg.customProviderId;
-  return cfg.mode; // amazon-bedrock / google-vertex / azure / one of the 9 generic ids — all literal ids
 }
 
 // OpenCode: the `provider.<id>` entry to write into opencode.json, if any.

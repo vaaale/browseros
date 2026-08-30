@@ -2,7 +2,7 @@
 
 An **Item** is the unit of installation (user-specs/002-service-daemons): a
 self-contained folder that may bundle any mix of `app/` (UI), `services/`,
-`hooks/`, `config/`, `spec/`, `doc/`. There is **one** install mechanism for
+`hooks/`, `config/`, `spec/`, `docs/`. There is **one** install mechanism for
 every item shape: the item's content lives under `dataDir()/user-apps/items/<id>/`
 (the user's own GitFS repo, aka the local marketplace) and each present facet
 is **symlinked** into `dataDir()/system/<type>/<id>` (see
@@ -29,6 +29,47 @@ There is no separate apps repo and no `appsDir()`/`BOS_APPS_DIR` anymore.
 
 ---
 
+## The `docs/` facet
+
+An item ships its own documentation, in the **same two-audience shape as BOS's
+own `docs/`**, each audience namespaced by one folder named after the item:
+
+```
+<item>/docs/
+├── usage/<Name>/…      # end-user pages
+└── dev/<Name>/…        # developer/agent pages
+```
+
+`readFacets()` reports it as the `docs` facet, and `src/lib/docs/store.ts`
+**overlays** every installed item's `docs/usage` and `docs/dev` onto BOS's own
+two trees at read time — so `/api/docs` and the Docs app show an item's pages
+alongside BOS's, with no build step and nothing written outside the item.
+
+Rules that fall out of that:
+
+- **Namespace by one folder, always.** Loose `.md` files directly under an
+  item's `docs/usage/` land at the root of the shared tree and read as BOS
+  pages. Name the folder after the item as a user sees it (`Workflows`, not
+  `workflows` or `workflow-manager`) — it is a UI label.
+- **BOS's own docs win a path collision**, and among items the lowest id wins,
+  so an item can extend the tree but never shadow a BOS page. That's a
+  tie-break, not a feature to design around — the per-item folder makes
+  collisions impossible in practice.
+- **No symlink into `docs/`.** Installed state is ONE symlink at `system/<id>`
+  (035-install-by-symlink); a second artifact planted in the git-tracked source
+  tree would dirty every worktree, be absent from feature-branch worktrees that
+  didn't create it, and outlive an uninstall that only removes the one link.
+  Pre-035 there was exactly such a symlink (`docs/external-docs/<id>`) with no
+  reader at all — the overlay is what that link was missing.
+- **The `/Docs` VFS mount is BOS source only.** It is branch-coupled and
+  writable (writes ride a `bos/*` branch), which an item's read-only docs are
+  not — so `file_read /Docs/usage/...` sees BOS's pages, not an item's. Item
+  docs are authored in the item, by rebuilding it.
+- **When a feature moves out of BOS core into an item, delete its `docs/`
+  pages in the same change.** Two copies is the failure mode.
+
+---
+
 ## Store & lifecycle (`src/lib/apps/store.ts`)
 
 - `installItem({ name, icon?, files, entry? }, { draft? })` — the assistant's
@@ -40,11 +81,16 @@ There is no separate apps repo and no `appsDir()`/`BOS_APPS_DIR` anymore.
   facet is present — validates/registers/auto-starts it the same way a
   Marketplace-triggered service install does. At least one recognized facet
   (or an `entry`) is required; a services-only item (no `app/` at all) is
-  valid. `draft:true` under the Supervisor lands the content on the
-  `app-candidate` branch of the **user-apps repo** (preview) — see
-  [Live version control](../self-modification/live-version-control.md) for the
-  one exception (a preview process installing into its own branch-coupled
-  `user-apps` skips `app-candidate` and rides the feature branch instead).
+  valid. `draft:true` requires an active feature branch and lands the content on
+  it: `installItem` resolves a `dataRoot` via `branchDataRoot()`
+  (`src/lib/devharness/branch-data-root.ts`) — the branch's data clone when run
+  from BASE, this process's own root inside a preview (already that clone) or
+  with no Supervisor. Item files, the install symlink, seeded config and bundled
+  assets all derive from that one root, so an install can't half-land. A service
+  facet is validated but NOT started for a branch install: the branch's preview
+  starts it on boot. You therefore stay on BASE for the whole job and switch to
+  the Preview only to test — see
+  [Live version control](../self-modification/live-version-control.md).
 - `installItemApp(id, meta?)` — the marketplace path: the item is already under
   `user-apps/items/<id>/`; writes/updates its `app.json` (provenance: remote
   marketplace installs get `origin:"marketplace"` → opaque-origin sandbox;
@@ -124,6 +170,6 @@ Developer sub-agent + install:
 
 `contentOnly:true` keeps it a **content** operation (no BOS-code preview worktree)
 — see [Sub-agents](../assistant/sub-agents-and-delegation.md). Preview / promote /
-discard for apps is the GitFS `app-candidate` branch of the **user-apps repo**
-(served branch-live by base, no extra port) — see
+discard for apps is the feature branch's coupled **user-apps** worktree, promoted
+and discarded together with the branch's code and specs (no extra port) — see
 [Live version control](../self-modification/live-version-control.md).

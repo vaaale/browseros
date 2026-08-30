@@ -120,13 +120,20 @@ export async function configureSshAuth(
   gitLogger().debug({ op, repoPath: keyPath });
 
   const cleanup = async (): Promise<void> => {
+    // A decrypted SSH private key (or its passphrase) left on disk is a real
+    // security exposure, not a cosmetic one — a failed cleanup must be loud,
+    // not silently swallowed, so an operator can find and remove it.
     try {
       await fs.rm(keyPath, { force: true });
-      if (passphrase) {
+    } catch (err) {
+      gitLogger().error({ op, repoPath: keyPath, error: { code: "SSH_KEY_CLEANUP_FAILED", message: `failed to remove temporary SSH key at ${keyPath}: ${(err as Error).message}` } });
+    }
+    if (passphrase) {
+      try {
         await fs.rm(keyPath + ".pass", { force: true });
+      } catch (err) {
+        gitLogger().error({ op, repoPath: `${keyPath}.pass`, error: { code: "SSH_KEY_CLEANUP_FAILED", message: `failed to remove temporary SSH passphrase file at ${keyPath}.pass: ${(err as Error).message}` } });
       }
-    } catch {
-      // Best effort cleanup.
     }
   };
 

@@ -25,6 +25,7 @@ RUN apt-get update && apt-get install -y \
     python3 \
     python3-venv \
     poppler-utils \
+    ffmpeg \
     libreoffice \
     openjdk-25-jre-headless \
     fonts-dejavu fonts-liberation \
@@ -80,10 +81,16 @@ WORKDIR /app
 # Copy source (node_modules excluded by .dockerignore)
 COPY . .
 
+# Install mcp-proxy
+#RUN pipx install mcp-proxy
+
 # Install Claude Code and OpenCode CLIs globally
 RUN npm install -g --allow-scripts=@anthropic-ai/claude-code,opencode-ai
 RUN npm install -g @anthropic-ai/claude-code opencode-ai
 RUN npm install -g @googleworkspace/cli
+
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright-browsers
+RUN npx playwright install --force chrome
 
 COPY docker-entrypoint.sh /docker-entrypoint.sh
 RUN chmod +x /docker-entrypoint.sh

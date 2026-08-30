@@ -1,6 +1,9 @@
 # BrowserOS
 
-**An operating system that runs in your browser — and rewrites itself.**
+**BOS is an agentic 'BrowserOS' that has the ability to modify itself.<br>**
+*Why does BOS exist? There are several good AI Agent systems out there like, [Hermes Agent](https://github.com/nousresearch/hermes-agent), [AgentZero](https://github.com/agent0ai/agent-zero), each having their own strengths and weaknesses wrt. to what I personally was looking for.
+This includes integrations, some configuration options I wanted, or some other capability I wanted. I could of course just create a fork and make the modifications myself, but I don't want the hassle of maintaining a codebase that I don't have control over.<br>*
+**What I really wanted, was to have the ability to modify the system from within the system itself without having to write a single line of code.**
 
 BrowserOS (BOS) has a desktop, draggable windows, a dock, and a built-in AI assistant that can operate the OS, manage files, browse the web, and install apps — just like you'd expect. What it isn't supposed to do is modify its own source code, live, on a branch you can preview before merging. But it does that too.
 

@@ -19,6 +19,7 @@ import {
 
 const BOS_DEFAULT_REMOTE = "bos-default";
 import { sessionHeader } from "@/lib/logging/client/session";
+import { ConflictSessionBadge } from "@/components/gitops/ConflictSessionBadge";
 
 type Provider = "github" | "gitlab" | "generic";
 type AuthType = "token" | "oauth" | "ssh";
@@ -438,6 +439,7 @@ interface FilesystemCardProps {
   fs: GitFsInstance;
   remotes: GitRemote[] | undefined;
   busyAction: string | null;
+  msg: string | null;
   onAdd: () => void;
   onEdit: (remote: GitRemote) => void;
   onAction: (action: string, remote: GitRemote) => void;
@@ -445,7 +447,7 @@ interface FilesystemCardProps {
   onPush: (remote: GitRemote) => void;
 }
 
-function FilesystemCard({ fs, remotes, busyAction, onAdd, onEdit, onAction, onPull, onPush }: FilesystemCardProps) {
+function FilesystemCard({ fs, remotes, busyAction, msg, onAdd, onEdit, onAction, onPull, onPush }: FilesystemCardProps) {
   const btn = "rounded px-2 py-1 text-[11px] font-medium disabled:opacity-40";
   const loading = remotes === undefined;
   return (
@@ -549,6 +551,16 @@ function FilesystemCard({ fs, remotes, busyAction, onAdd, onEdit, onAction, onPu
             ))}
           </div>
         )}
+        {msg && (
+          msg.startsWith("Error:") ? (
+            <div className="mt-3 flex items-start gap-2 rounded border border-red-400/30 bg-red-500/10 p-2.5 text-[11px] text-red-200">
+              <AlertCircle size={12} className="mt-0.5 shrink-0" />
+              <span>{msg}</span>
+            </div>
+          ) : (
+            <div className="mt-3 text-[11px] text-white/50">{msg}</div>
+          )
+        )}
       </div>
     </div>
   );
@@ -560,7 +572,14 @@ export function GitRemotesTab() {
   const [remotesByFs, setRemotesByFs] = useState<Record<string, GitRemote[]>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [msg, setMsg] = useState<string | null>(null);
+  // Keyed by filesystem id, not flat — so a Pull/Push/Test/etc. result shows
+  // inside the panel for the repo it actually ran against, instead of one
+  // shared line at the bottom of the whole tab regardless of which repo was
+  // operated on.
+  const [msgByFs, setMsgByFs] = useState<Record<string, string | null>>({});
+  const setFsMsg = useCallback((fsId: string, m: string | null) => {
+    setMsgByFs((prev) => ({ ...prev, [fsId]: m }));
+  }, []);
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [addFor, setAddFor] = useState<GitFsInstance | null>(null);
   const [editState, setEditState] = useState<{ fs: GitFsInstance; remote: GitRemote } | null>(null);
@@ -568,7 +587,7 @@ export function GitRemotesTab() {
   // A true divergence (local has unique commits AND the remote gained unique
   // commits since we last fetched) can never be resolved by push or pull alone
   // — only a merge (not offered here) or an explicit, confirmed force-push.
-  const [divergedState, setDivergedState] = useState<{ fs: GitFsInstance; remote: GitRemote; ahead: number; behind: number } | null>(null);
+  const [divergedState, setDivergedState] = useState<{ fs: GitFsInstance; remote: GitRemote; ahead: number; behind: number; sessionId?: string; devopsConversationId?: string; message?: string } | null>(null);
 
   const loadRemotes = useCallback(async (fsId: string) => {
     const res = await fetch(`/api/git-remotes?filesystem=${encodeURIComponent(fsId)}`);
@@ -604,7 +623,7 @@ export function GitRemotesTab() {
     // across filesystems (each may have an "origin"), so a name-only key would
     // spin the matching button in every card at once.
     setBusyAction(`${action}-${fsId}-${body.name ?? ""}`);
-    setMsg(null);
+    setFsMsg(fsId, null);
     try {
       const res = await fetch("/api/git-remotes", {
         method: "POST",
@@ -613,15 +632,15 @@ export function GitRemotesTab() {
       });
       const data = await res.json();
       if (data.error) {
-        setMsg(`Error: ${data.error.message ?? data.error}`);
+        setFsMsg(fsId, `Error: ${data.error.message ?? data.error}`);
         throw new Error(data.error.message ?? data.error);
       }
-      setMsg(data.message ?? "Done.");
+      setFsMsg(fsId, data.message ?? "Done.");
       await loadRemotes(fsId);
     } finally {
       setBusyAction(null);
     }
-  }, [loadRemotes]);
+  }, [loadRemotes, setFsMsg]);
 
   const onRemoteAction = useCallback(async (fsId: string, action: string, remote: GitRemote) => {
     if (action === "remove") {
@@ -635,7 +654,7 @@ export function GitRemotesTab() {
   // needs a confirmation dialog (Adopt), not a plain success/error toast.
   const onPull = useCallback(async (fs: GitFsInstance, remote: GitRemote) => {
     setBusyAction(`fetch-${fs.id}-${remote.name}`);
-    setMsg(null);
+    setFsMsg(fs.id, null);
     try {
       const res = await fetch("/api/git-remotes", {
         method: "POST",
@@ -644,7 +663,7 @@ export function GitRemotesTab() {
       });
       const data = await res.json();
       if (data.error) {
-        setMsg(`Error: ${data.error.message ?? data.error}`);
+        setFsMsg(fs.id, `Error: ${data.error.message ?? data.error}`);
         return;
       }
       if (data.unrelatedHistory) {
@@ -655,16 +674,28 @@ export function GitRemotesTab() {
       // truly diverged (local has commits the remote doesn't, AND vice versa) —
       // functionally identical to a failure for the user (push still can't
       // succeed), so it must be just as visible, not a bland "Done."-style line.
-      if (data.merged === false && (data.behind ?? 0) > 0) {
-        setDivergedState({ fs, remote, ahead: data.ahead ?? 0, behind: data.behind ?? 0 });
+      if (data.merged === false && ((data.behind ?? 0) > 0 || data.escalated)) {
+        // 035 (FR-019): `escalated` means the conflicted rebase went to the
+        // conflict-resolution agent, so the dialog below shows the LIVE
+        // session (and a button into the pane) instead of the old
+        // "resolve manually on the command line, or force-push" dead end.
+        setDivergedState({
+          fs,
+          remote,
+          ahead: data.ahead ?? 0,
+          behind: data.behind ?? 0,
+          sessionId: data.sessionId,
+          devopsConversationId: data.devopsConversationId,
+          message: data.message,
+        });
         return;
       }
-      setMsg(data.message ?? "Done.");
+      setFsMsg(fs.id, data.message ?? "Done.");
       await loadRemotes(fs.id);
     } finally {
       setBusyAction(null);
     }
-  }, [loadRemotes]);
+  }, [loadRemotes, setFsMsg]);
 
   // Push is a dedicated flow (not the generic api() helper) for the same
   // reason Pull is: the route now auto-recovers a plain rejection (unshallow
@@ -674,7 +705,7 @@ export function GitRemotesTab() {
   // dialogs (Adopt / Force push), not a plain success/error toast.
   const onPush = useCallback(async (fs: GitFsInstance, remote: GitRemote) => {
     setBusyAction(`push-${fs.id}-${remote.name}`);
-    setMsg(null);
+    setFsMsg(fs.id, null);
     try {
       const res = await fetch("/api/git-remotes", {
         method: "POST",
@@ -683,23 +714,31 @@ export function GitRemotesTab() {
       });
       const data = await res.json();
       if (data.error) {
-        setMsg(`Error: ${data.error.message ?? data.error}`);
+        setFsMsg(fs.id, `Error: ${data.error.message ?? data.error}`);
         return;
       }
       if (data.unrelatedHistory) {
         setUnrelatedState({ fs, remote, ahead: data.ahead ?? 0, behind: data.behind ?? 0 });
         return;
       }
-      if (data.merged === false && data.rebaseConflict) {
-        setDivergedState({ fs, remote, ahead: data.ahead ?? 0, behind: data.behind ?? 0 });
+      if (data.merged === false && (data.escalated || data.rebaseConflict)) {
+        setDivergedState({
+          fs,
+          remote,
+          ahead: data.ahead ?? 0,
+          behind: data.behind ?? 0,
+          sessionId: data.sessionId,
+          devopsConversationId: data.devopsConversationId,
+          message: data.message,
+        });
         return;
       }
-      setMsg(data.message ?? "Done.");
+      setFsMsg(fs.id, data.message ?? "Done.");
       await loadRemotes(fs.id);
     } finally {
       setBusyAction(null);
     }
-  }, [loadRemotes]);
+  }, [loadRemotes, setFsMsg]);
 
   const onForcePush = useCallback(async () => {
     if (!divergedState) return;
@@ -753,6 +792,7 @@ export function GitRemotesTab() {
               fs={fs}
               remotes={remotesByFs[fs.id]}
               busyAction={busyAction}
+              msg={msgByFs[fs.id] ?? null}
               onAdd={() => setAddFor(fs)}
               onEdit={(remote) => setEditState({ fs, remote })}
               onAction={(action, remote) => void onRemoteAction(fs.id, action, remote)}
@@ -761,17 +801,6 @@ export function GitRemotesTab() {
             />
           ))}
         </div>
-      )}
-
-      {msg && (
-        msg.startsWith("Error:") ? (
-          <div className="flex items-start gap-2 rounded border border-red-400/30 bg-red-500/10 p-2.5 text-[11px] text-red-200">
-            <AlertCircle size={12} className="mt-0.5 shrink-0" />
-            <span>{msg}</span>
-          </div>
-        ) : (
-          <div className="text-[11px] text-white/50">{msg}</div>
-        )
       )}
 
       <AddRemoteModal
@@ -845,10 +874,22 @@ export function GitRemotesTab() {
               Local and <span className="font-medium">{divergedState.remote.name}</span> have diverged:{" "}
               <span className="font-medium">{divergedState.ahead}</span> commit(s) only local,{" "}
               <span className="font-medium">{divergedState.behind}</span> commit(s) only on the remote. An automatic
-              rebase of local commits onto the remote was attempted, but that hit conflicts. You&apos;ll need to
-              either resolve the conflicts with a manual merge on the command line, or force-push to make local
-              win (the remote-only commits above will be discarded from the branch).
+              rebase of local commits onto the remote was attempted, but that hit conflicts.
+              {divergedState.sessionId
+                ? " It has been handed to the conflict-resolution agent — open the resolution to watch it, answer its questions, or roll back."
+                : " It has been handed to the conflict-resolution agent."}{" "}
+              Force-pushing instead makes local win outright (the remote-only commits above are discarded from the
+              branch).
             </p>
+            {(divergedState.sessionId || divergedState.devopsConversationId) && (
+              <div className="mt-3">
+                <ConflictSessionBadge
+                  variant="block"
+                  sessionId={divergedState.sessionId}
+                  conversationId={divergedState.devopsConversationId}
+                />
+              </div>
+            )}
             <div className="mt-4 flex justify-end gap-2">
               <button
                 onClick={() => setDivergedState(null)}

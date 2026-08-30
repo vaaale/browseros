@@ -26,10 +26,14 @@ export function useTestDataDir(label: string): { dir: string; cleanup: () => voi
 }
 
 /** Reset the hot-reload-safe globalThis singletons between tests so state
- *  (registered services, worker refs, restart counts) never leaks across
- *  tests that exercise the module-level serviceRegistry()/serviceManager(). */
+ *  (registered services, worker refs, restart counts, registered service
+ *  tools) never leaks across tests that exercise the module-level
+ *  serviceRegistry()/serviceManager()/serviceToolBridge(). Safe to reset the
+ *  bridge too: any `new ServiceManager()` constructed afterwards re-wires its
+ *  dispatcher (039-service-tool-exposure). */
 export function resetServiceSingletons(): void {
   const g = globalThis as unknown as Record<string, unknown>;
   delete g.__bosServiceRegistry;
   delete g.__bosServiceManager;
+  delete g.__bosServiceToolBridge;
 }

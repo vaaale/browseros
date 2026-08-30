@@ -102,7 +102,7 @@ test.describe("surface agents", () => {
     );
     const secondDelegateCard = page.locator('[data-testid="tool-card"][data-tool="agent_delegate"]').last();
     await expect(secondDelegateCard).toBeVisible({ timeout: 15_000 });
-    await expect(secondDelegateCard.getByText(/no agent|not.*active|no such/i)).toBeVisible({ timeout: 10_000 });
+    await expect(secondDelegateCard.getByText(/no matching agent|not.*active|no such/i)).toBeVisible({ timeout: 10_000 });
   });
 
   test("no cross-call memory: a second delegation succeeds using only its own task string (US-5, SC-006)", async ({ page }) => {

@@ -7,8 +7,12 @@ import type { Agent, AgentType } from "./types";
 import { parseFrontmatter, buildFrontmatter, asString, asList, asBool } from "./markdown";
 import { DEFAULT_AGENT_ID } from "@/lib/agent/agent-ids";
 import { CAPABILITIES } from "@/lib/agent/capabilities-registry";
+import { reconcileInstalledItemAssets } from "@/system/marketplace/install/bundledAssets";
+import { archiveSeededDir, decideSeedAction, readSeedStamp, seedRev, writeSeedStamp } from "@/lib/agent/seed-sync";
 
 const DIR = path.join(dataDir(), "agents");
+/** Agents moved aside by seed reconciliation (never deleted) — see seed-sync.ts. */
+const ARCHIVE_DIR = path.join(DIR, ".archive");
 
 // Folder id of the shared "default prompt" template. Not a runnable agent — its
 // body is prepended to any agent whose useDefaultPrompt is true. Managed via
@@ -16,7 +20,10 @@ const DIR = path.join(dataDir(), "agents");
 export const DEFAULT_PROMPT_AGENT_ID = "default_agent";
 
 // Root of the seed directory. Each subfolder contains an AGENT.md that is
-// copied into data/agents/ on first install (additive — never overwrites edits).
+// copied into data/agents/. Reconciled rather than merely backfilled: a copy
+// BOS wrote and nobody has edited since tracks the seed (updated in place, or
+// archived when the seed drops the id); anything locally edited is left alone.
+// See seed-sync.ts for the .seed-rev mechanism and its one-time migration cost.
 const SEED_DIR = path.join(process.cwd(), "seed", "agents");
 
 function slugify(name: string): string {
@@ -31,24 +38,79 @@ async function listSeedIds(): Promise<string[]> {
   return entries.filter((e) => e.isDirectory()).map((e) => e.name);
 }
 
-/** Read and parse one seed AGENT.md, or return undefined if missing. */
-async function readSeedAgent(id: string): Promise<Agent | undefined> {
-  try {
-    const src = await fs.readFile(path.join(SEED_DIR, id, "AGENT.md"), "utf8");
-    return fromMarkdown(id, src);
-  } catch {
-    return undefined;
+/**
+ * Reconcile one seed agent into data/agents/: write it when absent, refresh it
+ * when BOS's own copy is untouched and the seed has moved on, and never touch a
+ * locally edited one (Settings → Agents edits, capability changes, and the
+ * allowlist backfills below all count as edits, which is the point).
+ */
+async function applySeedAgent(id: string): Promise<string | null> {
+  const seedRaw = await fs.readFile(path.join(SEED_DIR, id, "AGENT.md"), "utf8").catch(() => null);
+  if (seedRaw === null) return null;
+  const dir = path.join(DIR, id);
+  const liveRaw = await fs.readFile(path.join(dir, "AGENT.md"), "utf8").catch(() => null);
+  const action = decideSeedAction({
+    inSeed: true,
+    liveRev: liveRaw === null ? undefined : seedRev([liveRaw]),
+    stamp: await readSeedStamp(dir),
+    seedRev: seedRev([seedRaw]),
+  });
+  if (action !== "seed" && action !== "update") return null;
+  await fs.mkdir(dir, { recursive: true });
+  await writeFileAtomic(path.join(dir, "AGENT.md"), seedRaw);
+  // Refreshing an agent restores the seed's own frontmatter, which carries no
+  // tool allowlist — so the backfills below must run over it again, and their
+  // per-agent marker (which exists to make them one-shot) has to go with it.
+  // Without this an updated agent would come back with an EMPTY allowlist, and
+  // under `empty allowlist = zero tools` that is a silently mute agent.
+  if (action === "update") {
+    await fs.rm(path.join(dir, MIGRATION_MARKER), { force: true });
+    await fs.rm(path.join(dir, CONFLICT_BACKFILL_MARKER), { force: true });
+  }
+  return id;
+}
+
+/**
+ * Stamp the agents just written, AFTER the migrations that rewrite them. The
+ * `live` half of the stamp must describe the final bytes on disk, not what
+ * `applySeedAgent` wrote — otherwise every seeded agent reads as locally
+ * modified on the next boot and nothing ever updates again.
+ */
+async function stampSeededAgents(ids: string[]): Promise<void> {
+  for (const id of ids) {
+    const dir = path.join(DIR, id);
+    const [seedRaw, liveRaw] = await Promise.all([
+      fs.readFile(path.join(SEED_DIR, id, "AGENT.md"), "utf8").catch(() => null),
+      fs.readFile(path.join(dir, "AGENT.md"), "utf8").catch(() => null),
+    ]);
+    if (seedRaw === null || liveRaw === null) continue;
+    await writeSeedStamp(dir, { seed: seedRev([seedRaw]), live: seedRev([liveRaw]) });
   }
 }
 
-/** Copy a seed agent into data/agents/ if the destination doesn't exist yet. */
-async function applySeedAgent(id: string): Promise<void> {
-  const dst = path.join(DIR, id, "AGENT.md");
-  try { await fs.access(dst); return; } catch { /* missing — seed it */ }
-  const src = await readSeedAgent(id);
-  if (!src) return;
-  await fs.mkdir(path.join(DIR, id), { recursive: true });
-  await writeFileAtomic(dst, await fs.readFile(path.join(SEED_DIR, id, "AGENT.md"), "utf8"));
+/**
+ * Archive agents BOS seeded that the seed no longer ships — the deletion half
+ * of reconciliation. Only ever touches a copy that is provably still BOS's own
+ * (stamped and unedited); anything the user made theirs stays.
+ */
+async function archiveDroppedSeedAgents(seedIds: string[]): Promise<void> {
+  // An unreadable or empty seed directory must never read as "everything was
+  // deleted" — that would archive the whole agent set on a broken deployment.
+  if (seedIds.length === 0) return;
+  const shipped = new Set(seedIds);
+  const entries = await fs.readdir(DIR, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
+    if (shipped.has(entry.name) || isProtectedAgentId(entry.name)) continue;
+    const dir = path.join(DIR, entry.name);
+    const liveRaw = await fs.readFile(path.join(dir, "AGENT.md"), "utf8").catch(() => null);
+    const action = decideSeedAction({
+      inSeed: false,
+      liveRev: liveRaw === null ? undefined : seedRev([liveRaw]),
+      stamp: await readSeedStamp(dir),
+    });
+    if (action === "archive") await archiveSeededDir(dir, ARCHIVE_DIR, entry.name);
+  }
 }
 
 function toMarkdown(a: Agent): string {
@@ -62,6 +124,7 @@ function toMarkdown(a: Agent): string {
       tools: a.tools,
       skills: a.skills,
       mcp: a.mcp,
+      kbs: a.kbs,
       deferredTools: a.deferredTools,
       useDefaultPrompt: a.useDefaultPrompt,
     },
@@ -81,6 +144,7 @@ function fromMarkdown(id: string, src: string): Agent {
     tools: asList(meta.tools),
     skills: asList(meta.skills),
     mcp: asList(meta.mcp),
+    kbs: asList(meta.kbs),
     deferredTools: asList(meta.deferredTools),
     useDefaultPrompt: asBool(meta.useDefaultPrompt),
     model: asString(meta.model),
@@ -94,10 +158,22 @@ async function ensureSeed(): Promise<void> {
   if (seeded) return;
   seeded = true;
   await fs.mkdir(DIR, { recursive: true });
-  // Apply every seed agent (including default_agent) additively — never
-  // overwrites an existing file so user edits are always preserved.
+  // Reconcile every seed agent (including default_agent): seed what's missing,
+  // refresh what BOS wrote and nobody edited, archive what the seed dropped.
+  // A locally edited agent is never written to — user edits always win.
   const seedIds = await listSeedIds();
-  for (const id of seedIds) await applySeedAgent(id);
+  const written: string[] = [];
+  for (const id of seedIds) {
+    const wrote = await applySeedAgent(id);
+    if (wrote) written.push(wrote);
+  }
+  await archiveDroppedSeedAgents(seedIds);
+  // Marketplace items may bundle their own agents (040-okf-knowledge-base).
+  // Reconciled here, not only at install time, because an already-installed
+  // item that gains an agent would otherwise never surface it — nobody
+  // reinstalls an item they already have. Same additive contract as the seed
+  // agents above: never overwrites a locally-modified copy.
+  await reconcileInstalledItemAssets();
   // Phase B strict-allowlist migration: with `empty allowlist = zero tools`,
   // any legacy agent that relied on "unset ⇒ all" would silently lose every
   // tool on upgrade. Backfill each such agent's allowlist with the FULL set
@@ -105,6 +181,51 @@ async function ensureSeed(): Promise<void> {
   // per-agent marker file makes this idempotent — a user who later saves an
   // explicit empty allowlist will keep it (the marker prevents re-migration).
   await backfillLegacyAllowlists();
+  // 035: a pre-existing data/agents/devops/AGENT.md (from any prior install)
+  // is never re-seeded — applySeedAgent returns early when the destination
+  // exists — so it would silently lack the conflict_* tools and every
+  // escalation would fail at the first tool call. Backfill the ids explicitly.
+  await backfillConflictTools();
+  // LAST: the two backfills above rewrite the files applySeedAgent just wrote,
+  // so the stamp has to describe the bytes that ended up on disk. Stamping any
+  // earlier makes every seeded agent look locally edited on the next boot.
+  await stampSeededAgents(written);
+}
+
+/** Tool ids the conflict-resolution pipeline needs (035). */
+const CONFLICT_TOOL_IDS = [
+  "conflict_read",
+  "conflict_write",
+  "conflict_decision",
+  "conflict_status",
+  "conflict_complete",
+  "conflict_abandon",
+] as const;
+const CONFLICT_BACKFILL_MARKER = ".conflict-tools-backfilled";
+
+/** Additive, idempotent, and marker-guarded, exactly like the allowlist
+ *  migration above: a user who later removes these ids keeps them removed. */
+async function backfillConflictTools(): Promise<void> {
+  const agentDir = path.join(DIR, "devops");
+  const marker = path.join(agentDir, CONFLICT_BACKFILL_MARKER);
+  try {
+    await fs.access(marker);
+    return;
+  } catch { /* not backfilled yet */ }
+
+  const file = path.join(agentDir, "AGENT.md");
+  let src: string;
+  try {
+    src = await fs.readFile(file, "utf8");
+  } catch {
+    return; // no devops agent on this install — the seed will bring the new one
+  }
+  const agent = fromMarkdown("devops", src);
+  const missing = CONFLICT_TOOL_IDS.filter((id) => !agent.tools?.includes(id));
+  if (missing.length > 0) {
+    await writeFileAtomic(file, toMarkdown({ ...agent, tools: [...missing, ...(agent.tools ?? [])] }));
+  }
+  await writeFileAtomic(marker, "1").catch(() => undefined);
 }
 
 // One-time backfill executed at first read after upgrade. Uses a per-agent
@@ -150,6 +271,8 @@ export async function listSubAgents(): Promise<Agent[]> {
   const agents: Agent[] = [];
   for (const d of dirs) {
     if (!d.isDirectory()) continue;
+    // `.archive/` holds agents seed reconciliation moved aside — not agents.
+    if (d.name.startsWith(".")) continue;
     if (d.name === DEFAULT_PROMPT_AGENT_ID) continue;
     try {
       const src = await fs.readFile(path.join(DIR, d.name, "AGENT.md"), "utf8");
@@ -240,13 +363,13 @@ export async function setAgentSystemPrompt(id: string, systemPrompt: string): Pr
   return updated;
 }
 
-/** Update an agent's capability allowlists (tools/skills/mcp/deferredTools).
+/** Update an agent's capability allowlists (tools/skills/mcp/kbs/deferredTools).
  *  Only provided classes are changed. Tools use the strict allowlist migrated
- *  above; skills/MCP keep their unset/empty-means-all behavior; deferredTools
+ *  above; skills/MCP/kbs keep their unset/empty-means-all behavior; deferredTools
  *  is the agent's sole (no registry-wide default) deferred-tool list. */
 export async function setAgentCapabilities(
   id: string,
-  caps: { tools?: string[]; skills?: string[]; mcp?: string[]; deferredTools?: string[] },
+  caps: { tools?: string[]; skills?: string[]; mcp?: string[]; kbs?: string[]; deferredTools?: string[] },
 ): Promise<Agent | undefined> {
   const agent = await getAgent(id);
   if (!agent) return undefined;
@@ -255,6 +378,7 @@ export async function setAgentCapabilities(
     tools: caps.tools ?? agent.tools,
     skills: caps.skills ?? agent.skills,
     mcp: caps.mcp ?? agent.mcp,
+    kbs: caps.kbs ?? agent.kbs,
     deferredTools: caps.deferredTools ?? agent.deferredTools,
   };
   await writeFileAtomic(path.join(DIR, agent.id, "AGENT.md"), toMarkdown(updated));

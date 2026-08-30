@@ -14,7 +14,6 @@ import { buildRuntimeOptions } from "@/lib/agent/runtime";
 import { OpenAIChatAdapter, OpenAIResponsesAdapter } from "@/lib/agent/openai-chat-adapter";
 import { composeInstructions } from "@/lib/agent/instructions";
 import { getConversationActiveFeatureBranch } from "@/lib/agent/conversations-server";
-import { withCompaction } from "@/lib/agent/compaction/middleware";
 import { withToolGate } from "@/lib/agent/tool-gate";
 import { getAgent } from "@/lib/agent/subagents/store";
 import { readMetadataOverrides } from "@/lib/agent/tool-metadata-overrides";
@@ -76,11 +75,10 @@ export async function POST(req: NextRequest) {
   // the composed prompt so it actually reaches the model. Runtime-level MCP/action
   // tools are still assigned to this agent by CopilotRuntime.
   const rawModel = agentId ? serviceAdapter.getLanguageModel?.() : undefined;
-  // Apply compaction to the provider input, then wrap that model with the
-  // server-side tool gate. The gate stays outermost so it derives revealed
-  // deferred tools from the full transcript before compaction can remove old
-  // tool results from what the provider sees.
-  let model = rawModel && convId ? withCompaction(rawModel, convId) : rawModel;
+  // NOTE: this legacy CopilotKit chat path is dead in the live app (the
+  // mounted chat UI is AssistantChatV2, which goes through
+  // src/lib/agent/compaction/v2.ts directly) — compaction is not applied here.
+  let model = rawModel;
   if (model && agentId) {
     const agent = await getAgent(agentId).catch(() => undefined);
     if (agent) {

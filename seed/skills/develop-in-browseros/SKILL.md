@@ -14,6 +14,6 @@ First decide which use-case applies, then follow the matching reference:
 Shared rules (both use-cases):
 1. Do not explore the codebase or VFS yourself and do not try to understand the implementation first - delegate the whole request.
 2. Before modifying BOS source, check whether the Assistant header has an Active feature branch selected. If not, ask the user to select or create one before calling the developer harness.
-3. Delegate to the developer sub-agent: agent_delegate with agent 'developer' (Claude - required for all coding). For a large or vague request, optionally delegate to the planner sub-agent first and hand its plan to the developer.
+3. Delegate to the developer sub-agent: agent_delegate with agent 'developer' (Claude - required for all coding). For a large or vague request, take it through Build Studio first (spec -> design -> plan -> tasks) and hand the developer the spec path, rather than an ad-hoc plan.
 4. When the developer reports back, summarize what changed and how to try it; the docs are source files under docs/usage (end users) and docs/dev (developers) and must be updated by the developer as part of the change.
 5. If the developer sub-agent or Claude harness is unavailable, tell the user - never fall back to editing code through the VFS or writing it yourself.

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useState, type ReactNode } from "react";
 import { CheckCircle2, Loader2 } from "lucide-react";
 import { CardScopeProvider } from "@/lib/agent/card-collapse";
 import { useConversations, useActiveConversation, newConversation, selectConversation } from "@/lib/agent/conversations";
@@ -16,7 +16,6 @@ import { MessageListV2 } from "./MessageListV2";
 import { ChatInputV2 } from "./ChatInputV2";
 import { FrontendToolsV2 } from "./FrontendToolsV2";
 import { InfoPanelV2 } from "./InfoPanelV2";
-import { VoiceTTSPlayer } from "@/components/voice/VoiceTTSPlayer";
 
 // The embeddable Assistant, v2 — server-owned runs. Same surface API as the
 // CopilotKit-era AssistantChat (agentId / showConversations / allGroups /
@@ -41,7 +40,14 @@ export interface AssistantChatV2Props {
   children?: ReactNode;
 }
 
-export function AssistantChatV2(props: AssistantChatV2Props) {
+// Memoized: an embed like Build Studio mounts this as one sibling inside a
+// much larger app tree with its own frequently-mutating state (file tree
+// selection, artifact reload, viewer scroll/highlight) — without memo, every
+// one of those unrelated re-renders also reconciles this entire chat subtree
+// (including the input, mid-keystroke), on top of whatever the chat store
+// itself is already doing. Safe because every real caller passes only
+// primitive props.
+export const AssistantChatV2 = memo(function AssistantChatV2(props: AssistantChatV2Props) {
   const [currentAgentId, setCurrentAgentId] = useState(props.agentId ?? DEFAULT_AGENT_ID);
   const activeConv = useActiveConversation(currentAgentId);
   const resolvedAgentId = activeConv?.agentId ?? props.agentId ?? DEFAULT_AGENT_ID;
@@ -126,7 +132,6 @@ export function AssistantChatV2(props: AssistantChatV2Props) {
               <SelfImproveIndicator key={conversationId} conversationId={conversationId} />
             </div>
             <MessageListV2 conversationId={conversationId} agentId={resolvedAgentId} initialLabel={props.initialLabel} />
-            <VoiceTTSPlayer conversationId={conversationId} />
           </div>
           <ChatInputV2
             conversationId={conversationId}
@@ -138,4 +143,4 @@ export function AssistantChatV2(props: AssistantChatV2Props) {
       </div>
     </CardScopeProvider>
   );
-}
+});

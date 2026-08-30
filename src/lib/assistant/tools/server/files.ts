@@ -1,6 +1,6 @@
 import "server-only";
 import type { AssistantTool } from "../../tools";
-import { serverTool, schema, p } from "./util";
+import { serverTool, parallel, schema, p } from "./util";
 import * as vfs from "@/os/vfs";
 import { withFeatureScope } from "@/lib/specs/feature-context";
 
@@ -44,19 +44,47 @@ async function walkFiles(root: string, maxFiles: number): Promise<string[]> {
   return out;
 }
 
-/** Simple glob→RegExp: `**` = any path segment(s), `*` = any chars except `/`,
- *  `?` = one char. Good enough for agent-authored patterns like `**\/*.md`. */
+/** Simple glob→RegExp: `**\/` = zero or more path segments (can vanish
+ *  entirely, so `**\/*.md` also matches a file directly in the search root —
+ *  standard "globstar" semantics), bare `**` = any chars including `/`, `*` =
+ *  any chars except `/`, `?` = one char. Good enough for agent-authored
+ *  patterns like `**\/*.md`. Intended to be tested against a path RELATIVE to
+ *  the search root (see `relativeToRoot`) — a bare `*.md` has no `/`-crossing
+ *  component, so it only matches a bare filename, never an absolute path. */
 function globToRegExp(glob: string): RegExp {
-  const escaped = glob
-    .split("**")
-    .map((part) =>
-      part
-        .split("*")
-        .map((seg) => seg.split("?").map(escapeRegExp).join("[^/]"))
-        .join("[^/]*"),
-    )
-    .join(".*");
-  return new RegExp(`^${escaped}$`);
+  let out = "";
+  let i = 0;
+  while (i < glob.length) {
+    if (glob.startsWith("**/", i)) {
+      out += "(?:.*/)?";
+      i += 3;
+    } else if (glob.startsWith("**", i)) {
+      out += ".*";
+      i += 2;
+    } else if (glob[i] === "*") {
+      out += "[^/]*";
+      i += 1;
+    } else if (glob[i] === "?") {
+      out += "[^/]";
+      i += 1;
+    } else {
+      out += escapeRegExp(glob[i]);
+      i += 1;
+    }
+  }
+  return new RegExp(`^${out}$`);
+}
+
+/** Strip `root` (VFS-normalized) from an absolute VFS path returned by
+ *  `walkFiles`, so a glob pattern is matched relative to the directory the
+ *  caller searched under — matching what `path.str("Glob pattern, e.g.
+ *  '**\/*.md'")` actually documents. Without this, every path tested is
+ *  absolute (leading `/`), so a pattern with no `**` prefix (e.g. `*.md`)
+ *  could never match anything, at any root, ever. */
+function relativeToRoot(root: string, filePath: string): string {
+  const normRoot = vfs.normalizeVfsPath(root);
+  const prefix = normRoot === "/" ? "/" : `${normRoot}/`;
+  return filePath.startsWith(prefix) ? filePath.slice(prefix.length) : filePath.replace(/^\/+/, "");
 }
 
 export function fileTools(): Record<string, AssistantTool> {
@@ -125,7 +153,7 @@ export function fileTools(): Record<string, AssistantTool> {
         }),
     ),
 
-    file_search: serverTool(
+    file_search: parallel(serverTool(
       "file_search",
       "Search file content for a literal string under a VFS directory (optionally filtered by a glob). Returns matching path:line:text. Works across mounted filesystems too (e.g. /Specs, /Docs).",
       schema(
@@ -144,7 +172,7 @@ export function fileTools(): Record<string, AssistantTool> {
           const files = await walkFiles(root, 5000);
           const results: { path: string; line: number; text: string }[] = [];
           for (const file of files) {
-            if (glob && !glob.test(file)) continue;
+            if (glob && !glob.test(relativeToRoot(root, file))) continue;
             const ext = file.slice(file.lastIndexOf(".")).toLowerCase();
             if (!SEARCHABLE_EXT.has(ext)) continue;
             const content = await vfs.readText(file).catch(() => null);
@@ -159,9 +187,12 @@ export function fileTools(): Record<string, AssistantTool> {
           }
           return JSON.stringify(results);
         }),
-    ),
+    )),
 
-    file_glob: serverTool(
+    // file_search / file_glob are read-only VFS traversals — parallel-safe.
+    // The mutating file tools above (file_edit / file_patch) deliberately are
+    // NOT: two concurrent edits could target the same file.
+    file_glob: parallel(serverTool(
       "file_glob",
       "Find files under a VFS directory matching a glob pattern (`**` = any path segments, `*` = any chars in a segment). Works across mounted filesystems too (e.g. /Specs, /Docs).",
       schema({ path: p.str("VFS directory to search under"), pattern: p.str("Glob pattern, e.g. '**/*.md'") }, ["path", "pattern"]),
@@ -170,9 +201,9 @@ export function fileTools(): Record<string, AssistantTool> {
           const root = String(input.path ?? "/");
           const re = globToRegExp(String(input.pattern ?? "**"));
           const files = await walkFiles(root, 20000);
-          const matches = files.filter((f) => re.test(f)).slice(0, MAX_GLOB_RESULTS);
+          const matches = files.filter((f) => re.test(relativeToRoot(root, f))).slice(0, MAX_GLOB_RESULTS);
           return JSON.stringify(matches);
         }),
-    ),
+    )),
   };
 }

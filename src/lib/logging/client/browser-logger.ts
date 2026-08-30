@@ -21,6 +21,27 @@ interface ClientRecord {
   err?: { message: string; stack?: string };
 }
 
+// Two known-benign Chromium notifications surfaced as uncaught window errors
+// whenever a ResizeObserver callback itself triggers further layout changes
+// (e.g. a pane resize while an embedded iframe is present). They carry no
+// diagnostic value and would otherwise flood the log every time a user drags
+// a resize handle — matched verbatim (not a substring) so a genuinely novel
+// or app-specific "…loop…" error is still logged. Chromium emits the
+// "completed" variant WITH a trailing period (confirmed via a real
+// window.onerror capture) but the "limit exceeded" variant without one —
+// both forms are listed so a Chrome version difference can't let it slip
+// through. See specs/033-fix-pane-resize.
+const BENIGN_RESIZE_OBSERVER_MESSAGES = new Set([
+  "ResizeObserver loop completed with undelivered notifications",
+  "ResizeObserver loop completed with undelivered notifications.",
+  "ResizeObserver loop limit exceeded",
+  "ResizeObserver loop limit exceeded.",
+]);
+
+export function isBenignResizeObserverMessage(message: string): boolean {
+  return BENIGN_RESIZE_OBSERVER_MESSAGES.has(message);
+}
+
 const FLUSH_INTERVAL_MS = 2_000;
 const FLUSH_AT = 50; // flush eagerly once the buffer reaches this many records
 const MAX_QUEUE = 1_000; // hard cap so a logging storm can't grow unbounded
@@ -119,9 +140,15 @@ export function startBrowserLogging(): () => void {
   started = true;
   void resolveTarget();
 
-  const onError = (e: ErrorEvent) =>
+  const onError = (e: ErrorEvent) => {
+    if (isBenignResizeObserverMessage(e.message)) return;
     clog("error", "window.onerror", e.message || "uncaught error", { filename: e.filename, lineno: e.lineno, colno: e.colno }, e.error);
-  const onRejection = (e: PromiseRejectionEvent) => clog("error", "unhandledrejection", "unhandled promise rejection", undefined, e.reason);
+  };
+  const onRejection = (e: PromiseRejectionEvent) => {
+    const reasonMessage = e.reason instanceof Error ? e.reason.message : typeof e.reason === "string" ? e.reason : "";
+    if (isBenignResizeObserverMessage(reasonMessage)) return;
+    clog("error", "unhandledrejection", "unhandled promise rejection", undefined, e.reason);
+  };
   const onVisibility = () => {
     if (document.visibilityState === "hidden") void flush(true);
   };

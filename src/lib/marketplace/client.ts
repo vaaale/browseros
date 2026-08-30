@@ -11,6 +11,7 @@ import { userSpecRoot } from "@/lib/specs/spec-mount";
 import { installItemApp } from "@/lib/apps/store";
 import { logger } from "@/lib/logging/server-logger";
 import { saveSkill, type SkillAsset } from "@/lib/agent/skills/store";
+import { parseFrontmatter, asString } from "@/lib/agent/subagents/markdown";
 import { installService } from "@/system/marketplace/install/serviceInstaller";
 import type { AppManifest } from "@/os/types";
 import {
@@ -251,6 +252,72 @@ async function readJsonSafe(filePath: string): Promise<Record<string, unknown> |
   }
 }
 
+/** Whether an entry still offers anything installable. The schema requires at
+ *  least one facet, so an entry that has lost them all describes nothing and is
+ *  the only case in which a declared entry may be pruned. */
+function hasAnyFacet(item: MarketplaceItem): boolean {
+  return Boolean(item.app || item.spec || item.skill || item.serverPlugin || item.services || item.integration || item.voiceEngine);
+}
+
+/**
+ * Top-level `skills/<name>/` folders in the user's own marketplace, as catalog
+ * items carrying a `skill` facet — the same shape the Claude/Anthropic
+ * synthesizers emit (see synthesizeFromClaudePlugin above).
+ *
+ * 034-user-apps-marketplace-parity says user-apps has the same layout as any
+ * marketplace clone, and a CLONE's skills are catalogued. The local scan only
+ * ever walked `items/`, so skills sitting in `user-apps/skills/` existed on
+ * disk, were git-tracked, and were completely invisible in the Marketplace —
+ * they could never be installed from it. Items and skills are siblings in the
+ * repo layout, so both are scanned.
+ */
+async function scanLocalSkills(existingIds: Set<string>): Promise<MarketplaceItem[]> {
+  const root = path.join(userAppsDir(), "skills");
+  const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => [] as import("node:fs").Dirent[]);
+  const items: MarketplaceItem[] = [];
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const id = entry.name;
+    // A skill folder IS its SKILL.md — anything else is not installable, so
+    // advertising it would be a false offer (same rule as `gone()` below).
+    const skillFile = path.join(root, id, "SKILL.md");
+    if (!(await pathExists(skillFile))) continue;
+    // The flat `items` array is keyed by id; an item of the same name wins,
+    // since it is the richer facet set. Skipping is loud rather than silent
+    // because the collision means the repo has two things claiming one id.
+    if (existingIds.has(id)) {
+      logger().warn(COMPONENT, "skipping local skill: id already taken by an item", { id });
+      continue;
+    }
+
+    let name = toDisplayName(id);
+    let description = "";
+    let version = "0.0.0";
+    try {
+      const raw = await fs.readFile(skillFile, "utf8");
+      const { meta } = parseFrontmatter(raw);
+      if (asString(meta.name)) name = asString(meta.name) as string;
+      if (asString(meta.description)) description = asString(meta.description) as string;
+      // parseFrontmatter flattens to string values and does not descend into a
+      // nested `metadata:` block, which is where these skills carry their
+      // version — so read it off the front-matter text directly rather than
+      // pretending the parser nests. Top-level `version:` wins if present.
+      const top = asString(meta.version);
+      const nested = /^\s*version:\s*["']?([^"'\s]+)/m.exec(raw.split(/^---$/m)[1] ?? "");
+      const v = top || nested?.[1];
+      if (v) version = v;
+    } catch (err) {
+      // Malformed front-matter still leaves an installable skill folder, so it
+      // is catalogued with derived defaults rather than dropped — but say so.
+      logger().warn(COMPONENT, "local skill front-matter unreadable; using derived name", { id, err: String(err) });
+    }
+
+    items.push({ id, name, description, skill: { path: path.posix.join("skills", id), version } });
+  }
+  return items;
+}
+
 async function scanLocalItems(): Promise<MarketplaceItem[]> {
   const root = userAppsItemsDir();
   const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => [] as import("node:fs").Dirent[]);
@@ -390,8 +457,9 @@ async function reconcileLocalManifest(): Promise<MarketplaceManifest> {
     }
   }
 
-  const scanned = await scanLocalItems();
-  const scannedById = new Map(scanned.map((i) => [i.id, i]));
+  const scannedItems = await scanLocalItems();
+  // Skills are siblings of items in the repo layout, so both feed the manifest.
+  const scanned = [...scannedItems, ...(await scanLocalSkills(new Set(scannedItems.map((i) => i.id))))];
 
   // Repair entrypoints left behind by the pre-034 flat layout. A manifest
   // written before items/ existed declares `terminal/app`; the directory now
@@ -430,6 +498,10 @@ async function reconcileLocalManifest(): Promise<MarketplaceManifest> {
       const entrypoint = await repairPath(next.services.entrypoint);
       if (await gone(entrypoint)) delete next.services; else next.services = { ...next.services, entrypoint };
     }
+    if (next.skill) {
+      const p = await repairPath(next.skill.path);
+      if (await gone(p)) delete next.skill; else next.skill = { ...next.skill, path: p };
+    }
     if (next.serverPlugin) {
       const entrypoint = await repairPath(next.serverPlugin.entrypoint);
       if (await gone(entrypoint)) delete next.serverPlugin; else next.serverPlugin = { ...next.serverPlugin, entrypoint };
@@ -449,11 +521,27 @@ async function reconcileLocalManifest(): Promise<MarketplaceManifest> {
     items: [],
   };
 
-  // Keep declared entries in their existing order, untouched, dropping only
-  // those whose directory is gone. Then append newly discovered items.
-  const surviving = base.items.filter((item) => scannedById.has(item.id));
-  const pruned = base.items.length - surviving.length;
-  const kept = await Promise.all(surviving.map(repairItem));
+  // Keep declared entries in their existing order, dropping only those whose
+  // content is actually GONE FROM DISK. Then append newly discovered items.
+  //
+  // The rule used to be "keep only ids the scanner rediscovered", which made
+  // curation hostage to the scanner's blind spots: the scan walks `items/` and
+  // emits app/spec/services only — it deliberately does not decide plugin kind,
+  // and (until scanLocalSkills) knew nothing about `skills/`. So every curated
+  // entry whose content lives outside `items/<id>/` was silently deleted. That
+  // is not hypothetical: on 2026-08-25 BOS committed "sync marketplace manifest
+  // (21 removed)" against the user's own repo, destroying all 21 curated skill
+  // entries. They stayed visible only because a separate registered clone still
+  // served them, and vanished the moment that clone was unregistered.
+  //
+  // 034 FR-004 says this manifest is maintained by MERGE ONLY, never by
+  // regeneration — so liveness is judged per declared facet (repairItem already
+  // drops each facet whose path is gone) and an entry is pruned only once
+  // nothing installable is left in it. A facet the scanner cannot produce is no
+  // longer evidence that the entry is stale.
+  const repaired = await Promise.all(base.items.map(repairItem));
+  const kept = repaired.filter(hasAnyFacet);
+  const pruned = repaired.length - kept.length;
   const known = new Set(kept.map((i) => i.id));
   const added = scanned.filter((i) => !known.has(i.id));
 

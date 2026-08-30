@@ -15,7 +15,6 @@ import {
 import type { SupervisorHealth } from "./docker";
 import { provisionUser } from "./provision";
 import * as logStore from "./log-store";
-import { SESSION_TTL_MS } from "./sessions";
 
 /**
  * "unhealthy" is distinct from "stopped" on purpose: the container is running but

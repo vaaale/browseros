@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { AssistantTab } from "./AssistantTab";
 import { DefaultAgentTab } from "./DefaultAgentTab";
+import { BundledAssetConflicts } from "./BundledAssetConflicts";
 
 type Tab = "agents" | "default";
 
@@ -17,6 +18,11 @@ export function AgentsTab() {
         <TabButton active={tab === "agents"} onClick={() => setTab("agents")}>Agents</TabButton>
         <TabButton active={tab === "default"} onClick={() => setTab("default")}>Default Agent</TabButton>
       </div>
+      {tab === "agents" ? (
+        <div className="shrink-0 px-2 pt-2 empty:hidden">
+          <BundledAssetConflicts kind="agent" />
+        </div>
+      ) : null}
       <div className="min-h-0 flex-1">
         {tab === "agents" ? <AssistantTab /> : <DefaultAgentTab />}
       </div>

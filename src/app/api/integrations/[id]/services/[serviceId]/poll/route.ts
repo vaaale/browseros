@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import "@/lib/integrations"; // side-effect: register manifests
 import { getService } from "@/lib/integrations/registry";
 import { getAdapterEntry } from "@/lib/integrations/actions/adapter-registry";
-import { emitNotification } from "@/lib/integrations/notifications/store";
+import { emitIntegrationEvent } from "@/lib/events/from-integration-event";
 import { mutateState } from "@/lib/integrations/state/store";
 import { ensureSchedulerStarted } from "@/lib/integrations/scheduler/daemon";
 import { runJobOnce } from "@/lib/integrations/scheduler/jobs";
@@ -85,7 +85,7 @@ export async function POST(
     const result = await pollable.pollOnce({ since: body.since, maxResults: body.maxResults });
     let emitted = 0;
     for (const ev of result.events) {
-      await emitNotification(ev);
+      await emitIntegrationEvent(ev);
       emitted++;
     }
     await mutateState(id, (prev) => ({

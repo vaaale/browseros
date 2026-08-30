@@ -126,8 +126,22 @@ export function ConversationSelector({
   agentId?: string;
 }) {
   const { conversations, activeId } = useConversations(agentId);
+  // Arm-then-confirm instead of window.confirm: a native blocking dialog
+  // here is a known trigger for React's "flushSync was called from inside a
+  // lifecycle method" warning (it re-enters the event loop synchronously
+  // mid-handler, ahead of a useSyncExternalStore-backed update), the same
+  // reason the rest of BOS avoids window.confirm/alert/prompt for anything
+  // that follows with a state change.
+  const [confirming, setConfirming] = useState(false);
+
+  useEffect(() => {
+    if (!confirming) return;
+    const t = setTimeout(() => setConfirming(false), 3000);
+    return () => clearTimeout(t);
+  }, [confirming]);
 
   const onChange = async (next: string) => {
+    setConfirming(false);
     if (next === "__new__") {
       await newConversation(agentId);
       return;
@@ -137,7 +151,11 @@ export function ConversationSelector({
 
   const onDelete = () => {
     if (!activeId) return;
-    if (!window.confirm("Delete this conversation?")) return;
+    if (!confirming) {
+      setConfirming(true);
+      return;
+    }
+    setConfirming(false);
     void deleteConversation(activeId);
   };
 
@@ -159,9 +177,12 @@ export function ConversationSelector({
       </label>
       <button
         onClick={onDelete}
+        onBlur={() => setConfirming(false)}
         disabled={!activeId}
-        title="Delete this conversation"
-        className="rounded p-1 text-white/40 hover:bg-white/10 hover:text-white disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-white/40"
+        title={confirming ? "Click again to confirm delete" : "Delete this conversation"}
+        className={`rounded p-1 disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-white/40 ${
+          confirming ? "bg-red-500/20 text-red-300 hover:bg-red-500/30" : "text-white/40 hover:bg-white/10 hover:text-white"
+        }`}
       >
         <Trash2 size={12} />
       </button>

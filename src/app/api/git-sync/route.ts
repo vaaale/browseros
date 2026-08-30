@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { listMounts } from "@/lib/gitops/mount-manager";
-import { getSyncStatus, hasConflict, resolveConflict } from "@/lib/gitops/sync-status";
+import { getSyncStatus, hasConflict, resolveConflict, mountWorkContext } from "@/lib/gitops/sync-status";
+import { reconcile } from "@/lib/gitops/reconcile";
 import { gitLock } from "@/lib/gitops/lock";
 import { gitLogger } from "@/lib/gitops/logging";
 
@@ -96,7 +97,42 @@ export async function POST(req: NextRequest) {
         const lock = gitLock();
         return await lock.withLock(process.cwd(), "api.git_sync_resolve", async (release) => {
           try {
-            await resolveConflict(remoteName, strategy);
+            const result = await resolveConflict(remoteName, strategy);
+            if (result.status === "conflict") {
+              // 035 (FR-016, discovered by the completeness sweep): a mounted
+              // repo whose chosen strategy conflicts used to end here as a
+              // 400 with no agent. It now escalates like every other repo —
+              // the ONLY difference is this working context (FR-003/FR-004).
+              const ctx = mountWorkContext(remoteName);
+              if (!ctx) return err("NOT_FOUND", `Remote '${remoteName}' is not mounted.`);
+              await release();
+              const outcome = await reconcile({
+                repoPath: ctx.repoPath,
+                sourceRef: `origin/${ctx.branch}`,
+                strategy: strategy === "rebase" ? "merge" : "merge",
+                repoKind: "vfs-mount",
+                repoRoot: ctx.repoPath,
+                repoLabel: `${remoteName} (mount)`,
+                mode: "working-tree",
+                operationLabel: "mount sync",
+                escalationContext: `Mounted repo "${remoteName}": reconciling against origin/${ctx.branch} with the "${strategy}" strategy conflicted.`,
+                completion: { kind: "merge", strategy: "merge" },
+              });
+              gitLogger().warn({ op: "api.git_sync_resolve", remote: remoteName, error: { code: "RESOLVE_ESCALATED", message: outcome.sessionId ?? "escalated" } });
+              return NextResponse.json({
+                ok: outcome.status !== "failed",
+                escalated: true,
+                sessionId: outcome.sessionId,
+                devopsConversationId: outcome.devopsConversationId,
+                sessionStatus: outcome.sessionStatus ?? outcome.status,
+                rollbackTag: outcome.rollbackTag,
+                message:
+                  outcome.status === "success"
+                    ? `Reconciled '${remoteName}' via ${outcome.method}.`
+                    : outcome.error?.message ??
+                      `The '${strategy}' of '${remoteName}' conflicted and was handed to the conflict-resolution agent — open the resolution to watch or answer it.`,
+              });
+            }
             gitLogger().info({ op: "api.git_sync_resolve", remote: remoteName, success: true });
             return NextResponse.json({ ok: true, message: `Resolved conflict for '${remoteName}' via ${strategy}.` });
           } catch (e) {

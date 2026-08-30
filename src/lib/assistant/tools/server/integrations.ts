@@ -1,7 +1,8 @@
 import "server-only";
 import type { AssistantTool } from "../../tools";
 import { serverTool } from "./util";
-import { actionNameFor, invokeAdapterMethod } from "@/lib/integrations/actions/dispatcher";
+import { actionNameFor } from "@/lib/integrations/actions/dispatcher";
+import { invokeAdapterMethodDirect } from "@/lib/integrations/actions/invoke-server";
 import { adapterParametersToJsonSchema, type AdapterMethodParameter } from "@/lib/integrations/actions/types";
 import { GMAIL_METHOD_DESCRIPTORS } from "@/lib/integrations/services/gsuite/adapters/gmail-methods";
 import { DRIVE_METHOD_DESCRIPTORS } from "@/lib/integrations/services/gsuite/adapters/drive-methods";
@@ -47,7 +48,7 @@ function buildTools(
     const name = actionNameFor(opts.integrationId, opts.nameServiceId, d.method);
     out[name] = serverTool(name, d.description, adapterParametersToJsonSchema(d.parameters), async (input) => {
       try {
-        const result = await invokeAdapterMethod({
+        const result = await invokeAdapterMethodDirect({
           integrationId: opts.integrationId,
           serviceId: opts.serviceId,
           method: d.method,

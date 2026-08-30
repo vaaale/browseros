@@ -55,8 +55,12 @@ async function writeLockFile(filePath: string, record: LockFileContent): Promise
 async function removeLockFile(filePath: string): Promise<void> {
   try {
     await fs.rm(filePath, { force: true });
-  } catch {
-    // ignore
+  } catch (err) {
+    // Self-healing (the next acquire() treats a lingering lock file as stale
+    // once LOCK_TIMEOUT_MS passes), so this doesn't need to throw — but it
+    // must be visible, since a persistently-failing removal here is a real
+    // signal something's wrong with the repo's filesystem permissions.
+    gitLogger().warn({ op: "git-lock.remove-failed", repoPath: path.dirname(filePath), error: { code: "LOCK_FILE_REMOVE_FAILED", message: (err as Error).message } });
   }
 }
 

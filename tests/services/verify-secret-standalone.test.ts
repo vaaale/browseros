@@ -16,6 +16,7 @@ import { createSecret, verifySecret } from "../../src/lib/secrets/service-secret
 const SERVICE = "standalone-test";
 
 function setupTest(label: string) {
+  // eslint-disable-next-line react-hooks/rules-of-hooks -- useTestDataDir is a test helper (temp-dir setup), not a React hook
   const { dir, cleanup } = useTestDataDir(label);
   _resetKeyCache();
   return {

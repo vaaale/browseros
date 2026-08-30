@@ -2,7 +2,7 @@
 
 import { createElement, useCallback, useEffect, useRef, type PointerEvent as ReactPointerEvent } from "react";
 import { Pin, PinOff } from "lucide-react";
-import type { WindowInstance } from "@/os/types";
+import type { WindowBounds, WindowInstance } from "@/os/types";
 import { useOSStore } from "@/store/os-provider";
 import { getAppComponent } from "@/components/apps/registry";
 import { IframeApp } from "@/components/apps/IframeApp";
@@ -11,6 +11,14 @@ const TOPBAR_H = 32;
 // Higher than zCounter can plausibly reach in a session, so a pinned window can
 // never be covered by focusing an unpinned one.
 const PIN_Z_BAND = 1_000_000;
+// Mirrors os-store's own resize() floor (it re-clamps regardless) — duplicated
+// here because dragging the north/west edges must shrink width/height AND grow
+// x/y in lockstep, and that lockstep math needs to know the same floor the
+// store will apply, not just let the store clamp it after the fact.
+const MIN_W = 280;
+const MIN_H = 180;
+
+type ResizeDir = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
 
 export function Window({ win }: { win: WindowInstance }) {
   const focus = useOSStore((s) => s.focus);
@@ -32,7 +40,23 @@ export function Window({ win }: { win: WindowInstance }) {
     nextY: number;
     rafId: number | null;
   } | null>(null);
-  const resizeState = useRef<{ pointerId: number; startX: number; startY: number; startW: number; startH: number } | null>(null);
+  const resizeState = useRef<{
+    pointerId: number;
+    dir: ResizeDir;
+    startX: number;
+    startY: number;
+    startW: number;
+    startH: number;
+    startWinX: number;
+    startWinY: number;
+  } | null>(null);
+  // Holds the exact end-handler reference passed to addEventListener, so the
+  // handler can remove its OWN sibling listener (pointerup vs. pointercancel,
+  // whichever didn't fire) via a ref read instead of referencing its own
+  // `const` name — self-reference from within a useCallback body is flagged
+  // by the React Compiler lint rule as an unsafe stale-closure pattern.
+  const dragEndRef = useRef<() => void>(() => {});
+  const resizeEndRef = useRef<() => void>(() => {});
 
   const applyDragFrame = useCallback(() => {
     const d = dragState.current;
@@ -62,6 +86,8 @@ export function Window({ win }: { win: WindowInstance }) {
   const onDragEnd = useCallback(() => {
     const d = dragState.current;
     window.removeEventListener("pointermove", onDragMove);
+    window.removeEventListener("pointerup", dragEndRef.current);
+    window.removeEventListener("pointercancel", dragEndRef.current);
     if (!d) return;
     if (d.rafId !== null) {
       cancelAnimationFrame(d.rafId);
@@ -83,8 +109,17 @@ export function Window({ win }: { win: WindowInstance }) {
         nextY: win.y,
         rafId: null,
       };
+      dragEndRef.current = onDragEnd;
+      // Captures the pointer to this element so pointermove/pointerup keep
+      // firing here even when the cursor crosses an iframe's own document
+      // (this window's app content, or another window's) mid-drag — without
+      // it, fast movement over an iframe silently drops the move/up events,
+      // leaving dragState stuck and the drag "resuming" on the next stray
+      // pointermove that reaches window.
+      e.currentTarget.setPointerCapture(e.pointerId);
       window.addEventListener("pointermove", onDragMove);
       window.addEventListener("pointerup", onDragEnd, { once: true });
+      window.addEventListener("pointercancel", onDragEnd, { once: true });
     },
     [focus, onDragEnd, onDragMove, win.id, win.maximized, win.x, win.y],
   );
@@ -93,10 +128,26 @@ export function Window({ win }: { win: WindowInstance }) {
     (e: PointerEvent) => {
       const r = resizeState.current;
       if (!r || e.pointerId !== r.pointerId) return;
-      resize(win.id, {
-        width: r.startW + (e.clientX - r.startX),
-        height: r.startH + (e.clientY - r.startY),
-      });
+      const dx = e.clientX - r.startX;
+      const dy = e.clientY - r.startY;
+      const bounds: Partial<WindowBounds> = {};
+      if (r.dir.includes("e")) bounds.width = r.startW + dx;
+      if (r.dir.includes("s")) bounds.height = r.startH + dy;
+      // West/north also move x/y, and by exactly however much the size
+      // actually changed (not the raw pointer delta) — once MIN_W/MIN_H
+      // clamps the size, the edge must stop tracking the cursor too, or the
+      // window visibly detaches from the pointer instead of just stopping.
+      if (r.dir.includes("w")) {
+        const w = Math.max(MIN_W, r.startW - dx);
+        bounds.width = w;
+        bounds.x = Math.max(0, r.startWinX + (r.startW - w));
+      }
+      if (r.dir.includes("n")) {
+        const h = Math.max(MIN_H, r.startH - dy);
+        bounds.height = h;
+        bounds.y = Math.max(TOPBAR_H, r.startWinY + (r.startH - h));
+      }
+      resize(win.id, bounds);
     },
     [resize, win.id],
   );
@@ -104,17 +155,35 @@ export function Window({ win }: { win: WindowInstance }) {
   const onResizeEnd = useCallback(() => {
     resizeState.current = null;
     window.removeEventListener("pointermove", onResizeMove);
+    window.removeEventListener("pointerup", resizeEndRef.current);
+    window.removeEventListener("pointercancel", resizeEndRef.current);
   }, [onResizeMove]);
 
   const startResize = useCallback(
-    (e: ReactPointerEvent) => {
+    (e: ReactPointerEvent, dir: ResizeDir) => {
       e.stopPropagation();
       focus(win.id);
-      resizeState.current = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, startW: win.width, startH: win.height };
+      resizeState.current = {
+        pointerId: e.pointerId,
+        dir,
+        startX: e.clientX,
+        startY: e.clientY,
+        startW: win.width,
+        startH: win.height,
+        startWinX: win.x,
+        startWinY: win.y,
+      };
+      resizeEndRef.current = onResizeEnd;
+      // See startDrag's comment — without pointer capture, dragging the
+      // corner across this window's own iframe content drops pointermove and
+      // (worse) pointerup, so the resize never ends and resumes on the next
+      // pointermove that reaches window instead of a fresh pointerdown.
+      e.currentTarget.setPointerCapture(e.pointerId);
       window.addEventListener("pointermove", onResizeMove);
       window.addEventListener("pointerup", onResizeEnd, { once: true });
+      window.addEventListener("pointercancel", onResizeEnd, { once: true });
     },
-    [focus, onResizeEnd, onResizeMove, win.height, win.id, win.width],
+    [focus, onResizeEnd, onResizeMove, win.height, win.id, win.width, win.x, win.y],
   );
 
   useEffect(() => {
@@ -122,10 +191,16 @@ export function Window({ win }: { win: WindowInstance }) {
       const d = dragState.current;
       if (d?.rafId != null) cancelAnimationFrame(d.rafId);
       window.removeEventListener("pointermove", onDragMove);
+      window.removeEventListener("pointerup", onDragEnd);
+      window.removeEventListener("pointercancel", onDragEnd);
       const r = resizeState.current;
-      if (r) window.removeEventListener("pointermove", onResizeMove);
+      if (r) {
+        window.removeEventListener("pointermove", onResizeMove);
+        window.removeEventListener("pointerup", onResizeEnd);
+        window.removeEventListener("pointercancel", onResizeEnd);
+      }
     };
-  }, [onDragMove, onResizeMove]);
+  }, [onDragEnd, onDragMove, onResizeEnd, onResizeMove]);
 
   if (win.minimized) return null;
 
@@ -220,11 +295,23 @@ export function Window({ win }: { win: WindowInstance }) {
       </div>
 
       {!win.maximized && (
-        <div
-          onPointerDown={startResize}
-          className="absolute bottom-0 right-0 h-4 w-4 cursor-nwse-resize"
-          style={{ background: "linear-gradient(135deg, transparent 50%, rgba(255,255,255,0.25) 50%)" }}
-        />
+        <>
+          {/* Edges — inset past the corner handles so corners take priority
+              in the small region where an edge and a corner would overlap. */}
+          <div onPointerDown={(e) => startResize(e, "n")} className="absolute inset-x-3 top-0 h-1.5 cursor-ns-resize" />
+          <div onPointerDown={(e) => startResize(e, "s")} className="absolute inset-x-3 bottom-0 h-1.5 cursor-ns-resize" />
+          <div onPointerDown={(e) => startResize(e, "w")} className="absolute inset-y-3 left-0 w-1.5 cursor-ew-resize" />
+          <div onPointerDown={(e) => startResize(e, "e")} className="absolute inset-y-3 right-0 w-1.5 cursor-ew-resize" />
+          {/* Corners */}
+          <div onPointerDown={(e) => startResize(e, "nw")} className="absolute left-0 top-0 h-3 w-3 cursor-nwse-resize" />
+          <div onPointerDown={(e) => startResize(e, "ne")} className="absolute right-0 top-0 h-3 w-3 cursor-nesw-resize" />
+          <div onPointerDown={(e) => startResize(e, "sw")} className="absolute bottom-0 left-0 h-3 w-3 cursor-nesw-resize" />
+          <div
+            onPointerDown={(e) => startResize(e, "se")}
+            className="absolute bottom-0 right-0 h-4 w-4 cursor-nwse-resize"
+            style={{ background: "linear-gradient(135deg, transparent 50%, rgba(255,255,255,0.25) 50%)" }}
+          />
+        </>
       )}
     </div>
   );

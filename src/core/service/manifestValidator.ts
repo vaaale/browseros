@@ -5,6 +5,21 @@ import Ajv from "ajv";
 import type { ServiceManifest } from "./types";
 
 const ID_RE = /^[a-z0-9]([a-z0-9._-]*[a-z0-9])?$/;
+// 039-service-tool-exposure ADR-002 — absent ⇒ "default" (no tools, backward
+// compatible); "tools" opts a service into declaring tools via tool_declare.
+const VALID_DEPLOYMENT_MODES = new Set(["default", "tools"]);
+
+/** Read a service manifest from an item's `services/` directory.
+ *
+ *  Lives here, beside validateManifest, rather than in the installer: a caller
+ *  that only wants to VALIDATE a manifest — e.g. a branch-targeted install,
+ *  which deliberately does not register or start the service — must not have to
+ *  load the installer and with it the service registry, the symlink manager and
+ *  the tool bridge. */
+export async function readServiceManifest(installedServicesDir: string): Promise<ServiceManifest> {
+  const raw = await fs.readFile(path.join(installedServicesDir, "service.json"), "utf8");
+  return JSON.parse(raw) as ServiceManifest;
+}
 
 export interface ValidationResult {
   valid: boolean;
@@ -62,6 +77,10 @@ export async function validateManifest(manifest: unknown, itemDir?: string): Pro
     } else if (typeof m.id === "string" && (m.dependencies as string[]).includes(m.id)) {
       errors.push(`manifest.dependencies must not include the service's own id ("${m.id}") — self-dependencies are rejected`);
     }
+  }
+
+  if (m.deploymentMode !== undefined && !VALID_DEPLOYMENT_MODES.has(m.deploymentMode as string)) {
+    errors.push(`manifest.deploymentMode must be one of "default" | "tools" if provided (got ${JSON.stringify(m.deploymentMode)})`);
   }
 
   if (m.settingsRegistration !== undefined) {

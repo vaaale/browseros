@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
-  CAPABILITIES,
+  listCapabilities,
   deferredCapabilityIds,
   groupDescription,
   isActionId,
@@ -74,7 +74,7 @@ export async function GET(req: NextRequest) {
   const allow = agent.tools ?? [];
   const allowSet = new Set(allow);
 
-  const scored = CAPABILITIES
+  const scored = listCapabilities()
     // Only main-chat actions are discoverable client-side — server-only
     // tools (context "tool") are unreachable from the browser.
     .filter((c) => isActionId(c.id))

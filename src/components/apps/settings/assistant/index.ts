@@ -12,6 +12,8 @@ export { SkillsGrid } from "./SkillsGrid";
 export type { SkillsGridProps } from "./SkillsGrid";
 export { McpGrid } from "./McpGrid";
 export type { McpGridProps } from "./McpGrid";
+export { KnowledgeBasesGrid } from "./KnowledgeBasesGrid";
+export type { KnowledgeBasesGridProps } from "./KnowledgeBasesGrid";
 export { ToolAccordions } from "./ToolAccordions";
 export type { ToolAccordionsProps } from "./ToolAccordions";
 export { DangerZone } from "./DangerZone";
@@ -21,6 +23,7 @@ export type {
   Catalog,
   CatalogSkill,
   CatalogMcp,
+  CatalogKb,
   CatalogTool,
   CapabilitiesPatch,
 } from "./types";

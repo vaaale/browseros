@@ -1,6 +1,6 @@
 import "server-only";
 import { getAdapterEntry, listAdapterServices } from "../actions/adapter-registry";
-import { emitNotification } from "../notifications/store";
+import { emitIntegrationEvent } from "@/lib/events/from-integration-event";
 import { mutateState, readState } from "../state/store";
 import type { GmailAdapter } from "../services/gsuite/adapters/gmail";
 import {
@@ -150,7 +150,7 @@ export async function runJobOnce(integrationId: string, serviceId: string): Prom
     const result = await pollable.pollOnce({ since });
     let emitted = 0;
     for (const ev of result.events) {
-      await emitNotification(ev);
+      await emitIntegrationEvent(ev);
       emitted++;
     }
     await mutateState(integrationId, (prev) => {

@@ -18,6 +18,10 @@ export interface ReconcileJob {
   id: string;
   phase: ReconcileJobPhase;
   devopsConversationId?: string;
+  /** 035 (FR-018): the resolution session, surfaced the moment the pipeline
+   *  escalates so the Supervisor's poller can put it in the promote response
+   *  and the UI can link straight into the Build Studio conflict pane. */
+  sessionId?: string;
   outcome?: ReconcileOutcome;
   startedAt: number;
 }
@@ -39,17 +43,19 @@ export function startReconcileJob(opts: ReconcileOptions): string {
 
   void reconcile({
     ...opts,
-    onEscalate: (conversationId) => {
+    onEscalate: (conversationId, sessionId) => {
       job.phase = "escalated";
       job.devopsConversationId = conversationId;
+      job.sessionId = sessionId;
       gitLogger().info({ op: "gitops.reconcileJob.escalated", repoPath: opts.repoPath, remote: opts.remote, success: true, error: undefined });
-      opts.onEscalate?.(conversationId);
+      opts.onEscalate?.(conversationId, sessionId);
     },
   })
     .then((outcome) => {
       job.phase = "done";
       job.outcome = outcome;
       if (outcome.devopsConversationId) job.devopsConversationId = outcome.devopsConversationId;
+      if (outcome.sessionId) job.sessionId = outcome.sessionId;
       gitLogger().info({ op: "gitops.reconcileJob.done", repoPath: opts.repoPath, remote: opts.remote, success: outcome.status !== "failed", error: outcome.error });
     })
     .catch((e) => {

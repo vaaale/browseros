@@ -40,10 +40,32 @@ export interface ToolContext {
   runId: string;
 }
 
+/** A server tool's result, when it needs to hand the model something beyond
+ *  plain text — e.g. an image the tool just read/generated, so the model
+ *  actually SEES it (a vision content block) rather than being told about it
+ *  in prose. Most tools just return a string; this is the escape hatch for
+ *  the few that need to attach visual content to their own result. */
+export interface ToolExecuteResult {
+  text: string;
+  attachments?: import("./messages").Attachment[];
+}
+
 export interface AssistantTool extends ToolDeclaration {
   execution: "server" | "frontend";
-  /** Server tools only. Must return the string handed to the model. */
-  execute?: (input: Record<string, unknown>, ctx: ToolContext) => Promise<string>;
+  /** Server tools only. Must return the string handed to the model, or a
+   *  ToolExecuteResult when the result needs attachments (e.g. an image). */
+  execute?: (input: Record<string, unknown>, ctx: ToolContext) => Promise<string | ToolExecuteResult>;
+  /** Opt in to running concurrently with ADJACENT parallel-safe calls in the
+   *  same turn (agent-loop.ts). Default false = strictly sequential, which is
+   *  what every tool did before this existed.
+   *
+   *  Only set this when the tool is safe to run alongside a copy of itself and
+   *  alongside its neighbours — in practice: no shared mutable state, no
+   *  write to a path another call might touch, no single-slot external
+   *  resource. Read-only lookups and fan-out delegations qualify; writes,
+   *  and anything that lazily creates a shared singleton (e.g. the
+   *  run_command sandbox container), do not. */
+  parallelSafe?: boolean;
 }
 
 /** Per-run gate configuration, mirroring tool-gate.ts semantics. */

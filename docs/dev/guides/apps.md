@@ -34,7 +34,7 @@ served from `/api/iframe-sdk` and auto-injected into every app's HTML by the
 `/apps/[...slug]` route. It is a promise-based wrapper over a `postMessage`
 broker (`IframeApp.tsx`); a call succeeds only if the app's manifest **granted**
 that `AppCapability` (`fs:read`/`fs:write`/`settings:read`/`notify`/`window:title`/
-`storage`/`services:read`). `window.__bos.storage.{get,set,remove,keys}` is a per-app KV
+`storage`/`services:read`/`assistant`). `window.__bos.storage.{get,set,remove,keys}` is a per-app KV
 (`/api/app-storage`, namespaced by the app id the *parent* supplies — never the
 iframe). The SDK also shims `localStorage`/`sessionStorage` over `storage`, but
 ONLY when native storage is unavailable (opaque origin); same-origin apps keep
@@ -47,6 +47,13 @@ native storage.
 > through `window.__bos` + a granted capability instead. See
 > [Design heuristics](../design-heuristics.md#opaque-origin-sandboxed-apps-cant-fetch-bos-apis-directly)
 > for the full story and the four files a new capability touches.
+
+`assistant` is the one capability whose payload is a *stream*, so it works
+differently from the rest: the parent frame owns the run's NDJSON connection and
+pushes each event into the app as an unsolicited `__bos_event` message
+(`window.__bos.assistant.onRunEvent`). It is also the only **declaration-gated**
+capability — grantable only if the app's own `app.json` asks for it. See
+[the assistant broker](../assistant/assistant-broker.md).
 
 Provenance (`AppManifest.origin`) sets the sandbox:
 
@@ -201,7 +208,7 @@ See [Features & components guide](./features-and-components.md) for the registra
 1. Author the app as a static folder or a TS/TSX project in a staging directory.
 2. For a project app, ensure `entry` points to the main TSX file.
 3. Delegate installation to `installApp` or call `/api/apps/build` then `/api/apps`.
-4. Preview/promote via the GitFS `app-candidate` branch.
+4. Preview/promote via the feature branch's coupled `user-apps` worktree.
 
 ---
 

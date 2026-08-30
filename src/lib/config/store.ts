@@ -24,3 +24,20 @@ export async function patchNamespace(ns: string, patch: Record<string, unknown>)
   await writeNamespace(ns, next);
   return next;
 }
+
+/**
+ * The git committer identity BOS uses for commits it makes on the user's
+ * behalf — tags, rebases, merges, and every repo BOS itself `git init`s (spec
+ * stores, user-apps) — sourced from Settings → Versions (namespace
+ * "self-modification"). Falls back to "BrowserOS" <bos@localhost> when unset,
+ * so a fresh instance with no configured identity never hard-fails on
+ * "Committer identity unknown". A leaf helper (this file only touches the
+ * filesystem) so every git-writing module can depend on it without pulling in
+ * the full config registry.
+ */
+export async function getGitIdentity(): Promise<{ name: string; email: string }> {
+  const s = await readNamespace("self-modification");
+  const name = typeof s.gitName === "string" && s.gitName.trim() ? s.gitName.trim() : "BrowserOS";
+  const email = typeof s.gitEmail === "string" && s.gitEmail.trim() ? s.gitEmail.trim() : "bos@localhost";
+  return { name, email };
+}

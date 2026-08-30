@@ -18,7 +18,7 @@ export async function GET() {
     const bin = h.tool === "opencode" ? "opencode" : "claude";
     const label = h.tool === "opencode" ? "OpenCode" : "Claude";
     try {
-      const { stdout } = await exec(bin, ["--version"], { timeout: 10_000 });
+      const { stdout } = await exec(bin, ["--version"], { cwd: h.cwd, timeout: 10_000 });
       return NextResponse.json({ mode: "cli", tool: h.tool, ok: true, version: stdout.trim(), cwd: h.cwd });
     } catch (e) {
       return NextResponse.json({ mode: "cli", tool: h.tool, ok: false, error: `${label} CLI not available: ${(e as Error).message}`, cwd: h.cwd });

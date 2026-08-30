@@ -177,6 +177,93 @@ async function openaiWebSearch(valid: WebSearchInput, config: ProviderConfig, ru
   return { query: valid.query, hits: dedupeHits(hits), text: text.join("\n").trim(), blocks: [] };
 }
 
+// ── Native web fetch (039-adjacent: same shape as native web search above,
+// but Anthropic-only — no OpenAI equivalent exists (only web_search_preview,
+// which searches rather than fetching a specific URL). The Anthropic
+// web_fetch server tool does the HTML→text extraction on Anthropic's own
+// infrastructure and returns clean content directly — BOS never touches
+// raw HTML here, unlike the old client-side fetchText()/stripHtml() path. ──
+
+export interface WebFetchOutput {
+  url: string;
+  content: string;
+  mediaType?: string;
+  retrievedAt?: string;
+}
+
+function supportsWebFetch(provider: string): boolean {
+  return familyOf(provider as never) === "anthropic";
+}
+
+export async function isNativeWebFetchAvailable(): Promise<boolean> {
+  const config = await getProviderConfig();
+  if (!supportsWebFetch(config.provider)) return false;
+  return !!config.apiKey;
+}
+
+export async function webFetch(url: string, runId?: string): Promise<WebFetchOutput> {
+  const config = await getProviderConfig();
+  if (!supportsWebFetch(config.provider)) {
+    throw new Error("Native web fetch requires an Anthropic provider.");
+  }
+  if (!config.apiKey) {
+    throw new Error("Anthropic API key is required for native web fetch.");
+  }
+  return anthropicWebFetch(url, config, runId);
+}
+
+async function anthropicWebFetch(url: string, config: ProviderConfig, runId?: string): Promise<WebFetchOutput> {
+  const client = new Anthropic({ apiKey: config.apiKey, baseURL: config.baseUrl || undefined });
+  // No beta namespace/header needed — web_fetch is a GA server tool.
+  const res = await client.messages.create(
+    {
+      model: config.model,
+      max_tokens: config.maxTokens ?? DEFAULT_MAX_TOKENS,
+      messages: [{ role: "user", content: `Fetch the content at ${url} and return nothing else.` }],
+      tools: [{ type: "web_fetch_20260318", name: "web_fetch", max_uses: 1 }],
+    } as unknown as Parameters<typeof client.messages.create>[0],
+    {
+      timeout: await providerTimeoutMs(),
+      ...(runId ? { headers: { "X-Correlation-Id": runId } } : {}),
+    },
+  ) as { content: unknown[] };
+
+  for (const block of res.content) {
+    const typed = block as Record<string, unknown>;
+    if (typed.type !== "web_fetch_tool_result") continue;
+    const result = typed.content as Record<string, unknown>;
+    if (result.type === "web_fetch_tool_result_error") {
+      throw new Error(`web_fetch failed: ${String(result.error_code ?? "unknown_error")}`);
+    }
+    if (result.type === "web_fetch_result") {
+      const doc = result.content as Record<string, unknown>;
+      const source = (doc.source ?? {}) as Record<string, unknown>;
+      return {
+        url: String(result.url ?? url),
+        content: String(source.data ?? ""),
+        mediaType: typeof source.media_type === "string" ? source.media_type : undefined,
+        retrievedAt: typeof result.retrieved_at === "string" ? result.retrieved_at : undefined,
+      };
+    }
+  }
+  throw new Error("web_fetch: the model did not fetch the URL — it may not be fetchable in this context (see URL validation rules).");
+}
+
+// ── Native video-understanding capability (mirrors isNativeWebSearchAvailable's
+// per-provider gate shape). As of this writing, NEITHER Anthropic nor OpenAI
+// accept video as a native Messages/Responses API content type — Claude's
+// vision input is JPEG/PNG/GIF/WebP images only (see
+// platform.claude.com/docs/en/build-with-claude/vision — "Animations are
+// unsupported, and only the first frame is used"; no video content block
+// exists). This always returns false today; it exists so that when a provider
+// adds native video, video_keyframes' ffmpeg-based frame-sampling fallback can
+// be preferred over automatically without another design change — flip the
+// body to a real per-provider check at that point, the same way
+// isNativeWebSearchAvailable checks `supportsWebSearch`. ──
+export async function isNativeVideoUnderstandingAvailable(): Promise<boolean> {
+  return false;
+}
+
 export function formatWebSearchForModel(output: WebSearchOutput): string {
   const lines = [`Web search results for: ${output.query}`];
   if (output.text) lines.push("", output.text);

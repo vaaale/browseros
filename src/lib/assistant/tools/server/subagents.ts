@@ -1,6 +1,6 @@
 import "server-only";
 import type { AssistantTool } from "../../tools";
-import { serverTool, schema, p } from "./util";
+import { serverTool, parallel, schema, p } from "./util";
 import { listSubAgents, getAgent, createSubAgent } from "@/lib/agent/subagents/store";
 import type { Agent } from "@/lib/agent/subagents/types";
 import { runManager } from "../../run-manager";
@@ -64,7 +64,14 @@ export function subAgentTools(): Record<string, AssistantTool> {
       },
     ),
 
-    agent_delegate: serverTool(
+    // Parallel-safe, and the highest-value case for it: several independent
+    // sub-agents in one turn (fan out across files/sources/candidates) now
+    // actually run at the same time instead of queueing. Verified per-call
+    // state: delegateToAgent builds its own gate/systemPrompt/maxSteps,
+    // runInnerLoop keeps its own messages/steps/toolCalls, and the parent
+    // run's frontend-dispatch map is callId-keyed, so concurrent inner loops
+    // cannot cross-talk. Sub-agents are still depth-guarded as before.
+    agent_delegate: parallel(serverTool(
       "agent_delegate",
       "Delegate a task to a named or one-off (ephemeral) agent.\n\nNAMED — supply `agent` with an existing id/name (persisted or surface). Use find_agent to discover options.\n\nEPHEMERAL — supply all three of `ephemeralName` + `ephemeralType` + `ephemeralSystemPrompt` (all three are required; omitting any one fails). Choose the type:\n• `ephemeralType: 'local'` — for research, analysis, writing, or any non-BOS-development task. No feature branch needed.\n• `ephemeralType: 'claude'` — ONLY for BOS source-code development. Requires an active feature branch; call dev_branch_request first if none is set.",
       schema(
@@ -78,6 +85,9 @@ export function subAgentTools(): Record<string, AssistantTool> {
           contentOnly: p.bool(
             "Set true when the 'claude' agent should produce content or perform analysis without touching BOS source files (bypasses the feature branch requirement). Set false (default) when the agent needs full BOS source access for implementation.",
           ),
+          specPath: p.str(
+            "Only meaningful with contentOnly:true. A store-prefixed path (e.g. \"item-falling-blocks\" or \"item-falling-blocks/spec.md\") to a spec/plan/design/tasks already written in a spec store. A contentOnly run has no worktree, so nothing is otherwise readable there — set this instead of pasting the spec's content into `task`; BOS resolves it to a real path and tells the agent where to read it, so `task` can stay a short instruction.",
+          ),
         },
         ["task"],
       ),
@@ -85,6 +95,7 @@ export function subAgentTools(): Record<string, AssistantTool> {
         const task = String(input.task ?? "");
         if (!task) return "Error: agent_delegate: task is required.";
         const contentOnly = input.contentOnly === true;
+        const specPath = input.specPath ? String(input.specPath) : undefined;
 
         if (input.ephemeralName && !input.ephemeralSystemPrompt) {
           return "Error: agent_delegate: ephemeralSystemPrompt is required when ephemeralName is set — provide the agent's system instructions.";
@@ -101,7 +112,7 @@ export function subAgentTools(): Record<string, AssistantTool> {
             subagentType: input.ephemeralSubagentType ? String(input.ephemeralSubagentType) : undefined,
             ephemeral: true,
           };
-          return delegateToAgent(def, true, task, ctx, contentOnly, "agent_delegate");
+          return delegateToAgent(def, true, task, ctx, contentOnly, "agent_delegate", specPath);
         }
 
         if (input.agent) {
@@ -109,7 +120,7 @@ export function subAgentTools(): Record<string, AssistantTool> {
           // Resolution order (FR-022): the persisted roster ALWAYS wins over
           // a surface agent — a surface agent may never shadow a persisted one.
           const named = await getAgent(idOrName);
-          if (named) return delegateToAgent(named, false, task, ctx, contentOnly, "agent_delegate");
+          if (named) return delegateToAgent(named, false, task, ctx, contentOnly, "agent_delegate", specPath);
 
           const run = runManager().get(ctx.runId);
           const surfaceAgent = run?.agents.get(idOrName.toLowerCase());
@@ -118,6 +129,6 @@ export function subAgentTools(): Record<string, AssistantTool> {
 
         return `Error: agent_delegate: no matching agent found${input.agent ? ` for "${input.agent}"` : ""} and no ephemeral spec provided. Supply either an existing \`agent\` id/name, or all three of \`ephemeralName\` + \`ephemeralType\` + \`ephemeralSystemPrompt\`.`;
       },
-    ),
+    )),
   };
 }

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { listSubAgents, createSubAgent, deleteSubAgent, ProtectedAgentError } from "@/lib/agent/subagents/store";
 import type { Agent, AgentType } from "@/lib/agent/subagents/types";
-import { CAPABILITIES } from "@/lib/agent/capabilities-registry";
+import { listCapabilities } from "@/lib/agent/capabilities-registry";
 import { unresolvedToolIds } from "@/lib/assistant/gate";
 
 export const dynamic = "force-dynamic";
@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
 // (e.g. a typo, or a stale pre-016 id) computed at read time — not stored —
 // so the existing Settings → Agents editor can flag them without a new page.
 function withUnresolvedToolIds(agents: Agent[]): (Agent & { unresolvedToolIds: string[] })[] {
-  const registryIds = new Set(CAPABILITIES.map((c) => c.id));
+  const registryIds = new Set(listCapabilities().map((c) => c.id));
   return agents.map((a) => ({
     ...a,
     unresolvedToolIds: [...unresolvedToolIds(a.tools, registryIds), ...unresolvedToolIds(a.deferredTools, registryIds)],

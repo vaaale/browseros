@@ -31,12 +31,64 @@ if (parentPort) {
 }
 `;
 
+// 039-service-tool-exposure — a stub service that opts into tool exposure
+// (manifest deploymentMode: "tools"): declares a single "echo_tool" right
+// after reporting "initialized", then answers tool_call with tool_result
+// (valid string "text" arg) or tool_error (anything else). Mirrors the
+// tool_declare/tool_call/tool_result/tool_error IPC contract added to
+// src/core/service/types.ts (T002).
+export const TOOL_DECLARING_WORKER = `
+const { parentPort } = require("node:worker_threads");
+if (parentPort) {
+  parentPort.on("message", (msg) => {
+    if (!msg) return;
+    if (msg.type === "initialize") {
+      parentPort.postMessage({ type: "initialized" });
+      parentPort.postMessage({
+        type: "tool_declare",
+        payload: {
+          callId: "declare-echo_tool",
+          declaration: {
+            name: "echo_tool",
+            description: "Echoes the given text back",
+            inputSchema: {
+              type: "object",
+              properties: { text: { type: "string" } },
+              required: ["text"],
+            },
+          },
+        },
+      });
+    }
+    if (msg.type === "dispose") {
+      parentPort.postMessage({ type: "disposed" });
+    }
+    if (msg.type === "tool_call") {
+      const { callId, name, args } = msg.payload;
+      // Logged so integration tests can prove a schema-rejected call in the
+      // kernel never reaches this worker at all (039-service-tool-exposure T018).
+      parentPort.postMessage({ type: "log", level: "info", message: "tool_call received: " + name });
+      if (name === "echo_tool" && args && typeof args.text === "string") {
+        parentPort.postMessage({ type: "tool_result", payload: { callId, result: args.text } });
+      } else {
+        parentPort.postMessage({
+          type: "tool_error",
+          payload: { callId, error: { code: "bad_args", message: "echo_tool requires a string text argument" } },
+        });
+      }
+    }
+  });
+}
+`;
+
 /** Lays out dataDir()/system/services/<id>/service.json + <entry> so
  *  ServiceManager.start() can resolve and load a real worker entrypoint. */
 export function installFixtureService(
   dataDir: string,
   id: string,
-  opts: { entrySource: string; dependencies?: string[]; entry?: string } = { entrySource: RESPONSIVE_WORKER },
+  opts: { entrySource: string; dependencies?: string[]; entry?: string; deploymentMode?: "default" | "tools" } = {
+    entrySource: RESPONSIVE_WORKER,
+  },
 ): void {
   const entry = opts.entry ?? "index.js";
   // 035-install-by-symlink: installed state is ONE symlink, dataDir()/system/<id>,
@@ -48,7 +100,14 @@ export function installFixtureService(
   mkdirSync(servicesDir, { recursive: true });
   writeFileSync(
     join(servicesDir, "service.json"),
-    JSON.stringify({ id, name: id, version: "1.0.0", entry, ...(opts.dependencies ? { dependencies: opts.dependencies } : {}) }),
+    JSON.stringify({
+      id,
+      name: id,
+      version: "1.0.0",
+      entry,
+      ...(opts.dependencies ? { dependencies: opts.dependencies } : {}),
+      ...(opts.deploymentMode ? { deploymentMode: opts.deploymentMode } : {}),
+    }),
   );
   writeFileSync(join(servicesDir, entry), opts.entrySource);
 

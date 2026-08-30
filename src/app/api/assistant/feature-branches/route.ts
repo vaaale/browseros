@@ -1,15 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
 import { listFeatureBranches, createFeatureBranch } from "@/lib/system/git";
 import { normalizeFeatureBranch } from "@/lib/agent/feature-branch";
+import { listDeclaredFeatureBranches } from "@/lib/agent/conversations-server";
 
 export const dynamic = "force-dynamic";
 
 // Feature branches that Assistant conversations target for developer harness
 // work. Under the Supervisor, the git worktree is provisioned by the Supervisor
-// itself at delegate time. In standalone dev mode, the branch is created here.
+// itself at delegate time — so a branch a conversation just "activated" via
+// dev_branch_request has NO real git ref yet, only a name recorded on that one
+// conversation's own file, until dev_delegate actually runs under it. Merge
+// those declared-but-not-yet-real names in too, so a DIFFERENT conversation
+// can select the same branch immediately instead of waiting for it to
+// materialize — see listDeclaredFeatureBranches's own doc comment.
+async function allKnownFeatureBranches(): Promise<string[]> {
+  const [real, declared] = await Promise.all([listFeatureBranches(), listDeclaredFeatureBranches()]);
+  return Array.from(new Set([...real, ...declared])).sort();
+}
 
 export async function GET() {
-  return NextResponse.json({ featureBranches: await listFeatureBranches() });
+  return NextResponse.json({ featureBranches: await allKnownFeatureBranches() });
 }
 
 export async function POST(req: NextRequest) {
@@ -39,6 +49,6 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, error: msg }, { status: 500 });
     }
   }
-  const featureBranches = await listFeatureBranches();
+  const featureBranches = await allKnownFeatureBranches();
   return NextResponse.json({ ok: true, branch, featureBranches });
 }

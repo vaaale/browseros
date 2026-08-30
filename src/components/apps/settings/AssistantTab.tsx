@@ -10,7 +10,7 @@ import {
 } from "./assistant";
 import { DEFAULT_AGENT_ID } from "@/lib/agent/agent-ids";
 
-const EMPTY_CATALOG: Catalog = { tools: [], skills: [], mcp: [] };
+const EMPTY_CATALOG: Catalog = { tools: [], skills: [], mcp: [], kbs: [] };
 
 /**
  * Master-detail shell for Settings → Assistant. The list on the left drives

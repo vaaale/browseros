@@ -33,6 +33,12 @@ or feature, it updates these pages as part of the change (by editing the source 
 the developer sub‑agent) — so the in‑OS docs stay current as your BOS evolves,
 including pages describing apps you asked it to build.
 
+**Installed apps bring their own docs.** An app you install from a marketplace (or
+build yourself) carries its documentation inside the app, in the same two trees —
+so once it's installed, its pages appear here automatically, in a folder named
+after the app, under both **Usage** and **Developer**. Uninstall the app and its
+pages disappear with it. Nothing is copied into BOS's own documentation.
+
 > **Tip.** While previewing a version of BOS (see *Live version control*), the Docs
 > app shows *that* version's documentation, so you can read exactly what changed
 > before you promote it.

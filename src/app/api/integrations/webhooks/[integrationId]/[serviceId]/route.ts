@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import "@/lib/integrations"; // side-effect: register manifests
-import { emitNotification } from "@/lib/integrations/notifications/store";
+import { emitIntegrationEvent } from "@/lib/events/from-integration-event";
 import { readState, mutateState } from "@/lib/integrations/state/store";
 import { getWebhookHandler } from "@/lib/integrations/webhooks/registry";
 import {
@@ -106,7 +106,7 @@ export async function POST(
     if (config.eventTypes && config.eventTypes.length > 0 && !config.eventTypes.includes(ev.type)) {
       continue;
     }
-    await emitNotification(ev);
+    await emitIntegrationEvent(ev);
     emitted++;
   }
 

@@ -153,6 +153,18 @@ export function isNonDefaultOpenCodeProvider(cfg: OpenCodeProviderConfig): boole
   return cfg.mode !== "credential-file";
 }
 
+// OpenCode: the provider id to prefix `model` with, e.g. "amazon-bedrock/<model>"
+// or "<custom id>/<model>" — undefined when there's no provider selected at all
+// (credential-file, or Custom with no id typed yet). Shared by generate-config.ts
+// (writing opencode.json's `model` field) and harness-config.ts (the `--model` CLI
+// flag) — both must agree on the qualified id, or OpenCode can't resolve a bare
+// model id to the right provider and fails with a generic server error.
+export function openCodeModelProviderId(cfg: OpenCodeProviderConfig): string | undefined {
+  if (cfg.mode === "credential-file") return undefined;
+  if (cfg.mode === "custom") return cfg.customProviderId;
+  return cfg.mode; // amazon-bedrock / google-vertex / azure / one of the 9 generic ids — all literal ids
+}
+
 /**
  * Env vars OpenCode needs for auth methods with NO `opencode.json` config
  * surface (verified against OpenCode's own docs) — the caller (generate-config.ts)

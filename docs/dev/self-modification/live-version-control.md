@@ -69,18 +69,17 @@ right alongside the spec stores, before the clone itself is discarded. A
 `merge-tree` pre-check (`userAppsConflicts`) runs before the code promote's
 point of no return, same as specs.
 
-One wrinkle unique to `user-apps`: its own primary checkout
-(`CANONICAL_DATA/user-apps`, what BASE actually serves from) is not always on
-its default branch — the separate, older `appBegin`/`appPromote`/`appDiscard`
-mechanism (for installing a draft app straight on BASE, with no code preview at
-all) checks it out onto `app-candidate` **in place**. When a preview's promote
-runs while that's active, merging the preview's branch would otherwise mean
-flipping branches on the exact directory BASE is live-serving from mid-request
-— so `promoteUserApps` merges via plumbing instead (`merge-tree` write-tree +
-`commit-tree` + `update-ref`), which advances the ref without ever touching
-that working tree. BASE keeps showing the app-candidate draft until it
-resolves; `appPromote`/`appDiscard`'s own later checkout of the base branch
-then picks up the already-advanced tip transparently.
+`user-apps` is coupled exactly like a spec store: one feature = one branch
+across the BOS repo, every spec store, and `user-apps`. It used to carry a
+SECOND branch scheme — `appBegin`/`appPromote`/`appDiscard`, which checked its
+primary checkout out onto an `app-candidate` branch **in place** so a draft app
+could be installed straight on BASE with no code preview. That required a
+`liveCheckoutOwners` registry so a concurrent promote wouldn't flip branches on
+the exact directory BASE was live-serving from mid-request. It is **retired**:
+there is one scheme over `user-apps` now, so a promote merges directly into the
+checked-out default branch, falling back to plumbing (`merge-tree` write-tree +
+`commit-tree` + `update-ref`) only for the one genuine case left, a detached
+HEAD.
 
 ### Per-session routing (pin cookie)
 
@@ -136,20 +135,21 @@ everyone else stays on `base`.
   `bos/*` branches and recreates branch-owned preview records as `not-built`.
   Runtime state is reconstructed, not persisted.
 
-### App-content candidate (GitFS, no extra port)
+### App content (GitFS, no extra port)
 
-Apps are previewed differently — there's no second server. `appBegin/appPromote/
-appDiscard` check out an `app-candidate` **branch** in the user-apps repo
-(`<canonicalData>/user-apps` — the ONE install target for items, apps included)
-so the base server serves it; promote merges to base, discard drops it. See
+App/item content lives in the user-apps repo (`<canonicalData>/user-apps` — the
+ONE install target for items, apps included), which is branch-coupled: it mounts
+as a worktree on the active feature branch and is promoted or discarded with
+that branch's code and specs. There is no separate app-only candidate, and no
+separate "Promote app"/"Discard app" control. See
 [Installed apps](../apps/installed-apps.md).
 
 ### Control endpoints (`/__supervisor/...`)
 
 `state` · `branches` · `preview-changes` (alias `next-changes`) · `logs` · `pin` ·
-`begin` · `build` · `activate` · `promote` · `stop` · `discard` · `app-begin` ·
-`app-promote` · `app-discard` · `push`. `state` reports `base`, `preview`,
-`appCandidate`, and **`serving`** (which version the pin routes THIS session to) so
+`begin` · `build` · `activate` · `promote` · `stop` · `discard` · `push`.
+`state` reports `base`, `preview`,
+and **`serving`** (which version the pin routes THIS session to) so
 the UI can tell "previewing" from "a preview exists but you're still on base".
 `branches` lists **all** git branches (so an orphaned `bos/*` preview can be
 re‑selected). `preview-changes` lists the preview's changed files (committed in its

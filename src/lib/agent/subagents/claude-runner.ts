@@ -1,5 +1,7 @@
 import "server-only";
 import { spawn } from "node:child_process";
+import { statSync } from "node:fs";
+import path from "node:path";
 import { connectMcpClient, extractText } from "@/lib/mcp/client";
 import { getHarnessConfig, harnessCredentialEnv, type HarnessConfig } from "@/lib/devharness/harness-config";
 import { getOpenCodeProviderEnv } from "@/lib/devharness/generate-config";
@@ -12,9 +14,6 @@ import type { Agent, AgentRunResult } from "./types";
 export const HARNESS_UNAVAILABLE = "harness-unavailable:";
 
 type OnEvent = (e: { tool: string; input: unknown }) => void;
-
-// Headless Claude can run for a while; cap below the delegate route's budget.
-const CLI_TIMEOUT_MS = 1000_000;
 
 // Applies the Dev Harness's model override (Settings → Dev Harness) on top of
 // the agent's own `model`, if it has one. Only meaningful for the CLI
@@ -32,7 +31,10 @@ function envForCwd(cwd: string): NodeJS.ProcessEnv {
   return { ...process.env, PWD: cwd, ...harnessCredentialEnv() };
 }
 
-function isStandaloneContentTask(task: string): boolean {
+/** Exported for tests — the two predicates below decide whether a `contentOnly`
+ *  delegation runs at all, and a wrong verdict is silent (see
+ *  `referencesBosOwnDevDoc`), so they are pinned directly. */
+export function isStandaloneContentTask(task: string): boolean {
   const t = task.toLowerCase();
   return [
     "standalone app",
@@ -50,22 +52,61 @@ function isStandaloneContentTask(task: string): boolean {
   ].some((needle) => t.includes(needle));
 }
 
-function isBosSourceTask(task: string): boolean {
+/**
+ * The `docs/dev/` veto needs more than a substring match, because that literal
+ * is no longer exclusively BOS's own documentation. An installed marketplace
+ * ITEM carries its docs INSIDE the item, in the same two-audience shape
+ * (`docs/usage/<Name>/`, `docs/dev/<Name>/` relative to the staging directory —
+ * see the Build Studio skill's `target-marketplace-item.md`), so a legitimate
+ * contentOnly task now has every reason to say it.
+ *
+ * What must still be refused is a task pointing at a page BOS ITSELF ships: a
+ * contentOnly run executes in the live source checkout (it deliberately skips
+ * the Supervisor worktree every real source edit goes through), so an edit
+ * there lands off-branch and unversioned.
+ *
+ * Ask the filesystem instead of the string: `docs/dev/architecture-overview.md`
+ * resolves to a real file in the source repo and is refused; an item's
+ * `docs/dev/Widgets/architecture.md` does not exist and passes. A bare
+ * `docs/dev/` with no page named is not matched at all — naming no file means
+ * there is no BOS page to damage, and the allow-list still has to match for the
+ * run to proceed regardless.
+ *
+ * This mattered more than a plain false positive: the blunt match killed the
+ * WHOLE delegation (app, service and docs alike), and the refusal text coaches
+ * the agent to strip the offending wording — so the retry succeeded and shipped
+ * an item with no documentation, silently.
+ */
+function referencesBosOwnDevDoc(task: string, sourceRoot: string): boolean {
+  // Case-sensitive, against the ORIGINAL text: BOS's own pages are lowercase
+  // kebab-case, whereas an item's folder is its display name (`Widgets`).
+  for (const [match] of task.matchAll(/docs\/dev\/[\w./-]*\.md/g)) {
+    // Traversal out of docs/dev/ is never a legitimate item-docs path.
+    if (match.includes("..")) return true;
+    if (statSync(path.join(sourceRoot, match), { throwIfNoEntry: false })?.isFile()) return true;
+  }
+  return false;
+}
+
+export function isBosSourceTask(task: string, sourceRoot: string): boolean {
   const t = task.toLowerCase();
-  return [
-    "browseros source",
-    "browseros's own source",
-    "bos source",
-    "bos's own source",
-    "built-in app",
-    "built in app",
-    "settings tab",
-    "api route",
-    "server logic",
-    "gitlab issue",
-    "issue #",
-    "docs/dev/",
-  ].some((needle) => t.includes(needle)) || /\bsrc\/(app|apps|components|lib|os|store)\//.test(t);
+  return (
+    [
+      "browseros source",
+      "browseros's own source",
+      "bos source",
+      "bos's own source",
+      "built-in app",
+      "built in app",
+      "settings tab",
+      "api route",
+      "server logic",
+      "gitlab issue",
+      "issue #",
+    ].some((needle) => t.includes(needle)) ||
+    /\bsrc\/(app|apps|components|lib|os|store)\//.test(t) ||
+    referencesBosOwnDevDoc(task, sourceRoot)
+  );
 }
 
 interface StreamEvent {
@@ -80,7 +121,7 @@ interface StreamEvent {
 // repo. Claude itself is the autonomous coding agent (its own Read/Edit/Write/
 // Bash tools); we stream its tool_use events for the live UI and return its
 // final result. Uses --dangerously-skip-permissions so it runs non-interactively.
-function runClaudeCli(agent: Agent, task: string, cwd: string, onEvent?: OnEvent): Promise<AgentRunResult> {
+function runClaudeCli(agent: Agent, task: string, cwd: string, timeoutMs: number, onEvent?: OnEvent): Promise<AgentRunResult> {
   const base = { agent: agent.name, type: "claude" as const, task, steps: 0, toolCalls: [] as { tool: string; input: unknown }[] };
   onEvent?.({ tool: "Claude Code (headless)", input: { task } });
 
@@ -111,8 +152,8 @@ function runClaudeCli(agent: Agent, task: string, cwd: string, onEvent?: OnEvent
     };
     const timer = setTimeout(() => {
       try { child.kill("SIGTERM"); } catch { /* ignore */ }
-      finish({ ...base, output: resultText, steps, toolCalls, error: `Claude CLI timed out after ${CLI_TIMEOUT_MS}ms.` });
-    }, CLI_TIMEOUT_MS);
+      finish({ ...base, output: resultText, steps, toolCalls, error: `Claude CLI timed out after ${timeoutMs}ms.` });
+    }, timeoutMs);
 
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
@@ -189,7 +230,7 @@ interface OcEvent {
 // we prepend the agent's prompt to the task message (avoids writing an opencode.json
 // into the worktree, which the Supervisor would commit). `--auto` runs it
 // non-interactively, matching the Claude CLI path.
-async function runOpenCodeCli(agent: Agent, task: string, cwd: string, onEvent?: OnEvent): Promise<AgentRunResult> {
+async function runOpenCodeCli(agent: Agent, task: string, cwd: string, timeoutMs: number, onEvent?: OnEvent): Promise<AgentRunResult> {
   const base = { agent: agent.name, type: "claude" as const, task, steps: 0, toolCalls: [] as { tool: string; input: unknown }[] };
   onEvent?.({ tool: "OpenCode (headless)", input: { task } });
 
@@ -233,8 +274,8 @@ async function runOpenCodeCli(agent: Agent, task: string, cwd: string, onEvent?:
     };
     const timer = setTimeout(() => {
       try { child.kill("SIGTERM"); } catch { /* ignore */ }
-      finish({ ...base, output: finalText(), steps, toolCalls, error: `OpenCode CLI timed out after ${CLI_TIMEOUT_MS}ms.` });
-    }, CLI_TIMEOUT_MS);
+      finish({ ...base, output: finalText(), steps, toolCalls, error: `OpenCode CLI timed out after ${timeoutMs}ms.` });
+    }, timeoutMs);
 
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
@@ -353,7 +394,12 @@ export async function runClaudeAgent(
   const harness = await getHarnessConfig();
 
   if (opts?.contentOnly) {
-    if (!isStandaloneContentTask(task) || isBosSourceTask(task)) {
+    // The tree a contentOnly run would actually write into — under the
+    // Supervisor that is the main repo, not this process's cwd (which may be a
+    // preview worktree). `mcp` mode drives a remote Agent tool whose working
+    // directory is the server's, so fall back to the source root we know about.
+    const sourceRoot = harness.mode === "cli" ? harness.cwd : harness.server.cwd || process.cwd();
+    if (!isStandaloneContentTask(task) || isBosSourceTask(task, sourceRoot)) {
       return {
         agent: agent.name,
         type: "claude",
@@ -363,12 +409,13 @@ export async function runClaudeAgent(
         toolCalls: [],
         error:
           "Refusing contentOnly developer harness run. `contentOnly:true` is only for standalone app content generation; BrowserOS source analysis or implementation must run through the Supervisor feature-branch worktree with contentOnly omitted/false. " +
-          "If this IS standalone content (e.g. a marketplace item), do not switch to dev_delegate — that forces an unrelated BOS-source feature branch onto a plain item build. Instead rephrase this SAME task: include a trigger phrase like \"staging directory\"/\"write a bos app project\", and remove any spec-path references or BOS-source-sounding wording (\"api route\", \"server logic\", \"src/...\", etc.) — see the Build Studio skill's target-marketplace-item.md, Step 1, for the exact rule.",
+          "If this IS standalone content (e.g. a marketplace item), do not switch to dev_delegate — that forces an unrelated BOS-source feature branch onto a plain item build. Instead rephrase this SAME task: include a trigger phrase like \"staging directory\"/\"write a bos app project\", and remove any spec-path references or BOS-source-sounding wording (\"api route\", \"server logic\", \"src/...\", etc.) — see the Build Studio skill's target-marketplace-item.md, Step 1, for the exact rule. " +
+          "One thing NOT to strip: an item's own documentation. `docs/usage/<Name>/…` and `docs/dev/<Name>/…` inside the staging directory are part of the item and never trigger this refusal — only a path naming a page BOS itself ships (e.g. docs/dev/architecture-overview.md) does, and editing those is a separate dev_delegate.",
       };
     }
     if (harness.mode === "mcp") return runViaMcp(agent, task, harness.server, opts?.onEvent);
     const cliRun = harness.tool === "opencode" ? runOpenCodeCli : runClaudeCli;
-    return cliRun(withHarnessModel(agent, harness), task, harness.cwd, opts?.onEvent);
+    return cliRun(withHarnessModel(agent, harness), task, harness.cwd, harness.timeoutMs, opts?.onEvent);
   }
 
   // Source edits must never run in the live checkout. The Supervisor is the only
@@ -464,7 +511,7 @@ export async function runClaudeAgent(
   const result =
     harness.mode === "mcp"
       ? await runViaMcp(runAgent, task, { ...harness.server, cwd, env: { ...(harness.server.env ?? {}), PWD: cwd } }, opts?.onEvent)
-      : await (harness.tool === "opencode" ? runOpenCodeCli : runClaudeCli)(withHarnessModel(runAgent, harness), task, cwd, opts?.onEvent);
+      : await (harness.tool === "opencode" ? runOpenCodeCli : runClaudeCli)(withHarnessModel(runAgent, harness), task, cwd, harness.timeoutMs, opts?.onEvent);
 
   // Always build when a candidate branch exists — even if the agent reported an
   // error, any staged partial work gets committed and health-gated so it is

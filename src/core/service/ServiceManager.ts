@@ -10,11 +10,22 @@ import { checkPortAvailable, checkPortReservedByBos } from "./PortChecker";
 import { validateManifestAtStart } from "./manifestValidator";
 import { checkDependenciesRunning, resolveOrder } from "./DependencyResolver";
 import { cancelPendingRestart, handleCrash } from "./CrashRecovery";
-import { postMessage, waitForMessage } from "./workerIpc";
+import { postMessage, waitForMessage, sendToolCall, waitForToolResult, sendEventDispatch } from "./workerIpc";
 import { DEFAULT_SERVICE_TIMEOUTS } from "./types";
 import type { ServiceState, WorkerToMainMessage } from "./types";
+import { serviceToolBridge } from "@/lib/agent/service-tool-bridge";
+import { LOG as TOOL_LOG } from "./serviceToolTypes";
+import * as eventsApi from "@/lib/events/api";
+import { setOwnerRunningCheck, setServiceInvoker, reevaluateAllPending } from "@/lib/events/dispatch";
+import { reevaluateAfterOwnerStarted } from "@/lib/events/kernel";
+
+const EVENTS_LOG = "services.events-bridge";
 
 const COMPONENT = "services.manager";
+// 039-service-tool-exposure: how long BOS waits for a service's `tool_result`/
+// `tool_error` after dispatching a `tool_call`, before treating the call as
+// failed. Distinct from the manifest's own start/stop timeouts.
+const TOOL_CALL_TIMEOUT_MS = 30_000;
 const RESOURCE_LIMITS = { maxOldGenerationSizeMb: 256, maxYoungGenerationSizeMb: 64 };
 
 // Turbopack (unlike webpack's `webpackIgnore` comment, which works for
@@ -89,6 +100,52 @@ export class ServiceManager {
    *  Cleared at the start and end of every startAll() run — manual start()/
    *  restart() calls never touch this and always retry unconditionally. */
   private bootAttempts = new Map<string, number>();
+
+  constructor() {
+    // 039-service-tool-exposure — wire the bridge's dispatcher every time a
+    // ServiceManager is constructed (not just for the module singleton, since
+    // tests construct `new ServiceManager()` directly). Idempotent: re-wiring
+    // just replaces the closure, which always resolves the Worker via
+    // serviceRegistry() at CALL time, not at wiring time, so it's correct
+    // regardless of which ServiceManager instance ends up starting a service.
+    serviceToolBridge().setDispatcher(async (serviceId, invocation, signal) => {
+      const worker = serviceRegistry().getService(serviceId)?.worker;
+      if (!worker) {
+        return {
+          callId: invocation.callId,
+          error: { code: "service_not_running", message: `service "${serviceId}" is not running` },
+        };
+      }
+      sendToolCall(worker, invocation);
+      return waitForToolResult(worker, invocation.callId, TOOL_CALL_TIMEOUT_MS, signal);
+    });
+
+    // 034-event-notification-system (T029) — same wiring shape as the tool
+    // bridge above: the dispatch engine never imports ServiceManager (it would
+    // be a cycle), so it calls back through these two injected functions
+    // instead. `setOwnerRunningCheck` feeds the active-set rule (data-model
+    // §4); `setServiceInvoker` only confirms the `event_dispatch` IPC message
+    // was sent — settlement arrives later via the worker's own loopback ack
+    // (design.md §3.5 "Ack ownership", R1), not a reply on this channel.
+    setOwnerRunningCheck((ownerId) => serviceRegistry().getService(ownerId)?.state === "running");
+    setServiceInvoker(async (ownerId, handlerId, record, _timeoutMs, callId) => {
+      const worker = serviceRegistry().getService(ownerId)?.worker;
+      if (!worker) throw new Error(`service "${ownerId}" is not running`);
+      sendEventDispatch(worker, { callId, eventId: record.id, handlerId, record });
+    });
+  }
+
+  /** 039-service-tool-exposure — remove every tool a service registered via
+   *  the bridge (a no-op if it registered none) and log a summary event.
+   *  Called from every lifecycle path that ends a service's worker: stop and
+   *  crash (unexpected worker exit). The bridge itself logs `tool:unregistered`
+   *  per removed tool; this adds the `worker:exit-cleanup` summary. */
+  private cleanupServiceTools(serviceId: string): void {
+    const toolCount = serviceToolBridge().serviceToolsFor(serviceId).length;
+    if (toolCount === 0) return;
+    serviceToolBridge().unregisterServiceTools(serviceId);
+    logger().info(TOOL_LOG, "worker:exit-cleanup", { serviceId, toolCount });
+  }
 
   getStatus(serviceId: string): ServiceState {
     return serviceRegistry().getService(serviceId)?.state ?? "stopped";
@@ -215,6 +272,11 @@ export class ServiceManager {
     // 7/8. Running; reset restart counter (successful init clears crash history).
     registry.resetRestart(serviceId);
     registry.setState(serviceId, "running");
+    // 034-event-notification-system (FR-005b): catch up any already-registered
+    // headless handlers of this service on events that went pending while it
+    // was down — covers a restart where the service doesn't re-declare (the
+    // handler_declare path above covers the case where it does).
+    reevaluateAfterOwnerStarted(serviceId);
     logger().info(COMPONENT, `service "${serviceId}" started`, { serviceId, entryPath, port: configuredPort?.port });
   }
 
@@ -229,6 +291,11 @@ export class ServiceManager {
       }
       // CH-001 — an unexpected exit (including a crash during `initialize`,
       // before any `initialized`/`crash` message could be sent) is a crash.
+      this.cleanupServiceTools(serviceId);
+      // 034-event-notification-system (FR-019/edge cases): this service's
+      // headless handlers just stopped being "active" — re-evaluate every
+      // pending event so any that were only waiting on them can complete.
+      reevaluateAllPending();
       void handleCrash(serviceId, `Worker exited unexpectedly with code ${code}`);
     });
 
@@ -271,6 +338,65 @@ export class ServiceManager {
         await appendServiceLog(logsPath, `[error] ${msg.message}`);
         break;
       }
+      case "tool_declare": {
+        const { declaration, callId } = msg.payload;
+        logger().info(TOOL_LOG, "tool_declare:received", { serviceId, name: declaration.name, callId });
+        const def = registry.getService(serviceId);
+        if (def?.manifest.deploymentMode !== "tools") {
+          logger().warn(TOOL_LOG, "tool_declare:rejected", {
+            serviceId,
+            name: declaration.name,
+            callId,
+            reason: `deploymentMode is "${def?.manifest.deploymentMode ?? "default"}", not "tools"`,
+          });
+          break;
+        }
+        serviceToolBridge().registerTool(serviceId, declaration);
+        break;
+      }
+      case "tool_result":
+      case "tool_error":
+        // Resolved by workerIpc's waitForToolResult, which attaches its own
+        // callId-keyed listener directly to the worker (same pattern as
+        // "initialized"/"disposed" alongside waitForMessage) — nothing to do here.
+        break;
+      case "handler_declare": {
+        // 034-event-notification-system (ADR-3, T029): a service declares a
+        // headless handler at startup. Re-declaring the same handlerId is an
+        // idempotent upsert (register() preserves a previously-set `enabled`).
+        const { handlerId, eventType, displayName, description, icon, timeoutMs, callId } = msg.payload;
+        logger().info(EVENTS_LOG, "handler_declare:received", { serviceId, handlerId, eventType, callId });
+        try {
+          await eventsApi.register({
+            handlerId,
+            eventType,
+            mode: "headless",
+            ownerId: serviceId,
+            displayName,
+            description,
+            icon,
+            timeoutMs,
+            declaredBy: "service",
+            grantedNamespaces: registry.getService(serviceId)?.manifest.eventNamespaces,
+          });
+          logger().info(EVENTS_LOG, "handler_declare:registered", { serviceId, handlerId, callId });
+        } catch (err) {
+          logger().warn(EVENTS_LOG, "handler_declare:rejected", {
+            serviceId,
+            handlerId,
+            callId,
+            error: (err as Error).message,
+          });
+        }
+        // The service is already "running" by the time it can send this
+        // message, but a handler that was previously registered while the
+        // service was down (or disabled) may now have pending work to catch
+        // up on — register() already does this for a brand-new/changed
+        // registration; this covers the "nothing about the registration
+        // changed, the service just (re)started" case.
+        reevaluateAfterOwnerStarted(serviceId);
+        break;
+      }
       case "initialized":
       case "disposed":
         break;
@@ -291,6 +417,8 @@ export class ServiceManager {
     if (!worker) {
       registry.setState(serviceId, "stopped");
       registry.resetRestart(serviceId);
+      this.cleanupServiceTools(serviceId);
+      reevaluateAllPending();
       return;
     }
 
@@ -313,6 +441,8 @@ export class ServiceManager {
     registry.setWorker(serviceId, null);
     registry.setState(serviceId, "stopped");
     registry.resetRestart(serviceId);
+    this.cleanupServiceTools(serviceId);
+    reevaluateAllPending();
     logger().info(COMPONENT, `service "${serviceId}" stopped`, { serviceId });
   }
 

@@ -16,4 +16,4 @@ Steps:
 4. Update the file with file_write, then call web_view(filePath='/mockups/<feature-slug>.html', title='<Feature> Mockup', update=true) to refresh in place.
 5. Repeat until the user explicitly approves the design.
 
-Only proceed to Phase 2 (Specification) after the user approves.
+Only proceed to Phase 2 (Feature Branch) after the user approves.

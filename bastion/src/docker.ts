@@ -152,6 +152,17 @@ export async function createBosContainer(username: string, cfg: Config): Promise
         },
       ],
       RestartPolicy: { Name: "no" },
+      // The Supervisor runs as PID 1 inside this container (by design — it
+      // must survive the base Next.js server dying). A plain Node process as
+      // PID 1 never reaps orphaned grandchildren (e.g. a browser-automation
+      // Chromium process left behind when its immediate parent is killed) —
+      // they pile up as permanent <defunct> zombies. Init:true attaches
+      // Docker's built-in tini ahead of PID 1 to reap them.
+      Init: true,
+      // Default 64MB /dev/shm starves headless Chromium in this container
+      // (no host privileges to raise it via --shm-size after the fact),
+      // causing browser-automation sessions to crash or hang.
+      ShmSize: 1024 * 1024 * 1024,
     },
   });
   return container.id;

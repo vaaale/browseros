@@ -1,6 +1,6 @@
 import "server-only";
 import type { ToolGateConfig } from "./tools";
-import { CAPABILITIES } from "@/lib/agent/capabilities-registry";
+import { listCapabilities } from "@/lib/agent/capabilities-registry";
 import { readMetadataOverrides } from "@/lib/agent/tool-metadata-overrides";
 import { getAgent } from "@/lib/agent/subagents/store";
 import type { Agent } from "@/lib/agent/subagents/types";
@@ -30,7 +30,11 @@ export function unresolvedToolIds(ids: string[] | undefined, registryIds: Set<st
  *  never written to `data/agents/`. */
 export async function gateFromAgent(agent: Agent | undefined): Promise<ToolGateConfig> {
   const overrides = await readMetadataOverrides().catch(() => ({}) as Record<string, { description?: string }>);
-  const registryIds = new Set(CAPABILITIES.map((c) => c.id));
+  // 039-service-tool-exposure: listCapabilities() (not the static CAPABILITIES
+  // array) so dynamically-registered service tool ids are gated exactly like
+  // built-ins — this call is already per-invocation, so it reflects the live
+  // registry at call time.
+  const registryIds = new Set(listCapabilities().map((c) => c.id));
 
   const unresolved = [...unresolvedToolIds(agent?.tools, registryIds), ...unresolvedToolIds(agent?.deferredTools, registryIds)];
   if (unresolved.length > 0) {

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { CAPABILITIES } from "@/lib/agent/capabilities-registry";
+import { listCapabilities } from "@/lib/agent/capabilities-registry";
 import {
   getEffectiveCatalog,
   readMetadataOverrides,
@@ -27,7 +27,7 @@ export async function PATCH(req: NextRequest) {
     };
     const id = String(body?.id ?? "");
     if (!id) return NextResponse.json({ error: "id is required" }, { status: 400 });
-    if (!CAPABILITIES.some((c) => c.id === id)) {
+    if (!listCapabilities().some((c) => c.id === id)) {
       return NextResponse.json({ error: `unknown tool: ${id}` }, { status: 400 });
     }
 

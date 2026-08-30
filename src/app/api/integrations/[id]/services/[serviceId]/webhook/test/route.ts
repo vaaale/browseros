@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import "@/lib/integrations"; // side-effect: register manifests
-import { emitNotification } from "@/lib/integrations/notifications/store";
+import { emitIntegrationEvent } from "@/lib/events/from-integration-event";
 import { getService } from "@/lib/integrations/registry";
 import { readWebhookConfig } from "@/lib/integrations/webhooks/store";
 
@@ -26,7 +26,7 @@ export async function POST(
   const config = await readWebhookConfig(id, serviceId);
   if (!config) return NextResponse.json({ error: "webhook not configured" }, { status: 400 });
 
-  await emitNotification({
+  await emitIntegrationEvent({
     type: "webhook_test",
     service: `${id}/${serviceId}`,
     timestamp: Date.now(),

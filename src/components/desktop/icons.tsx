@@ -21,5 +21,6 @@ function resolveIcon(name: string): ComponentType<LucideProps> {
 
 export function AppIcon({ name, ...props }: { name: string } & LucideProps) {
   const Cmp = resolveIcon(name);
+  // eslint-disable-next-line react-hooks/static-components -- resolveIcon returns a stable module-level lucide component, not one created per render
   return <Cmp {...props} />;
 }

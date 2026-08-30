@@ -4,7 +4,7 @@ import path from "node:path";
 import { dataDir } from "@/os/data-dir";
 import { gitLogger } from "./logging";
 import { getMountStatus } from "./mount-manager";
-import { fetchRepo, hasUncommittedChanges } from "./git-ops";
+import { fetchRepo, hasUncommittedChanges, isMergeConflict } from "./git-ops";
 
 export interface SyncStatus {
   remoteName: string;
@@ -133,10 +133,26 @@ export async function hasConflict(remoteName: string): Promise<boolean> {
   }
 }
 
+/** The working context for a VFS-mounted repo, so a conflict here escalates
+ *  through the SAME mechanism as every other repo (FR-003/FR-004, S6). */
+export function mountWorkContext(remoteName: string): { repoPath: string; branch: string } | null {
+  const mount = getMountStatus(remoteName);
+  if (!mount) return null;
+  return { repoPath: getRepoPath(remoteName), branch: mount.branch };
+}
+
+/**
+ * Reconcile a mounted repo against its remote with the chosen strategy.
+ *
+ * 035 (FR-016): a CONFLICT is no longer a thrown dead-end. It is reported as
+ * `{ status: "conflict" }` so the caller can route it through the shared
+ * pipeline with this mount's working context — the same session + agent + pane
+ * every other repo gets. A genuine failure (not a conflict) still throws.
+ */
 export async function resolveConflict(
   remoteName: string,
   strategy: "merge" | "rebase",
-): Promise<void> {
+): Promise<{ status: "success" | "conflict" }> {
   const op = "sync-status.resolveConflict";
   const repoPath = getRepoPath(remoteName);
   const mount = getMountStatus(remoteName);
@@ -159,6 +175,10 @@ export async function resolveConflict(
     if (exitCode !== 0) {
       await runGit(["rebase", "--abort"], { cwd: repoPath });
       const durationMs = Date.now() - t0;
+      if (isMergeConflict(stderr)) {
+        gitLogger().warn({ op, remote: remoteName, durationMs, error: { code: "REBASE_CONFLICT", message: stderr } });
+        return { status: "conflict" };
+      }
       gitLogger().error({
         op,
         remote: remoteName,
@@ -175,6 +195,11 @@ export async function resolveConflict(
     );
     if (exitCode !== 0) {
       const durationMs = Date.now() - t0;
+      if (isMergeConflict(stderr)) {
+        await runGit(["merge", "--abort"], { cwd: repoPath });
+        gitLogger().warn({ op, remote: remoteName, durationMs, error: { code: "MERGE_CONFLICT", message: stderr } });
+        return { status: "conflict" };
+      }
       gitLogger().error({
         op,
         remote: remoteName,
@@ -188,6 +213,7 @@ export async function resolveConflict(
 
   const durationMs = Date.now() - t0;
   gitLogger().info({ op, remote: remoteName, durationMs, success: true });
+  return { status: "success" };
 }
 
 // Export helpers for testing.
