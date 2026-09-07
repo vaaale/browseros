@@ -1,5 +1,40 @@
 # Changelog
 
+## 2026-09-07
+
+### Highlights
+
+- **A scheduled job can no longer run twice.** BOS runs several server processes over one data root (base, preview, dev) — the scheduler could dispatch the same due job once per process. A container-wide lock now elects one daemon owner and locks every dispatch, so a job runs exactly once no matter how many processes are alive.
+- **Tools are organized into groups you can rename and retune.** Settings → Tools now shows every tool grouped (Web, Files, Gmail, Scheduler, and so on), with an editable description and search aliases per group — the same text the assistant's own tool search and system-prompt index use to decide what's worth looking into.
+- **Apps can declare which file types they open.** Double-click a file, or right-click → "Open with…", and the right app launches with the file — built-in or installed, render or edit.
+- **Promoting a feature branch no longer times out behind a reverse proxy.** Promote now runs as a background job you poll for completion instead of one long blocking request.
+- **Tool search got sharper and simpler.** The three different `find_tools` implementations are down to one, with real relevance ranking instead of a grab-bag of heuristics.
+
+### Added
+
+- **Tool groups** — every assistant tool belongs to a group; expand one in Settings → Tools to rewrite its description or add your own search aliases, with **Reset** to restore the built-in text. A group with unresolved tools (a marketplace item's manifest pointing at a group id that doesn't exist) is surfaced as a visible warning instead of being filed away silently.
+- **File type handlers** — apps declare `fileHandlers` in their manifest (built-in or installed) and the Files app launches the right one on double-click or "Open with…", with a per-type "always open with" selection that falls back cleanly if the app is later uninstalled.
+- A new **path-shaped raw file route** (`/api/fs/raw/<path>`) so a previewed HTML document's relative links and scripts resolve against its own folder instead of 404ing.
+- The chat's **active feature branch** can now be set or cleared through the API directly, serialized against the assistant's own message saves so the two can't race.
+- **OpenCode's context window** now follows whatever you set in Settings → Dev Harness instead of silently falling back to OpenCode's own built-in default for the model.
+
+### Changed
+
+- **Scheduler dispatch is now locked at two layers**: one elected daemon owns ticking, and every individual job dispatch takes its own disk lock for the run's duration — closing a bug where a non-idempotent scheduled job (e.g. a daily review) could fire several times concurrently and blow through context limits.
+- **`find_tools` is one implementation now**, ranking matches by a real per-term relevance score across a tool's id, description, aliases, and group — two duplicate, now-dead implementations were removed.
+- **Promote is asynchronous** — it returns a job id immediately and the UI polls until the merge actually finishes, and it now requires you to be actively previewing the candidate first rather than just seeing a passed health check.
+- The supervisor's promote/push/worktree pipeline picked up a large expansion of test coverage aimed at the concurrency and credential-handling edge cases that have historically caused production incidents.
+
+### Removed
+
+- The old standalone discovery API route and the per-subagent `tools.ts` allowlist file — both fully superseded by tool groups and the capability registry.
+
+### Fixed
+
+- Rebuilding an already-installed app from the assistant (`app_build`) could silently create a second, disconnected item instead of updating the original.
+- A scheduled job dispatching multiple times across live server processes (see Highlights).
+- Promote requests being cut off mid-merge by a reverse proxy's request timeout on larger builds.
+
 ## 2026-08-30
 
 ### Highlights

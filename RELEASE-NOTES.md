@@ -1,3 +1,85 @@
+# BrowserOS v2.6 Release Notes
+
+## Overview
+
+This release is mostly about correctness under real production load. A **scheduler concurrency bug** that could fire the same scheduled job several times at once — across BOS's own base/preview/dev processes — is fixed with a real cross-process locking scheme. **Promote** no longer times out behind a reverse proxy on larger builds. Alongside that: **tool groups** give you direct control over how the assistant's tools are organized and described, a new **file-type handler** contract lets apps declare which files they open, and tool search (`find_tools`) was consolidated into one, better-ranked implementation.
+
+---
+
+## New Features
+
+### Tool Groups
+
+Every assistant tool now belongs to a group — Web, Files, Gmail, Scheduler, and so on — visible and editable from **Settings → Tools**.
+
+- **Editable group description and aliases** — the text a group's description carries is exactly what the assistant's system prompt shows in its tool-group index, and what its own tool search ranks against. Add aliases for words your team actually uses that the built-in description doesn't contain.
+- **Editable per-tool descriptions** — rewrite what the model sees for any single tool, with **Reset** back to the built-in text.
+- **Marketplace items bring their own group** — a service that exposes tools registers its own group at startup, and its overrides survive the service stopping and starting again.
+- **"Unresolved tool group" surfacing** — a tool pointing at a group id that doesn't exist shows up as a visible error in Settings → Tools instead of being silently bucketed into a placeholder.
+
+**Documentation:** [docs/usage/settings/tools.md](docs/usage/settings/tools.md)
+
+### File-Type Handlers
+
+Apps can now declare which file types they open, and the Files app honors it.
+
+- **Double-click or "Open with…"** — launches the declared handler (built-in or installed) with the file's path and an `open`/`edit` action.
+- **"Always open with"** — picking a render-capable handler sets it as the type's default; it falls back cleanly to the manifest default (or the Files app's own preview/editor) if that app is later uninstalled.
+- **Correct relative links in previews** — a new path-shaped raw-file route (`/api/fs/raw/<path>`) means a previewed HTML document's relative `<link>`/`<script>` references resolve against its own folder instead of 404ing.
+
+**Documentation:** [docs/dev/apps/file-handlers.md](docs/dev/apps/file-handlers.md)
+
+### Sharper Tool Search
+
+`find_tools` is down to a single implementation (two dead duplicates removed), now ranking matches by a real per-term relevance score across a tool's id, description, aliases, and group — instead of a grab-bag of ad hoc heuristics.
+
+---
+
+## Improvements
+
+- **Scheduler concurrency, fixed at the root** — BOS runs several server processes over the same data (base, preview, dev), and the scheduler could dispatch the same due job once per process. One process now wins an election to own dispatch, and every individual job run additionally takes its own disk lock for its whole duration — so a job runs exactly once no matter how many processes are alive. See [docs/dev/automation/scheduler-concurrency.md](docs/dev/automation/scheduler-concurrency.md).
+- **Promote no longer blocks on one HTTP request** — it now returns a job id immediately and the UI polls until the merge actually finishes, so a reverse proxy in front of BOS can no longer cut it off mid-build. Promote also now requires you to be actively previewing the candidate, not just seeing a passed health check.
+- **OpenCode's context window follows your settings** — a context-window size set in Settings → Dev Harness is now written into OpenCode's own model config, instead of OpenCode silently falling back to its built-in default (which can be wrong and let a run overflow).
+- **Supervisor test coverage** — a large expansion of tests around promote, push, worktree provisioning, and credential handling, targeting the concurrency and auth edge cases that have historically caused production incidents.
+
+---
+
+## Bug Fixes
+
+- Fixed a scheduled job dispatching multiple times concurrently across BOS's live server processes — the main driver of this release.
+- Fixed Promote requests being cut off mid-merge by a reverse proxy's request timeout on larger builds.
+- Fixed rebuilding an already-installed app from the assistant (`app_build`) silently creating a second, disconnected item instead of updating the original.
+
+---
+
+## Breaking Changes
+
+None. Existing installs upgrade in place.
+
+---
+
+## Migration Guide
+
+### For Users
+
+- **Nothing required.** Existing tool groups and file-type associations are populated from the built-in defaults automatically.
+- **Optional:** visit Settings → Tools to rename group descriptions or add your own search aliases if the defaults don't match how your team talks about a tool family.
+
+### For Bastion Admins
+
+- **Pull the latest image** — this release includes the scheduler double-dispatch fix, which matters most in multi-process deployments (base + preview running together).
+- **Expect promote to take longer to report done** — it's now a polled background job rather than one blocking request; this is expected and avoids the reverse-proxy timeout issue from earlier releases.
+
+---
+
+## Support
+
+- **Documentation** — [docs/](docs/)
+- **Issue Reports** — GitHub Issues
+- **Architecture Guide** — [docs/dev/architecture-overview.md](docs/dev/architecture-overview.md)
+
+---
+
 # BrowserOS v2.5 Release Notes
 
 ## Overview
