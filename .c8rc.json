@@ -1,0 +1,15 @@
+{
+  "include": [
+    "src/os/vfs.ts",
+    "src/os/mount-table.ts",
+    "src/os/path-jail.ts",
+    "src/os/fs/**/*.ts"
+  ],
+  "exclude": [
+    "**/*.test.ts",
+    "**/*.d.ts"
+  ],
+  "all": true,
+  "reporter": ["text", "html", "json-summary"],
+  "reports-dir": "coverage"
+}

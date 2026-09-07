@@ -220,7 +220,11 @@ an `opencode.json` the Supervisor would commit" concern above:
 - `.claude.json` — Claude's `mcpServers` (**not** `settings.json` — Claude Code
   doesn't read MCP servers from there), from every `includeInDevHarness` server.
 - `.config/opencode/opencode.json` — OpenCode's `provider`/`model` fields plus its
-  `mcp` block, from the same server list.
+  `mcp` block, from the same server list. If a **Context window** was set for the
+  OpenCode model, it's also written as that provider's
+  `models.<modelId>.limit.context` — OpenCode has no way to know BOS's model
+  catalog on its own, so without this it silently falls back to its own built-in
+  default context size for the model, which can be wrong and let a run overflow.
 
 A file is deleted (not left empty) when it has nothing to say — e.g. provider left
 `default` and no servers flagged — which is also how

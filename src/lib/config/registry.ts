@@ -417,6 +417,13 @@ const REGISTRATIONS: ConfigRegistration[] = [
           placeholder: "e.g. claude-opus-4-7 (blank = CLI default)",
           description: "Model id passed to OpenCode CLI via --model. Leave blank to use the CLI's own default.",
         },
+        {
+          key: "opencodeContextSize",
+          label: "OpenCode context window",
+          type: "number",
+          description:
+            "Context window (tokens) of the model above. Written into opencode.json as this model's limit.context, since OpenCode has no way to know BOS's own model catalog. Leave blank to use OpenCode's built-in default for this model (may not match BrowserOS's selected model and can overflow).",
+        },
         // Shared by both CLI transports (Local run mode only — the MCP modes use
         // their own Agent-tool call timeout, unaffected by this).
         {
@@ -460,6 +467,7 @@ const REGISTRATIONS: ConfigRegistration[] = [
         opencodeCustomNpmPackage: opencode.customNpmPackage || "",
         opencodeCustomModelId: opencode.customModelId || "",
         opencodeModel,
+        opencodeContextSize: opencode.contextSize,
         cliTimeoutSec: clampCliTimeoutSec(typeof stored.cliTimeoutSec === "number" ? stored.cliTimeoutSec : CLI_TIMEOUT_SEC_DEFAULT),
       };
     },

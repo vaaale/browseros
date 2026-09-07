@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { createCipheriv, createDecipheriv } from "node:crypto";
+import { slog } from "./log.mjs";
 
 // Standalone copy of the read/write path in bastion/src/secrets-reader.ts,
 // itself a copy of src/lib/integrations/secrets — the Supervisor is a
@@ -47,7 +48,8 @@ function loadKey(dataDir) {
   try {
     const buf = fs.readFileSync(path.join(dataDir, ".integrations-key"));
     return buf.length === 32 ? buf : null;
-  } catch {
+  } catch (e) {
+    if (e?.code !== "ENOENT") slog("warn", "secrets", `reading encryption key in ${dataDir} failed: ${e?.message || e}`);
     return null;
   }
 }
@@ -57,7 +59,12 @@ function loadDisk(dataDir) {
     const parsed = JSON.parse(fs.readFileSync(path.join(dataDir, "integrations", "secrets.json"), "utf8"));
     if (parsed?.version !== 1 || typeof parsed.entries !== "object") return null;
     return parsed;
-  } catch {
+  } catch (e) {
+    // ENOENT (no secrets stored yet) is the expected, silent case. Anything
+    // else — malformed JSON, a permissions error — means an EXISTING secrets
+    // file couldn't be read, which every caller then reads as "no credential
+    // configured" with zero indication that one may have been lost.
+    if (e?.code !== "ENOENT") slog("warn", "secrets", `reading secrets.json in ${dataDir} failed: ${e?.message || e}`);
     return null;
   }
 }
@@ -70,7 +77,11 @@ function getDecrypted(dataDir, storeKey) {
   if (!sealed) return null;
   try {
     return JSON.parse(aesDecrypt(sealed, key));
-  } catch {
+  } catch (e) {
+    // The entry exists but wouldn't decrypt (wrong key, tampered/corrupted
+    // data) — a genuinely different situation from "no credential stored",
+    // which every caller otherwise can't tell apart from this.
+    slog("warn", "secrets", `decrypting stored secret "${storeKey}" in ${dataDir} failed: ${e?.message || e}`);
     return null;
   }
 }
@@ -122,7 +133,8 @@ export function updateRemoteOauthExpiry(dataDir, provider, expiresAt) {
   let configs;
   try {
     configs = JSON.parse(fs.readFileSync(file, "utf8"));
-  } catch {
+  } catch (e) {
+    if (e?.code !== "ENOENT") slog("warn", "secrets", `reading git-remotes.json in ${dataDir} failed (expiry mirror skipped): ${e?.message || e}`);
     return;
   }
   if (!Array.isArray(configs)) return;
@@ -136,8 +148,10 @@ export function updateRemoteOauthExpiry(dataDir, provider, expiresAt) {
   if (!changed) return;
   try {
     writeFileAtomic(file, JSON.stringify(configs, null, 2));
-  } catch {
-    // Best-effort mirror only — see doc comment above.
+  } catch (e) {
+    // Best-effort mirror only (see doc comment above) — but still worth
+    // knowing the display value is now stale.
+    slog("warn", "secrets", `writing git-remotes.json expiry mirror in ${dataDir} failed: ${e?.message || e}`);
   }
 }
 
@@ -179,7 +193,12 @@ function ensureCredentialHelper(dataDir) {
   fs.mkdirSync(dir, { recursive: true });
   let current = null;
   try { current = fs.readFileSync(scriptPath, "utf8"); } catch { /* not found */ }
-  if (current !== HELPER_SOURCE) fs.writeFileSync(scriptPath, HELPER_SOURCE, { mode: 0o700 });
+  // Atomic (temp + rename), not a direct in-place write: under hardlink-farm
+  // isolation this path can share its inode with base's and every other
+  // preview's copy until first written — a write-in-place would be visible,
+  // mid-write, to all of them at once (the exact hazard the project's own
+  // atomic-writes contract exists to rule out).
+  if (current !== HELPER_SOURCE) writeFileAtomic(scriptPath, HELPER_SOURCE);
   fs.chmodSync(scriptPath, 0o700);
   return scriptPath;
 }

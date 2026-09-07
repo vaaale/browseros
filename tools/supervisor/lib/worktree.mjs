@@ -3,9 +3,10 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { WORKTREES, CANONICAL_DATA, REPO } from "./config.mjs";
-import { git, meaningfulDirtyLines } from "./gitutil.mjs";
+import { git, meaningfulDirtyLines, GIT_IDENTITY } from "./gitutil.mjs";
 import { state } from "./state.mjs";
 import { slog } from "./log.mjs";
+import { specStoreReposFor, commitCoupled } from "./coupled-repos.mjs";
 
 const exec = promisify(execFile);
 
@@ -14,8 +15,60 @@ async function isolationMethod() {
   try {
     const cfg = JSON.parse(await fs.readFile(path.join(CANONICAL_DATA, "config", "datafs.json"), "utf8"));
     return cfg.method || "auto";
-  } catch {
+  } catch (e) {
+    // ENOENT (no config written yet) is the expected, common case — "auto" is
+    // its documented default. Anything else (malformed JSON, a permissions
+    // error) silently falling back to the same default would hide a real
+    // misconfiguration, so only that's worth a warning.
+    if (e?.code !== "ENOENT") slog("warn", "provision", `reading datafs.json failed, defaulting to "auto": ${e?.message || e}`);
     return "auto";
+  }
+}
+
+// installItemLink (src/system/marketplace/install/symlinkManager.ts) always
+// creates dataDir()/system/<id> as an ABSOLUTE symlink. For an item installed
+// on base BEFORE a preview's clone ever existed, that absolute target points
+// into CANONICAL_DATA — and `cp -a` preserves a symlink's target string
+// byte-for-byte, so the clone's own copy of that same symlink still points
+// back into CANONICAL_DATA's user-apps, never into the clone's OWN
+// branch-coupled user-apps mount (coupled-repos.mjs's mountCoupled). Any edit
+// an agent makes to that item inside the preview's mounted user-apps worktree
+// is then invisible when the SAME preview serves the app — the serving path
+// (src/app/apps/[...slug]/route.ts's itemLinkPath) reads straight through the
+// stale symlink to base's unedited copy. Retargeting every user-apps-sourced
+// item symlink to the clone's own user-apps closes that gap. Symlinks whose
+// provenance is something else (e.g. a marketplace clone) are left untouched
+// — only user-apps is branch-coupled/mounted per preview, so there is no
+// clone-local equivalent to redirect a marketplace item's symlink to.
+async function retargetUserAppsItemSymlinks(cloneDir, finalTarget) {
+  const systemDir = path.join(cloneDir, "system");
+  const canonicalUserApps = path.join(CANONICAL_DATA, "user-apps");
+  const cloneUserApps = path.join(finalTarget, "user-apps");
+  let entries;
+  try {
+    entries = await fs.readdir(systemDir, { withFileTypes: true });
+  } catch (e) {
+    if (e?.code !== "ENOENT") slog("warn", "provision", `reading ${systemDir} for item-symlink retargeting failed: ${e?.message || e}`);
+    return;
+  }
+  for (const entry of entries) {
+    if (!entry.isSymbolicLink()) continue;
+    const linkPath = path.join(systemDir, entry.name);
+    let resolvedTarget;
+    try {
+      resolvedTarget = path.resolve(systemDir, await fs.readlink(linkPath));
+    } catch (e) {
+      slog("warn", "provision", `reading item symlink ${linkPath} failed — leaving it untouched: ${e?.message || e}`);
+      continue;
+    }
+    const rel = path.relative(canonicalUserApps, resolvedTarget);
+    if (rel.startsWith("..") || path.isAbsolute(rel)) continue;
+    try {
+      await fs.rm(linkPath, { force: true });
+      await fs.symlink(path.join(cloneUserApps, rel), linkPath, "dir");
+    } catch (e) {
+      slog("warn", "provision", `retargeting item symlink ${linkPath} into this clone's user-apps failed: ${e?.message || e}`);
+    }
   }
 }
 
@@ -30,15 +83,36 @@ export async function provisionClone(target) {
   await fs.mkdir(path.dirname(target), { recursive: true });
   const method = await isolationMethod();
   const run = (args) => exec("cp", args, { maxBuffer: 8 * 1024 * 1024, timeout: 180_000 });
+  // Copy into a sibling staging path and only `rename` it onto `target` once
+  // the copy is FULLY complete — `rename` is atomic (same directory, same
+  // filesystem), so `target` never exists in a partially-copied state.
+  // Without this, the `fs.stat(target)` existence check above can't tell a
+  // finished clone from one interrupted mid-copy (Supervisor crash/restart,
+  // disk full, a killed `cp`): the directory is already there, so every
+  // later provision call treats a broken, partial clone as good forever —
+  // the preview then silently runs against missing/incomplete data with no
+  // error anywhere. A leftover staging dir here can only be from an
+  // interrupted PREVIOUS attempt (the caller already serializes concurrent
+  // provisions for the same target via preview.mjs's `previewProvisioning`),
+  // so it's always safe to clear before starting.
+  const staging = `${target}.provisioning`;
+  await fs.rm(staging, { recursive: true, force: true }).catch((e) =>
+    slog("warn", "provision", `cleanup of stale in-progress clone ${staging} failed: ${e?.message || e}`),
+  );
   try {
-    if (method === "reflink") return await run(["-a", "--reflink=auto", CANONICAL_DATA, target]);
-    if (method === "copy") return await run(["-a", CANONICAL_DATA, target]);
+    if (method === "reflink") await run(["-a", "--reflink=auto", CANONICAL_DATA, staging]);
+    else if (method === "copy") await run(["-a", CANONICAL_DATA, staging]);
     // auto / hardlink → hardlink farm, fall back to a full copy.
-    return await run(["-al", CANONICAL_DATA, target]);
-  } catch {
-    await fs.rm(target, { recursive: true, force: true }).catch(() => {});
-    return await run(["-a", CANONICAL_DATA, target]);
+    else await run(["-al", CANONICAL_DATA, staging]);
+  } catch (e) {
+    slog("warn", "provision", `${method} clone of ${target} failed, falling back to plain copy: ${e?.message || e}`);
+    await fs.rm(staging, { recursive: true, force: true }).catch((rmErr) =>
+      slog("error", "provision", `cleanup before fallback copy failed for ${staging}: ${rmErr?.message || rmErr}`),
+    );
+    await run(["-a", CANONICAL_DATA, staging]);
   }
+  await retargetUserAppsItemSymlinks(staging, target);
+  await fs.rename(staging, target);
 }
 
 // ---------------------------------------------------------------- worktree + process lifecycle
@@ -54,29 +128,37 @@ export async function provisionClone(target) {
 export async function hydrateWorktree(wt) {
   const nm = path.join(wt, "node_modules");
   const run = (args) => exec("cp", args, { maxBuffer: 64 * 1024 * 1024, timeout: 600_000 });
+  // Same reasoning as provisionClone's staging dance: copy into a sibling
+  // path and `rename` it onto `nm` only once complete, so isHealthyWorktree's
+  // existence check (below) can never mistake an interrupted copy — Supervisor
+  // restart, killed `cp`, disk full — for a finished one and skip re-hydrating
+  // a worktree that will then fail to build for a reason nobody can see.
+  const staging = `${nm}.provisioning`;
+  await fs.rm(staging, { recursive: true, force: true }).catch((e) =>
+    slog("warn", "provision", `cleanup of stale in-progress node_modules copy ${staging} failed: ${e?.message || e}`),
+  );
   try {
-    await run(["-a", "--reflink=auto", path.join(REPO, "node_modules"), nm]);
-  } catch {
+    await run(["-a", "--reflink=auto", path.join(REPO, "node_modules"), staging]);
+  } catch (e) {
     // `cp` without --reflink support (e.g. BSD/macOS): fall back to a plain copy.
-    await fs.rm(nm, { recursive: true, force: true }).catch(() => {});
-    await run(["-a", path.join(REPO, "node_modules"), nm]).catch(() => {});
+    slog("warn", "provision", `reflink copy of node_modules into ${wt} failed, falling back to plain copy: ${e?.message || e}`);
+    await fs.rm(staging, { recursive: true, force: true }).catch((rmErr) =>
+      slog("error", "provision", `cleanup before fallback node_modules copy failed for ${staging}: ${rmErr?.message || rmErr}`),
+    );
+    await run(["-a", path.join(REPO, "node_modules"), staging]).catch((cpErr) => {
+      slog("error", "provision", `fallback node_modules copy into ${staging} failed — worktree will likely fail to build: ${cpErr?.message || cpErr}`);
+      throw cpErr; // both copy strategies failed — nothing to promote, must not silently continue
+    });
   }
+  await fs.rename(staging, nm);
   for (const f of [".env", ".env.local"]) {
-    await fs.copyFile(path.join(REPO, f), path.join(wt, f)).catch(() => {});
+    await fs.copyFile(path.join(REPO, f), path.join(wt, f)).catch((e) => {
+      // Both files are optional (`.env.local` in particular is commonly
+      // absent) — only a failure that ISN'T "the source file doesn't exist"
+      // is worth surfacing.
+      if (e?.code !== "ENOENT") slog("warn", "provision", `copying ${f} into ${wt} failed: ${e?.message || e}`);
+    });
   }
-}
-
-// Create/replace the BASE worktree: detached at `commit` so it never
-// conflicts with REPO's own checkout of baseBranch. Fixed location (base is
-// a singleton).
-export async function addBaseWorktree(commit) {
-  const wt = path.join(WORKTREES, "base");
-  await git(["worktree", "remove", "--force", wt]).catch(() => {}); // idempotent teardown of whatever was here before; `worktree add --detach` below still throws if the path genuinely can't be reused
-  await fs.rm(wt, { recursive: true, force: true }).catch(() => {});
-  await fs.mkdir(WORKTREES, { recursive: true });
-  await git(["worktree", "add", "--detach", wt, commit]);
-  await hydrateWorktree(wt);
-  return wt;
 }
 
 // True if `wt` is already a healthy worktree checked out on `branch` at the
@@ -89,7 +171,11 @@ export async function addBaseWorktree(commit) {
 export async function isHealthyWorktree(wt, branch) {
   try {
     await git(["rev-parse", "--git-dir"], wt);
-  } catch {
+  } catch (e) {
+    // Any failure here safely means "not healthy" (worst case: the caller
+    // pays for a rebuild it didn't strictly need) — but worth a trace so a
+    // persistently-failing "healthy" check isn't mysterious.
+    slog("debug", "provision", `worktree health check: ${wt} has no readable git dir: ${e?.message || e}`, { branch });
     return false;
   }
   let head, worktreeHead, branchTip;
@@ -98,7 +184,8 @@ export async function isHealthyWorktree(wt, branch) {
     if (head !== branch) return false;
     worktreeHead = await git(["rev-parse", "HEAD"], wt);
     branchTip = await git(["rev-parse", branch]);
-  } catch {
+  } catch (e) {
+    slog("debug", "provision", `worktree health check: reading branch/commit state of ${wt} failed: ${e?.message || e}`, { branch });
     return false;
   }
   if (worktreeHead !== branchTip) return false;
@@ -111,15 +198,19 @@ export async function isHealthyWorktree(wt, branch) {
 export async function addWorktreeForBranch(branch) {
   const wt = path.join(WORKTREES, branch);
   if (await isHealthyWorktree(wt, branch)) return wt;
-  await git(["worktree", "remove", "--force", wt]).catch(() => {}); // best-effort teardown of a stale/unhealthy worktree; `worktree add` below throws if the path genuinely can't be reused
-  await fs.rm(wt, { recursive: true, force: true }).catch(() => {});
+  // Best-effort teardown of a stale/unhealthy worktree — `worktree add` below
+  // still throws if the path genuinely can't be reused, so a failure here
+  // isn't fatal, but it must be visible: it's the first sign something about
+  // this worktree is in a state the rest of this function doesn't expect.
+  await git(["worktree", "remove", "--force", wt]).catch((e) => slog("warn", "provision", `remove of stale worktree ${wt} failed: ${e?.message || e}`, { branch }));
+  await fs.rm(wt, { recursive: true, force: true }).catch((e) => slog("error", "provision", `cleanup of stale worktree dir ${wt} failed: ${e?.message || e}`, { branch }));
   await fs.mkdir(path.dirname(wt), { recursive: true });
   // Clear any stale worktree registration (e.g. a worktree dir removed by
   // hand, or a leftover lock) so `worktree add` can't fail with "already
   // registered"/"already checked out" — the failure that would otherwise
   // push the caller into editing the live checkout in place
   // (specs/017-central-logging diagnosis).
-  await git(["worktree", "prune"]).catch(() => {}); // pruning is inherently best-effort; the `worktree add` below still throws if it genuinely can't proceed
+  await git(["worktree", "prune"]).catch((e) => slog("warn", "provision", `worktree prune before adding ${wt} failed: ${e?.message || e}`, { branch })); // best-effort; the `worktree add` below still throws if it genuinely can't proceed
   await git(["worktree", "add", wt, branch]);
   await hydrateWorktree(wt);
   return wt;
@@ -187,15 +278,61 @@ export async function assertRepoIntegrity(context = "") {
 // pruneAllCoupledWorktrees — their worktrees lived inside these code
 // worktrees, so both must run at boot, in either order.
 export async function reconcileWorktrees() {
-  await git(["worktree", "prune"]).catch(() => {}); // pruning is inherently best-effort — nothing downstream depends on this succeeding beyond the removals below, which independently verify via `worktree list`
-  const list = await git(["worktree", "list", "--porcelain"]).catch(() => "");
+  await git(["worktree", "prune"]).catch((e) => slog("warn", "reconcile", `initial worktree prune failed: ${e?.message || e}`)); // best-effort — nothing downstream depends on this succeeding beyond the removals below, which independently verify via `worktree list`
+  const list = await git(["worktree", "list", "--porcelain"]).catch((e) => {
+    slog("error", "reconcile", `worktree list failed — cannot reconcile leftover worktrees this boot: ${e?.message || e}`);
+    return "";
+  });
   for (const line of list.split("\n")) {
     if (!line.startsWith("worktree ")) continue;
     const wt = line.slice("worktree ".length).trim();
     if (wt && wt !== REPO && wt.startsWith(WORKTREES)) {
+      // A worktree here can hold UNCOMMITTED edits — e.g. an agent's
+      // dev_delegate wrote files but the Supervisor process restarted
+      // (crash, manual restart, redeploy) before buildAndStart's own commit
+      // step ran. Blindly removing it, as this used to do unconditionally,
+      // silently destroyed that work: the branch survives (it's just a git
+      // ref), but whatever hadn't been committed onto it is gone the moment
+      // `fs.rm` runs, and every later rebuild of the branch just reflects
+      // the last real commit — reading as "my change isn't in the preview"
+      // with no error anywhere. Commit first (the exact same safety-net
+      // commit buildAndStart already makes routinely) so a restart can never
+      // lose in-flight edits; only genuinely clean worktrees are destroyed.
+      let branch = null;
+      try {
+        branch = await git(["rev-parse", "--abbrev-ref", "HEAD"], wt);
+      } catch (e) {
+        // Can't determine the branch, so the safety-commit below is skipped
+        // entirely — exactly the case where it matters most. Log loudly:
+        // this worktree is about to be removed with no protection.
+        slog("error", "reconcile", `could not read branch of ${wt} — skipping its safety-net commit before removal, any uncommitted edits will be lost: ${e?.message || e}`);
+        branch = null;
+      }
+      if (branch && branch !== "HEAD") {
+        await git(["add", "-A"], wt).catch((e) =>
+          slog("error", "reconcile", `git add failed in ${wt} before safety-committing it — some edits may not get staged: ${e?.message || e}`, { branch }),
+        );
+        const dirty = await git(["status", "--porcelain"], wt).catch((e) => {
+          slog("error", "reconcile", `git status failed in ${wt} — cannot tell if it holds uncommitted edits, treating it as dirty to be safe: ${e?.message || e}`, { branch });
+          return "?"; // unreadable status must never be read as "clean" — fail toward attempting the safety commit
+        });
+        if (dirty) {
+          await git([...GIT_IDENTITY, "commit", "-m", `BOS candidate (${branch}) — safety-net commit before supervisor restart`], wt).catch((e) =>
+            slog("error", "reconcile", `failed to safety-commit dirty worktree ${wt} before removing it on restart — uncommitted work may be lost: ${e?.message || e}`, { branch }),
+          );
+        }
+        // Spec-store worktrees are mounted NESTED inside this one
+        // (`<wt>/specs/<store>`) — the `fs.rm` below would take their
+        // uncommitted edits down with it too, same risk as the code above.
+        for (const repo of await specStoreReposFor(wt)) {
+          await commitCoupled(repo, repo.dst, branch).catch((e) =>
+            slog("error", "reconcile", `failed to safety-commit dirty spec store ${repo.id} in ${wt} before removing it on restart — uncommitted work may be lost: ${e?.message || e}`, { branch }),
+          );
+        }
+      }
       await git(["worktree", "remove", "--force", wt]).catch((e) => slog("warn", "reconcile", `failed to remove stale worktree ${wt}: ${e?.message || e}`));
-      await fs.rm(wt, { recursive: true, force: true }).catch(() => {});
+      await fs.rm(wt, { recursive: true, force: true }).catch((e) => slog("error", "reconcile", `failed to delete worktree dir ${wt}: ${e?.message || e}`));
     }
   }
-  await git(["worktree", "prune"]).catch(() => {});
+  await git(["worktree", "prune"]).catch((e) => slog("warn", "reconcile", `final worktree prune failed: ${e?.message || e}`));
 }

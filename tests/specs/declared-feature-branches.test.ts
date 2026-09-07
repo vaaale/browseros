@@ -7,14 +7,14 @@
 // conversation has no way to select the same branch — this is the merge-in
 // that closes that gap.
 //
-// NOTE: os/vfs.ts caches its data root in a module-level constant computed
-// once at import time (correct in production — BOS_DATA_DIR never changes
-// mid-process — but it means useTestDataDir()'s per-test override does NOT
-// isolate /Documents/Chats/ across tests sharing a worker). So these tests
-// use random-ish, collision-proof branch/file names and assert with
+// NOTE: os/vfs.ts resolves its data root from dataDir() per call (not cached
+// at import time), so useTestDataDir()'s per-test BOS_DATA_DIR override does
+// isolate /Documents/Chats/ correctly. Multiple tests in this file still run
+// concurrently against the SAME worker process, though, and each only sets
+// its own env override for its own duration — so these tests still use
+// random-ish, collision-proof branch/file names and assert with
 // `arrayContaining`/`toContain` against the merged result, never exact
-// equality against the full listing — leftover conversation files from
-// sibling tests in the same worker are expected to still be present.
+// equality against the full listing.
 //   npm run test:unit -- tests/specs/declared-feature-branches.test.ts
 import "../services/_stub-server-only";
 import { test, expect } from "@playwright/test";

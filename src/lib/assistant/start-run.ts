@@ -168,7 +168,11 @@ export async function startAssistantRun(opts: StartRunOptions): Promise<Run> {
           // e2e runs (BOS_E2E_SCRIPTED=1 + an "@@e2e {…}" message) use a scripted
           // provider for determinism; everything else uses the real model.
           streamTurn: e2eScriptedTurn(opts.message) ?? streamModelTurn,
-          composeSystem: () => composeInstructions(opts.agentId),
+          // 041-tool-groups: the gate + tool map go in so the "## Tool groups"
+          // block reflects what THIS run can actually call. `run.tools` is the
+          // same reference the loop reads, so a surface tool added mid-run is
+          // already accounted for when the block is composed.
+          composeSystem: () => composeInstructions(opts.agentId, { gate, tools: run.tools }),
           tools: run.tools,
           gate,
           hooks,

@@ -65,6 +65,34 @@ export async function saveConversationMessages(
   });
 }
 
+/**
+ * Patch `activeFeatureBranch` on a conversation file, through the SAME
+ * per-conversation queue as `saveConversationMessages`.
+ *
+ * This exists because the browser's own metadata edits (the chat header's
+ * branch selector) used to persist via a plain, unserialized VFS write
+ * (`/api/fs`'s generic `write` op) — a completely different code path from
+ * this module's queue. The two writers raced: if the agent loop's next
+ * message save (its `existing` read taken before the browser's write landed)
+ * finished last, it wrote its own stale `activeFeatureBranch` back over the
+ * user's clear, silently reverting it. Routing the edit through this queue
+ * instead means both writers serialize against the SAME critical section for
+ * a given conversation id, so whichever runs second always sees the other's
+ * result rather than a stale snapshot.
+ */
+export async function setConversationActiveFeatureBranch(
+  conversationId: string,
+  branch: string | undefined,
+): Promise<void> {
+  await enqueuePerKey(conversationId, async () => {
+    const existing = await readFile(conversationId);
+    if (!existing) return; // nothing to patch — the conversation doesn't exist yet
+    if (branch) existing.activeFeatureBranch = branch;
+    else delete existing.activeFeatureBranch;
+    await vfs.writeText(pathFor(conversationId), JSON.stringify(existing, null, 2));
+  });
+}
+
 /** The loop's IO facade for one conversation. */
 export function conversationIO(conversationId: string, agentId: string): AgentLoopIO {
   return {

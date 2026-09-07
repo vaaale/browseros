@@ -21,7 +21,10 @@ launched.
   coder; BOS streams its tool activity and captures the result, exactly like the
   Claude CLI. OpenCode uses its **own** provider/model auth (configure it via
   OpenCode, e.g. `opencode auth login` or its config), independent of the BOS
-  AI‑provider setting. Same sandbox advice.
+  AI‑provider setting. Same sandbox advice. Since OpenCode has no visibility into
+  BOS's model catalog, set **Context window** to the selected model's real context
+  size — otherwise OpenCode falls back to its own built-in default for that model,
+  which can be wrong and let a run overflow the model's context.
 - **MCP stdio (`claude mcp serve`)** — connect to a local Claude Code MCP server.
   - **Command** — the command to spawn (default `claude mcp serve`).
 - **MCP HTTP (remote)** / **MCP SSE (remote)** — connect to a remote Claude Code
@@ -61,6 +64,10 @@ before — nothing changes unless you pick something else. BOS writes the select
 provider into a **generated** config file inside the harness's own home directory
 (`~/.claude/settings.json` for Claude, `~/.config/opencode/opencode.json` for
 OpenCode) — these are regenerated on every save, so don't hand-edit them.
+
+For OpenCode, an optional **Context window** field is written alongside the model
+as that model's `limit.context` in the generated `opencode.json`, so OpenCode stops
+before exceeding it. Leave it blank to use OpenCode's own built-in default instead.
 
 ## Giving the harness your MCP servers
 

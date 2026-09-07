@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { listFeatureBranches, createFeatureBranch } from "@/lib/system/git";
 import { normalizeFeatureBranch } from "@/lib/agent/feature-branch";
 import { listDeclaredFeatureBranches } from "@/lib/agent/conversations-server";
+import { setConversationActiveFeatureBranch } from "@/lib/assistant/conversation-store";
 
 export const dynamic = "force-dynamic";
 
@@ -51,4 +52,32 @@ export async function POST(req: NextRequest) {
   }
   const featureBranches = await allKnownFeatureBranches();
   return NextResponse.json({ ok: true, branch, featureBranches });
+}
+
+// Set (or clear) a conversation's `activeFeatureBranch`. Routed through
+// conversation-store.ts's own per-conversation queue — not a plain VFS write
+// — so this serializes against the v2 agent loop's own message saves instead
+// of racing them (see setConversationActiveFeatureBranch's doc comment).
+export async function PATCH(req: NextRequest) {
+  let body: { conversationId?: unknown; branch?: unknown };
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ ok: false, error: "Invalid JSON body" }, { status: 400 });
+  }
+  const conversationId = typeof body.conversationId === "string" ? body.conversationId.trim() : "";
+  if (!conversationId) {
+    return NextResponse.json({ ok: false, error: "conversationId is required" }, { status: 400 });
+  }
+  const raw = typeof body.branch === "string" ? body.branch.trim() : "";
+  if (!raw) {
+    await setConversationActiveFeatureBranch(conversationId, undefined);
+    return NextResponse.json({ ok: true, branch: undefined });
+  }
+  const branch = normalizeFeatureBranch(raw);
+  if (!branch) {
+    return NextResponse.json({ ok: false, error: `Invalid branch name "${raw}".` }, { status: 400 });
+  }
+  await setConversationActiveFeatureBranch(conversationId, branch);
+  return NextResponse.json({ ok: true, branch });
 }

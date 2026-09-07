@@ -87,6 +87,11 @@ Three tabs describe what the current agent has available:
 
 - **Tools** — the actions the assistant can take, grouped by area (OS, Files,
   Config, Sub‑agents, Memory, Skills, MCP, Dev, Docs, Assistant, Workflows).
+  The wrench colours reflect the selected agent's allowlist and this
+  conversation's discovered tools — **green** = granted, **orange** = deferred
+  and not yet discovered, **blue** = deferred and discovered in this
+  conversation, **grey** = not granted (a legend at the top of the tab repeats
+  this).
 - **Skills** — the reusable procedures in the library, with a one‑line summary
   each. See [Skills](../self-improvement/skills.md).
 - **MCP** — connected MCP servers and a live **connected / disconnected** status

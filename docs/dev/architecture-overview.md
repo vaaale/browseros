@@ -162,9 +162,21 @@ This is the most complex subsystem, with multiple sub-components:
 #### 8.2 Capabilities Registry
 | File | Responsibility |
 |------|---------------|
-| `capabilities-registry.ts` | Unified capability definitions (80+ capabilities, 20+ groups) |
+| `capabilities-registry.ts` | Unified capability definitions (~150 capabilities). `Capability.group` is a group **id** (a slug), not a display name — see below |
+| `tool-groups.ts` | The tool-group model (041): id, display name, description, search aliases; built-in table + a `globalThis` dynamic layer for service-declared groups |
+| `tool-group-overrides.ts` | User edits to a group's description/aliases (Settings → Tools), persisted per group id |
+| `discovery-search.ts` | Deterministic term-level IDF ranking behind `find_tools` |
 
-**Capability Groups:** OS, Web, Files, Config, Agents, Memory, Skills, Scratchpad, MCP, Apps, Dev, Docs, Specs, Build Studio, Gmail, Google Drive, Google Calendar, Google Contacts, Telegram.
+**Capability groups (041-tool-groups):** OS, Web, Files, Config, Agents,
+Conversation Review, Memory, Skills, Scratchpad, MCP, Apps, Specs, Dev, Conflict
+Resolution, Scheduler, Build Studio, UI Preview, Gmail, Google Drive, Google
+Calendar, Google Contacts, Telegram — plus one group per installed
+tool-exposing marketplace item, registered at runtime.
+
+The built-in table in `tool-groups.ts` is the canonical ORDER (it drives both
+Settings and the system-prompt block), and group ids are the stable join key for
+capabilities, user overrides and manifest declarations. **There is no fallback
+group**: an unresolvable group id is surfaced as an error, never bucketed.
 
 #### 8.3 Sub-agents (Delegation)
 
@@ -375,7 +387,9 @@ for the full mechanism and adoption checklist; the Bastion-side half
 | `register-ui-handlers.ts` | Surfaces every app's manifest-declared `eventHandlers` into the registry at boot |
 
 A pub/sub broker, in-process (a daemon started from `instrumentation.ts`,
-sibling to the scheduler daemon in §1 — not a worker-thread service). Any
+sibling to the scheduler daemon in §1 — not a worker-thread service; unlike the
+scheduler it is not owner-elected, see
+[Scheduler concurrency](automation/scheduler-concurrency.md)). Any
 component emits an event (type + JSON payload); the kernel durably records
 it (a single O(1) shard append) and fans out to matching **headless
 handlers** (invoked automatically, must ack, participate in a

@@ -1,4 +1,4 @@
-// Parse the `args` a model passes to callMcpTool (014-mcp-tool-gateway).
+// Parse the `args` a model passes to mcp_tool_call (014-mcp-tool-gateway).
 //
 // The arguments MUST travel as a JSON STRING at the CopilotKit layer, not an object
 // parameter: CopilotKit converts an `object`-typed action parameter that has no

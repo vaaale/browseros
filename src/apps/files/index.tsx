@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   ArrowUp,
   RefreshCw,
@@ -16,9 +17,12 @@ import {
   ImagePlus,
   Download,
   UploadCloud,
+  Check,
 } from "lucide-react";
 import type { VfsEntry } from "@/os/types";
-import { fsClient } from "@/lib/os-client";
+import { fsClient, fileHandlersClient } from "@/lib/os-client";
+import { buildLaunchParams, fileBaseMime, type FileHandlerView } from "@/os/file-handlers";
+import { AppIcon } from "@/components/desktop/icons";
 import { useOSStore } from "@/store/os-provider";
 import type { AppProps } from "@/components/apps/types";
 
@@ -43,10 +47,18 @@ export default function FileBrowser({ windowId, params }: AppProps) {
   const [dragActive, setDragActive] = useState(false);
   const [upload, setUpload] = useState<{ loaded: number; total: number } | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; entry: VfsEntry } | null>(null);
+  // Handlers for the file the context menu is open on. Fetched when the menu
+  // opens rather than per entry: the list only matters once a menu is showing,
+  // and an empty list must render the menu exactly as it did before 036.
+  const [handlers, setHandlers] = useState<FileHandlerView[]>([]);
   const dragDepth = useRef(0);
+  // Bumped on every menu open so a slow lookup for one file can never paint its
+  // handlers over a menu the user has since opened on a different file.
+  const handlerReq = useRef(0);
 
   const setTitle = useOSStore((s) => s.setTitle);
   const applySettings = useOSStore((s) => s.applySettings);
+  const launch = useOSStore((s) => s.launch);
 
   const refresh = useCallback(async (path: string) => {
     setLoading(true);
@@ -92,6 +104,17 @@ export default function FileBrowser({ windowId, params }: AppProps) {
     e.preventDefault();
     e.stopPropagation();
     setMenu({ x: e.clientX, y: e.clientY, entry });
+    // Cleared first so a slow lookup can never show the previous file's
+    // handlers. Directories have none by definition (FR-012).
+    setHandlers([]);
+    if (entry.type !== "file") return;
+    const req = ++handlerReq.current;
+    void fileHandlersClient
+      .list(fileBaseMime(entry.path))
+      .then((view) => {
+        if (handlerReq.current === req) setHandlers(view.handlers);
+      })
+      .catch(() => {});
   };
 
   const uploadFiles = async (files: FileList | File[]) => {
@@ -134,11 +157,9 @@ export default function FileBrowser({ windowId, params }: AppProps) {
     void uploadFiles(e.dataTransfer.files);
   };
 
-  const openEntry = async (entry: VfsEntry) => {
-    if (entry.type === "dir") {
-      setCwd(entry.path);
-      return;
-    }
+  // The Files app's own viewer/editor — the behavior that predates 036 and
+  // still handles every type no installed app has claimed (FR-007, SC-003).
+  const openInApp = async (entry: VfsEntry) => {
     setOpen(entry);
     if (IMAGE_RE.test(entry.name)) return;
     try {
@@ -147,6 +168,46 @@ export default function FileBrowser({ windowId, params }: AppProps) {
     } catch (e) {
       setText(`Could not read file: ${(e as Error).message}`);
     }
+  };
+
+  /** Hand a file to a registered handler via the open-file launch contract.
+   *  Returns false if the app turned out not to be launchable, so the caller
+   *  can fall back rather than leave the user staring at nothing (R-3). */
+  const launchHandler = (handler: FileHandlerView, entry: VfsEntry, action: "open" | "edit"): boolean =>
+    launch(handler.appId, buildLaunchParams(handler.decl, entry.path, action)) !== null;
+
+  /** An "Open with <App>" pick. A render-capable choice is also an "always open
+   *  with" — it becomes the type's selected handler, so double-click follows it
+   *  from now on. An edit-only one is a one-shot: a selection must be
+   *  render-capable (FR-010 / ADR-6), so the checkmark stays put. */
+  const pickHandler = (handler: FileHandlerView, entry: VfsEntry) => {
+    const renders = handler.capabilities.includes("render");
+    setMenu(null);
+    if (!launchHandler(handler, entry, renders ? "open" : "edit")) {
+      void openInApp(entry);
+      return;
+    }
+    // Fire-and-forget: the file is already open; persisting the preference is
+    // not something the user should wait on.
+    if (renders) void fileHandlersClient.setSelected(fileBaseMime(entry.path), handler.appId).catch(() => {});
+  };
+
+  const openEntry = async (entry: VfsEntry) => {
+    if (entry.type === "dir") {
+      setCwd(entry.path);
+      return;
+    }
+    // Ask the registry who owns this type. A render-capable selection wins;
+    // anything else — no handler, an expired selection, an app that failed to
+    // launch — falls through to the in-app path unchanged.
+    try {
+      const view = await fileHandlersClient.list(fileBaseMime(entry.path));
+      const selected = view.handlers.find((h) => h.appId === view.selected);
+      if (selected && launchHandler(selected, entry, "open")) return;
+    } catch {
+      // Registry unreachable — opening the file still has to work.
+    }
+    await openInApp(entry);
   };
 
   const newFolder = async () => {
@@ -295,13 +356,35 @@ export default function FileBrowser({ windowId, params }: AppProps) {
       </div>
 
       {menu && (
-        <div
-          style={{ position: "fixed", left: menu.x, top: menu.y, zIndex: 100002 }}
-          className="min-w-[140px] rounded border border-white/15 bg-neutral-900 py-1 text-xs shadow-2xl"
-          onClick={(e) => e.stopPropagation()}
-          onContextMenu={(e) => e.preventDefault()}
-          data-testid="files-context-menu"
-        >
+        <CursorMenu x={menu.x} y={menu.y} contentKey={handlers.length}>
+          {handlers.length > 0 && (
+            <>
+              <div className="px-3 pb-0.5 pt-1 text-[10px] font-semibold uppercase tracking-wide text-white/40">
+                Open with
+              </div>
+              {handlers.map((handler) => (
+                <button
+                  key={handler.appId}
+                  type="button"
+                  onClick={() => pickHandler(handler, menu.entry)}
+                  className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-white/80 hover:bg-white/10"
+                  data-testid="files-open-with"
+                  data-app={handler.appId}
+                >
+                  {/* The TARGET app's own manifest icon — a hidden handler like
+                      html-viewer has no dock icon but still shows its glyph. */}
+                  <AppIcon name={handler.icon} size={14} className="shrink-0" />
+                  <span className="flex-1">Open with {handler.label}</span>
+                  {handler.selected ? (
+                    <Check size={14} className="shrink-0 text-white/70" data-testid="files-open-with-check" />
+                  ) : (
+                    <span className="w-[14px] shrink-0" />
+                  )}
+                </button>
+              ))}
+              <div className="mx-2 my-1 h-px bg-white/10" />
+            </>
+          )}
           <button
             type="button"
             onClick={() => {
@@ -314,7 +397,7 @@ export default function FileBrowser({ windowId, params }: AppProps) {
             <Download size={14} />
             {menu.entry.type === "dir" ? "Download as zip" : "Download"}
           </button>
-        </div>
+        </CursorMenu>
       )}
 
       {open && (
@@ -348,5 +431,57 @@ export default function FileBrowser({ windowId, params }: AppProps) {
         </div>
       )}
     </div>
+  );
+}
+
+// Distance kept between the menu and the viewport edge when it has to be
+// nudged back on-screen.
+const MENU_MARGIN = 4;
+
+// The right-click menu, portalled to document.body. Window chrome is
+// CSS-transform-positioned (Window.tsx), which makes the window the containing
+// block for every `position: fixed` descendant — rendered inline, the menu's
+// left/top resolved against the window box while `clientX`/`clientY` are
+// viewport coordinates, so the menu appeared offset by wherever the window sat
+// (style-guide.md § Modal / dialog). Portalling puts both back in the same
+// coordinate space, i.e. under the cursor.
+function CursorMenu({
+  x,
+  y,
+  contentKey,
+  children,
+}: {
+  x: number;
+  y: number;
+  // Bumped whenever the menu's contents change size — the async handler lookup
+  // lands after the first paint, so the clamp below has to re-measure.
+  contentKey: number;
+  children: React.ReactNode;
+}) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [pos, setPos] = useState({ x, y });
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const { width, height } = el.getBoundingClientRect();
+    setPos({
+      x: Math.max(MENU_MARGIN, Math.min(x, window.innerWidth - width - MENU_MARGIN)),
+      y: Math.max(MENU_MARGIN, Math.min(y, window.innerHeight - height - MENU_MARGIN)),
+    });
+  }, [x, y, contentKey]);
+
+  return createPortal(
+    <div
+      ref={ref}
+      style={{ position: "fixed", left: pos.x, top: pos.y, zIndex: 100002 }}
+      className="min-w-[140px] rounded border border-white/15 bg-neutral-900 py-1 text-xs shadow-2xl"
+      onClick={(e) => e.stopPropagation()}
+      onContextMenu={(e) => e.preventDefault()}
+      data-testid="files-context-menu"
+    >
+      {children}
+    </div>,
+    document.body,
   );
 }

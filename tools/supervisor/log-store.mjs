@@ -34,7 +34,11 @@ export class LogStore {
     this._queue = Promise.resolve(); // serialize all appends (single writer => no interleave)
     this._ready = fs.mkdir(this.sessionsDir, { recursive: true })
       .then(() => fs.mkdir(this.buildsDir, { recursive: true }))
-      .catch(() => {});
+      // console.error, not this store's own write() — logging a logging
+      // failure through the thing that just failed would be circular. This
+      // is the one place that failure can surface at all: every write below
+      // silently no-ops once `_ready` never resolves cleanly.
+      .catch((e) => console.error("[log-store] failed to create log directories:", e?.message || e));
   }
 
   // Restrict a session id / branch to a safe single filename component.
@@ -76,7 +80,7 @@ export class LogStore {
   }
 
   _enqueue(fn) {
-    this._queue = this._queue.then(fn).catch(() => {});
+    this._queue = this._queue.then(fn).catch((e) => console.error("[log-store] write failed:", e?.message || e));
     return this._queue;
   }
 
@@ -179,15 +183,16 @@ export class LogStore {
     // Age prune.
     let survivors = [];
     for (const f of all) {
-      if (f.mtimeMs < ageCutoff) await fs.rm(f.full, { force: true }).catch(() => {});
-      else survivors.push(f);
+      if (f.mtimeMs < ageCutoff) {
+        await fs.rm(f.full, { force: true }).catch((e) => console.error(`[log-store] failed to prune ${f.full}:`, e?.message || e));
+      } else survivors.push(f);
     }
     // Size prune (oldest first) until under the cap.
     let total = survivors.reduce((s, f) => s + f.size, 0);
     survivors.sort((a, b) => a.mtimeMs - b.mtimeMs);
     for (const f of survivors) {
       if (total <= this.maxBytes) break;
-      await fs.rm(f.full, { force: true }).catch(() => {});
+      await fs.rm(f.full, { force: true }).catch((e) => console.error(`[log-store] failed to prune ${f.full}:`, e?.message || e));
       total -= f.size;
     }
   }

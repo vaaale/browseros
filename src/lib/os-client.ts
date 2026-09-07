@@ -1,6 +1,7 @@
 "use client";
 
 import type { OSSettings, VfsEntry } from "@/os/types";
+import type { FileHandlerListing } from "@/os/file-handlers";
 import { sessionHeader } from "@/lib/logging/client/session";
 
 // Must match FEATURE_CONVERSATION_HEADER in @/lib/specs/feature-context (a
@@ -101,6 +102,22 @@ export const fsClient = {
       xhr.onerror = () => reject(new Error("Upload failed"));
       xhr.send(body);
     }),
+};
+
+/** 036-file-type-handlers: the client's view of the handler registry. `list` is
+ *  what the Files app calls on double-click and on opening a context menu;
+ *  `setSelected` records an "always open with" pick. */
+export const fileHandlersClient = {
+  list: (mime: string) =>
+    fetch(`/api/file-handlers?mime=${encodeURIComponent(mime)}`).then((r) =>
+      jsonOrThrow<FileHandlerListing>(r),
+    ),
+  setSelected: (mime: string, appId?: string) =>
+    fetch("/api/file-handlers", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...sessionHeader() },
+      body: JSON.stringify({ mime, appId }),
+    }).then((r) => jsonOrThrow<FileHandlerListing>(r)),
 };
 
 export const settingsClient = {

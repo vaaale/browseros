@@ -90,6 +90,16 @@ export async function register(): Promise<void> {
     const { serviceManager } = await import("@/core/service/ServiceManager");
     await serviceManager().startAll();
 
+    // Scheduler daemon (042-scheduler-daemon-lock). EVERY server process runs
+    // this hook — the Supervisor keeps a BASE and (while previewing a feature
+    // branch) a PREVIEW alive, and `next dev` adds more — so before the fix
+    // each one started its own ticking daemon over the same jobs and a single
+    // due job fired N times (N concurrent "Daily Review" runs). startDaemon()
+    // is now election-gated: it competes for the container-wide daemon lock
+    // under <canonical data>/scheduler/daemon.lock and only the winner ticks;
+    // losers keep polling so a crashed owner is taken over. Deliberately kept
+    // inside startDaemon() rather than open-coded here, so every entry point
+    // into the engine (routes, tests) gets the same guarantee.
     const { startDaemon } = await import("@/lib/scheduler/daemon");
     startDaemon();
 

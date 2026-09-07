@@ -15,6 +15,7 @@
     "start": "next start",
     "lint": "eslint",
     "test:unit": "NODE_OPTIONS=--conditions=react-server playwright test -c playwright.unit.config.ts",
+    "test:coverage": "c8 npm run test:unit",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "supervisor": "node tools/supervisor/supervisor.mjs"
@@ -51,6 +52,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@types/ws": "^8.18.1",
+    "c8": "^12.0.0",
     "eslint": "^9",
     "eslint-config-next": "16.2.9",
     "tailwindcss": "^4",

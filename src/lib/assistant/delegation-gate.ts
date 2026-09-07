@@ -1,7 +1,7 @@
 import "server-only";
 import type { AssistantTool, ToolGateConfig } from "./tools";
 import { gateFor } from "./gate";
-import { composeInstructions, buildSkillsIndexBlock, buildMcpIndexBlock, buildKbIndexBlock, currentDateTimeBlock } from "@/lib/agent/instructions";
+import { composeInstructions, buildSkillsIndexBlock, buildMcpIndexBlock, buildKbIndexBlock, buildToolGroupsBlock, currentDateTimeBlock } from "@/lib/agent/instructions";
 import { getDefaultPromptAgent } from "@/lib/agent/subagents/store";
 import { listSkills } from "@/lib/agent/skills/store";
 import { listMcpServers } from "@/lib/mcp/store";
@@ -70,8 +70,11 @@ export function surfaceDelegationGate(toolNames: string[], parentGate: ToolGateC
  *  `agent.systemPrompt`, no default-prompt/memory/skills-index/mcp-index at
  *  all), since FR-005's whole point is "resolved identically regardless of
  *  invocation context." */
-export function namedComposeSystem(agentId: string): () => Promise<string> {
-  return () => composeInstructions(agentId);
+export function namedComposeSystem(
+  agentId: string,
+  run?: { gate: ToolGateConfig; tools: Record<string, AssistantTool> },
+): () => Promise<string> {
+  return () => composeInstructions(agentId, run);
 }
 
 /** Ephemeral agent: default prompt + systemPrompt as personality, plus the
@@ -83,6 +86,12 @@ export function namedComposeSystem(agentId: string): () => Promise<string> {
 export function ephemeralComposeSystem(
   systemPrompt: string,
   parentAllowlists: { skills?: string[]; mcp?: string[]; kbs?: string[] },
+  // 041-tool-groups: an ephemeral agent's gate has an EMPTY deferred set, so its
+  // block lists groups with no "more available here" lines — which is correct
+  // and is exactly why the block must be built from the gate rather than from an
+  // agent record. Without this it would receive no tool guidance at all, since
+  // it never reads an AGENT.md.
+  run?: { gate: ToolGateConfig; tools: Record<string, AssistantTool> },
 ): () => Promise<string> {
   return async () => {
     const [skills, mcpServers, kbs, defaultAgent] = await Promise.all([
@@ -97,6 +106,7 @@ export function ephemeralComposeSystem(
     out += buildSkillsIndexBlock(parentAllowlists.skills, skills);
     out += buildMcpIndexBlock(parentAllowlists.mcp, mcpServers);
     out += buildKbIndexBlock(parentAllowlists.kbs, kbs);
+    if (run) out += await buildToolGroupsBlock(run.gate, run.tools);
     return out;
   };
 }
@@ -104,13 +114,18 @@ export function ephemeralComposeSystem(
 /** Surface agent: default prompt + systemPrompt as its personality, nothing
  *  else appended (FR-017) — the registering app supplies the bounded toolset
  *  and personality, but still inherits the shared default prompt. */
-export function surfaceComposeSystem(systemPrompt: string): () => Promise<string> {
+export function surfaceComposeSystem(
+  systemPrompt: string,
+  run?: { gate: ToolGateConfig; tools: Record<string, AssistantTool> },
+): () => Promise<string> {
   return async () => {
     const defaultAgent = await getDefaultPromptAgent();
     const defaultBody = defaultAgent?.systemPrompt?.trim() || "";
-    if (defaultBody) {
-      return `${currentDateTimeBlock()}\n\n${defaultBody}\n\n## Personality\n${systemPrompt}`;
-    }
-    return `${currentDateTimeBlock()}\n\n${systemPrompt}`;
+    const head = defaultBody
+      ? `${currentDateTimeBlock()}\n\n${defaultBody}\n\n## Personality\n${systemPrompt}`
+      : `${currentDateTimeBlock()}\n\n${systemPrompt}`;
+    // 041-tool-groups: a surface agent's toolset is app-declared and fully
+    // visible, so it gets the group index with no discovery lines.
+    return run ? head + (await buildToolGroupsBlock(run.gate, run.tools)) : head;
   };
 }

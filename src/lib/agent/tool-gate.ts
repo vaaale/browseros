@@ -2,6 +2,7 @@ import "server-only";
 import { wrapLanguageModel, type LanguageModel } from "ai";
 import type { LanguageModelV3, LanguageModelV3Middleware } from "@ai-sdk/provider";
 import { listCapabilities, deferredCapabilityIds } from "@/lib/agent/capabilities-registry";
+import { idsFromFindToolsPayload } from "@/lib/assistant/messages";
 
 // Server-side tool gate for the main agent (025-deferred-tool-discovery +
 // 016-unified-agents). This is the SINGLE choke point that decides which tools
@@ -47,9 +48,13 @@ function parseMaybeJsonString(value: unknown): unknown {
 }
 
 /** Extract the tool ids revealed by every prior find_tools result in the
- *  message history. find_tools returns a JSON array of `{ id, … }`; we collect
- *  each `id`. Robust to text- or json-typed tool outputs and to malformed
- *  payloads (skipped silently). */
+ *  message history. Robust to text- or json-typed tool outputs and to malformed
+ *  payloads (skipped silently).
+ *
+ *  Shape handling lives in `idsFromFindToolsPayload` (src/lib/assistant/
+ *  messages.ts) and is shared with the v2 loop's own derivation, so the two
+ *  cannot drift: both accept the legacy bare array AND the 041 envelope, and
+ *  both read `results` only. */
 export function deriveRevealedIds(prompt: unknown): Set<string> {
   const revealed = new Set<string>();
   if (!Array.isArray(prompt)) return revealed;
@@ -62,11 +67,7 @@ export function deriveRevealedIds(prompt: unknown): Set<string> {
       if (out?.type === "json") payload = parseMaybeJsonString(out.value);
       else if (out?.type === "text") payload = parseMaybeJsonString(out.value);
       else continue;
-      if (!Array.isArray(payload)) continue;
-      for (const r of payload) {
-        const id = (r as { id?: unknown })?.id;
-        if (typeof id === "string" && id) revealed.add(id);
-      }
+      for (const id of idsFromFindToolsPayload(payload)) revealed.add(id);
     }
   }
   return revealed;

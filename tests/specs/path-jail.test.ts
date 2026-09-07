@@ -26,3 +26,11 @@ test("clamps a parent-traversal attempt back under the root", () => {
 test("collapses harmless internal traversal", () => {
   assert.equal(jailResolve(ROOT, "a/../b"), path.join(ROOT, "b"));
 });
+
+test("throws rather than trust a malformed (non-canonical) root — the caller contract is an absolute, canonical root", () => {
+  // A relative root can never be a string-prefix of path.resolve()'s absolute
+  // output, so this exercises the explicit escape guard directly rather than
+  // relying on relPath alone to reach it (relPath traversal is neutralized
+  // before this check ever sees it — see the test above).
+  assert.throws(() => jailResolve("relative/root", "file.txt"), /escapes the filesystem root/);
+});

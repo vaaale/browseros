@@ -39,6 +39,11 @@ export async function POST(req: NextRequest) {
     if (entry) delete files["app/index.html"];
 
     const icon = body.icon ? String(body.icon) : pickIcon(name);
+    // Explicit id (from app_list) for rebuilding an already-installed item —
+    // its id is fixed at creation and does not track a later rename of its
+    // display name, so falling back to slugify(name) here would silently
+    // create a second, separate, never-installed item instead of updating it.
+    const id = typeof body.id === "string" && body.id.trim() ? body.id.trim() : undefined;
     const branch = await getConversationActiveFeatureBranch(String(body.conversationId ?? ""));
     if (!branch) {
       return NextResponse.json(
@@ -46,7 +51,7 @@ export async function POST(req: NextRequest) {
         { status: 400 },
       );
     }
-    const result = await installItem({ name, icon, files, entry }, { draft: true, branch });
+    const result = await installItem({ name, icon, files, entry, id }, { draft: true, branch });
     return NextResponse.json(result);
   } catch (err) {
     return NextResponse.json({ error: (err as Error).message }, { status: 400 });

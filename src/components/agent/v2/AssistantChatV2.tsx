@@ -139,7 +139,7 @@ export const AssistantChatV2 = memo(function AssistantChatV2(props: AssistantCha
             ensureConversation={ensureConversation}
           />
         </div>
-        {props.showInfo && <InfoPanelV2 agentId={resolvedAgentId} />}
+        {props.showInfo && <InfoPanelV2 agentId={resolvedAgentId} conversationId={conversationId} />}
       </div>
     </CardScopeProvider>
   );

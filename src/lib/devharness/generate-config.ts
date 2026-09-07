@@ -117,11 +117,24 @@ function claudeEnvBlock(cfg: ClaudeProviderConfig): Record<string, string> {
 }
 
 // OpenCode: the `provider.<id>` entry to write into opencode.json, if any.
-// google-vertex returns undefined unconditionally — its required parameters are
+// google-vertex has no `options` surface — its required parameters are
 // environment-variable-only (openCodeProviderEnv below), confirmed against
-// OpenCode's own docs; there is no config.json options surface for it at all.
-function openCodeProviderFileEntry(cfg: OpenCodeProviderConfig): Record<string, unknown> | undefined {
-  if (cfg.mode === "credential-file" || cfg.mode === "google-vertex") return undefined;
+// OpenCode's own docs — but it can still carry a `models` block, so it isn't
+// excluded outright the way credential-file (no provider id at all) is.
+//
+// modelId is the bare (unqualified) model id — same one written into
+// opencode.json's top-level `model` field as `<providerId>/<modelId>` — used
+// as the key for a `models.<modelId>.limit.context` override when the user
+// has set a context size (context-size propagation follow-up).
+function openCodeProviderFileEntry(cfg: OpenCodeProviderConfig, modelId: string | undefined): Record<string, unknown> | undefined {
+  if (cfg.mode === "credential-file") return undefined;
+
+  const contextOverride: Record<string, unknown> | undefined =
+    cfg.mode !== "custom" && cfg.contextSize && modelId ? { [modelId]: { limit: { context: cfg.contextSize } } } : undefined;
+
+  if (cfg.mode === "google-vertex") {
+    return contextOverride ? { models: contextOverride } : undefined;
+  }
 
   if (cfg.mode === "amazon-bedrock") {
     const options: Record<string, unknown> = {
@@ -129,12 +142,20 @@ function openCodeProviderFileEntry(cfg: OpenCodeProviderConfig): Record<string, 
       ...(cfg.bedrockProfile ? { profile: cfg.bedrockProfile } : {}),
       ...(cfg.bedrockEndpoint ? { endpoint: cfg.bedrockEndpoint } : {}),
     };
-    return Object.keys(options).length ? { options } : undefined;
+    if (!Object.keys(options).length && !contextOverride) return undefined;
+    return {
+      ...(Object.keys(options).length ? { options } : {}),
+      ...(contextOverride ? { models: contextOverride } : {}),
+    };
   }
 
   if (cfg.mode === "azure") {
     // Resource name is env-var-only (openCodeProviderEnv); the API key IS file-based.
-    return cfg.apiKey ? { options: { apiKey: cfg.apiKey } } : undefined;
+    if (!cfg.apiKey && !contextOverride) return undefined;
+    return {
+      ...(cfg.apiKey ? { options: { apiKey: cfg.apiKey } } : {}),
+      ...(contextOverride ? { models: contextOverride } : {}),
+    };
   }
 
   if (cfg.mode === "custom") {
@@ -146,7 +167,7 @@ function openCodeProviderFileEntry(cfg: OpenCodeProviderConfig): Record<string, 
     return {
       npm: cfg.customNpmPackage || "@ai-sdk/openai-compatible",
       ...(Object.keys(options).length ? { options } : {}),
-      models: { [cfg.customModelId || "default"]: {} },
+      models: { [cfg.customModelId || "default"]: cfg.contextSize ? { limit: { context: cfg.contextSize } } : {} },
     };
   }
 
@@ -155,7 +176,11 @@ function openCodeProviderFileEntry(cfg: OpenCodeProviderConfig): Record<string, 
     ...(cfg.apiKey ? { apiKey: cfg.apiKey } : {}),
     ...(cfg.baseUrl ? { baseURL: cfg.baseUrl } : {}),
   };
-  return Object.keys(options).length ? { options } : undefined;
+  if (!Object.keys(options).length && !contextOverride) return undefined;
+  return {
+    ...(Object.keys(options).length ? { options } : {}),
+    ...(contextOverride ? { models: contextOverride } : {}),
+  };
 }
 
 export async function regenerateHarnessConfigFiles(): Promise<void> {
@@ -183,7 +208,7 @@ export async function regenerateHarnessConfigFiles(): Promise<void> {
   const ocConfig: Record<string, unknown> = {};
   const providerId = openCodeModelProviderId(opencode);
   if (providerId) {
-    const entry = openCodeProviderFileEntry(opencode);
+    const entry = openCodeProviderFileEntry(opencode, model || undefined);
     if (entry) ocConfig.provider = { [providerId]: entry };
     if (model) ocConfig.model = `${providerId}/${model}`;
   }

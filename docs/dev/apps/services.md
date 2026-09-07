@@ -628,6 +628,55 @@ field's absence, means `"default"` — no tools, current behavior. Validated by
 `src/core/service/manifestValidator.ts` (enum `"default" | "tools"`; an
 unrecognized value is rejected at install/start).
 
+### Declaring your tool group(s) — REQUIRED (041-tool-groups)
+
+A `"tools"`-mode manifest MUST also declare the group(s) its tools appear under.
+Before 041 every service tool landed in a single shared `Service Tools` bucket;
+that bucket no longer exists and nothing replaced it, so a tool that resolves to
+no declared group is **rejected at registration**.
+
+```json
+{
+  "deploymentMode": "tools",
+  "toolGroups": [
+    {
+      "id": "workflows",
+      "name": "Workflows",
+      "description": "Multi-step workflow automation: creating, running and monitoring workflows.",
+      "aliases": ["pipeline", "automation"]
+    }
+  ]
+}
+```
+
+- `id` — lowercase slug, unique within the manifest. This is the stable key: the
+  user's Settings → Tools edits for the group are stored against it, so renaming
+  `name` is free but changing `id` orphans them.
+- `description` — one line. It is what the assistant reads in its system prompt
+  when deciding whether this family is relevant, AND what `find_tools` ranks
+  against. There is no second place to author it.
+- `aliases` — optional search vocabulary your description doesn't use.
+
+Declaring **several** groups is supported; each tool then names which one it
+belongs to via `group` on its `tool_declare` payload:
+
+```js
+parentPort.postMessage({
+  type: "tool_declare",
+  payload: { callId: "declare-my_tool", declaration: { name: "my_tool", group: "workflows", /* … */ } },
+});
+```
+
+With exactly one group declared, `group` may be omitted and is implied. With
+several declared, omitting it is an **error** — BOS will not guess which heading
+your tool belongs under.
+
+Validation happens at **install** (`manifestValidator.ts`), so a malformed or
+missing declaration fails before the service ever starts, naming the offending
+field. A rejection at registration time (unknown group, or a multi-group service
+whose tool named none) is written to the service's `lastError` and shown in
+Settings → Services — it is never silently dropped.
+
 ### Declaring tools — `tool_declare` (Worker→Main, FR-001)
 
 After sending `{ type: "initialized" }`, a `"tools"`-mode worker posts one
@@ -663,7 +712,8 @@ can't grant itself tools by simply sending the message. Otherwise it calls
   re-composes on the very next call (no stale-cache window);
 - registers a **capability descriptor** with `src/lib/agent/
   capabilities-registry.ts`'s `registerAdditionalCapabilities()`, under the
-  `"Service Tools"` group, using **the tool's own name as the capability id**
+  group your manifest declared (see above), using **the tool's own name as the
+  capability id**
   (not a namespaced id) — this is what makes gating (below) actually apply to
   a live tool, not just to a hand-simulated one in a test.
 

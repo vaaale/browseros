@@ -7,7 +7,6 @@ import {
   DEFAULT_HANDLER_TIMEOUT_MS,
   isValidEventType,
   isValidRegistrationType,
-  ownsNamespace,
 } from "./types";
 import type { EventFullView, EventRecord, HandlerMode, HandlerRegistration } from "./types";
 
@@ -15,8 +14,8 @@ import type { EventFullView, EventRecord, HandlerMode, HandlerRegistration } fro
 // in-process (agent tools, core code — this module directly), same-origin
 // HTTP (the Event Viewer + bell, via src/app/api/events/*), and loopback HTTP
 // (worker-thread services, via src/lib/events/loopback.ts). This module adds
-// request validation (payload size, type shape, namespace ownership) on top
-// of kernel.ts's business logic, and is what every transport delegates to.
+// request validation (payload size, type shape) on top of kernel.ts's
+// business logic, and is what every transport delegates to.
 
 export interface EmitRequest {
   type: string;
@@ -86,42 +85,10 @@ export interface RegisterRequest {
   enabled?: boolean;
   declaredBy?: HandlerRegistration["declaredBy"];
   launch?: HandlerRegistration["launch"];
-  /** Explicit grant list — skips the best-effort registry lookup when the
-   *  caller already has the owner's manifest/service.json in hand. */
+  /** Advisory only since 037 (Event Namespace Relaxation): accepted for
+   *  backward compatibility with callers that pass the owner's declared
+   *  `eventNamespaces`, but registration is no longer namespace-gated. */
   grantedNamespaces?: string[];
-}
-
-/** Resolves an owner's statically-granted `eventNamespaces` (FR-023) from its
- *  built-in manifest, installed-app manifest, or service.json — whichever
- *  matches `ownerId`. Best-effort: any lookup failure (e.g. this module used
- *  outside a full BOS boot, as in unit tests) yields no grants, which still
- *  lets the owned-root check (`com.bos.<ownerId>.*`) succeed on its own. */
-async function resolveGrantedNamespaces(ownerId: string): Promise<string[]> {
-  try {
-    const { BUILTIN_APPS } = await import("@/os/apps");
-    const builtin = BUILTIN_APPS.find((a) => a.id === ownerId) as { eventNamespaces?: string[] } | undefined;
-    if (builtin?.eventNamespaces?.length) return builtin.eventNamespaces;
-  } catch {
-    // ignore — not available in this execution context
-  }
-  try {
-    const { listInstalledManifests } = await import("@/lib/apps/store");
-    const installed = (await listInstalledManifests()).find((a) => a.id === ownerId) as
-      | { eventNamespaces?: string[] }
-      | undefined;
-    if (installed?.eventNamespaces?.length) return installed.eventNamespaces;
-  } catch {
-    // ignore
-  }
-  try {
-    const { serviceRegistry } = await import("@/core/service/ServiceRegistry");
-    const svc = serviceRegistry().getService(ownerId);
-    const ns = (svc?.manifest as { eventNamespaces?: string[] } | undefined)?.eventNamespaces;
-    if (ns?.length) return ns;
-  } catch {
-    // ignore
-  }
-  return [];
 }
 
 export async function register(req: RegisterRequest): Promise<HandlerRegistration> {
@@ -133,19 +100,6 @@ export async function register(req: RegisterRequest): Promise<HandlerRegistratio
     throw new EventApiError("invalid-type", `mode must be "headless" or "ui"`);
   }
   if (!req.ownerId) throw new EventApiError("invalid-type", "ownerId is required");
-
-  // A caller that already has the owner's manifest/service.json in hand
-  // (register-ui-handlers.ts, ServiceManager's handler_declare wiring) can
-  // pass its grants directly — skipping the best-effort registry lookups
-  // below, which only work for a caller CURRENTLY discoverable in the app/
-  // service registries (irrelevant here since the manifest is already proof).
-  const grants = req.grantedNamespaces ?? (await resolveGrantedNamespaces(req.ownerId));
-  if (!ownsNamespace(req.eventType, req.ownerId, grants)) {
-    throw new EventApiError(
-      "namespace-not-owned",
-      `"${req.ownerId}" may not register handlers for "${req.eventType}" — outside its owned root (com.bos.${req.ownerId}.*) and granted namespaces`,
-    );
-  }
 
   // Re-registering the same handlerId is an idempotent upsert (contract §6):
   // preserve a previously-set `enabled` (e.g. the user disabled it in

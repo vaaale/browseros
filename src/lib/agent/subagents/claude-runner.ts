@@ -7,8 +7,11 @@ import { getHarnessConfig, harnessCredentialEnv, type HarnessConfig } from "@/li
 import { getOpenCodeProviderEnv } from "@/lib/devharness/generate-config";
 import { supervisorEnabled, supervisorBegin, supervisorBuild } from "@/lib/devharness/supervisor";
 import { stageAll } from "@/lib/system/git";
+import { logger } from "@/lib/logging/server-logger";
 import type { McpServerConfig } from "@/lib/mcp/types";
 import type { Agent, AgentRunResult } from "./types";
+
+const COMPONENT = "subagents.claude-runner";
 
 // Marks an error as "the harness couldn't run the agent" (vs. a task failure).
 export const HARNESS_UNAVAILABLE = "harness-unavailable:";
@@ -29,6 +32,31 @@ function envForCwd(cwd: string): NodeJS.ProcessEnv {
   // provisioned Claude/OpenCode credentials, so the headless CLIs authenticate
   // without an interactive login (essential in container deployments).
   return { ...process.env, PWD: cwd, ...harnessCredentialEnv() };
+}
+
+/**
+ * `supervisorBuild`, retried — this call is what makes `buildAndStart`'s
+ * commit step actually run, which is the ONE thing standing between an
+ * agent's edit and it being durably on the branch (see the "always build"
+ * comment at the call site below). `supervisorBuild` itself never throws —
+ * it swallows a network/connection failure into `null` (devharness/
+ * supervisor.ts's `call()`) — so a single unretried call here previously
+ * meant: the Supervisor being briefly unreachable (mid-restart, a network
+ * blip) silently skipped the commit, with no retry and no distinct signal
+ * to the caller that this happened. Retries a few times with backoff before
+ * giving up, since a transient Supervisor hiccup is exactly the case a retry
+ * fixes; logs every attempt so a persistent failure is diagnosable instead
+ * of just showing up as "state: unknown" to the user.
+ */
+async function buildCandidateWithRetry(branch: string, attempts = 3): Promise<Record<string, unknown> | null> {
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    const built = await supervisorBuild(branch);
+    if (built) return built;
+    logger().warn(COMPONENT, `supervisorBuild(${branch}) attempt ${attempt}/${attempts} did not reach the Supervisor`, {});
+    if (attempt < attempts) await new Promise((resolve) => setTimeout(resolve, 2000 * attempt));
+  }
+  logger().error(COMPONENT, `supervisorBuild(${branch}) failed after ${attempts} attempts — the candidate's commit may not have completed`, {});
+  return null;
 }
 
 /** Exported for tests — the two predicates below decide whether a `contentOnly`
@@ -195,8 +223,11 @@ function runClaudeCli(agent: Agent, task: string, cwd: string, timeoutMs: number
       try {
         const r = await stageAll(cwd);
         if (r.staged > 0) note = `\n\n[harness] Staged ${r.staged} changed file(s)${r.created ? ` (${r.created} new)` : ""}.`;
-      } catch {
-        /* ignore staging errors */
+      } catch (e) {
+        // Non-fatal: buildAndStart's own `git add -A` (Supervisor-side, on
+        // the next call) restages everything anyway — but a failure here is
+        // still worth knowing about, not silently dropped.
+        logger().warn(COMPONENT, `staging changes in ${cwd} failed: ${(e as Error)?.message ?? e}`, {});
       }
       if (isError || code !== 0) {
         finish({ ...base, output: resultText + note, steps, toolCalls, error: resultText || stderr.trim() || `claude exited with code ${code}.` });
@@ -316,8 +347,11 @@ async function runOpenCodeCli(agent: Agent, task: string, cwd: string, timeoutMs
       try {
         const r = await stageAll(cwd);
         if (r.staged > 0) note = `\n\n[harness] Staged ${r.staged} changed file(s)${r.created ? ` (${r.created} new)` : ""}.`;
-      } catch {
-        /* ignore staging errors */
+      } catch (e) {
+        // Non-fatal: buildAndStart's own `git add -A` (Supervisor-side, on
+        // the next call) restages everything anyway — but a failure here is
+        // still worth knowing about, not silently dropped.
+        logger().warn(COMPONENT, `staging changes in ${cwd} failed: ${(e as Error)?.message ?? e}`, {});
       }
       if (errorText || code !== 0) {
         finish({ ...base, output: finalText() + note, steps, toolCalls, error: errorText || stderr.trim() || `opencode exited with code ${code}.` });
@@ -381,7 +415,7 @@ async function runViaMcp(agent: Agent, task: string, server: McpServerConfig, on
   } catch (e) {
     return { ...base, output: "", error: `${HARNESS_UNAVAILABLE} ${(e as Error).message}` };
   } finally {
-    await client.close?.().catch(() => {});
+    await client.close?.().catch((e) => logger().warn(COMPONENT, `closing MCP client failed: ${(e as Error)?.message ?? e}`, {}));
   }
 }
 
@@ -519,7 +553,7 @@ export async function runClaudeAgent(
   // when the worktree was never provisioned (no branch).
   if (candidateBranch) {
     opts?.onEvent?.({ tool: "Supervisor: build + health-gate candidate", input: {} });
-    const built = await supervisorBuild(candidateBranch).catch(() => null);
+    const built = await buildCandidateWithRetry(candidateBranch);
     // Tell the caller the change is a CANDIDATE, not the live/active version — the
     // user must preview/promote it. Prevents the "fix is in place but the app still
     // doesn't work" confusion (the user was viewing active) and the bad workaround
@@ -530,7 +564,9 @@ export async function runClaudeAgent(
       (result.output || "") +
       (state === "ready"
         ? `\n\n[candidate] Your changes are built as preview ${brand} — this is NOT yet the base version the user sees. To view it: top-bar **Base ▾** → **Preview**; then **Promote** to make it the base (or **Stop** to discard). Do NOT re-apply the change to the main checkout.`
-        : `\n\n[candidate] Built preview ${brand}, but its health check did not pass (state: ${state || "unknown"}); it is not the base. Review before promoting.`);
+        : built === null
+          ? `\n\n[candidate] Could not reach the Supervisor to build preview ${brand} after several attempts — your changes may NOT be committed yet. Retry this delegation before assuming the change is safe; check Settings → Versions or the Supervisor logs if it keeps failing.`
+          : `\n\n[candidate] Built preview ${brand}, but its health check did not pass (state: ${state || "unknown"}); it is not the base. Review before promoting.`);
   }
   return result;
 }

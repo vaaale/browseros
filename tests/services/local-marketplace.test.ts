@@ -14,6 +14,7 @@ import {
   listCatalog,
   addMarketplace,
   removeMarketplace,
+  syncMarketplace,
   installMarketplaceService,
   LOCAL_MARKETPLACE_ID,
 } from "../../src/lib/marketplace/client";
@@ -249,6 +250,54 @@ test("a curated entry the local scanner can never re-emit is NOT pruned while it
     // ...but an entry whose files are genuinely gone still goes: the manifest
     // must never advertise something that cannot be installed.
     expect(ids, "entry with no surviving facet should be pruned").not.toContain("ghost");
+  } finally {
+    cleanup();
+  }
+});
+
+test("a registered marketplace stops advertising an item whose folder was deleted upstream, after sync", async () => {
+  const { dir, cleanup } = useTestDataDir("remote-mkt-stale-prune");
+  try {
+    // Regression: syncMarketplace only fast-forwards the clone (git pull) and
+    // trusts whatever marketplace.json comes with it — it never cross-checks
+    // declared facet paths against what actually exists in the clone. If the
+    // publisher deletes an item's folder but a stale entry lingers in
+    // marketplace.json (their own manifest-maintenance bug, not BOS's clone),
+    // BOS kept serving it forever, through every future sync, because nothing
+    // downstream of the pull ever verified the facet still exists on disk.
+    const commit = (cwd: string, msg: string) => {
+      execFileSync("git", ["-c", "user.email=t@t.com", "-c", "user.name=t", "add", "-A"], { cwd });
+      execFileSync("git", ["-c", "user.email=t@t.com", "-c", "user.name=t", "commit", "-q", "-m", msg], { cwd });
+    };
+    const writeManifest = (cwd: string, items: unknown[]) =>
+      writeFileSync(join(cwd, "marketplace.json"), JSON.stringify({ id: "acme", name: "Acme", version: "1.0.0", items }, null, 2) + "\n");
+
+    const upstream = join(dir, "upstream");
+    mkdirSync(join(upstream, "items", "welcome", "app"), { recursive: true });
+    writeFileSync(join(upstream, "items", "welcome", "app", "index.html"), "<!doctype html><title>welcome</title>");
+    writeManifest(upstream, [
+      { id: "welcome", name: "Welcome", description: "d", app: { entrypoint: "items/welcome/app", runtime: "iframe", version: "1.0.0" } },
+    ]);
+    execFileSync("git", ["init", "-q"], { cwd: upstream });
+    commit(upstream, "init");
+
+    const reg = await addMarketplace(upstream);
+    const before = await listCatalog();
+    expect(before.find((m) => m.id === reg.id)?.items.map((i) => i.id)).toContain("welcome");
+
+    // Publisher deletes the app's folder but the manifest entry for it lingers
+    // (their bug, not this clone's) — the exact shape of the reported bug.
+    rmSync(join(upstream, "items", "welcome"), { recursive: true, force: true });
+    commit(upstream, "remove welcome app files (manifest entry left behind)");
+
+    await syncMarketplace(reg.id);
+    const after = await listCatalog();
+    const entry = after.find((m) => m.id === reg.id);
+    expect(entry?.items.map((i) => i.id), "stale entry must not survive a sync").not.toContain("welcome");
+
+    // And the fix must never rewrite/commit into someone else's repo clone.
+    const cloneManifest = JSON.parse(readFileSync(join(dir, "marketplace", reg.id, "marketplace.json"), "utf8")) as { items: { id: string }[] };
+    expect(cloneManifest.items.map((i) => i.id), "the clone's own marketplace.json is read-only to BOS").toContain("welcome");
   } finally {
     cleanup();
   }

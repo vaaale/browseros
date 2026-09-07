@@ -1,11 +1,23 @@
 import "server-only";
 import { promises as fs } from "fs";
 import { randomUUID } from "crypto";
-import { logger } from "@/lib/logging";
+import { currentVersionLabel, logger } from "@/lib/logging";
 import * as vfs from "@/os/vfs";
 import { hostPath } from "@/os/vfs";
 import { calculateNextRun, validateScheduleConfig } from "./schedule";
 import { validateUpdate, assertDeletable } from "./acl";
+import {
+  DAEMON_LOCK_NAME,
+  acquireLock,
+  beginHeartbeat,
+  discardLock,
+  isReclaimable,
+  jobLockName,
+  readLock,
+  releaseLock,
+  releaseLockSync,
+  type LockHandle,
+} from "./lock";
 import type {
   CreateJobInput,
   JobDefinition,
@@ -26,10 +38,24 @@ import type {
 // - History:  /Documents/System/scheduler-history/<jobId>.jsonl  (append-only)
 // - Dispatch: pluggable handler registry keyed by `handler.kind`
 //
-// Concurrency model: the daemon is a single interval per Node process. A tick
-// guard prevents overlap; a per-job runningTaskIds set prevents double-run
-// within the same tick. External mutations to the JSON file are detected via
-// mtime and force a reload before the next tick.
+// Concurrency model (042-scheduler-daemon-lock). Two layers, because BOS runs
+// SEVERAL server processes over one data root (Supervisor BASE + PREVIEW, plus
+// `next dev` workers) and every one of them calls startDaemon() from
+// instrumentation.ts:
+//
+//  1. Owner election. startDaemon() no longer starts ticking; it competes for
+//     the container-wide `daemon` lock (./lock.ts) and only the winner ticks.
+//     Losers keep polling, so a crashed owner is taken over rather than
+//     wedging the scheduler.
+//  2. Per-job dispatch locks. Every dispatch first takes an atomic per-job
+//     lock, held (with a heartbeat) for the duration of the run. So even if two
+//     daemons somehow coexist, a due job still runs exactly once.
+//
+// Within one process the cheap guards still apply: a tick guard prevents
+// overlap and the in-memory `runningJobIds` set short-circuits before touching
+// the filesystem — but the on-disk lock, not that set, is the authority.
+// External mutations to the JSON file are detected via mtime and force a
+// reload before the next tick.
 
 const LOG = "scheduler.engine";
 export const JOBS_VFS_PATH = "/Documents/System/scheduler-jobs.json";
@@ -211,6 +237,8 @@ export async function deleteJob(jobId: string, opts: { force?: boolean } = {}): 
   await writeStore({ ...store, jobs });
   // Delete history file too. Best-effort — a stray history file is harmless.
   await vfs.remove(historyPath(jobId)).catch(() => {});
+  // And its dispatch lock, so a deleted-then-recreated id never inherits one.
+  await discardLock(jobLockName(jobId));
   logger().info(LOG, `job deleted: ${job.name}`, { id: job.id, category: job.category });
   return true;
 }
@@ -434,6 +462,20 @@ async function runJob(job: JobDefinition): Promise<JobExecution> {
 
 const DEFAULT_TICK_MS = 60_000;
 
+// Daemon-lock timings. The owner refreshes every HEARTBEAT_MS; a record older
+// than MAX_AGE_MS (or one whose PID is gone) is reclaimable. The gap between
+// them absorbs a slow tick or a long GC pause without handing the daemon over.
+// Losers re-run the election every ELECTION_MS, which bounds how long
+// scheduling pauses after the owner dies.
+const DAEMON_LOCK_MAX_AGE_MS = 90_000;
+const DAEMON_HEARTBEAT_MS = 15_000;
+const DAEMON_ELECTION_MS = 30_000;
+
+// Job locks outlive the daemon lock: an agent-prompt job can legitimately run
+// for minutes, and it heartbeats throughout.
+const JOB_LOCK_MAX_AGE_MS = 120_000;
+const JOB_HEARTBEAT_MS = 20_000;
+
 interface DaemonState {
   running: boolean;
   timer: NodeJS.Timeout | null;
@@ -441,6 +483,16 @@ interface DaemonState {
   tickMs: number;
   ticking: boolean;
   runningJobIds: Set<string>;
+  // 042: daemon ownership. `wanted` = this process asked for a daemon and has
+  // not stopped it, so it keeps standing in the election even while it loses.
+  wanted: boolean;
+  electing: boolean;
+  electionTimer: NodeJS.Timeout | null;
+  daemonLock: LockHandle | null;
+  stopHeartbeat: (() => void) | null;
+  electionMs: number;
+  lockMaxAgeMs: number;
+  heartbeatMs: number;
 }
 
 // The daemon state lives on globalThis so every module instance shares ONE
@@ -457,16 +509,57 @@ const state: DaemonState = (g.__bosSchedulerState ??= {
   tickMs: DEFAULT_TICK_MS,
   ticking: false,
   runningJobIds: new Set(),
+  wanted: false,
+  electing: false,
+  electionTimer: null,
+  daemonLock: null,
+  stopHeartbeat: null,
+  electionMs: DAEMON_ELECTION_MS,
+  lockMaxAgeMs: DAEMON_LOCK_MAX_AGE_MS,
+  heartbeatMs: DAEMON_HEARTBEAT_MS,
 });
 
 export interface DaemonStatus {
   running: boolean;
   lastCheck: number | null;
   tickMs: number;
+  /** True when THIS process holds the daemon lock and is the one ticking. */
+  owner?: boolean;
+  /** PID of the process that owns the daemon (this one, or another). */
+  ownerPid?: number;
 }
 
+/** This process's view: is *it* the ticking daemon? Synchronous, no I/O. */
 export function getDaemonStatus(): DaemonStatus {
-  return { running: state.running, lastCheck: state.lastCheck, tickMs: state.tickMs };
+  return {
+    running: state.running,
+    lastCheck: state.lastCheck,
+    tickMs: state.tickMs,
+    owner: state.running,
+    ...(state.daemonLock ? { ownerPid: state.daemonLock.pid } : {}),
+  };
+}
+
+/**
+ * Container-wide view, for the UI: a process that lost the election is not
+ * ticking, but the scheduler as a whole is very much running. Without this the
+ * Scheduler app would report "Daemon idle" whenever its request happened to be
+ * served by a non-owner process.
+ */
+export async function readDaemonStatus(): Promise<DaemonStatus> {
+  const mine = getDaemonStatus();
+  if (mine.running) return mine;
+  const rec = await readLock(DAEMON_LOCK_NAME);
+  // Same staleness rule the election uses, so status never claims a daemon that
+  // the next election is about to reclaim.
+  if (!rec || isReclaimable(rec, state.lockMaxAgeMs)) return mine;
+  return {
+    running: true,
+    owner: false,
+    ownerPid: rec.pid,
+    lastCheck: rec.heartbeatAt,
+    tickMs: state.tickMs,
+  };
 }
 
 export async function tick(): Promise<void> {
@@ -492,37 +585,132 @@ export async function tick(): Promise<void> {
   }
 }
 
+/**
+ * Dispatch one job, exactly once container-wide.
+ *
+ * LAYER 2 of 042: the per-job lock is taken atomically (a single link(2) in
+ * ./lock.ts) and held for the whole run, so two daemons — or a daemon plus a
+ * "Run now" click on another process — cannot both dispatch the same job. The
+ * in-memory set is only a free fast path for the common re-entrant case.
+ */
 async function runOne(job: JobDefinition): Promise<void> {
+  if (state.runningJobIds.has(job.id)) return;
+  const lock = await acquireLock(jobLockName(job.id), {
+    maxAgeMs: JOB_LOCK_MAX_AGE_MS,
+    label: `${currentVersionLabel()}:${job.name}`,
+  });
+  if (!lock) {
+    // Another process is running this exact job right now. Not an error: the
+    // job simply already fired for this due instant.
+    logger().info(LOG, `job already claimed elsewhere: ${job.name}`, { id: job.id });
+    return;
+  }
   state.runningJobIds.add(job.id);
+  // A prompt job can run for minutes; keep the lock young so nobody reclaims it
+  // mid-run, and notice if somebody did anyway.
+  const stopHeartbeat = beginHeartbeat(lock, JOB_HEARTBEAT_MS, () => {
+    logger().error(LOG, `job lock lost while running: ${job.name}`, undefined, { id: job.id });
+  });
   try {
     await runJob(job);
   } catch (err) {
     logger().error(LOG, `unhandled job error: ${job.name}`, err);
   } finally {
+    stopHeartbeat();
     state.runningJobIds.delete(job.id);
+    await releaseLock(lock);
   }
 }
 
-/** Run a specific job immediately, out of band. Skips if already in-flight. */
+/** Run a specific job immediately, out of band. Skips if already in-flight
+ *  (in this process or any other — see runOne). */
 export async function runJobNow(job: JobDefinition): Promise<void> {
-  if (state.runningJobIds.has(job.id)) return;
   await runOne(job);
 }
 
-export function startDaemon(opts: { tickMs?: number } = {}): void {
-  if (state.running) return;
-  state.tickMs = opts.tickMs ?? DEFAULT_TICK_MS;
+// ── Owner election (LAYER 1 of 042) ───────────────────────────────────────
+//
+// Every server process calls startDaemon() at boot, but only the one holding
+// the container-wide daemon lock ticks. The others stay in the election so a
+// crashed owner is taken over within `electionMs`.
+
+async function runElection(): Promise<void> {
+  if (!state.wanted || state.running || state.electing) return;
+  state.electing = true;
+  try {
+    const lock = await acquireLock(DAEMON_LOCK_NAME, {
+      maxAgeMs: state.lockMaxAgeMs,
+      label: currentVersionLabel(),
+    });
+    if (!lock) return; // someone else owns it; try again next election
+    state.daemonLock = lock;
+    beginTicking();
+  } catch (err) {
+    logger().error(LOG, "daemon election failed", err);
+  } finally {
+    state.electing = false;
+  }
+}
+
+function beginTicking(): void {
   state.running = true;
-  logger().info(LOG, "daemon starting", { tickMs: state.tickMs });
+  logger().info(LOG, "daemon starting (elected owner)", {
+    tickMs: state.tickMs,
+    pid: process.pid,
+  });
+  state.stopHeartbeat = beginHeartbeat(state.daemonLock!, state.heartbeatMs, () => {
+    // We were reclaimed (e.g. this process was suspended past the max age).
+    // Stand down immediately rather than tick alongside the new owner.
+    logger().error(LOG, "daemon lock lost — standing down", undefined, { pid: process.pid });
+    standDown();
+  });
   void tick();
   state.timer = setInterval(() => void tick(), state.tickMs);
   state.timer.unref?.();
 }
 
-export function stopDaemon(): void {
-  if (!state.running) return;
-  logger().info(LOG, "daemon stopping");
+/** Stop ticking but stay in the election (used when the lock is taken away). */
+function standDown(): void {
   if (state.timer) clearInterval(state.timer);
   state.timer = null;
+  state.stopHeartbeat?.();
+  state.stopHeartbeat = null;
+  state.daemonLock = null;
   state.running = false;
+}
+
+/**
+ * Ask this process to run the scheduler daemon. It ticks only if it wins the
+ * daemon lock; otherwise it waits and retries. Idempotent — a second call while
+ * already running or already standing in the election is a no-op, exactly as
+ * before 042.
+ */
+export function startDaemon(
+  opts: { tickMs?: number; electionMs?: number; lockMaxAgeMs?: number } = {},
+): void {
+  if (state.running || state.electionTimer) return;
+  state.tickMs = opts.tickMs ?? DEFAULT_TICK_MS;
+  state.electionMs = opts.electionMs ?? DAEMON_ELECTION_MS;
+  state.lockMaxAgeMs = opts.lockMaxAgeMs ?? DAEMON_LOCK_MAX_AGE_MS;
+  // Always refresh several times inside the staleness window, so a caller that
+  // shortens lockMaxAgeMs (tests, a tighter deployment) cannot end up losing
+  // its own lock between heartbeats.
+  state.heartbeatMs = Math.max(500, Math.min(DAEMON_HEARTBEAT_MS, Math.floor(state.lockMaxAgeMs / 4)));
+  state.wanted = true;
+  void runElection();
+  state.electionTimer = setInterval(() => void runElection(), state.electionMs);
+  state.electionTimer.unref?.();
+}
+
+export function stopDaemon(): void {
+  if (!state.wanted && !state.running) return;
+  logger().info(LOG, "daemon stopping");
+  state.wanted = false;
+  if (state.electionTimer) clearInterval(state.electionTimer);
+  state.electionTimer = null;
+  const lock = state.daemonLock;
+  standDown();
+  // Released synchronously so the next process can take over immediately (and
+  // so a test's teardown never leaks a lock into the following test).
+  if (lock) releaseLockSync(lock);
 }

@@ -1,82 +1,112 @@
 # Assistant actions, tools & event rendering
 
-> **Stale (v1 CopilotKit path):** most of this doc describes the retired
-> `useCopilotAction`/`/api/copilotkit` chat path (CLAUDE.md: "CopilotKit is retired from
-> the chat path; it remains only as a markdown renderer"). Current tool wiring for the
-> v2 server-owned runs lives in `src/lib/assistant/registry.ts` +
-> `src/lib/assistant/tools/server/*` (server tools) and
-> `src/lib/assistant/tools/frontend-declarations.ts` +
-> `src/components/agent/v2/FrontendToolsV2.tsx` (frontend tools) — see CLAUDE.md's
-> Assistant section. The capability registry (`src/lib/agent/capabilities-registry.ts`,
-> referenced below) is still the live source of truth for tool ids/gating; the
-> `*Actions.tsx` component list is not. A third source of `AssistantTool` entries
-> exists alongside built-ins: a marketplace service's own declared tools
-> (`deploymentMode: "tools"`, 039-service-tool-exposure) register dynamically into
-> this same capability registry at runtime and are gated identically — see
-> [Service daemons §15](../apps/services.md#15-services-as-native-assistant-tools-deploymentmode-tools-039-service-tool-exposure).
+## How a tool reaches the model
 
-## Actions (tools)
+Tools are NOT listed in the system prompt. They travel in the provider's own
+tool-calling field — `tools:` on Anthropic's `messages.create`, `tools:` on
+OpenAI chat/responses (`src/lib/assistant/model-turn.ts`) — which the provider
+renders into the model's context itself. That field is a FLAT list of
+`{name, description, schema}` with no grouping metadata in either wire format.
 
-Each `src/components/agent/*Actions.tsx` registers tools with
-`useCopilotAction({ name, description, parameters, handler })`. Handlers run
-**client‑side** and call BOS `/api/...` routes for server work. The v2 tool-call card
-registers a wildcard action (`name:"*"`) to render every tool call as a card.
+What BOS controls is *which* tools go into it. `visibleTools(tools, gate, revealed)`
+(`src/lib/assistant/tools.ts`) is recomputed on every step by the agent loop
+(`agent-loop.ts`), applying:
 
-### Per-agent capability gating (one agent, one allowlist — `specs/016-unified-agents/`)
+1. the agent's **allowlist** (016-unified-agents),
+2. the per-agent **deferred** set (025), minus whatever `find_tools` has already
+   revealed in this conversation,
+3. per-tool **description overrides** from Settings → Tools.
 
-"Sub-agent" is a role, not a type: an agent has ONE capability allowlist that governs
-it whether it's the **active personality** (main-chat actions) or **delegated to**
-(server `toolsFor()` tools). The single source of truth is the **capability registry**
-(`src/lib/agent/capabilities-registry.ts`): every tool by stable id, tagged with the
-context(s) it runs in (`action` / `tool` / `both`). `tool-manifest.ts` is a view of it.
+### Where tools are defined
 
-- Gating the active chat: all `*Actions` register plainly with CopilotKit. The
-  `/api/copilotkit` route wraps the AI SDK language model with `withToolGate`,
-  which filters the tool schema before each model step using the active agent's
-  strict `tools` allowlist, the registry default deferred set, and that agent's
-  per-agent `deferredTools`.
-- Deferred discovery: `DiscoveryActions` always registers `find_tools` and
-  `find_agent`. `find_tools` returns matching deferred tool ids and schemas;
-  `withToolGate` derives the revealed ids from prior `find_tools` tool results in
-  the conversation transcript, so no frontend reveal store is needed.
-- Compaction order matters: the tool gate wraps outside the compaction middleware
-  so it can inspect the full transcript for prior `find_tools` results before
-  compaction shrinks the prompt sent to the provider.
-- Back-compat rule: legacy agents are migrated once to an explicit full tool
-  allowlist. After migration, an empty `tools` allowlist means zero registry
-  tools.
-- `SpecActions`/`DocsActions` (client spec/docs ops, `spec_list`/`spec_read`/`spec_write`/
-  `spec_edit`/`spec_search` and `docs_list`/`docs_read`) are **retired** — spec and docs
-  access now goes through the generic `file_*` tools against the `/Specs`, `/Docs`, and
-  `/Templates` VFS mounts (`src/lib/specs/spec-mount.ts`), same as any other file path.
-
-Tool naming standard: `subsystem_object_verb`, snake_case, one id per operation
-(see `src/lib/agent/capabilities-registry.ts`). Duplicated main-chat action /
-sub-agent tool pairs are collapsed into a single id (`context: "both"`), so e.g.
-the main chat and a delegated sub-agent both use `file_read`.
-
-| Component | Actions |
+| Source | Where |
 |---|---|
-| `OSActions` | `bos_app_launch, bos_app_list, bos_window_close, bos_wallpaper_set, bos_browser_open, web_view, file_list, file_read, file_write, file_mkdir, file_delete, file_rename` |
-| `McpActions` | `mcp_server_list, mcp_tool_search, mcp_server_tools, mcp_tool_schema, mcp_tool_call, mcp_server_add, mcp_server_remove` |
-| `WebSearchActions` | `web_search` (Anthropic native web search over `/api/web-search`) |
-| `SubAgentActions` | `agent_list, agent_create, agent_delegate, agent_request_claude, dev_branch_request` (elicitation card) |
-| `MemoryActions` | `memory_save` (add/replace/remove, batch), `memory_recall` |
-| `FrontendToolsV2` | `app_install, app_build, app_list, app_uninstall` (agent prompt get/set are server tools in `tools/server/agent-admin.ts`) |
-| `ConfigActions` | `config_list, config_set` |
-| `SkillsActions` | `skill_list, skill_load, skill_read_file, skill_save` |
-| `SelfImprovementActions` | `skill_reflect, skill_improve, skill_curate` |
-| `GitActions` | `dev_git_status` |
-| `RunCommandActions` | `run_command` (sandboxed exec; Settings → Command Execution) |
-| `IntegrationActions` | GSuite actions (`gmail_*`, `drive_*`, `calendar_*`, `contacts_*`) and Telegram bot actions (`bot_*`) generated from adapter method descriptors |
+| Server tools | `src/lib/assistant/tools/server/*` via `src/lib/assistant/registry.ts` |
+| Frontend tools | `src/lib/assistant/tools/frontend-declarations.ts`, executed by `src/components/agent/v2/FrontendToolsV2.tsx` |
+| Service tools | A marketplace item with `deploymentMode: "tools"` declares them at startup over worker IPC; they register into the same capability registry at runtime ([Service daemons §15](../apps/services.md#15-services-as-native-assistant-tools-deploymentmode-tools-039-service-tool-exposure)) |
 
-> Removed: `switchAssistantAgent` (agents delegate, they don't self-switch roles),
-> the unsandboxed `runBash` tool (replaced by `run_command`), and the legacy MCP
-> aliases `findTools`/`callMcpServerTool`.
+The **capability registry** (`src/lib/agent/capabilities-registry.ts`) is the
+single source of truth for tool ids and gating. Tool naming standard:
+`subsystem_object_verb`, snake_case, one id per logical operation. A capability
+with `context: "both"` is one id exposed on both surfaces (main chat + delegated
+sub-agent), e.g. `file_read`.
 
-> Other components: `AssistantChatV2` (mounts everything), the run event stream
-> (per‑conversation load/save + auto‑title), `ToolCallRetry`,
-> `MarkdownRenderers`, `components/agent/v2/ToolCallCard.tsx`.
+## Tool groups (041-tool-groups)
+
+Every capability belongs to exactly one group, referenced by a stable group
+**id** (a slug). Groups live in `src/lib/agent/tool-groups.ts`: a built-in table
+whose order is canonical, plus a `globalThis`-backed dynamic layer that
+marketplace items register into when their service starts.
+
+Because the provider's tool field cannot express grouping, the group model
+surfaces in the **system prompt** instead, as a `## Tool groups` block built by
+`buildToolGroupsBlock()` (`src/lib/agent/instructions.ts`) — the fourth index
+block alongside Skills, MCP servers and Knowledge bases. It is built from the
+run's GATE, not from an agent record, so named, ephemeral and surface-delegated
+agents each get a block matching what they can actually call. Its rules:
+
+- a group appears iff the agent is granted ≥1 tool in it;
+- visible tools are listed **by name**; hidden (deferred) tools are only
+  **counted**, with a `find_tools(group: "<id>")` line — naming them would
+  defeat deferral;
+- it never restates a tool's description or schema (the provider already sends
+  those), and it is static for the run so the cached system block isn't
+  invalidated on every step.
+
+**There is no fallback group.** A capability whose group id doesn't resolve is a
+bug that gets surfaced — in Settings → Tools as an "Unresolved tool group" block,
+and for a service tool as an error on the owning service. Nothing is bucketed
+into a placeholder.
+
+## Discovery — `find_tools`
+
+`src/lib/assistant/tools/server/discovery.ts` is the ONE implementation (two
+others existed and were deleted as dead code in 041). It is always available and
+never registry-gated. Two modes, combinable:
+
+- `query` — natural-language search, ranked by `src/lib/agent/discovery-search.ts`:
+  per-term IDF over tool id / description / curated aliases / group name /
+  group description, with stopword removal, suffix folding and a distinct-term
+  coverage bonus. Pure and deterministic, so it is unit-testable
+  (`tests/agent/discovery-search.test.ts`, including a committed
+  natural-language benchmark).
+- `group` — returns every hidden tool of a group, **uncapped**. `maxFindResults`
+  applies to free-text only.
+
+It never returns an empty result silently: an unknown group, a query that
+matches nothing, and an unsearchable query each come back with an explanation
+and the agent's own group index. Truncation is always reported.
+
+**Results carry no JSON schema.** Returning a tool already un-gates it into the
+provider's native tool field on the next step, where the model gets its real
+schema — so copying the schema into the tool result duplicated data nothing
+reads back. Results carry id, description, group and why they matched.
+
+`find_tools` does NOT reach MCP server tools; those go through the MCP gateway
+(`mcp_tool_search` → `mcp_tool_schema` → `mcp_tool_call`).
+
+### How "revealed" works
+
+There is no reveal store. The revealed set is re-derived from the transcript on
+every step by `deriveRevealedIds` (`src/lib/assistant/messages.ts`, mirrored in
+`src/lib/agent/tool-gate.ts`), which reads ids out of prior `find_tools` tool
+results. Two things about it are load-bearing:
+
+- it accepts BOTH the pre-041 bare-array payload and the current envelope,
+  permanently — transcripts are replayed from disk and never rewritten;
+- it reads the **canonical** transcript, not the compacted model view. Compaction
+  clears older tool results from what the model sees while the reveal must
+  survive. Pointing it at `contextMessages` would silently un-reveal tools
+  mid-conversation.
+
+## The Tools panel
+
+`src/lib/agent/tool-manifest.ts` (`assistantToolsManifest()`) is a display-only
+view of the capability registry, rendered in the Assistant's right **Tools**
+panel. It is built per call from `listCapabilities()` so a marketplace item's
+service tools appear and disappear with its service.
+
+---
 
 ### `web_view` — documents *and* media
 
@@ -104,7 +134,7 @@ modes**, chosen by the handler and passed to the app as an explicit `mode` param
   into media mode. `mediaTargetLabel()` reads the same source, so the window is
   titled `clip.mp4` and not `view`.
 - `IMAGE_EXTENSIONS` / `VIDEO_EXTENSIONS` mirror the raw route's `MIME` map in
-  `src/app/api/fs/raw/route.ts` — **change both together**, or the tool claims a
+  `src/lib/files/serve.ts` — **change both together**, or the tool claims a
   target is video while the route serves it as `application/octet-stream`.
 - **Media params:** `poster` (a leading‑`/` VFS path is rewritten to a raw URL by
   the same rule as `url`/`filePath`), `autoplay`, `loop`, `muted` — video only.
@@ -142,14 +172,6 @@ modes**, chosen by the handler and passed to the app as an explicit `mode` param
   server‑side.
 - The media element is keyed on `src`, so `update=true` always re‑fetches.
 - User‑facing docs: [Previewing content (`web_view`)](../../usage/assistant/web-view.md).
-
-### The Tools panel manifest
-
-`src/lib/agent/tool-manifest.ts` (`ASSISTANT_TOOLS`) is derived from
-`capabilities-registry.ts`, shown in the Assistant's right **Tools** panel grouped
-by area. It is display-only — it does not register tools.
-
----
 
 ## Event rendering
 
@@ -189,14 +211,22 @@ by area. It is display-only — it does not register tools.
 
 ---
 
-## Adding an action (recipe)
+## Adding a tool (recipe)
 
-1. Add a `useCopilotAction({...})` in the most relevant `*Actions.tsx` (or a new
-   component mounted in `AssistantChatV2`). The handler hits a `/api/...` route
-   for server work.
-2. Add the capability to `src/lib/agent/capabilities-registry.ts` with the right
-   `context` and `deferred` default so `/api/copilotkit` can gate it.
-3. Prefer extending an existing grouping over creating new components.
+1. Implement it. A **server** tool goes in `src/lib/assistant/tools/server/<area>.ts`
+   and is spread into `assistantTools()` in `src/lib/assistant/registry.ts`. A
+   **frontend** tool is declared in `tools/frontend-declarations.ts` and handled
+   in `components/agent/v2/FrontendToolsV2.tsx`.
+2. Add a capability to `src/lib/agent/capabilities-registry.ts` with the same id,
+   the right `context`, and a **group id** from `tool-groups.ts`. Add `aliases`
+   for vocabulary a user would plausibly use that your description doesn't
+   contain — that is what makes the tool findable by natural language.
+3. If it belongs to a genuinely new family, add the group to
+   `BUILTIN_TOOL_GROUPS` in `tool-groups.ts` (id, display name, a real
+   one-line description, aliases) and place it in the table where it should
+   appear — that array's order is the display order everywhere.
+4. Prefer extending an existing group over inventing one. A group with two tools
+   is noise in the system-prompt index.
 
 ---
 

@@ -66,8 +66,21 @@ if (parentPort) {
 }
 `;
 
+// 041-tool-groups: a tools-mode manifest must declare the group(s) its tools
+// appear under — registerTool rejects anything that resolves to none, since the
+// old "Service Tools" fallback bucket is gone.
+const FIXTURE_TOOL_GROUPS = [
+  {
+    id: "fixture-tools",
+    name: "Fixture Tools",
+    description: "Tools declared by the worker-thread fixture service used in these tests.",
+  },
+];
+
 function manifest(id: string, extra: Partial<ServiceManifest> = {}): ServiceManifest {
-  return { id, name: id, version: "1.0.0", entry: "index.js", ...extra };
+  const base: ServiceManifest = { id, name: id, version: "1.0.0", entry: "index.js", ...extra };
+  if (base.deploymentMode === "tools" && !base.toolGroups) base.toolGroups = FIXTURE_TOOL_GROUPS;
+  return base;
 }
 
 /** Standard per-test setup: a fresh temp dataDir + a clean serviceRegistry()
@@ -462,11 +475,11 @@ test.describe("service-tool lifecycle cleanup (039-service-tool-exposure)", () =
       // simulating a stale entry that survived from a previous run — belt-
       // and-suspenders coverage for serviceInstaller's own defensive cleanup
       // call (independent of ServiceManager.stop()).
-      serviceToolBridge().registerTool("svc", {
-        name: "stale_tool",
-        description: "a stale tool entry",
-        inputSchema: { type: "object" },
-      });
+      serviceToolBridge().registerTool(
+        "svc",
+        { name: "stale_tool", description: "a stale tool entry", inputSchema: { type: "object" } },
+        FIXTURE_TOOL_GROUPS,
+      );
       expect(serviceToolBridge().serviceToolsFor("svc")).toHaveLength(1);
 
       await uninstallService("svc");

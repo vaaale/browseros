@@ -133,6 +133,35 @@ After adding or changing boot-time logic, **verify it actually ran** — check
 `services.registry` logging `initialized`), or check a file/directory it
 creates. Don't trust that the code exists.
 
+## `globalThis` singletons dedup within a process, never across processes
+
+BOS runs SEVERAL Node server processes over one data root: the Supervisor keeps
+a BASE alive plus a PREVIEW while a feature branch is previewed, and `next dev`
+adds more. `register()` in `src/instrumentation.ts` runs in every one of them.
+
+So a `globalThis.__somethingStarted` flag — the right tool for Turbopack's
+separate module graphs — buys nothing here, and neither does a module-level
+`Set`. The scheduler shipped with both (`globalThis.__bosSchedulerState`, an
+in-memory `runningJobIds`) and consequently ran one daemon per process: a single
+due job fired N times, which turned the non-idempotent "Daily Review" job into N
+concurrent agent runs (3-5x runtime, ~1M-token context errors) while idempotent
+jobs hid the problem entirely.
+
+Any boot-time singleton that owns a *shared resource* therefore needs a
+filesystem lock, not a process-local flag — and the lock must be:
+
+- **atomic**, i.e. a single `fs.link()`/`O_EXCL` create. A read-then-write
+  ("no lock? then write one") loses the race by construction: every process
+  reads "free" before any of them writes.
+- **rooted in `BOS_CANONICAL_DATA`** when the contenders may be a base and a
+  preview — they have DIFFERENT `BOS_DATA_DIR`s (a preview runs on a throwaway
+  clone) and only canonical data is shared container-wide.
+- **reclaimable**, via owner PID liveness plus a heartbeat, or a crashed owner
+  wedges the subsystem until someone restarts the container.
+
+See [Scheduler concurrency](automation/scheduler-concurrency.md) for the
+implementation (`src/lib/scheduler/lock.ts`).
+
 ## Turbopack breaks `new Worker(dynamicPath)` — tests won't catch it
 
 `next dev`'s Turbopack bundler intercepts every literal `new Worker(...)` call

@@ -173,8 +173,38 @@ function withEventParams(base: string, params: Record<string, unknown> | undefin
   }
 }
 
+/** 036-file-type-handlers: the file-opening counterpart to `withEventParams`.
+ *  When an installed (iframe) app is launched as a file handler, the OS hands
+ *  it the file through the URL — the only channel an iframe has, opaque-origin
+ *  or not. Only `path`/`action` (plus `title` when the handler asked for it)
+ *  travel: an iframe's `src` is always its own `manifest.url`, so the OS never
+ *  supplies it a `url` (design.md ADR-3). The `bos*` prefix keeps these from
+ *  ever shadowing query params the app defines itself. */
+function withFileParams(base: string, params: Record<string, unknown> | undefined): string {
+  const filePath = params?.path;
+  const action = params?.action;
+  // Both fields, not just `path`: `action` is set only by buildLaunchParams, so
+  // requiring it distinguishes a real handler launch from an app that happens
+  // to take a `path` param of its own.
+  if (typeof filePath !== "string" || !filePath) return base;
+  if (action !== "open" && action !== "edit") return base;
+  if (typeof window === "undefined") return base;
+  try {
+    const u = new URL(base, window.location.origin);
+    u.searchParams.set("bosFilePath", filePath);
+    u.searchParams.set("bosFileAction", action);
+    if (typeof params?.title === "string" && params.title) u.searchParams.set("bosFileTitle", params.title);
+    return `${u.pathname}${u.search}${u.hash}`;
+  } catch {
+    return base;
+  }
+}
+
 export function IframeApp({ windowId, appId, params }: AppProps) {
-  const url = withEventParams(typeof params?.url === "string" ? params.url : "about:blank", params);
+  const url = withFileParams(
+    withEventParams(typeof params?.url === "string" ? params.url : "about:blank", params),
+    params,
+  );
   const capabilities = params?.capabilities as AppCapability[] | undefined;
   const capSet = new Set<AppCapability>(capabilities ?? []);
   const iframeRef = useRef<HTMLIFrameElement>(null);

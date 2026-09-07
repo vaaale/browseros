@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { GitRemotesTab } from "./versions/GitRemotesTab";
-import { supervisorPost, promoteIssues, type Ver, type SupState, type Branches } from "@/lib/supervisor/client";
+import { supervisorPost, promoteAndWait, promoteIssues, type Ver, type SupState, type Branches } from "@/lib/supervisor/client";
 import { ConflictSessionBadge } from "@/components/gitops/ConflictSessionBadge";
 
 function VersionRow({ v }: { v: Ver | null }) {
@@ -104,9 +104,16 @@ export function VersionsTab() {
 
   const act = async (path: string, body?: Record<string, unknown>) => {
     setBusy(true);
-    setMsg(null);
+    // Promote can take minutes (a full base rebuild) — promoteAndWait
+    // returns quickly from the server's own point of view (a job id) and
+    // polls for the real result instead of blocking one HTTP request for the
+    // whole duration, which is what made this hit reverse-proxy timeouts.
+    // Every other action here is already fast enough not to need it, but
+    // that also means it's no longer one blocked browser request the user
+    // can see is pending — show our own progress message instead.
+    setMsg(path === "promote" ? "Promoting… this can take a few minutes." : null);
     try {
-      const j = await supervisorPost(path, body);
+      const j = path === "promote" ? await promoteAndWait(String(body?.branch ?? "")) : await supervisorPost(path, body);
       // 035 (FR-018/FR-019): a promote that escalated a conflict carries the
       // resolution session id — surface the live session here rather than
       // just a terse "Error:" line the user can do nothing with.
@@ -141,6 +148,10 @@ export function VersionsTab() {
   // cookie) — not `isBase`, which only reflects the dropdown selection. Base
   // can already be serving while a different branch sits selected above.
   const viewingBase = state.serving?.role !== "preview";
+  // Promote requires actively viewing the candidate running, not just a
+  // passed health check — a stale pointer resolving a branch no one is
+  // looking at is exactly how a bad candidate used to reach base unreviewed.
+  const previewingSelected = !viewingBase && state.serving?.branch === selectedBranch;
   const ready = selectedPreview?.state === "ready";
   const stopped = selectedPreview?.state === "stopped";
   const failed = selectedPreview?.state === "failed";
@@ -150,7 +161,7 @@ export function VersionsTab() {
   return (
     <div className="space-y-4 text-xs">
       <p className="text-white/50">
-        Run feature branches alongside base and promote safely. Base branch <code>{state.baseBranch ?? branches.base}</code> · push mode <code>{state.pushMode}</code>.
+        Run feature branches alongside base and promote safely. Base branch <code>{state.baseBranch ?? branches.base}</code>.
       </p>
       <div className="space-y-2 rounded border border-white/10 bg-black/20 p-3">
         <div className="font-semibold text-white/70">Git identity</div>
@@ -197,7 +208,14 @@ export function VersionsTab() {
         <button disabled={busy || isBase} onClick={() => act("activate", { branch: selectedBranch })} className={`${btn} bg-sky-500/25 hover:bg-sky-500/40`}>Build/start</button>
         <button disabled={busy || !ready} onClick={() => act("pin", { version: "preview", branch: selectedBranch })} className={`${btn} bg-violet-500/30 hover:bg-violet-500/45`}>Preview</button>
         <button disabled={busy || viewingBase} onClick={() => act("pin", { version: "base" })} className={`${btn} bg-white/10 hover:bg-white/20`}>Back to base</button>
-        <button disabled={busy || isBase || building || failed} onClick={() => act("promote", { branch: selectedBranch })} className={`${btn} bg-emerald-500/25 hover:bg-emerald-500/40`}>Promote</button>
+        <button
+          disabled={busy || isBase || building || failed || !previewingSelected}
+          onClick={() => act("promote", { branch: selectedBranch })}
+          title={previewingSelected ? undefined : "Switch to Preview first — Promote requires actively viewing the candidate running, not just a passed health check."}
+          className={`${btn} bg-emerald-500/25 hover:bg-emerald-500/40`}
+        >
+          Promote
+        </button>
         <button disabled={busy || !ready} onClick={() => act("stop", { branch: selectedBranch })} className={`${btn} bg-white/10 hover:bg-white/20`} title="Stop the server but keep the worktree + branch">Stop</button>
         <button
           disabled={busy || isBase || building}

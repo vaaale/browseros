@@ -573,13 +573,41 @@ async function reconcileLocalManifest(): Promise<MarketplaceManifest> {
   return merged;
 }
 
+/**
+ * Drop facets (and, once empty, whole items) whose declared path no longer
+ * exists in a registered marketplace's clone — display-time filtering only,
+ * NEVER written back or committed (unlike reconcileLocalManifest, BOS doesn't
+ * own this repo's manifest content, so it must not rewrite someone else's
+ * git history). `syncMarketplace` only fast-forwards the clone; nothing
+ * guarantees the publisher's own marketplace.json edits keep pace with their
+ * own item/facet deletions, so a stale entry can otherwise persist through
+ * every future sync forever.
+ */
+async function withoutMissingFacets(manifest: MarketplaceManifest, root: string): Promise<MarketplaceManifest> {
+  const exists = (rel: string) => pathExists(path.join(root, rel));
+  const filterItem = async (item: MarketplaceItem): Promise<MarketplaceItem> => {
+    const next: MarketplaceItem = { ...item };
+    if (next.app && !(await exists(next.app.entrypoint))) delete next.app;
+    if (next.spec && !(await exists(next.spec.path))) delete next.spec;
+    if (next.skill && !(await exists(next.skill.path))) delete next.skill;
+    if (next.serverPlugin && !(await exists(next.serverPlugin.entrypoint))) delete next.serverPlugin;
+    if (next.services && !(await exists(next.services.entrypoint))) delete next.services;
+    if (next.integration && !(await exists(next.integration.entrypoint))) delete next.integration;
+    if (next.voiceEngine && !(await exists(next.voiceEngine.entrypoint))) delete next.voiceEngine;
+    return next;
+  };
+  const filtered = await Promise.all(manifest.items.map(filterItem));
+  return { ...manifest, items: filtered.filter(hasAnyFacet) };
+}
+
 async function readManifest(id: string): Promise<MarketplaceManifest> {
   // user-apps is a real marketplace repo with a real on-disk manifest (034
   // FR-002); it is reconciled against items/ first so hand-created folders are
   // picked up, then read like any other.
   if (id === LOCAL_MARKETPLACE_ID) return reconcileLocalManifest();
-  const raw = await fs.readFile(path.join(cloneDir(id), MANIFEST), "utf8");
-  return validateManifest(JSON.parse(raw));
+  const root = cloneDir(id);
+  const raw = await fs.readFile(path.join(root, MANIFEST), "utf8");
+  return withoutMissingFacets(validateManifest(JSON.parse(raw)), root);
 }
 
 /** Register a marketplace: allowlist the URL, clone, validate the manifest, keep. */

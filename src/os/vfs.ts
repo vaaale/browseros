@@ -8,23 +8,31 @@ import type { VfsEntry } from "./types";
 import type { FSBackend } from "./fs-types";
 import { resolveMountPath, normalizeMountPrefix } from "./mount-table";
 
-const VFS_ROOT = path.join(dataDir(), "vfs");
+// Resolved per call, not cached at module load: dataDir()/BOS_CANONICAL_DATA are
+// fixed for the lifetime of a real BOS process, but tests importing this module
+// override them (e.g. useTestDataDir()) after import — a frozen constant here
+// would silently ignore that override and fall through to the real data dir.
+function vfsRoot(): string {
+  return path.join(dataDir(), "vfs");
+}
 // A few VFS subtrees must survive a discarded PREVIEW data clone (live version
 // control, specs/005-self-modification), so they are rooted in CANONICAL data
 // rather than this version's per-process data dir. Chat conversations are the prime
 // case: history written while viewing a preview must not vanish when that preview's
 // clone is deleted on Stop. (Mirrors the canonical data root convention; outside
 // the Supervisor BOS_CANONICAL_DATA is unset and this is a no-op.)
-const CANONICAL_VFS_ROOT = path.join(process.env.BOS_CANONICAL_DATA?.trim() || dataDir(), "vfs");
+function canonicalVfsRoot(): string {
+  return path.join(process.env.BOS_CANONICAL_DATA?.trim() || dataDir(), "vfs");
+}
 const CANONICAL_SUBPATHS = ["Documents/Chats"];
 
 /** The fs root for a cleaned (leading-slash-stripped) POSIX path: canonical data for
  *  the cross-version subtrees above, otherwise this version's own VFS root. */
 function rootForClean(clean: string): string {
   for (const sub of CANONICAL_SUBPATHS) {
-    if (clean === sub || clean.startsWith(sub + "/")) return CANONICAL_VFS_ROOT;
+    if (clean === sub || clean.startsWith(sub + "/")) return canonicalVfsRoot();
   }
-  return VFS_ROOT;
+  return vfsRoot();
 }
 
 /** Resolve a POSIX-style VFS path to a real fs path, refusing escapes. */
@@ -100,15 +108,16 @@ async function ensureSpecMount(): Promise<void> {
 let seeded = false;
 async function ensureVfs(): Promise<void> {
   await ensureSpecMount();
-  await fs.mkdir(VFS_ROOT, { recursive: true });
+  const root = vfsRoot();
+  await fs.mkdir(root, { recursive: true });
   // Conversations live in canonical data (CANONICAL_SUBPATHS) so they survive a
   // discarded preview clone — make sure that directory exists even when this version
   // runs on a clone whose own copy we deliberately bypass.
-  await fs.mkdir(path.join(CANONICAL_VFS_ROOT, "Documents", "Chats"), { recursive: true });
+  await fs.mkdir(path.join(canonicalVfsRoot(), "Documents", "Chats"), { recursive: true });
   if (seeded) return;
   seeded = true;
   for (const dir of ["Documents", "Pictures", "Desktop"]) {
-    await fs.mkdir(path.join(VFS_ROOT, dir), { recursive: true });
+    await fs.mkdir(path.join(root, dir), { recursive: true });
   }
   // Mount-point stubs: real directories so "Specs"/"Docs"/"Templates" appear
   // when listing "/" even though reads/writes under them route to the
@@ -117,9 +126,9 @@ async function ensureVfs(): Promise<void> {
   // its own stub children too — otherwise listing /Specs falls through to this
   // plain (would-be-empty) directory instead of resolving into either mount.
   for (const dir of ["Specs", "Docs", "Templates", "Specs/user-specs", "Specs/bos-system-specs"]) {
-    await fs.mkdir(path.join(VFS_ROOT, dir), { recursive: true });
+    await fs.mkdir(path.join(root, dir), { recursive: true });
   }
-  const welcome = path.join(VFS_ROOT, "Documents", "welcome.txt");
+  const welcome = path.join(root, "Documents", "welcome.txt");
   if (!(await exists(welcome))) {
     await writeFileAtomic(
       welcome,
@@ -283,7 +292,7 @@ export async function remove(vfsPath: string): Promise<void> {
   const m = findMount(normalizeVfsPath(vfsPath));
   if (m) return m.backend.remove(m.rel);
   const real = resolveSafe(vfsPath);
-  if (real === VFS_ROOT) throw new Error("Refusing to remove the VFS root");
+  if (real === vfsRoot()) throw new Error("Refusing to remove the VFS root");
   await fs.rm(real, { recursive: true, force: true });
 }
 

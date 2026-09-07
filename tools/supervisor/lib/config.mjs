@@ -12,7 +12,6 @@ export const POOL_SIZE = Number(process.env.BOS_PORT_POOL_SIZE || 20);
 export const WORKTREES = process.env.BOS_WORKTREES || path.join(REPO, "bos-worktrees");
 export const CANONICAL_DATA = process.env.BOS_CANONICAL_DATA || path.join(REPO, "data");
 export const CLONES = process.env.BOS_DATA_CLONES || path.join(REPO, "bos-data-clones");
-export const PUSH_MODE = process.env.BOS_PUSH_MODE || "manual"; // manual | auto-on-promote
 export const REMOTE = process.env.BOS_REMOTE || "origin";
 export const HEALTH_TIMEOUT_MS = Number(process.env.BOS_HEALTH_TIMEOUT_MS || 120_000);
 // Reuse an already-running server as BASE (dev convenience / testing).

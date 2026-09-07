@@ -12,8 +12,13 @@ test.describe("Per-agent capabilities", () => {
     // The capability catalog lives on the "Tools" tab (nav buttons are labeled by
     // tab title). Saving is automatic — there is no explicit save button.
     await win.locator("nav").getByRole("button", { name: "Tools", exact: true }).click();
-    // The unified catalog lists every capability id (grouped by category),
-    // main-chat actions included — e.g. bos_app_launch under the "OS" group.
+    // The unified catalog lists every capability id, grouped. Since
+    // 041-tool-groups the groups render COLLAPSED (they are ~22 groups / ~150
+    // tools), so the group has to be opened before its tools exist in the DOM —
+    // e.g. bos_app_launch under "OS".
+    const osHeader = win.getByRole("button", { name: /^OS, \d+ tools?$/ });
+    await expect(osHeader).toBeVisible({ timeout: 15000 });
+    await osHeader.click();
     await expect(win.getByText("bos_app_launch", { exact: true })).toBeVisible();
   });
 });

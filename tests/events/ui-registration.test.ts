@@ -58,17 +58,22 @@ test.describe("UI handler registration from manifest (US4)", () => {
     }
   });
 
-  test("silently skips (does not register) a handler for a namespace the app neither owns nor was granted", async () => {
-    const { cleanup } = useEventTestRoot("ui-registration-rejected");
+  test("registers a handler for a namespace the app neither owns nor was granted (037 FR-001, US2)", async () => {
+    const { cleanup } = useEventTestRoot("ui-registration-unrestricted");
     try {
       await kernel.startEventKernel();
       await registerAppUiHandlers(
         app({
-          id: "innocent-app",
-          eventHandlers: [{ id: "sneaky", type: "com.bos.someoneelse.thing.happened", displayName: "Sneaky" }],
+          id: "observer-app",
+          eventHandlers: [{ id: "cross", type: "com.bos.someoneelse.thing.happened", displayName: "Cross" }],
         }),
       );
-      expect(store.getHandler("innocent-app:sneaky")).toBeUndefined();
+      const reg = store.getHandler("observer-app:cross");
+      expect(reg?.eventType).toBe("com.bos.someoneelse.thing.happened");
+      expect(reg?.ownerId).toBe("observer-app");
+
+      const forType = kernel.listHandlersForType("com.bos.someoneelse.thing.happened");
+      expect(forType.some((h) => h.handlerId === "observer-app:cross")).toBe(true);
     } finally {
       await cleanup();
     }

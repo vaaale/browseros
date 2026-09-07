@@ -11,7 +11,7 @@ import { buildAppDir } from "@/lib/apps/build";
 import { branchDataRoot } from "@/lib/devharness/branch-data-root";
 import { logger } from "@/lib/logging/server-logger";
 import { createAppSymlink, removeAppSymlink } from "@/system/marketplace/install/symlinkManager";
-import type { AppManifest, AppCapability, AppEventHandlerDeclaration } from "@/os/types";
+import type { AppManifest, AppCapability, AppEventHandlerDeclaration, AppFileHandlerDeclaration } from "@/os/types";
 import type { ServiceManifest } from "@/core/service/types";
 
 // Installed apps are the `app/` facet of an ITEM (user-specs/002-service-daemons):
@@ -59,6 +59,8 @@ export interface InstalledApp {
   eventHandlers?: AppEventHandlerDeclaration[];
   /** 034-event-notification-system: granted event-namespace prefixes. */
   eventNamespaces?: string[];
+  /** 036-file-type-handlers: file types this app can render/edit, from app.json. */
+  fileHandlers?: AppFileHandlerDeclaration[];
 }
 
 /** The ONE gitfs repo root for the user's local marketplace (034/035) — every
@@ -191,6 +193,7 @@ export async function readApp(id: string, knownItem?: InstalledItem | null): Pro
     appUrl: typeof m.appUrl === "string" ? m.appUrl : undefined,
     eventHandlers: Array.isArray(m.eventHandlers) ? (m.eventHandlers as AppEventHandlerDeclaration[]) : undefined,
     eventNamespaces: Array.isArray(m.eventNamespaces) ? (m.eventNamespaces as string[]) : undefined,
+    fileHandlers: Array.isArray(m.fileHandlers) ? (m.fileHandlers as AppFileHandlerDeclaration[]) : undefined,
   };
 }
 
@@ -249,6 +252,7 @@ export function toManifest(app: InstalledApp): AppManifest {
     marketplaceId: app.marketplaceId,
     eventHandlers: app.eventHandlers,
     eventNamespaces: app.eventNamespaces,
+    fileHandlers: app.fileHandlers,
   };
 }
 

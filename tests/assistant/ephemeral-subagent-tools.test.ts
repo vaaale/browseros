@@ -9,6 +9,16 @@
 
 import "../services/_stub-server-only";
 import { test, expect } from "@playwright/test";
+
+/** find_tools' response shape since 041-tool-groups: an envelope rather than a
+ *  bare array, so it can report truncation, already-visible matches and the
+ *  caller's group index instead of returning a silent []. */
+type FindToolsResponse = {
+  results: { id: string }[];
+  totalMatches: number;
+  withheld: number;
+  groups?: { id: string }[];
+};
 import { strict as assert } from "node:assert";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -118,10 +128,13 @@ test("ADR-12 (a): a named agent's find_tools still resolves via gateFor (no in-r
     expect(getInRunAgent("run-not-registered")).toBeUndefined();
 
     // agentId "ghost" is not persisted and "run-not-registered" has no in-run
-    // agent → gateFor("ghost") = empty gate → find_tools returns [] (pre-patch
-    // behavior; the runA ephemeral agent is not consulted).
-    const out = JSON.parse(await find_tools.execute!({ query: "search" }, ctx({ agentId: "ghost", runId: "run-not-registered" }))) as { id: string }[];
-    assert.deepEqual(out, []);
+    // agent → gateFor("ghost") = empty gate → find_tools finds nothing (the runA
+    // ephemeral agent is not consulted). 041-tool-groups changed the payload to
+    // an envelope: no match now also reports the caller's group index instead of
+    // a bare [], so assert on `results` rather than the whole response.
+    const out = JSON.parse(await find_tools.execute!({ query: "search" }, ctx({ agentId: "ghost", runId: "run-not-registered" }))) as FindToolsResponse;
+    assert.deepEqual(out.results, []);
+    assert.deepEqual(out.groups, []); // an empty gate has no groups either
   } finally {
     // cleanup via a fresh reference (in-run-agents exposes only set/get/clear)
     const { clearInRunAgent } = await import("../../src/lib/agent/subagents/in-run-agents");
@@ -142,8 +155,8 @@ test("ADR-12 (a): a persisted named agent's find_tools returns its declared defe
     // A runId NOT in the in-run registry → gateFor("named-x") → the named
     // agent's own gate. web_fetch is deferred + allowed → returned; web_search
     // is allowed but not deferred → NOT returned.
-    const out = JSON.parse(await find_tools.execute!({ query: "fetch" }, ctx({ agentId: "named-x", runId: "run-not-registered" }))) as { id: string }[];
-    assert.deepEqual(out.map((r) => r.id).sort(), ["web_fetch"]);
+    const out = JSON.parse(await find_tools.execute!({ query: "fetch" }, ctx({ agentId: "named-x", runId: "run-not-registered" }))) as FindToolsResponse;
+    assert.deepEqual(out.results.map((r) => r.id).sort(), ["web_fetch"]);
   } finally {
     data.cleanup();
   }
@@ -168,10 +181,10 @@ test("ADR-12 (b): an ephemeral agent's find_tools returns its declared deferred 
   };
   setInRunAgent("run-eph", eph);
   try {
-    const out = JSON.parse(await find_tools.execute!({ query: "fetch read" }, ctx({ agentId: "eph-researcher", runId: "run-eph" }))) as { id: string }[];
+    const out = JSON.parse(await find_tools.execute!({ query: "fetch read" }, ctx({ agentId: "eph-researcher", runId: "run-eph" }))) as FindToolsResponse;
     // Both declared deferred tools are discovered (incl. the frontend file_read,
     // which is lookupable); web_search is allowed but not deferred → absent.
-    assert.deepEqual(out.map((r) => r.id).sort(), ["file_read", "web_fetch"]);
+    assert.deepEqual(out.results.map((r) => r.id).sort(), ["file_read", "web_fetch"]);
   } finally {
     clearInRunAgent("run-eph");
   }

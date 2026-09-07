@@ -223,7 +223,17 @@ export async function newConversation(agentId: string = DEFAULT_AGENT_ID): Promi
 }
 
 /** Set which feature branch this conversation's developer harness work targets.
- *  The empty string clears the selection. */
+ *  The empty string clears the selection.
+ *
+ *  Persists via a dedicated server endpoint (PATCH /api/assistant/feature-
+ *  branches), NOT the generic VFS write `writeConversationFile` used to use —
+ *  that raced against the v2 agent loop's own message saves
+ *  (conversation-store.ts), which read the file independently and write
+ *  their OWN snapshot of `activeFeatureBranch` back verbatim. Whichever write
+ *  landed last won, so a clear made while (or just before) a turn was saving
+ *  could be silently reverted. The dedicated endpoint funnels through
+ *  conversation-store.ts's own per-conversation queue, so both writers now
+ *  serialize against the same critical section instead of racing. */
 export async function setConversationActiveFeatureBranch(id: string, branch: string): Promise<void> {
   await ensureLoading();
   const normalized = branch.trim();
@@ -243,16 +253,12 @@ export async function setConversationActiveFeatureBranch(id: string, branch: str
     conversations: current.conversations.map((c) => (c.id === id ? next : c)),
   });
   try {
-    await enqueuePerKey(id, async () => {
-      const file = (await readConversationFile(id)) ?? { ...next, messages: [] };
-      if (activeFeatureBranch) {
-        await writeConversationFile({ ...file, activeFeatureBranch });
-      } else {
-        const rest = { ...file };
-        delete rest.activeFeatureBranch;
-        await writeConversationFile(rest);
-      }
+    const res = await fetch("/api/assistant/feature-branches", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ conversationId: id, branch: activeFeatureBranch ?? "" }),
     });
+    if (!res.ok) throw new Error(`PATCH /api/assistant/feature-branches failed: ${res.status}`);
   } catch (err) {
     console.error("Failed to persist active feature branch change", err);
   }

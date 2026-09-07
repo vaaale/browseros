@@ -119,7 +119,7 @@ export interface StreamEvent {
 export type EventErrorCode =
   | "invalid-type"
   | "payload-too-large"
-  | "namespace-not-owned"
+  | "namespace-not-owned" // retired by 037 (Event Namespace Relaxation) — never thrown; kept for compatibility
   | "ack-forbidden"
   | "already-settled"
   | "invalid-preference"
@@ -174,25 +174,6 @@ export function typeMatches(handlerType: string, eventType: string): boolean {
   if (handlerType.endsWith(".*")) {
     const prefix = handlerType.slice(0, -1); // keep trailing "."
     return eventType.startsWith(prefix);
-  }
-  return false;
-}
-
-function baseOf(pattern: string): string {
-  return pattern.endsWith(".*") ? pattern.slice(0, -2) : pattern;
-}
-
-/** FR-023: a component owns `com.bos.<ownerId>.*` by identity, plus any
- *  statically-granted `eventNamespaces` prefixes. `eventType` may itself be
- *  an exact type or a "prefix.*" registration pattern — either way it must
- *  fall within the owned root or a granted namespace (never broader). */
-export function ownsNamespace(eventType: string, ownerId: string, grantedNamespaces: readonly string[] = []): boolean {
-  const ownedBase = `com.bos.${ownerId}`;
-  const eventBase = baseOf(eventType);
-  if (eventBase === ownedBase || eventBase.startsWith(`${ownedBase}.`)) return true;
-  for (const grant of grantedNamespaces) {
-    const grantBase = baseOf(grant);
-    if (eventBase === grantBase || eventBase.startsWith(`${grantBase}.`)) return true;
   }
   return false;
 }

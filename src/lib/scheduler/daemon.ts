@@ -25,7 +25,15 @@ async function ensureMemoryRoot(): Promise<void> {
   await mkdir("/Memories");
 }
 
-export function startDaemon(opts: { tickMs?: number } = {}): void {
+/**
+ * Ask this process to run the scheduler daemon. Since 042 the engine only ticks
+ * if this process wins the container-wide daemon lock; the handler install and
+ * memory-root seeding below happen regardless, because a non-owner process
+ * still serves "Run now" through runTaskNow().
+ */
+export function startDaemon(
+  opts: { tickMs?: number; electionMs?: number; lockMaxAgeMs?: number } = {},
+): void {
   void ensureMemoryRoot().catch((err) => {
     console.error("[scheduler] ensureMemoryRoot failed:", err);
   });

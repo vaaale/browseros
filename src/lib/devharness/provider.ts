@@ -74,10 +74,21 @@ export interface OpenCodeProviderConfig {
   customProviderId?: string;
   customNpmPackage?: string;
   customModelId?: string;
+  // Context window size for the selected model, written into opencode.json as
+  // provider.<id>.models.<modelId>.limit.context (context-size propagation
+  // follow-up to 029-settings-dev-harness) — OpenCode has no visibility into
+  // BOS's own model catalog, so this must be supplied explicitly to stop it
+  // from exceeding the model's real context window.
+  contextSize?: number;
 }
 
 function str(v: unknown): string | undefined {
   return typeof v === "string" && v.trim() ? v.trim() : undefined;
+}
+
+function num(v: unknown): number | undefined {
+  const n = typeof v === "number" ? v : typeof v === "string" && v.trim() ? Number(v.trim()) : NaN;
+  return Number.isFinite(n) && n > 0 ? n : undefined;
 }
 
 /**
@@ -142,6 +153,7 @@ export function normalizeOpenCodeProvider(raw: Record<string, unknown>): OpenCod
     customProviderId: str(raw.opencodeCustomProviderId) ?? (mode === "custom" ? legacyProviderId : undefined),
     customNpmPackage: str(raw.opencodeCustomNpmPackage),
     customModelId: str(raw.opencodeCustomModelId),
+    contextSize: num(raw.opencodeContextSize),
   };
 }
 

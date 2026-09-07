@@ -86,3 +86,5 @@ next-env.d.ts
 # generated: Silero VAD model + ONNX runtime WASM copied from node_modules by
 # tools/copy-vad-assets.mjs (regenerated on predev/prebuild)
 /public/vad/
+
+foo.*

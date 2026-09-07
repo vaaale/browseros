@@ -22,6 +22,7 @@ Two things make BOS Settings special:
 | **[Apps](../apps/settings.md#apps)** | Uninstall / restore / purge installed apps. |
 | **[Appearance](appearance.md)** | Wallpaper, fit, accent color. |
 | **[AI Provider](ai-provider.md)** | Provider, model, API key, token limits. |
+| **[Tools](tools.md)** | Tool groups, the descriptions the model sees, and discovery limits. |
 | **[Data Isolation](data-isolation.md)** | How previewed versions isolate data. |
 | **[Versions](../versions/live-version-control.md)** | Preview / promote / stop BOS versions. |
 | **[Dev Harness](dev-harness.md)** | How Claude Code runs for development. |

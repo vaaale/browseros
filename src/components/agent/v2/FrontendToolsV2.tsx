@@ -174,11 +174,11 @@ export function FrontendToolsV2(_: { conversationId: string }) {
       // not just an app — res.app is only present if it has an app facet, and
       // res.service is only present if it has a services facet. A services-only
       // item has nothing to launch as a window.
-      app_build: async ({ name, dir, entry, icon }, { conversationId }) => {
+      app_build: async ({ name, dir, entry, icon, id }, { conversationId }) => {
         const res = await fetch("/api/apps/build", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name, dir, entry, icon, conversationId }),
+          body: JSON.stringify({ name, dir, entry, icon, id, conversationId }),
         }).then((r) => r.json());
         if (res.error) return `Error: ${res.error}`;
         const app = res.app as AppManifest | undefined;

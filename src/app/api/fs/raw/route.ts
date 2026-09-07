@@ -1,45 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { Readable } from "stream";
-import path from "path";
 import * as vfs from "@/os/vfs";
+import { serveVfsFile } from "@/lib/files/serve";
 import { withFeatureScope, scopeFromRequest } from "@/lib/specs/feature-context";
 
 export const dynamic = "force-dynamic";
 
-const MIME: Record<string, string> = {
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".gif": "image/gif",
-  ".webp": "image/webp",
-  ".svg": "image/svg+xml",
-  ".avif": "image/avif",
-  ".txt": "text/plain; charset=utf-8",
-  ".md": "text/markdown; charset=utf-8",
-  ".json": "application/json; charset=utf-8",
-  ".pdf": "application/pdf",
-  ".html": "text/html; charset=utf-8",
-  ".htm": "text/html; charset=utf-8",
-  ".css": "text/css; charset=utf-8",
-  ".js": "text/javascript; charset=utf-8",
-  ".mjs": "text/javascript; charset=utf-8",
-  ".mp3": "audio/mpeg",
-  ".mp4": "video/mp4",
-  ".ogg": "audio/ogg",
-  ".ogv": "video/ogg",
-  ".wav": "audio/wav",
-  ".webm": "video/webm",
-  ".m4a": "audio/mp4",
-  ".mov": "video/quicktime",
-  ".m4v": "video/mp4",
-  ".avi": "video/x-msvideo",
-};
-
-// Streams raw file bytes without buffering the whole file in memory (vfs.ts's
-// readStream/writeStream) — the primitive a large-file consumer (e.g. a
-// marketplace-item service mounting the VFS over WebDAV) needs, reached over a
-// plain loopback HTTP call rather than importing @/os/vfs directly (a worker-
-// thread service runs unbundled, outside the @/ module graph).
+// Raw VFS bytes by query string. The streaming itself (and the Content-Type map)
+// lives in @/lib/files/serve, shared with the path-shaped `[...path]` sibling —
+// which is what a previewed DOCUMENT is loaded from, so its relative references
+// resolve. See that route's header for the split.
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const p = searchParams.get("path");
@@ -52,23 +22,7 @@ export async function GET(req: NextRequest) {
   // plain browser navigation (an <iframe src>, e.g. web_view's preview) which
   // cannot set custom headers, so scope travels as a query param instead —
   // see scopeFromRequest.
-  return withFeatureScope(scopeFromRequest(req.headers, searchParams), async () => {
-    try {
-      const info = await vfs.stat(p);
-      const nodeStream = await vfs.readStream(p);
-      const webStream = Readable.toWeb(nodeStream as Readable) as ReadableStream;
-      const type = MIME[path.extname(p).toLowerCase()] ?? "application/octet-stream";
-      return new NextResponse(webStream, {
-        headers: {
-          "Content-Type": type,
-          "Content-Length": String(info.size),
-          "Cache-Control": "no-store",
-        },
-      });
-    } catch (err) {
-      return NextResponse.json({ error: (err as Error).message }, { status: 404 });
-    }
-  });
+  return withFeatureScope(scopeFromRequest(req.headers, searchParams), () => serveVfsFile(p));
 }
 
 // Streaming write counterpart to GET — the request body streams straight into

@@ -234,7 +234,14 @@ export async function seedItemBundledAssets(
 // idempotence guarantees apply: unchanged assets are skipped, and a locally
 // diverged one is never overwritten — it becomes a pending conflict instead.
 
-let reconcilePass: Promise<void> | undefined;
+// Memoized PER DATA ROOT, not per process. `dataDir()` is env-driven and BOS
+// changes it at runtime — a feature-branch data clone and a per-user container
+// each have their own data root — so a single process-wide promise meant the
+// first root to be scanned was the only one ever reconciled: after switching to
+// a branch clone, an installed item's bundled agents/skills would never appear
+// there. Keying by root keeps the "one scan per root" guarantee that both
+// stores rely on while making the memo follow the data dir.
+const reconcilePasses = new Map<string, Promise<void>>();
 
 async function reconcileOnce(): Promise<void> {
   const items = await listInstalledItems().catch(() => []);
@@ -246,16 +253,19 @@ async function reconcileOnce(): Promise<void> {
 
 /**
  * Copy any not-yet-installed bundled agents/skills from every installed item.
- * Memoized per process — both stores call it and only one scan runs. Never
- * throws: a failure here must not block reading agents/skills.
+ * Memoized per DATA ROOT — both stores call it and only one scan runs per root.
+ * Never throws: a failure here must not block reading agents/skills.
  */
 export async function reconcileInstalledItemAssets(): Promise<void> {
-  if (!reconcilePass) {
-    reconcilePass = reconcileOnce().catch((err) => {
+  const root = dataDir();
+  let pass = reconcilePasses.get(root);
+  if (!pass) {
+    pass = reconcileOnce().catch((err) => {
       logger().warn(COMPONENT, "reconcile.failed", { error: (err as Error).message });
     });
+    reconcilePasses.set(root, pass);
   }
-  return reconcilePass;
+  return pass;
 }
 
 // ── Pending conflicts ────────────────────────────────────────────────────────

@@ -107,6 +107,20 @@ export function installFixtureService(
       entry,
       ...(opts.dependencies ? { dependencies: opts.dependencies } : {}),
       ...(opts.deploymentMode ? { deploymentMode: opts.deploymentMode } : {}),
+      // 041-tool-groups: a tools-mode manifest MUST declare the group(s) its
+      // tools appear under — a tool resolving to none is rejected, since the
+      // old "Service Tools" fallback bucket no longer exists.
+      ...(opts.deploymentMode === "tools"
+        ? {
+            toolGroups: [
+              {
+                id: "fixture-tools",
+                name: "Fixture Tools",
+                description: "Tools declared by the worker-thread fixture service used in these tests.",
+              },
+            ],
+          }
+        : {}),
     }),
   );
   writeFileSync(join(servicesDir, entry), opts.entrySource);

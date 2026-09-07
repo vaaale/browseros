@@ -10,9 +10,15 @@ import { CAPABILITIES } from "@/lib/agent/capabilities-registry";
 import { reconcileInstalledItemAssets } from "@/system/marketplace/install/bundledAssets";
 import { archiveSeededDir, decideSeedAction, readSeedStamp, seedRev, writeSeedStamp } from "@/lib/agent/seed-sync";
 
-const DIR = path.join(dataDir(), "agents");
+/** Resolved per call, NOT captured at module scope. `dataDir()` is env-driven
+ *  (`BOS_DATA_DIR`) and BOS changes it at runtime — a feature-branch data clone
+ *  and a per-user container both point it elsewhere — so a module-scope constant
+ *  serves whatever path was current the first time this module was imported. */
+function agentsDir(): string {
+  return path.join(dataDir(), "agents");
+}
 /** Agents moved aside by seed reconciliation (never deleted) — see seed-sync.ts. */
-const ARCHIVE_DIR = path.join(DIR, ".archive");
+const ARCHIVE_DIR = path.join(agentsDir(), ".archive");
 
 // Folder id of the shared "default prompt" template. Not a runnable agent — its
 // body is prepended to any agent whose useDefaultPrompt is true. Managed via
@@ -47,7 +53,7 @@ async function listSeedIds(): Promise<string[]> {
 async function applySeedAgent(id: string): Promise<string | null> {
   const seedRaw = await fs.readFile(path.join(SEED_DIR, id, "AGENT.md"), "utf8").catch(() => null);
   if (seedRaw === null) return null;
-  const dir = path.join(DIR, id);
+  const dir = path.join(agentsDir(), id);
   const liveRaw = await fs.readFile(path.join(dir, "AGENT.md"), "utf8").catch(() => null);
   const action = decideSeedAction({
     inSeed: true,
@@ -78,7 +84,7 @@ async function applySeedAgent(id: string): Promise<string | null> {
  */
 async function stampSeededAgents(ids: string[]): Promise<void> {
   for (const id of ids) {
-    const dir = path.join(DIR, id);
+    const dir = path.join(agentsDir(), id);
     const [seedRaw, liveRaw] = await Promise.all([
       fs.readFile(path.join(SEED_DIR, id, "AGENT.md"), "utf8").catch(() => null),
       fs.readFile(path.join(dir, "AGENT.md"), "utf8").catch(() => null),
@@ -98,11 +104,11 @@ async function archiveDroppedSeedAgents(seedIds: string[]): Promise<void> {
   // deleted" — that would archive the whole agent set on a broken deployment.
   if (seedIds.length === 0) return;
   const shipped = new Set(seedIds);
-  const entries = await fs.readdir(DIR, { withFileTypes: true }).catch(() => []);
+  const entries = await fs.readdir(agentsDir(), { withFileTypes: true }).catch(() => []);
   for (const entry of entries) {
     if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
     if (shipped.has(entry.name) || isProtectedAgentId(entry.name)) continue;
-    const dir = path.join(DIR, entry.name);
+    const dir = path.join(agentsDir(), entry.name);
     const liveRaw = await fs.readFile(path.join(dir, "AGENT.md"), "utf8").catch(() => null);
     const action = decideSeedAction({
       inSeed: false,
@@ -153,11 +159,16 @@ function fromMarkdown(id: string, src: string): Agent {
 }
 
 
-let seeded = false;
+// Tracked PER DATA ROOT, not per process. `dataDir()` is env-driven and BOS
+// changes it at runtime (a feature-branch data clone, a per-user container), so
+// a single boolean meant only the FIRST root ever got seeded — after switching
+// roots, the seeded agents/skills would silently never appear there.
+const seededRoots = new Set<string>();
 async function ensureSeed(): Promise<void> {
-  if (seeded) return;
-  seeded = true;
-  await fs.mkdir(DIR, { recursive: true });
+  const root = agentsDir();
+  if (seededRoots.has(root)) return;
+  seededRoots.add(root);
+  await fs.mkdir(root, { recursive: true });
   // Reconcile every seed agent (including default_agent): seed what's missing,
   // refresh what BOS wrote and nobody edited, archive what the seed dropped.
   // A locally edited agent is never written to — user edits always win.
@@ -206,7 +217,7 @@ const CONFLICT_BACKFILL_MARKER = ".conflict-tools-backfilled";
 /** Additive, idempotent, and marker-guarded, exactly like the allowlist
  *  migration above: a user who later removes these ids keeps them removed. */
 async function backfillConflictTools(): Promise<void> {
-  const agentDir = path.join(DIR, "devops");
+  const agentDir = path.join(agentsDir(), "devops");
   const marker = path.join(agentDir, CONFLICT_BACKFILL_MARKER);
   try {
     await fs.access(marker);
@@ -235,11 +246,11 @@ const MIGRATION_MARKER = ".capabilities-migrated";
 const ALL_CAPABILITY_IDS: string[] = CAPABILITIES.map((c) => c.id);
 
 async function backfillLegacyAllowlists(): Promise<void> {
-  const entries = await fs.readdir(DIR, { withFileTypes: true }).catch(() => [] as import("fs").Dirent[]);
+  const entries = await fs.readdir(agentsDir(), { withFileTypes: true }).catch(() => [] as import("fs").Dirent[]);
   for (const d of entries) {
     if (!d.isDirectory()) continue;
     if (d.name === DEFAULT_PROMPT_AGENT_ID) continue;
-    const agentDir = path.join(DIR, d.name);
+    const agentDir = path.join(agentsDir(), d.name);
     const marker = path.join(agentDir, MIGRATION_MARKER);
     try {
       await fs.access(marker);
@@ -267,7 +278,7 @@ async function backfillLegacyAllowlists(): Promise<void> {
 
 export async function listSubAgents(): Promise<Agent[]> {
   await ensureSeed();
-  const dirs = await fs.readdir(DIR, { withFileTypes: true }).catch(() => []);
+  const dirs = await fs.readdir(agentsDir(), { withFileTypes: true }).catch(() => []);
   const agents: Agent[] = [];
   for (const d of dirs) {
     if (!d.isDirectory()) continue;
@@ -275,7 +286,7 @@ export async function listSubAgents(): Promise<Agent[]> {
     if (d.name.startsWith(".")) continue;
     if (d.name === DEFAULT_PROMPT_AGENT_ID) continue;
     try {
-      const src = await fs.readFile(path.join(DIR, d.name, "AGENT.md"), "utf8");
+      const src = await fs.readFile(path.join(agentsDir(), d.name, "AGENT.md"), "utf8");
       agents.push(fromMarkdown(d.name, src));
     } catch {
       /* skip dirs without AGENT.md */
@@ -290,7 +301,7 @@ export async function listSubAgents(): Promise<Agent[]> {
 export async function getDefaultPromptAgent(): Promise<Agent | undefined> {
   await ensureSeed();
   try {
-    const src = await fs.readFile(path.join(DIR, DEFAULT_PROMPT_AGENT_ID, "AGENT.md"), "utf8");
+    const src = await fs.readFile(path.join(agentsDir(), DEFAULT_PROMPT_AGENT_ID, "AGENT.md"), "utf8");
     return fromMarkdown(DEFAULT_PROMPT_AGENT_ID, src);
   } catch {
     return undefined;
@@ -310,8 +321,8 @@ export async function setDefaultPromptAgent(input: { systemPrompt: string; descr
     type: "local",
     systemPrompt: input.systemPrompt,
   };
-  await fs.mkdir(path.join(DIR, DEFAULT_PROMPT_AGENT_ID), { recursive: true });
-  await writeFileAtomic(path.join(DIR, DEFAULT_PROMPT_AGENT_ID, "AGENT.md"), toMarkdown(updated));
+  await fs.mkdir(path.join(agentsDir(), DEFAULT_PROMPT_AGENT_ID), { recursive: true });
+  await writeFileAtomic(path.join(agentsDir(), DEFAULT_PROMPT_AGENT_ID, "AGENT.md"), toMarkdown(updated));
   return updated;
 }
 
@@ -337,16 +348,16 @@ export async function createSubAgent(input: {
   // capability set. Callers that want a locked-down agent should pass tools: [].
   const tools = input.tools ?? [...ALL_CAPABILITY_IDS];
   const agent: Agent = { id, type: input.type ?? "local", ...input, tools };
-  await fs.mkdir(path.join(DIR, id), { recursive: true });
-  await writeFileAtomic(path.join(DIR, id, "AGENT.md"), toMarkdown(agent));
+  await fs.mkdir(path.join(agentsDir(), id), { recursive: true });
+  await writeFileAtomic(path.join(agentsDir(), id, "AGENT.md"), toMarkdown(agent));
   // Mark migrated so ensureSeed doesn't try to re-backfill this agent.
-  await writeFileAtomic(path.join(DIR, id, MIGRATION_MARKER), "1");
+  await writeFileAtomic(path.join(agentsDir(), id, MIGRATION_MARKER), "1");
   return agent;
 }
 
 export async function removeSubAgent(idOrName: string): Promise<void> {
   const agent = await getAgent(idOrName);
-  if (agent) await fs.rm(path.join(DIR, agent.id), { recursive: true, force: true });
+  if (agent) await fs.rm(path.join(agentsDir(), agent.id), { recursive: true, force: true });
 }
 
 // NOTE: there is deliberately no global "active agent". Each conversation carries
@@ -359,7 +370,7 @@ export async function setAgentSystemPrompt(id: string, systemPrompt: string): Pr
   const agent = await getAgent(id);
   if (!agent) return undefined;
   const updated: Agent = { ...agent, systemPrompt };
-  await writeFileAtomic(path.join(DIR, agent.id, "AGENT.md"), toMarkdown(updated));
+  await writeFileAtomic(path.join(agentsDir(), agent.id, "AGENT.md"), toMarkdown(updated));
   return updated;
 }
 
@@ -381,7 +392,7 @@ export async function setAgentCapabilities(
     kbs: caps.kbs ?? agent.kbs,
     deferredTools: caps.deferredTools ?? agent.deferredTools,
   };
-  await writeFileAtomic(path.join(DIR, agent.id, "AGENT.md"), toMarkdown(updated));
+  await writeFileAtomic(path.join(agentsDir(), agent.id, "AGENT.md"), toMarkdown(updated));
   return updated;
 }
 
@@ -391,7 +402,7 @@ export async function setAgentUseDefaultPrompt(id: string, value: boolean): Prom
   const agent = await getAgent(id);
   if (!agent) return undefined;
   const updated: Agent = { ...agent, useDefaultPrompt: value };
-  await writeFileAtomic(path.join(DIR, agent.id, "AGENT.md"), toMarkdown(updated));
+  await writeFileAtomic(path.join(agentsDir(), agent.id, "AGENT.md"), toMarkdown(updated));
   return updated;
 }
 
@@ -408,7 +419,7 @@ export async function setAgentMeta(
     name: typeof meta.name === "string" ? meta.name : agent.name,
     description: typeof meta.description === "string" ? meta.description : agent.description,
   };
-  await writeFileAtomic(path.join(DIR, agent.id, "AGENT.md"), toMarkdown(updated));
+  await writeFileAtomic(path.join(agentsDir(), agent.id, "AGENT.md"), toMarkdown(updated));
   return updated;
 }
 
@@ -432,5 +443,5 @@ export async function deleteSubAgent(idOrName: string): Promise<void> {
   const agent = await getAgent(idOrName);
   if (!agent) return;
   if (isProtectedAgentId(agent.id)) throw new ProtectedAgentError(agent.id);
-  await fs.rm(path.join(DIR, agent.id), { recursive: true, force: true });
+  await fs.rm(path.join(agentsDir(), agent.id), { recursive: true, force: true });
 }

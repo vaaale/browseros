@@ -43,7 +43,7 @@ Start at **[Architecture overview](dev/architecture-overview.md)**.
 - **Features & components:** [Features & components guide](dev/guides/features-and-components.md)
 - **Assistant:** [overview](dev/assistant/overview.md) · [actions & tools](dev/assistant/actions-and-tools.md) · [sub‑agents & delegation](dev/assistant/sub-agents-and-delegation.md) · [API](dev/assistant/api/assistant-api.md)
 - [Memory](dev/memory/memory.md) · [Self‑improvement](dev/self-improvement/self-improvement.md)
-- [MCP](dev/mcp/mcp.md) · [Browser automation](dev/automation/browser-automation.md) · [Web proxy](dev/web-proxy/web-proxy.md)
+- [MCP](dev/mcp/mcp.md) · [Browser automation](dev/automation/browser-automation.md) · [Scheduler concurrency](dev/automation/scheduler-concurrency.md) · [Web proxy](dev/web-proxy/web-proxy.md)
 - **Self‑modification:** [live version control](dev/self-modification/live-version-control.md) · [DataFS](dev/self-modification/data-isolation-datafs.md) · [testing](dev/self-modification/testing.md)
 - [API reference](dev/api-reference.md) · [Extending BOS](dev/extending-bos.md) · [Design heuristics & gotchas](dev/design-heuristics.md)
 

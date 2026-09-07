@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AutoSaveStatus } from "./AutoSaveStatus";
 import { useAutoSave } from "./hooks/useAutoSave";
+import { ToolGroupList, type GroupMeta } from "./tools/ToolGroupList";
 
 interface Capability {
   id: string;
@@ -20,6 +21,17 @@ type MetadataOverrides = Record<string, MetadataOverride>;
 interface Payload {
   catalog: Capability[];
   overrides: MetadataOverrides;
+}
+
+// A group as /api/tool-groups reports it: registry/manifest values merged with
+// the user's persisted overrides (041-tool-groups).
+interface EffectiveGroup extends GroupMeta {
+  description: string;
+  aliases: string[];
+  sourceDescription: string;
+  sourceAliases: string[];
+  overridden: boolean;
+  origin: "builtin" | "service";
 }
 
 const MAX_FIND_RESULTS_MIN = 5;
@@ -51,6 +63,8 @@ export function ToolsTab() {
   // bos:tool-descriptions-updated event contract still fires when a description
   // is saved so other panels (e.g. ToolManifest) can refresh.
   const [overrides, setOverrides] = useState<Record<string, string>>({});
+  const [groups, setGroups] = useState<EffectiveGroup[]>([]);
+  const [filter, setFilter] = useState("");
   const [maxFindResults, setMaxFindResults] = useState<number>(MAX_FIND_RESULTS_DEFAULT);
   const [toolCallTimeoutSec, setToolCallTimeoutSec] = useState<number>(TOOL_TIMEOUT_DEFAULT);
   const [maxAgentSteps, setMaxAgentSteps] = useState<number>(MAX_AGENT_STEPS_DEFAULT);
@@ -60,6 +74,10 @@ export function ToolsTab() {
       const res = (await fetch("/api/tool-descriptions").then((r) => r.json())) as Payload;
       setCatalog(res.catalog ?? []);
       setOverrides(descriptionMap(res.overrides ?? {}));
+    } catch { /* keep previous state */ }
+    try {
+      const res = (await fetch("/api/tool-groups").then((r) => r.json())) as { groups?: EffectiveGroup[] };
+      setGroups(res.groups ?? []);
     } catch { /* keep previous state */ }
     try {
       const res = (await fetch("/api/config").then((r) => r.json())) as {
@@ -146,7 +164,53 @@ export function ToolsTab() {
 
   const save = useAutoSave<{ id: string; description: string }>(saveDescription);
 
-  const groups = useMemo(() => groupByCategory(catalog), [catalog]);
+  const saveGroup = useCallback(async (patch: { groupId: string; description?: string; aliases?: string[] }) => {
+    const res = await fetch("/api/tool-groups", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    if (!res.ok) {
+      const body = (await res.json().catch(() => null)) as { error?: string } | null;
+      throw new Error(body?.error || `Failed to save (${res.status})`);
+    }
+    setGroups((prev) =>
+      prev.map((g) =>
+        g.id !== patch.groupId
+          ? g
+          : {
+              ...g,
+              description: patch.description?.trim() ? patch.description : g.sourceDescription,
+              aliases: patch.aliases ?? g.aliases,
+              overridden: Boolean(patch.description?.trim()) || (patch.aliases ?? g.aliases).join() !== g.sourceAliases.join(),
+            },
+      ),
+    );
+  }, []);
+  const groupSave = useAutoSave<{ groupId: string; description?: string; aliases?: string[] }>(saveGroup);
+
+  // The filter matches ids, descriptions and group aliases, and auto-expands
+  // whatever it matched — collapsing 20+ groups otherwise makes finding one
+  // tool harder, not easier (FR-047).
+  const q = filter.trim().toLowerCase();
+  const visibleCatalog = useMemo(() => {
+    if (!q) return catalog;
+    const groupHit = new Set(
+      groups
+        .filter((g) => g.name.toLowerCase().includes(q) || g.aliases.some((a) => a.toLowerCase().includes(q)))
+        .map((g) => g.id),
+    );
+    return catalog.filter(
+      (t) =>
+        t.id.toLowerCase().includes(q) ||
+        (overrides[t.id] ?? t.description).toLowerCase().includes(q) ||
+        groupHit.has(t.group),
+    );
+  }, [catalog, groups, overrides, q]);
+  const forceOpen = useMemo(
+    () => (q ? new Set(visibleCatalog.map((t) => t.group)) : undefined),
+    [q, visibleCatalog],
+  );
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -154,7 +218,7 @@ export function ToolsTab() {
         <p className="text-[11px] text-white/50">
           Rewrite what the LLM sees for any tool. Per-agent deferred visibility is edited in Settings → Agents.
         </p>
-        <AutoSaveStatus status={save.status} />
+        <AutoSaveStatus status={groupSave.status === "saving" || groupSave.status === "error" ? groupSave.status : save.status} />
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
         <div className="mb-3 flex flex-col gap-2 rounded-md border border-white/10 bg-white/[0.03] p-2.5">
@@ -216,30 +280,47 @@ export function ToolsTab() {
             />
           </label>
         </div>
-        <div className="flex flex-col gap-2">
-          {groups.map(({ group, items }) => (
-            <div key={group} className="rounded-md border border-white/10 bg-white/[0.03] p-2.5">
-              <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-violet-300">
-                {group}
-              </div>
-              <div className="flex flex-col gap-2">
-                {items.map((tool) => (
-                  <ToolRow
-                    // Re-key on override presence so a reset (override cleared) or
-                    // an incoming override remounts the row with the new initial
-                    // draft — cleaner than syncing prop→state inside an effect.
-                    key={`${tool.id}:${overrides[tool.id] ?? ""}`}
-                    id={tool.id}
-                    sourceDescription={tool.description}
-                    override={overrides[tool.id]}
-                    onSave={(description) => save.save({ id: tool.id, description })}
-                  />
-                ))}
-              </div>
+        <label className="mb-2 flex items-center gap-2 rounded-md border border-white/10 bg-white/[0.03] px-2.5 py-1.5">
+          <span className="text-[10px] uppercase tracking-wide text-white/40">Filter</span>
+          <input
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            placeholder="tool id, description or group"
+            className="min-w-0 flex-1 bg-transparent text-[12px] text-white outline-none placeholder:text-white/25"
+          />
+          {filter && (
+            <button
+              type="button"
+              onClick={() => setFilter("")}
+              className="rounded px-1.5 py-0.5 text-[10px] text-white/50 hover:bg-white/10 hover:text-white/80"
+            >
+              Clear
+            </button>
+          )}
+        </label>
+        <ToolGroupList
+          items={visibleCatalog}
+          groups={groups}
+          forceOpen={forceOpen}
+          emptyMessage={catalog.length === 0 ? "Loading…" : "No tools match that filter."}
+          renderGroupDetail={(group) => {
+            const full = groups.find((g) => g.id === group.id);
+            return full ? <GroupRow key={`${full.id}:${full.description}`} group={full} onSave={groupSave.save} /> : null;
+          }}
+          renderItems={(items) => (
+            <div className="flex flex-col gap-2">
+              {items.map((tool) => (
+                <ToolRow
+                  key={`${tool.id}:${overrides[tool.id] ?? ""}`}
+                  id={tool.id}
+                  sourceDescription={tool.description}
+                  override={overrides[tool.id]}
+                  onSave={(description) => save.save({ id: tool.id, description })}
+                />
+              ))}
             </div>
-          ))}
-        </div>
-        {catalog.length === 0 && <p className="text-xs text-white/40">Loading…</p>}
+          )}
+        />
       </div>
     </div>
   );
@@ -315,21 +396,74 @@ function ToolRow({
   );
 }
 
-interface Grouped {
-  group: string;
-  items: Capability[];
-}
+/** The per-group editor shown when a group is expanded (FR-045). Same
+ *  draft-on-blur + reset affordance as ToolRow — a group's description feeds
+ *  BOTH the system-prompt tool-group block and find_tools ranking, so editing
+ *  it here is how a user steers discovery. */
+function GroupRow({
+  group,
+  onSave,
+}: {
+  group: EffectiveGroup;
+  onSave: (patch: { groupId: string; description?: string; aliases?: string[] }) => void;
+}) {
+  const [draft, setDraft] = useState(group.description);
+  const [aliasDraft, setAliasDraft] = useState(group.aliases.join(", "));
 
-function groupByCategory(tools: Capability[]): Grouped[] {
-  const order: string[] = [];
-  const buckets = new Map<string, Capability[]>();
-  for (const t of tools) {
-    const g = t.group?.trim() || "General";
-    if (!buckets.has(g)) {
-      buckets.set(g, []);
-      order.push(g);
-    }
-    buckets.get(g)!.push(t);
-  }
-  return order.map((group) => ({ group, items: buckets.get(group)! }));
+  const commitDescription = (value: string) => {
+    if (value === group.description) return;
+    onSave({ groupId: group.id, description: value.trim() === "" ? "" : value });
+  };
+  const commitAliases = (value: string) => {
+    const next = value.split(",").map((a) => a.trim()).filter(Boolean);
+    if (next.join() === group.aliases.join()) return;
+    onSave({ groupId: group.id, aliases: next });
+  };
+
+  return (
+    <div className="mb-2 rounded border border-white/10 bg-white/[0.02] p-2">
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <span className="text-[10px] uppercase tracking-wide text-white/40">
+          Group description {group.origin === "service" && <span className="text-violet-300/70">· from item</span>}
+        </span>
+        {group.overridden && (
+          <button
+            type="button"
+            onClick={() => {
+              setDraft(group.sourceDescription);
+              setAliasDraft(group.sourceAliases.join(", "));
+              onSave({ groupId: group.id, description: "", aliases: [] });
+            }}
+            className="rounded px-1.5 py-0.5 text-[10px] text-white/50 transition-colors hover:bg-white/10 hover:text-white/80"
+          >
+            Reset
+          </button>
+        )}
+      </div>
+      <textarea
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => commitDescription(draft)}
+        className="w-full resize-y rounded border border-white/10 bg-black/30 px-2 py-1.5 text-[12px] leading-relaxed text-white outline-none transition-colors focus:border-white/30"
+        style={{ minHeight: "44px" }}
+      />
+      <label className="mt-1.5 flex items-center gap-2">
+        <span className="shrink-0 text-[10px] uppercase tracking-wide text-white/40" title="Extra words that should find this group's tools">
+          Aliases
+        </span>
+        <input
+          value={aliasDraft}
+          onChange={(e) => setAliasDraft(e.target.value)}
+          onBlur={() => commitAliases(aliasDraft)}
+          placeholder="comma, separated, search terms"
+          className="min-w-0 flex-1 rounded border border-white/10 bg-black/30 px-2 py-1 text-[11px] text-white outline-none focus:border-white/30 placeholder:text-white/25"
+        />
+      </label>
+      {group.overridden && (
+        <div className="mt-1 text-[11px] leading-snug text-white/40">
+          Source: <span className="text-white/50">{group.sourceDescription}</span>
+        </div>
+      )}
+    </div>
+  );
 }

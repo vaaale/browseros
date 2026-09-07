@@ -132,6 +132,20 @@ export function startProc(v) {
       BOS_SUPERVISOR_URL: `http://127.0.0.1:${PUBLIC_PORT}`,
       BOS_SPECS_ROOT: v.role === "preview" ? path.join(v.worktree, "specs") : SPECS_ROOT,
       ...(v.role === "preview" ? { BOS_SPECS_SEED: "0" } : {}),
+      // A service entrypoint lives under dataDir()/user-apps/items/<id>/services/,
+      // not this checkout (v.worktree) — so a bare import like require("ws")
+      // only resolves by directory-walk accident when dataDir() happens to be
+      // nested under the checkout (true for base, false for every preview,
+      // whose data clone is a sibling directory tree). NODE_PATH must be part
+      // of THIS process's own initial env for Node to honor it at all — it is
+      // read once at bootstrap (Module._initPaths()), so mutating
+      // process.env.NODE_PATH later, or a worker_threads Worker's own per-
+      // instance env, are both too late/too narrow; setting it here fixes
+      // every require()/import() in this process AND every Worker it spawns
+      // (which inherit process.env by default) in one place.
+      NODE_PATH: process.env.NODE_PATH
+        ? `${process.env.NODE_PATH}${path.delimiter}${path.join(v.worktree, "node_modules")}`
+        : path.join(v.worktree, "node_modules"),
     },
     // Redirect Next.js stderr → supervisor stdout so Docker/Dokploy doesn't
     // classify normal request logs (which Next.js writes to stderr) as errors.

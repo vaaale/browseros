@@ -72,7 +72,20 @@ export async function buildAndStart(v, ctx = {}) {
       slog("warn", "build", `${repo.id}: commit failed for ${v.branch}: ${e?.message || e}`, { branch: v.branch, versionLabel: v.role }),
     );
   }
-  await git(["add", "-A"], v.worktree).catch(() => {});
+  try {
+    await git(["add", "-A"], v.worktree);
+  } catch (e) {
+    // A failed `git add` here is exactly the failure mode this whole commit
+    // step exists to prevent going unnoticed: the immediately-following
+    // `git commit` would find nothing staged and hit the harmless "nothing
+    // to commit" branch below, silently reporting a candidate as clean when
+    // its edits were never durably committed at all. Must abort, not warn
+    // and continue on a stale commit.
+    v.state = "failed";
+    v.buildError = `failed to stage candidate changes in ${v.worktree}: ${e?.message || e}`;
+    slog("error", "build", `build BLOCKED: ${v.branch} — git add failed`, { branch: v.branch, versionLabel: v.role, err: { message: v.buildError } });
+    return v.state;
+  }
   try {
     await git([...GIT_IDENTITY, "commit", "-m", `BOS candidate (${v.branch})`], v.worktree);
   } catch (e) {

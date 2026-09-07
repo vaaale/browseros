@@ -5,6 +5,8 @@ import { LOG, type ToolDeclaration } from "@/core/service/serviceToolTypes";
 import type { ServiceTool, ToolInvocation, ToolInvocationResult } from "@/core/service/serviceToolTypes";
 import type { ToolCallFailureCode } from "@/core/service/workerIpc";
 import { registerAdditionalCapabilities, unregisterCapabilities } from "@/lib/agent/capabilities-registry";
+import { registerToolGroups, unregisterToolGroups } from "@/lib/agent/tool-groups";
+import type { ToolGroupDeclaration } from "@/core/service/serviceToolTypes";
 
 // ServiceToolBridge (039-service-tool-exposure) — the single facade that turns
 // a service's `tool_declare` messages into registered `ServiceTool` entries,
@@ -76,10 +78,15 @@ export class ServiceToolBridge {
   }
 
   /** Validates the declaration (name shape, description, `inputSchema` is a
-   *  compilable JSON Schema) and rejects an exact `serviceId:name` duplicate.
-   *  Returns whether registration succeeded — callers that need to surface a
-   *  reason should read the emitted warn log. */
-  registerTool(serviceId: string, declaration: ToolDeclaration): boolean {
+   *  compilable JSON Schema, and a RESOLVABLE tool group) and rejects an exact
+   *  `serviceId:name` duplicate. Returns whether registration succeeded.
+   *
+   *  `toolGroups` is the owning service's manifest declaration (041 ADR-5).
+   *  A tool that does not resolve to one of them is REJECTED — it is never
+   *  filed under a generic bucket, because there is no fallback group
+   *  (FR-041). Callers must surface the failure to the user (ServiceManager
+   *  sets the service's `lastError`), not merely log it. */
+  registerTool(serviceId: string, declaration: ToolDeclaration, toolGroups: ToolGroupDeclaration[] = []): boolean {
     const name = declaration?.name;
     if (typeof name !== "string" || !name.trim()) {
       logger().warn(LOG, "tool:register-rejected", { serviceId, reason: "missing-name" });
@@ -96,6 +103,38 @@ export class ServiceToolBridge {
       return false;
     }
 
+    // 041-tool-groups: resolve the declaration's group against the manifest.
+    // One declared group is implied; several and the tool must pick, because
+    // guessing would silently file it under the wrong heading.
+    let group: ToolGroupDeclaration | undefined;
+    if (toolGroups.length === 0) {
+      logger().warn(LOG, "tool:register-rejected", { serviceId, name, reason: "no-tool-groups-declared" });
+      return false;
+    }
+    if (declaration.group) {
+      group = toolGroups.find((g) => g.id === declaration.group);
+      if (!group) {
+        logger().warn(LOG, "tool:register-rejected", {
+          serviceId,
+          name,
+          reason: "unknown-group",
+          group: declaration.group,
+          declared: toolGroups.map((g) => g.id),
+        });
+        return false;
+      }
+    } else if (toolGroups.length === 1) {
+      group = toolGroups[0];
+    } else {
+      logger().warn(LOG, "tool:register-rejected", {
+        serviceId,
+        name,
+        reason: "ambiguous-group",
+        declared: toolGroups.map((g) => g.id),
+      });
+      return false;
+    }
+
     let validate: ValidateFunction;
     try {
       validate = this.ajv.compile(declaration.inputSchema ?? {});
@@ -109,7 +148,7 @@ export class ServiceToolBridge {
       return false;
     }
 
-    this.tools.set(key, { declaration, serviceId, transport: "worker-ipc" });
+    this.tools.set(key, { declaration, serviceId, transport: "worker-ipc", groupId: group.id });
     this.validators.set(key, validate);
     this._version += 1;
     // FR-005/ADR-007: register a capability descriptor under the SAME id as the
@@ -118,7 +157,12 @@ export class ServiceToolBridge {
     // gate by comparing against the model-facing tool name, so the two must
     // match exactly or a live service tool would fall into tool-gate.ts's
     // "not in registry ⇒ always allowed" branch and bypass gating entirely.
-    registerAdditionalCapabilities([{ id: name, group: "Service Tools", context: "tool", description: declaration.description }]);
+    registerToolGroups([
+      { id: group.id, name: group.name, description: group.description, aliases: group.aliases ?? [], origin: "service" },
+    ]);
+    registerAdditionalCapabilities([
+      { id: name, group: group.id, context: "tool", description: declaration.description },
+    ]);
     logger().info(LOG, "tool:registered", { serviceId, name });
     return true;
   }
@@ -131,12 +175,24 @@ export class ServiceToolBridge {
     if (!stillNeeded) unregisterCapabilities([name]);
   }
 
+  /** Drops a group once its last member tool is gone (041 FR-004), mirroring
+   *  syncCapabilityAfterRemoval. The user's persisted override for that group
+   *  is deliberately NOT touched — an absent group is not a deleted one
+   *  (FR-049). */
+  private syncGroupsAfterRemoval(groupIds: string[]): void {
+    const live = new Set([...this.tools.values()].map((t) => t.groupId));
+    const orphaned = [...new Set(groupIds)].filter((id) => !live.has(id));
+    if (orphaned.length > 0) unregisterToolGroups(orphaned);
+  }
+
   unregisterTool(serviceId: string, name: string): void {
     const key = toolKey(serviceId, name);
+    const removed = this.tools.get(key);
     if (!this.tools.delete(key)) return;
     this.validators.delete(key);
     this._version += 1;
     this.syncCapabilityAfterRemoval(name);
+    if (removed) this.syncGroupsAfterRemoval([removed.groupId]);
     logger().info(LOG, "tool:unregistered", { serviceId, name });
   }
 
@@ -150,6 +206,7 @@ export class ServiceToolBridge {
       logger().info(LOG, "tool:unregistered", { serviceId, name: tool.declaration.name });
     }
     for (const tool of owned) this.syncCapabilityAfterRemoval(tool.declaration.name);
+    this.syncGroupsAfterRemoval(owned.map((t) => t.groupId));
     this._version += 1;
   }
 

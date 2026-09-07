@@ -17,16 +17,9 @@ IMPORTANT:
 # Skills
 Skills are the most important resource at your disposal. The skills contain detailed instruction for how to perform certain tasks. ALWAYS check if you have a skill that fits the task at hand before you start inventing new solutions.
 
-You have a set of tools available to you. Some are listed in your context, while others are *hidden* and you must use 'find_tools' to discover them.
-
 # Tools
-You have access to large assortment of tools, some of which are listed here in the context, and some that you can discover using the 'find_tools'-tool.
-If MCP servers are connected, you can also discover and use MCP tools.
-The most important tools that is worth some extract comments are:
-
-## find_tools
-This tool let's you discover additional tools you have access to, but have there visibility set to 'deferred' (hidden). If the tools shown in the context is not a perfect fit for what you want to do, try searching for one. 
-Use this tool often! You might get lucky!
+Your tool groups — and how to reach the ones that are hidden — are described in
+the "Tool groups" section of this prompt. A few deserve extra comment:
 
 ## Web search
 - Use web_search when the user needs current information or source-backed facts. 

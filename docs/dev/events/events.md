@@ -85,7 +85,7 @@ a matching HTTP status. In-process callers get a thrown `EventApiError`
 |---|---|---|
 | `invalid-type` | 400 | Bad request shape (type, mode, missing fields). |
 | `payload-too-large` | 413 | Payload > 1MB. Use a VFS path reference instead. |
-| `namespace-not-owned` | 403 | `register` outside the owner's root/grants. |
+| `namespace-not-owned` | 403 | Retired by 037 — kept in the table, never thrown. |
 | `ack-forbidden` | 403 | Caller doesn't own the handler/registration. |
 | `already-settled` | 409 | Conflicting terminal ack (already permanently failed). |
 | `invalid-preference` | 400 | `preferredHandlerId` isn't a UI handler for the type. |
@@ -246,27 +246,23 @@ are a pure display/interaction layer (FR-014).
 
 ---
 
-## 6. Namespace ownership (FR-023)
+## 6. Subscription is unrestricted; `ack` is owned (037)
 
-A component may register a handler (headless or UI) for an event type only
-if that type falls under:
+**Any component may register a handler (headless or UI) for any event type.**
+Feature 037 (Event Namespace Relaxation) removed 034's namespace-ownership
+gate from `register()` — the pub/sub model is open by default, so
+orchestrators, aggregators and monitors can react to other components'
+events with no declaration. `namespace-not-owned` is never thrown.
 
-1. **Its owned root** — `com.bos.<yourId>.*`, derived automatically from
-   your component id (the same id used as `source.appId` / a service's
-   `service.json` `id` / a built-in app's manifest `id`). No declaration
-   needed.
-2. **A granted namespace** — a static `eventNamespaces: string[]` list in
-   your manifest (built-in `AppManifest.eventNamespaces`) or `service.json`.
-   Each entry is a namespace prefix (`"com.example.shared.*"`) or exact type.
+`eventNamespaces: string[]` (built-in `AppManifest.eventNamespaces` or
+`service.json`) is still parsed and stored, but it is **advisory only** —
+documentation of what a component is interested in, not a gate. Same for
+`register()`'s `grantedNamespaces` request field.
 
-Violating this returns `403 namespace-not-owned`. This is a same-container
-integrity check, not a network security boundary (BOS's single-container
-trust model) — it exists to catch accidental collisions between components,
-not to defend against an adversary inside your own container.
-
-The same rule governs `ack` ownership (FR-022): the caller's declared
-`callerId` must match the handler's registered `ownerId`, or you get
-`403 ack-forbidden`.
+What is still enforced is **`ack` ownership** (FR-022, preserved by 037
+FR-002): the caller's declared `callerId` must match the handler's
+registered `ownerId`, or you get `403 ack-forbidden`. Subscribing to an
+event is open; settling someone else's handler is not.
 
 ---
 

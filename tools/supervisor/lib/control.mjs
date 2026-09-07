@@ -19,6 +19,7 @@ import {
   provisionPreview,
 } from "./preview.mjs";
 import { promote } from "./promote.mjs";
+import { startJob, getJob } from "./promote-jobs.mjs";
 import { pushNow } from "./push.mjs";
 
 async function publicState() {
@@ -26,7 +27,7 @@ async function publicState() {
     v ? { role: v.role, branch: await liveBranch(v), port: v.port, state: v.state, commit: v.commit, reused: !!v.reused, ...(v.buildError ? { buildError: v.buildError } : {}), ...(v.buildLog ? { buildLog: v.buildLog } : {}), ...(v.devopsConversationId ? { devopsConversationId: v.devopsConversationId } : {}), ...(v.conflictSessionId ? { conflictSessionId: v.conflictSessionId } : {}) } : null;
   const b = await pick(state.base);
   const ps = await Promise.all([...previews.values()].map(pick));
-  return { base: b, previews: ps, pushMode: process.env.BOS_PUSH_MODE || "manual", baseBranch: state.baseBranch };
+  return { base: b, previews: ps, baseBranch: state.baseBranch };
 }
 
 function parseCookies(req) {
@@ -244,12 +245,26 @@ export async function handleControl(req, res, sub) {
       baseBranch: state.baseBranch,
     });
   }
-  if (req.method === "GET" && (sub === "" || sub === "state" || sub === "branches" || sub === "preview-changes" || sub === "next-changes")) {
+  if (req.method === "GET" && (sub === "" || sub === "state" || sub === "branches" || sub === "preview-changes" || sub === "next-changes" || sub === "promote-status")) {
     if (sub === "") { res.writeHead(200, { "Content-Type": "text/html" }); res.end(controlPage()); return; }
     if (sub === "branches") return sendJson(res, { ok: true, branches: await listBranches(), base: state.baseBranch });
     if (sub === "preview-changes" || sub === "next-changes") {
       const branch = new URL(req.url, "http://localhost").searchParams.get("branch") || undefined;
       return sendJson(res, await previewChanges(branch));
+    }
+    if (sub === "promote-status") {
+      const jobId = new URL(req.url, "http://localhost").searchParams.get("jobId") || "";
+      const job = jobId && getJob(jobId);
+      if (!job) return sendJson(res, { ok: false, error: "unknown or expired promote job" }, 404);
+      if (job.status === "running") return sendJson(res, { ok: true, status: "running" });
+      if (job.status === "done") return sendJson(res, { ok: true, status: "done", ...job.result });
+      return sendJson(res, {
+        ok: false,
+        status: "failed",
+        error: job.error,
+        ...(job.sessionId ? { sessionId: job.sessionId } : {}),
+        ...(job.devopsConversationId ? { devopsConversationId: job.devopsConversationId } : {}),
+      });
     }
     // state — include which version THIS session is being served (the pin
     // cookie), so the toolbar can tell "you're viewing the preview" from "a
@@ -312,7 +327,23 @@ export async function handleControl(req, res, sub) {
     if (sub === "promote" && req.method === "POST") {
       const branch = String(body.branch || "");
       if (!branch) return sendJson(res, { ok: false, error: "branch required" }, 400);
-      return sendJson(res, { ok: true, ...(await promote(branch)) }, 200, clearPin);
+      // Runs in the background — see promote-jobs.mjs's own doc comment for
+      // why: a promote can take minutes, and blocking this response for the
+      // whole duration is exactly what a reverse proxy in front of BOS times
+      // out on. The client polls "promote-status" with the returned jobId.
+      //
+      // Deliberately NOT clearPin here (unlike every other route above/below
+      // that mutates the pin). The old synchronous promote only ever sent
+      // clearPin once promote() had ALREADY fully finished — including
+      // base's rebuild-and-restart, which takes it OFFLINE for the whole
+      // rebuild. Sending clearPin on THIS immediate response would switch
+      // the browser to base before promote() has done any real work, right
+      // as base is about to go down for that same rebuild — exactly the
+      // "ECONNREFUSED" a user then hits. The client (promoteAndWait in
+      // client.ts) clears the pin itself, once polling confirms the job is
+      // actually done.
+      const jobId = startJob(() => promote(branch));
+      return sendJson(res, { ok: true, jobId });
     }
     // stop = stop the preview server but KEEP worktree + branch (can resume
     // via /pin). Order matters: clear the pin (→ switch to base) BEFORE

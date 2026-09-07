@@ -79,6 +79,38 @@ API in-process, over `fetch("/api/events")`, or over loopback HTTP.
 
 ---
 
+## Add a file handler ("Open with \<your app\>")
+
+Make your app one of the choices when the user opens a file of a given type in
+the Files app. **Manifest-only** — no core code change.
+
+1. Add a `fileHandlers` entry to your `AppManifest` (built-in `manifest.ts` or
+   installed `app.json`):
+   `{ type, capabilities, label?, default?, paramShape? }`.
+   - `type` — an exact base MIME type (`"text/html"`) or a family prefix
+     (`"image/"`). It is matched against the extension map in
+     `src/os/file-handlers.ts`; an extension missing there never matches.
+   - `capabilities` — `["render"]`, `["edit"]`, or both. Only a render-capable
+     handler can be the *selected* (double-click) handler.
+   - `default: true` — be the selected handler for the type until the user
+     picks otherwise from "Open with".
+2. Implement the open-file launch contract — read the file the OS hands you:
+   - **Built-in:** `params.path` + `params.action` (`"open"` | `"edit"`).
+   - **Installed (iframe):** `bosFilePath` + `bosFileAction` off
+     `window.location.search`; fetch the bytes with the SDK (needs the
+     `fs:read` capability).
+3. **Built-in render handlers only:** add `paramShape: { url: "raw" }` to also
+   receive the file's raw-bytes URL as `params.url` (and
+   `title: "basename"` for `params.title`). An iframe app never gets a `url` —
+   its `src` is always its own `manifest.url`.
+
+`src/apps/html-viewer/manifest.ts` is the worked example: its `text/html`
+declaration is why double-clicking an `.html` file opens a rendered preview.
+
+→ [File-type handlers & the launch contract](./apps/file-handlers.md)
+
+---
+
 ## Add a sub-agent / make one able to edit source
 
 - `agent_create` (action) or a `DEFAULTS` entry in

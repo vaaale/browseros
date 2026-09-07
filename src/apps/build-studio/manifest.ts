@@ -24,8 +24,8 @@ const manifest: AppManifest = {
     },
   ],
   // The event is emitted by the gitops pipeline, not by Build Studio, so it
-  // falls outside BS's owned `com.bos.build-studio.*` root — it needs an
-  // explicit namespace grant to register a handler for it (034 FR-023).
+  // falls outside BS's own `com.bos.build-studio.*` root. Kept as advisory
+  // documentation of what BS listens to — since 037 no grant is required.
   eventNamespaces: ["com.bos.gitops.*"],
 };
 

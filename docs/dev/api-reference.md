@@ -13,6 +13,7 @@ delimited JSON), not a single body.
 |---|---|---|
 | `/api/fs` | GET (`op=list\|read`), POST (`op=write\|mkdir\|delete\|rename`) | VFS operations |
 | `/api/fs/raw` | GET `?path=` | Raw VFS bytes (images, …) |
+| `/api/fs/raw/<path>` | GET | The same bytes, path‑shaped — what a previewed **document** is loaded from, so its relative `href`/`src` references resolve against its own VFS folder |
 | `/api/fs/upload` | POST `multipart/form-data` (`path`, `files`) | Drag‑and‑drop upload target — writes one or more files into a VFS directory |
 | `/api/fs/download` | GET `?path=` | Download a file as an attachment, or a folder as an in‑memory zip (recursive) |
 | `/api/settings` | GET, PATCH | OS settings (`data/settings.json`) |

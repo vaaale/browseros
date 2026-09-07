@@ -9,6 +9,7 @@ import { test, expect } from "@playwright/test";
 import { logger } from "../../src/lib/logging";
 import { ServiceToolBridge } from "../../src/lib/agent/service-tool-bridge";
 import { listCapabilities, unregisterCapabilities } from "../../src/lib/agent/capabilities-registry";
+import { unregisterToolGroups } from "../../src/lib/agent/tool-groups";
 import type { ToolInvocation, ToolInvocationResult } from "../../src/core/service/serviceToolTypes";
 
 // Every declaration() name used anywhere in this file, so a single afterEach
@@ -18,7 +19,17 @@ import type { ToolInvocation, ToolInvocationResult } from "../../src/core/servic
 // id would otherwise leak into unrelated tests (same convention as gate.test.ts
 // / tool-gate.test.ts's per-test try/finally).
 const ALL_TEST_TOOL_NAMES = ["echo_tool", "tool_one", "tool_two", "tool_three"];
-test.afterEach(() => unregisterCapabilities(ALL_TEST_TOOL_NAMES));
+test.afterEach(() => {
+  unregisterCapabilities(ALL_TEST_TOOL_NAMES);
+  unregisterToolGroups(["test-tools"]);
+});
+
+// 041-tool-groups: registerTool now takes the owning service's manifest-declared
+// groups. A tool resolving to none of them is rejected outright — there is no
+// fallback group any more (FR-041), which is why every call here supplies one.
+const GROUPS = [
+  { id: "test-tools", name: "Test Tools", description: "Tools declared by the fixture service in these tests." },
+];
 
 function declaration(name = "echo_tool") {
   return {
@@ -52,7 +63,7 @@ async function captureLogs<T>(fn: () => Promise<T> | T): Promise<{ result: T; re
 test.describe("registerTool", () => {
   test("adds a valid declaration to the registry and logs tool:registered", async () => {
     const bridge = new ServiceToolBridge();
-    const { result, records } = await captureLogs(() => bridge.registerTool("svc-a", declaration()));
+    const { result, records } = await captureLogs(() => bridge.registerTool("svc-a", declaration(), GROUPS));
 
     expect(result).toBe(true);
     expect(bridge.registry.get("svc-a:echo_tool")?.declaration.name).toBe("echo_tool");
@@ -63,8 +74,8 @@ test.describe("registerTool", () => {
 
   test("rejects a duplicate serviceId:name and logs a warning instead of overwriting", async () => {
     const bridge = new ServiceToolBridge();
-    bridge.registerTool("svc-a", declaration());
-    const { result, records } = await captureLogs(() => bridge.registerTool("svc-a", { ...declaration(), description: "a different description" }));
+    bridge.registerTool("svc-a", declaration(), GROUPS);
+    const { result, records } = await captureLogs(() => bridge.registerTool("svc-a", { ...declaration(), description: "a different description" }, GROUPS));
 
     expect(result).toBe(false);
     // The FIRST registration's declaration is untouched.
@@ -75,7 +86,7 @@ test.describe("registerTool", () => {
   test("rejects a malformed inputSchema without registering", async () => {
     const bridge = new ServiceToolBridge();
     const bad = { ...declaration(), inputSchema: { type: "not-a-real-json-schema-type" } };
-    const { result } = await captureLogs(() => bridge.registerTool("svc-a", bad));
+    const { result } = await captureLogs(() => bridge.registerTool("svc-a", bad, GROUPS));
 
     expect(result).toBe(false);
     expect(bridge.registry.has("svc-a:echo_tool")).toBe(false);
@@ -83,8 +94,8 @@ test.describe("registerTool", () => {
 
   test("two different services can each register a tool of the same name", () => {
     const bridge = new ServiceToolBridge();
-    expect(bridge.registerTool("svc-a", declaration())).toBe(true);
-    expect(bridge.registerTool("svc-b", declaration())).toBe(true);
+    expect(bridge.registerTool("svc-a", declaration(), GROUPS)).toBe(true);
+    expect(bridge.registerTool("svc-b", declaration(), GROUPS)).toBe(true);
     expect(bridge.serviceToolsFor("svc-a")).toHaveLength(1);
     expect(bridge.serviceToolsFor("svc-b")).toHaveLength(1);
   });
@@ -93,8 +104,8 @@ test.describe("registerTool", () => {
 test.describe("unregisterTool / unregisterServiceTools", () => {
   test("unregisterTool removes exactly the named tool", () => {
     const bridge = new ServiceToolBridge();
-    bridge.registerTool("svc-a", declaration("tool_one"));
-    bridge.registerTool("svc-a", declaration("tool_two"));
+    bridge.registerTool("svc-a", declaration("tool_one"), GROUPS);
+    bridge.registerTool("svc-a", declaration("tool_two"), GROUPS);
 
     bridge.unregisterTool("svc-a", "tool_one");
 
@@ -104,9 +115,9 @@ test.describe("unregisterTool / unregisterServiceTools", () => {
 
   test("unregisterServiceTools removes every tool owned by that service only", () => {
     const bridge = new ServiceToolBridge();
-    bridge.registerTool("svc-a", declaration("tool_one"));
-    bridge.registerTool("svc-a", declaration("tool_two"));
-    bridge.registerTool("svc-b", declaration("tool_three"));
+    bridge.registerTool("svc-a", declaration("tool_one"), GROUPS);
+    bridge.registerTool("svc-a", declaration("tool_two"), GROUPS);
+    bridge.registerTool("svc-b", declaration("tool_three"), GROUPS);
 
     bridge.unregisterServiceTools("svc-a");
 
@@ -121,7 +132,7 @@ test.describe("unregisterTool / unregisterServiceTools", () => {
       dispatched = true;
       return { callId: invocation.callId, result: "ok" };
     });
-    bridge.registerTool("svc-a", declaration());
+    bridge.registerTool("svc-a", declaration(), GROUPS);
     bridge.unregisterTool("svc-a", "echo_tool");
 
     await expect(bridge.invoke("svc-a", "echo_tool", { text: "hi" })).rejects.toThrow(/unknown tool/);
@@ -141,18 +152,20 @@ test.describe("capability registration (FR-005 wiring)", () => {
   // (those tests register the capability by hand, bypassing the bridge).
   test("registerTool adds a capability descriptor whose id equals the tool name", () => {
     const bridge = new ServiceToolBridge();
-    bridge.registerTool("svc-a", declaration());
+    bridge.registerTool("svc-a", declaration(), GROUPS);
 
     const cap = listCapabilities().find((c) => c.id === "echo_tool");
     expect(cap).toBeTruthy();
-    expect(cap?.group).toBe("Service Tools");
+    // 041-tool-groups: filed under the service's own declared group, not the
+    // old catch-all "Service Tools" bucket.
+    expect(cap?.group).toBe("test-tools");
     expect(cap?.context).toBe("tool");
     expect(cap?.description).toBe("Echoes the given text back");
   });
 
   test("unregisterTool removes the capability descriptor", () => {
     const bridge = new ServiceToolBridge();
-    bridge.registerTool("svc-a", declaration());
+    bridge.registerTool("svc-a", declaration(), GROUPS);
     bridge.unregisterTool("svc-a", "echo_tool");
 
     expect(listCapabilities().some((c) => c.id === "echo_tool")).toBe(false);
@@ -160,8 +173,8 @@ test.describe("capability registration (FR-005 wiring)", () => {
 
   test("unregisterServiceTools removes every capability descriptor it owned", () => {
     const bridge = new ServiceToolBridge();
-    bridge.registerTool("svc-a", declaration("tool_one"));
-    bridge.registerTool("svc-a", declaration("tool_two"));
+    bridge.registerTool("svc-a", declaration("tool_one"), GROUPS);
+    bridge.registerTool("svc-a", declaration("tool_two"), GROUPS);
 
     bridge.unregisterServiceTools("svc-a");
 
@@ -171,8 +184,8 @@ test.describe("capability registration (FR-005 wiring)", () => {
 
   test("a same-named tool from a DIFFERENT service keeps the capability alive after one owner unregisters", () => {
     const bridge = new ServiceToolBridge();
-    bridge.registerTool("svc-a", declaration());
-    bridge.registerTool("svc-b", declaration());
+    bridge.registerTool("svc-a", declaration(), GROUPS);
+    bridge.registerTool("svc-b", declaration(), GROUPS);
 
     bridge.unregisterTool("svc-a", "echo_tool");
     // svc-b's echo_tool is still registered — the capability (and therefore
@@ -188,7 +201,7 @@ test.describe("cache re-arm (version)", () => {
   test("version increments on register and unregister so a stale consumer can detect staleness", () => {
     const bridge = new ServiceToolBridge();
     const v0 = bridge.version;
-    bridge.registerTool("svc-a", declaration());
+    bridge.registerTool("svc-a", declaration(), GROUPS);
     const v1 = bridge.version;
     expect(v1).toBeGreaterThan(v0);
 
@@ -210,7 +223,7 @@ test.describe("cache re-arm (version)", () => {
     };
 
     expect(Object.keys(read())).toHaveLength(0);
-    bridge.registerTool("svc-a", declaration());
+    bridge.registerTool("svc-a", declaration(), GROUPS);
     expect(Object.keys(read())).toContain("svc-a:echo_tool");
   });
 });
@@ -218,7 +231,7 @@ test.describe("cache re-arm (version)", () => {
 test.describe("invoke — schema validation (FR-004)", () => {
   test("valid args pass validation and dispatch a tool_call", async () => {
     const bridge = new ServiceToolBridge();
-    bridge.registerTool("svc-a", declaration());
+    bridge.registerTool("svc-a", declaration(), GROUPS);
     let received: ToolInvocation | undefined;
     bridge.setDispatcher(async (_serviceId, invocation) => {
       received = invocation;
@@ -234,7 +247,7 @@ test.describe("invoke — schema validation (FR-004)", () => {
 
   test("invalid args (missing required field) are rejected without dispatching, and log tool_call:schema-rejected", async () => {
     const bridge = new ServiceToolBridge();
-    bridge.registerTool("svc-a", declaration());
+    bridge.registerTool("svc-a", declaration(), GROUPS);
     let dispatched = false;
     bridge.setDispatcher(async (_serviceId, invocation) => {
       dispatched = true;
@@ -253,7 +266,7 @@ test.describe("invoke — schema validation (FR-004)", () => {
 
   test("invalid args (wrong type) are rejected without dispatching", async () => {
     const bridge = new ServiceToolBridge();
-    bridge.registerTool("svc-a", declaration());
+    bridge.registerTool("svc-a", declaration(), GROUPS);
     let dispatched = false;
     bridge.setDispatcher(async (_serviceId, invocation) => {
       dispatched = true;
@@ -266,7 +279,7 @@ test.describe("invoke — schema validation (FR-004)", () => {
 
   test("a tool_error result from the dispatcher surfaces as a rejected invoke(), and logs tool_call:error", async () => {
     const bridge = new ServiceToolBridge();
-    bridge.registerTool("svc-a", declaration());
+    bridge.registerTool("svc-a", declaration(), GROUPS);
     bridge.setDispatcher(async (_serviceId, invocation): Promise<ToolInvocationResult> => ({
       callId: invocation.callId,
       error: { code: "boom", message: "the service tool threw" },
@@ -282,7 +295,7 @@ test.describe("invoke — schema validation (FR-004)", () => {
 
   test("forwards the caller's signal to the dispatcher (039-service-tool-exposure T033)", async () => {
     const bridge = new ServiceToolBridge();
-    bridge.registerTool("svc-a", declaration());
+    bridge.registerTool("svc-a", declaration(), GROUPS);
     let receivedSignal: AbortSignal | undefined;
     bridge.setDispatcher(async (_serviceId, invocation, signal) => {
       receivedSignal = signal;
@@ -297,7 +310,7 @@ test.describe("invoke — schema validation (FR-004)", () => {
 
   test("a dispatcher rejection tagged 'timeout' logs tool_call:timeout (warn), not tool_call:error", async () => {
     const bridge = new ServiceToolBridge();
-    bridge.registerTool("svc-a", declaration());
+    bridge.registerTool("svc-a", declaration(), GROUPS);
     bridge.setDispatcher(async () => {
       throw Object.assign(new Error("timed out waiting for tool call"), { code: "timeout" });
     });
@@ -313,7 +326,7 @@ test.describe("invoke — schema validation (FR-004)", () => {
 
   test("a dispatcher rejection tagged 'cancelled' (run abort) logs tool_call:cancelled (warn), not tool_call:error", async () => {
     const bridge = new ServiceToolBridge();
-    bridge.registerTool("svc-a", declaration());
+    bridge.registerTool("svc-a", declaration(), GROUPS);
     bridge.setDispatcher(async () => {
       throw Object.assign(new Error("tool call cancelled (run aborted)"), { code: "cancelled" });
     });
@@ -329,7 +342,7 @@ test.describe("invoke — schema validation (FR-004)", () => {
 
   test("a dispatcher rejection with no code (e.g. worker crash) logs tool_call:error", async () => {
     const bridge = new ServiceToolBridge();
-    bridge.registerTool("svc-a", declaration());
+    bridge.registerTool("svc-a", declaration(), GROUPS);
     bridge.setDispatcher(async () => {
       throw new Error(`worker exited before resolving tool call "x"`);
     });
@@ -344,7 +357,7 @@ test.describe("invoke — schema validation (FR-004)", () => {
 
   test("invoke() without a wired dispatcher throws (never silently succeeds)", async () => {
     const bridge = new ServiceToolBridge();
-    bridge.registerTool("svc-a", declaration());
+    bridge.registerTool("svc-a", declaration(), GROUPS);
 
     await expect(bridge.invoke("svc-a", "echo_tool", { text: "hi" })).rejects.toThrow(/dispatch is not wired/);
   });
@@ -353,8 +366,8 @@ test.describe("invoke — schema validation (FR-004)", () => {
 test.describe("parallelSafe passthrough (039 → AssistantTool)", () => {
   test("a declaration's parallelSafe survives registration verbatim", async () => {
     const bridge = new ServiceToolBridge();
-    bridge.registerTool("svc-a", { ...declaration("read_thing"), parallelSafe: true });
-    bridge.registerTool("svc-a", declaration("write_thing"));
+    bridge.registerTool("svc-a", { ...declaration("read_thing"), parallelSafe: true }, GROUPS);
+    bridge.registerTool("svc-a", declaration("write_thing"), GROUPS);
 
     const stored = [...bridge.registry.values()];
     const read = stored.find((t) => t.declaration.name === "read_thing");

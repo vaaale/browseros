@@ -1,7 +1,10 @@
 import "server-only";
 import { promises as fs } from "fs";
 import path from "path";
-import { listInstalledItems } from "@/system/items/installed";
+import { SECTIONS, isSection, sectionRoots, type DocSection } from "@/lib/docs/roots";
+
+export { SECTIONS, isSection };
+export type { DocSection };
 
 // The Docs app is a READ-ONLY viewer of the project documentation tree that
 // lives in source control under `docs/` (NOT runtime state). Two audiences:
@@ -25,13 +28,6 @@ import { listInstalledItems } from "@/system/items/installed";
 // bug this replaces.
 
 const DOCS_ROOT = path.join(process.cwd(), "docs");
-
-export const SECTIONS = ["usage", "dev"] as const;
-export type DocSection = (typeof SECTIONS)[number];
-
-export function isSection(value: string): value is DocSection {
-  return (SECTIONS as readonly string[]).includes(value);
-}
 
 // A node in the documentation tree: either a markdown page or a folder.
 export interface DocNode {
@@ -103,22 +99,6 @@ async function buildTree(absDir: string, relBase: string): Promise<DocNode[]> {
   return nodes.sort(compare);
 }
 
-// Every root that contributes pages to a section, in RESOLUTION ORDER: BOS's own
-// docs/ tree first, then each installed item's `docs/<section>/`. Items are
-// ordered by id so the merged tree is stable across requests, and BOS's own docs
-// win any path collision — an item can extend the tree, never shadow it.
-// A broken install (dangling symlink) contributes nothing.
-async function sectionRoots(section: DocSection): Promise<string[]> {
-  const items = await listInstalledItems().catch(() => []);
-  return [
-    path.join(DOCS_ROOT, section),
-    ...items
-      .filter((i) => i.facets.docs && !i.broken)
-      .sort((a, b) => a.id.localeCompare(b.id))
-      .map((i) => path.join(i.itemPath, "docs", section)),
-  ];
-}
-
 // Fold one root's nodes into the accumulated tree. Directories with the same
 // path merge (so an item could add a page to an existing folder); a file that
 // already exists at that path is dropped — the earlier root already provided it.
@@ -142,7 +122,7 @@ export async function docsTree(): Promise<Record<DocSection, DocNode[]>> {
   const out = {} as Record<DocSection, DocNode[]>;
   for (const section of SECTIONS) {
     let nodes: DocNode[] = [];
-    for (const root of await sectionRoots(section)) {
+    for (const root of await sectionRoots(DOCS_ROOT, section)) {
       nodes = mergeNodes(nodes, await buildTree(root, ""));
     }
     out[section] = nodes;
@@ -163,7 +143,7 @@ function resolveDocPath(sectionRoot: string, relPath: string): string | null {
 export async function getDoc(section: DocSection, relPath: string): Promise<Doc | undefined> {
   // Same order the tree was built in, so a page always reads back from the root
   // the tree took it from.
-  for (const root of await sectionRoots(section)) {
+  for (const root of await sectionRoots(DOCS_ROOT, section)) {
     const abs = resolveDocPath(root, relPath);
     if (!abs) continue;
     const content = await fs.readFile(abs, "utf8").catch(() => null);

@@ -28,7 +28,6 @@ export interface Ver {
 export interface SupState {
   base: Ver | null;
   previews: Ver[];
-  pushMode?: string;
   baseBranch?: string;
   serving?: { role: string; branch?: string } | null;
 }
@@ -55,18 +54,79 @@ export interface PostResult {
   warnings?: string[];
   /** 035 (FR-018): set when a conflict during this operation was escalated. */
   sessionId?: string;
+  /** Present on promote's initial (immediate) response — see promoteAndWait. */
+  jobId?: string;
+  /** Present only in a raw promote-status poll response, never elsewhere. */
+  status?: "running" | "done" | "failed";
 }
 
 export async function supervisorPost(path: string, body?: Record<string, unknown>): Promise<PostResult> {
+  let r: Response;
   try {
-    const r = await fetch(`/__supervisor/${path}`, {
+    r = await fetch(`/__supervisor/${path}`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...sessionHeader() },
       body: JSON.stringify(body ?? {}),
     });
-    return (await r.json()) as PostResult;
   } catch (e) {
+    // The request never reached a server at all (DNS/connection failure, offline).
     return { ok: false, error: (e as Error).message };
+  }
+  try {
+    return (await r.json()) as PostResult;
+  } catch {
+    // The request DID reach a server (unlike the network failure above), but its
+    // body wasn't JSON. The common cause: a reverse proxy in front of BOS (e.g.
+    // Dokploy's Traefik) times out waiting on a long-running operation (a
+    // promote's rebuild can genuinely take minutes) and returns its OWN error
+    // page to the client — while the real operation keeps running to
+    // completion server-side, unaware the proxy already gave up on it. This is
+    // NOT the same as the operation having failed.
+    return {
+      ok: false,
+      error: `The server didn't send back a valid response (HTTP ${r.status}). This usually means a reverse proxy timed out waiting on a long-running operation, not that it failed — check Settings → Versions again in a minute; it very likely completed anyway.`,
+    };
+  }
+}
+
+const PROMOTE_POLL_MS = 3000;
+
+async function fetchPromoteStatus(jobId: string): Promise<PostResult> {
+  try {
+    const r = await fetch(`/__supervisor/promote-status?jobId=${encodeURIComponent(jobId)}`, { headers: sessionHeader() });
+    return (await r.json()) as PostResult;
+  } catch {
+    // A poll request failing (network blip) must not be read as the promote
+    // itself having failed — keep polling rather than surface a false error.
+    return { status: "running" };
+  }
+}
+
+/** Promote can take minutes (a full base rebuild) — the server responds to
+ *  the initial POST immediately with a job id instead of blocking that one
+ *  HTTP request for the whole duration (which reverse proxies like Dokploy's
+ *  time out on well before the real operation finishes, even though it keeps
+ *  running to completion regardless). This polls "promote-status" until the
+ *  job is done or failed, then returns the SAME shape a synchronous promote
+ *  used to — every existing caller (promoteIssues, the sessionId/ok checks in
+ *  VersionsTab) needs no other change. */
+export async function promoteAndWait(branch: string): Promise<PostResult> {
+  const started = await supervisorPost("promote", { branch });
+  if (started.ok === false || !started.jobId) return started;
+  const jobId = started.jobId;
+  for (;;) {
+    await new Promise((resolve) => setTimeout(resolve, PROMOTE_POLL_MS));
+    const poll = await fetchPromoteStatus(jobId);
+    if (poll.status === "running") continue;
+    // Only now — once base has actually finished rebuilding and is healthy
+    // again — switch the pin to it. The initial POST deliberately doesn't
+    // (see the matching comment in control.mjs's promote route): clearing
+    // it any earlier would bounce the browser to base while it's mid-
+    // rebuild and unreachable. A failed promote never touches the pin
+    // either, matching the old synchronous behavior — stay wherever the
+    // user already was.
+    if (poll.status === "done") await supervisorPost("pin", { version: "base" });
+    return poll;
   }
 }
 

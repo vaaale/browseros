@@ -54,6 +54,7 @@ interface Values {
   opencodeCustomNpmPackage: string;
   opencodeCustomModelId: string;
   opencodeModel: string;
+  opencodeContextSize: number | undefined;
   cliTimeoutSec: number;
 }
 interface TestResult {
@@ -279,6 +280,7 @@ export function DevHarnessTab() {
           opencodeCustomNpmPackage: vals.opencodeCustomNpmPackage || "",
           opencodeCustomModelId: vals.opencodeCustomModelId || "",
           opencodeModel: vals.opencodeModel || "",
+          opencodeContextSize: typeof vals.opencodeContextSize === "number" ? vals.opencodeContextSize : undefined,
           cliTimeoutSec: typeof vals.cliTimeoutSec === "number" ? vals.cliTimeoutSec : 1000,
         });
         setSecretsSet((s?.secretsSet ?? {}) as Record<string, boolean>);
@@ -718,6 +720,21 @@ export function DevHarnessTab() {
           </div>
         </label>
         {modelsHint("opencode") && <p className="text-[11px] text-white/40">{modelsHint("opencode")}</p>}
+        <label className={rowLabelCls}>
+          <span className="text-white/60">Context window</span>
+          <input
+            type="number"
+            min={1}
+            value={v.opencodeContextSize ?? ""}
+            disabled={!opencodeEnabled}
+            onChange={(e) => set({ opencodeContextSize: e.target.value ? Number(e.target.value) : undefined })}
+            placeholder="blank = OpenCode's own default"
+            className={fieldCls}
+          />
+        </label>
+        <p className="text-white/40">
+          Context window (tokens) of the model above, written into opencode.json so OpenCode stops before overflowing it.
+        </p>
         <p className="rounded border border-amber-400/20 bg-amber-400/10 px-3 py-2 text-amber-100/80">
           OpenCode runs with <code>--auto</code> (no edit/command prompts). Intended to be sandboxed (e.g. Docker). BOS source edits
           require Supervisor isolation and run only in a feature-branch worktree.

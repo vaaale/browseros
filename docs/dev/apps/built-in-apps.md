@@ -39,7 +39,7 @@ folder with a manifest" model as installed apps.
 
 | id | name | icon | order | singleton | notes |
 |---|---|---|---|---|---|
-| `files` | Files | `Folder` | 10 | no | VFS browser/editor; image preview; set‑wallpaper |
+| `files` | Files | `Folder` | 10 | no | VFS browser/editor; image preview; set‑wallpaper; "Open with" → [file-handlers.md](./file-handlers.md) |
 | `browser` | Browser | `Globe` | 20 | no | proxy web view |
 | `chat` | **Assistant** | `Bot` | 30 | yes | the CopilotKit chat |
 | `memory` | Memory | `Brain` | 40 | yes | user profile + agent memory editor |
@@ -49,6 +49,48 @@ folder with a manifest" model as installed apps.
 
 > Note the built‑in chat app's `id` is **`chat`** but its display name is
 > **"Assistant"**. Launch it with `bos_app_launch("chat")`.
+
+---
+
+## Declaring file-type handlers (`fileHandlers`)
+
+A manifest can declare which MIME types the app can **render** and/or **edit**.
+The OS's file-handler registry derives "which apps open this type?" from every
+installed app's declarations, so the Files app's "Open with" menu and its
+double-click behavior pick the app up with **no core code change**:
+
+```typescript
+const manifest: AppManifest = {
+  id: "html-viewer",
+  // …
+  fileHandlers: [
+    {
+      type: "text/html",              // exact base type, or a family prefix ("image/")
+      capabilities: ["render"],       // "render" (preview) and/or "edit"
+      label: "Web View",              // shown as "Open with Web View"; defaults to `name`
+      default: true,                  // initial selected handler for the type
+      paramShape: { url: "raw", title: "basename" },
+    },
+  ],
+};
+```
+
+- **`type`** — matched against the file's base MIME type (parameters stripped on
+  both sides) from the map in `src/os/file-handlers.ts`. A trailing slash makes
+  it a family prefix: `image/` covers `image/png`, `image/webp`, ….
+- **`capabilities`** — only a **render**-capable handler can be the *selected*
+  (double-click) handler for a type; an edit-only handler is still offered in
+  "Open with" as a one-shot choice.
+- **`default`** — the selected handler until the user picks another from
+  "Open with"; their choice persists in `data/system/file-handlers.json`.
+- **`paramShape`** — which optional contract fields to include in the launch.
+  `url: "raw"` applies to **built-in handlers only** (an iframe app's `src` is
+  always its own `manifest.url`).
+
+The same field works verbatim in an installed app's `app.json`. What the OS
+hands your app when the user opens a file with it — and what your app owes in
+return — is the **open-file launch contract**: see
+[file-handlers.md](./file-handlers.md).
 
 ---
 

@@ -1,8 +1,8 @@
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
+import path from "node:path";
 import { BASE_PORT, PUBLIC_PORT, CANONICAL_DATA, SPECS_ROOT, DEV_MAX_OLD_SPACE_MB, BASE_RESTART_BACKOFF_MS, BASE_RESTART_MAX, REPO } from "./config.mjs";
 import { git } from "./gitutil.mjs";
-import { addBaseWorktree } from "./worktree.mjs";
 import { runBuild } from "./build.mjs";
 import { startProc, stopProc, waitHealthy, wireExitHandler, setBaseExitHandler } from "./proc.mjs";
 import { state, baseSupervision } from "./state.mjs";
@@ -30,16 +30,19 @@ export async function regenApps(warnings) {
   }
 }
 
-// Build + start BASE from a detached worktree at `commit` (no commit step —
-// base is not a candidate branch). Runs against canonical data. A base build
-// failure is fatal at boot, so this still throws after logging the captured
-// reason.
+// Build + start BASE directly in REPO — base's one permanent home, in every
+// mode (042-worktree-collision: base used to be built into its own detached
+// worktree, or — worse, on promote — adopted a feature branch's PREVIEW
+// worktree in place, which a later begin/build/discard for that same branch
+// name could legitimately tear down out from under the live process. REPO is
+// never a path any preview lifecycle op computes or touches, so there is
+// nothing left to collide with). A base build failure is fatal at boot, so
+// this still throws after logging the captured reason.
 export async function buildAndStartBase(commit) {
-  const wt = await addBaseWorktree(commit);
-  state.base = { role: "base", branch: state.baseBranch, worktree: wt, dataDir: CANONICAL_DATA, port: BASE_PORT, state: "building", proc: null, commit };
+  state.base = { role: "base", branch: state.baseBranch, worktree: REPO, dataDir: CANONICAL_DATA, port: BASE_PORT, state: "building", proc: null, commit };
   const lctx = { branch: state.baseBranch, versionLabel: "base" };
   slog("info", "build", `building base (${state.baseBranch} @ ${commit.slice(0, 8)})`, lctx);
-  const build = await runBuild(wt, state.baseBranch, lctx);
+  const build = await runBuild(REPO, state.baseBranch, lctx);
   state.base.buildLog = build.relPath;
   if (!build.ok) {
     state.base.state = "failed";
@@ -77,6 +80,11 @@ export function startBaseDevProc(v) {
       BOS_BASE_BRANCH: state.baseBranch,
       BOS_SPECS_ROOT: SPECS_ROOT,
       BOS_SUPERVISOR_URL: `http://127.0.0.1:${PUBLIC_PORT}`,
+      // See the matching comment in proc.mjs's startProc — same reasoning,
+      // for base's dev-mode spawn path specifically.
+      NODE_PATH: process.env.NODE_PATH
+        ? `${process.env.NODE_PATH}${path.delimiter}${path.join(REPO, "node_modules")}`
+        : path.join(REPO, "node_modules"),
     },
     // Redirect Next.js stderr → supervisor stdout so Docker/Dokploy doesn't
     // classify normal request logs (which Next.js writes to stderr) as errors.

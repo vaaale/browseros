@@ -1,10 +1,17 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { CANONICAL_DATA, REMOTE, PUSH_MODE } from "./config.mjs";
+import { CANONICAL_DATA } from "./config.mjs";
 import { git } from "./gitutil.mjs";
 import { state } from "./state.mjs";
 import { log, slog } from "./log.mjs";
 import { isGitAuthFailure } from "./git-auth.mjs";
+import { resolveRemoteToken, buildGitCredential } from "./secrets.mjs";
+
+// Matches src/lib/gitops/filesystems.ts's SOURCE_FS_ID. The Supervisor is a
+// separate, unbundled process with no import access to src/lib, so this is a
+// literal duplicate of that constant's value, not a shared import — keep them
+// in sync by hand if the source filesystem's id ever changes.
+const CODE_FS_ID = "bos-src";
 
 // Push `branch` to `remote`, recovering from a non-fast-forward rejection
 // caused by BrowserOS's own checkout being shallow — Dokploy re-clones
@@ -18,9 +25,10 @@ import { isGitAuthFailure } from "./git-auth.mjs";
 // clear, actionable error instead of guessing; the per-remote "Push" button
 // is where a human resolves that (rebase-then-retry, or an explicit
 // force-push).
-export async function pushWithRecovery(repoPath, remote, branch, extraArgs = []) {
+export async function pushWithRecovery(repoPath, remote, branch, { extraArgs = [], credArgs = [], env } = {}) {
+  const attemptPush = () => git([...credArgs, "push", remote, branch, ...extraArgs], repoPath, env);
   try {
-    await git(["push", remote, branch, ...extraArgs], repoPath);
+    await attemptPush();
     return;
   } catch (e) {
     const msg = e?.message || String(e);
@@ -29,13 +37,14 @@ export async function pushWithRecovery(repoPath, remote, branch, extraArgs = [])
     let shallow = false;
     try {
       shallow = (await git(["rev-parse", "--is-shallow-repository"], repoPath)) === "true";
-    } catch {
+    } catch (e) {
       // Can't determine shallow-ness — proceed as if not shallow; the
       // fetch below still runs and the merge-base checks after it are what
       // actually decide whether recovery is possible.
+      slog("warn", "push", `could not determine shallow-ness of ${repoPath}, assuming not shallow: ${e?.message || e}`);
     }
-    if (shallow) await git(["fetch", "--unshallow", remote], repoPath).catch((e2) => slog("warn", "push", `unshallow fetch failed: ${e2?.message || e2}`));
-    await git(["fetch", remote, branch], repoPath).catch((e2) => slog("warn", "push", `fetch ${remote}/${branch} failed: ${e2?.message || e2}`));
+    if (shallow) await git([...credArgs, "fetch", "--unshallow", remote], repoPath, env).catch((e2) => slog("warn", "push", `unshallow fetch failed: ${e2?.message || e2}`));
+    await git([...credArgs, "fetch", remote, branch], repoPath, env).catch((e2) => slog("warn", "push", `fetch ${remote}/${branch} failed: ${e2?.message || e2}`));
 
     let mergeBase;
     try {
@@ -50,13 +59,18 @@ export async function pushWithRecovery(repoPath, remote, branch, extraArgs = [])
     try {
       await git(["merge-base", "--is-ancestor", `${remote}/${branch}`, "HEAD"], repoPath);
       canFastForward = true;
-    } catch {
+    } catch (e) {
+      // "not an ancestor" (genuine divergence) is the expected shape of this
+      // failure and is handled below (throws a clear divergence error) — but
+      // log it too, since an unrelated failure (git itself erroring) would
+      // otherwise be indistinguishable from a real divergence in the logs.
+      slog("warn", "push", `is-ancestor check for ${remote}/${branch} failed: ${e?.message || e}`);
       canFastForward = false;
     }
     if (!canFastForward) {
       throw new Error(`push to ${remote}/${branch} rejected: local and the remote have genuinely diverged (not just a shallow-history artifact) — resolve via Settings → Versions → Git Remotes, which can rebase or force-push. Original error: ${msg}`);
     }
-    await git(["push", remote, branch, ...extraArgs], repoPath);
+    await attemptPush();
   }
 }
 
@@ -92,23 +106,43 @@ export async function pushNow() {
   return { pushed: state.baseBranch };
 }
 
-// Auto-push: for each non-origin remote with autoPush enabled in the
-// git-remotes config, push the base branch. Errors are recorded (never just
-// logged) but do not stop other pushes.
-export async function runAutoPush(repoPath, branch) {
+// Auto-push: for each remote belonging to `filesystemId` with autoPush
+// enabled in the git-remotes config, push `branch`. Remote NAMES are not
+// scoping — every filesystem's remote is conventionally named "origin" (each
+// repo has exactly one push target), so filtering by name would (and
+// previously did) exclude every real remote in a typical deployment. A
+// config with no `filesystem` tag at all is a legacy entry that belongs to
+// the BOS source checkout (mirrors belongsToFilesystem in
+// src/app/api/git-remotes/route.ts). Resolves each remote's stored
+// credential itself — the Supervisor decrypts secrets.json directly (see
+// secrets.mjs's own doc comment) rather than delegating through base's API,
+// so this still works even when base isn't running. Errors are recorded
+// (never just logged) but do not stop other pushes.
+export async function runAutoPush(repoPath, branch, filesystemId) {
   const configPath = path.join(CANONICAL_DATA, "config", "git-remotes.json");
   let configs;
   try {
     configs = JSON.parse(await fs.readFile(configPath, "utf8"));
-  } catch {
+  } catch (e) {
+    if (e?.code !== "ENOENT") slog("warn", "push", `reading git-remotes.json (${configPath}) failed — auto-push skipped: ${e?.message || e}`);
     return [];
   }
-  const remotes = (Array.isArray(configs) ? configs : []).filter((r) => r.autoPush && r.name !== "origin");
+  const remotes = (Array.isArray(configs) ? configs : []).filter(
+    (r) => r.autoPush && (r.filesystem ?? CODE_FS_ID) === filesystemId,
+  );
   if (!remotes.length) return [];
   const results = [];
   for (const remote of remotes) {
     try {
-      await pushWithRecovery(repoPath, remote.name, branch, ["--follow-tags"]);
+      let credArgs = [];
+      let env;
+      const resolved = resolveRemoteToken(CANONICAL_DATA, remote.name, remote.authType, remote.provider);
+      if (resolved?.token) {
+        const cred = buildGitCredential(CANONICAL_DATA, resolved.token);
+        credArgs = cred.args;
+        env = cred.env;
+      }
+      await pushWithRecovery(repoPath, remote.name, branch, { extraArgs: ["--follow-tags"], credArgs, env });
       results.push({ remoteName: remote.name, status: "success" });
       log(`auto-push to ${remote.name}: success`);
     } catch (e) {
@@ -120,24 +154,12 @@ export async function runAutoPush(repoPath, branch) {
   return results;
 }
 
-// Push the just-promoted base branch to origin (gated by PUSH_MODE) and to
-// every autoPush-enabled remote. Never throws — a push failure must not
-// undo an already-successful promote — but every outcome is both logged and
-// returned so the caller (and ultimately the UI) can report "promoted, but
-// push to X failed: <reason>" instead of a false all-clear.
+// Push the just-promoted base branch to every autoPush-enabled remote
+// configured for the code repo (CODE_FS_ID). Never throws — a push failure
+// must not undo an already-successful promote — but every outcome is both
+// logged and returned (via runAutoPush) so the caller (and ultimately the
+// UI) can report "promoted, but push to X failed: <reason>" instead of a
+// false all-clear.
 export async function pushPromotedBase(repoPath, branch) {
-  const results = [];
-  if (PUSH_MODE === "auto-on-promote") {
-    try {
-      await pushOriginViaBaseApi(branch);
-      results.push({ remoteName: REMOTE, status: "success" });
-      log(`auto-push to ${REMOTE}: success`);
-    } catch (e) {
-      const msg = e.message || String(e);
-      results.push({ remoteName: REMOTE, status: "failed", error: msg });
-      slog("error", "promote", `auto-push to ${REMOTE} failed: ${msg}`, { branch, versionLabel: "base" });
-    }
-  }
-  results.push(...(await runAutoPush(repoPath, branch)));
-  return results;
+  return runAutoPush(repoPath, branch, CODE_FS_ID);
 }

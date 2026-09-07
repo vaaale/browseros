@@ -3,13 +3,13 @@
 // See user-specs/002-service-daemons/spec.md for the full architecture.
 
 import type { Worker } from "node:worker_threads";
-import type { DeploymentMode, ToolDeclaration, ToolInvocation, ToolInvocationResult } from "./serviceToolTypes";
+import type { DeploymentMode, ToolDeclaration, ToolGroupDeclaration, ToolInvocation, ToolInvocationResult } from "./serviceToolTypes";
 import type { EventRecord } from "@/lib/events/types";
 
 // Re-exported so worker-facing code (ServiceManager, worker entrypoints, test
 // fixtures) can import the tool declaration shape from the same module as the
 // rest of the service protocol (039-service-tool-exposure T001).
-export type { ToolDeclaration } from "./serviceToolTypes";
+export type { ToolDeclaration, ToolGroupDeclaration } from "./serviceToolTypes";
 
 // ── Manifest (services/<id>/service.json) ──────────────────────────────────
 
@@ -39,10 +39,16 @@ export interface ServiceManifest {
   /** Opt-in to native tool exposure (039-service-tool-exposure, ADR-002).
    *  Absent ⇒ `"default"` (no tools; pre-existing behavior, unchanged). */
   deploymentMode?: DeploymentMode;
-  /** 034-event-notification-system, FR-023: statically-granted event-type
-   *  namespace prefixes (each a "prefix.*" pattern or exact type) this
-   *  service may register handlers for, beyond its own owned root
-   *  (`com.bos.<id>.*`). Absent ⇒ no extra grants. */
+  /** The tool group(s) this item contributes (041-tool-groups, ADR-5).
+   *  REQUIRED when `deploymentMode === "tools"` — its tools appear under these
+   *  headings in the assistant's prompt and in Settings → Tools, replacing the
+   *  old catch-all "Service Tools" bucket. Validated at install. */
+  toolGroups?: ToolGroupDeclaration[];
+  /** 034-event-notification-system: event-type namespace prefixes (each a
+   *  "prefix.*" pattern or exact type) this service is interested in.
+   *  **Advisory only since 037 (Event Namespace Relaxation)** — registration
+   *  is no longer namespace-gated, so this documents intent rather than
+   *  granting access. Any service may register a handler for any type. */
   eventNamespaces?: string[];
 }
 

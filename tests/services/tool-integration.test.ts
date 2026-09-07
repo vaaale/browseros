@@ -24,8 +24,19 @@ import type { ServiceManifest } from "../../src/core/service/types";
 import { useTestDataDir, resetServiceSingletons } from "./_test-env";
 import { installToolFixtureService, ECHO_TOOL_NAME } from "./_tool-service-fixtures";
 
+// 041-tool-groups: a tools-mode manifest must declare the group(s) its tools
+// appear under — registerTool rejects anything that resolves to none, since the
+// old "Service Tools" fallback bucket is gone.
+const FIXTURE_TOOL_GROUPS = [
+  {
+    id: "fixture-tools",
+    name: "Fixture Tools",
+    description: "Tools declared by the worker-thread fixture service used in these tests.",
+  },
+];
+
 function manifest(id: string): ServiceManifest {
-  return { id, name: id, version: "1.0.0", entry: "index.js", deploymentMode: "tools" };
+  return { id, name: id, version: "1.0.0", entry: "index.js", deploymentMode: "tools", toolGroups: FIXTURE_TOOL_GROUPS };
 }
 
 // Same "everything visible" gate the existing agent-loop tests use — gating
@@ -150,7 +161,9 @@ test.describe("service tool exposure — end to end (US1)", () => {
 
       // The capability registry (not just the bridge's own map) now knows
       // about the live tool, under the same id as its model-facing name.
-      expect(listCapabilities().some((c) => c.id === ECHO_TOOL_NAME && c.group === "Service Tools")).toBe(true);
+      // 041-tool-groups: filed under the manifest's own declared group; the
+      // shared "Service Tools" bucket no longer exists.
+      expect(listCapabilities().some((c) => c.id === ECHO_TOOL_NAME && c.group === "fixture-tools")).toBe(true);
 
       const tools = assistantTools();
 

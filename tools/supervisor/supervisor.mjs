@@ -27,7 +27,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { PUBLIC_PORT, BASE_PORT, POOL_SIZE, CANONICAL_DATA, BASE_DEV, REUSE_BASE_PORT } from "./lib/config.mjs";
 import { git } from "./lib/gitutil.mjs";
-import { initLogStore, getLogStore, startPruneInterval, log } from "./lib/log.mjs";
+import { initLogStore, getLogStore, startPruneInterval, log, slog } from "./lib/log.mjs";
 import { probeOnce, reapOrphanedPreviewServers, stopProc } from "./lib/proc.mjs";
 import { reconcileWorktrees, assertRepoIntegrity } from "./lib/worktree.mjs";
 import { pruneAllCoupledWorktrees } from "./lib/coupled-repos.mjs";
@@ -52,8 +52,11 @@ async function main() {
     const logStore = getLogStore();
     if (Number(cfg.retentionDays) > 0) logStore.retentionDays = Number(cfg.retentionDays);
     if (Number(cfg.maxSizeMb) > 0) logStore.maxBytes = Number(cfg.maxSizeMb) * 1024 * 1024;
-  } catch {
-    // No logging.json (or it's malformed) — LogStore's own defaults apply.
+  } catch (e) {
+    // ENOENT (no logging.json written yet) is expected — LogStore's own
+    // defaults apply silently. Malformed JSON doing the same is a real
+    // misconfiguration worth surfacing.
+    if (e?.code !== "ENOENT") slog("warn", "boot", `reading logging.json failed, using LogStore defaults: ${e?.message || e}`);
   }
   startPruneInterval();
 
@@ -61,7 +64,10 @@ async function main() {
     await buildAndStartBaseDev();
   } else if (REUSE_BASE_PORT) {
     let commit;
-    try { commit = await git(["rev-parse", "HEAD"]); } catch { commit = undefined; }
+    try { commit = await git(["rev-parse", "HEAD"]); } catch (e) {
+      slog("warn", "boot", `reading current commit failed: ${e?.message || e}`);
+      commit = undefined;
+    }
     state.base = { role: "base", port: REUSE_BASE_PORT, state: "ready", reused: true, branch: state.baseBranch, commit };
     log(`reusing existing server on :${REUSE_BASE_PORT} as base (dev mode)`);
     if (!(await probeOnce(REUSE_BASE_PORT))) {

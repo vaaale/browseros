@@ -351,7 +351,22 @@ export class ServiceManager {
           });
           break;
         }
-        serviceToolBridge().registerTool(serviceId, declaration);
+        // 041-tool-groups: the manifest's declared groups decide which heading
+        // this tool appears under. A tool that doesn't resolve to one is
+        // rejected outright — there is no fallback group (FR-041) — and the
+        // failure is written to the service's `lastError` so it surfaces in
+        // Settings → Services rather than living only in the log (FR-040).
+        const ok = serviceToolBridge().registerTool(serviceId, declaration, def.manifest.toolGroups ?? []);
+        if (!ok) {
+          const declared = (def.manifest.toolGroups ?? []).map((g) => g.id);
+          const reason = declared.length === 0
+            ? `Tool "${declaration.name}" was rejected: this service declares no toolGroups in service.json. Add a toolGroups entry naming the group its tools belong to.`
+            : `Tool "${declaration.name}" was rejected: it does not resolve to one of this service's declared tool groups (${declared.join(", ")}).`;
+          // Keep the state (the service itself is fine) but surface the reason —
+          // setState is what writes lastError AND emits service:status:changed,
+          // which is how Settings → Services learns about it.
+          registry.setState(serviceId, def.state, reason);
+        }
         break;
       }
       case "tool_result":

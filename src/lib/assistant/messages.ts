@@ -118,9 +118,46 @@ export function truncateForEdit(messages: ChatMessage[], messageId: string): Cha
   return messages.slice(0, idx);
 }
 
+/**
+ * Tool ids a single find_tools tool-result reveals.
+ *
+ * TWO SHAPES, PERMANENTLY (041 ADR-4). Pre-041 results were a bare JSON array
+ * of `{id}`; from 041 they are an envelope `{results, totalMatches, ...}`. This
+ * is not a migration window — transcripts are replayed from disk forever and
+ * are never rewritten, so both must keep working indefinitely.
+ *
+ * `results` is the ONLY reveal source. The envelope's `alreadyVisible` and
+ * `groups` also carry ids and must never be read here: `alreadyVisible` is
+ * harmless today (those tools are visible by definition) but would become a
+ * gate bypass the moment it carried something the agent isn't granted, and
+ * `groups` is an index, not a grant.
+ *
+ * Shared with src/lib/agent/tool-gate.ts so the two derivation sites cannot
+ * drift — a disagreement there fails SILENTLY, by simply not revealing a tool.
+ */
+export function idsFromFindToolsPayload(payload: unknown): string[] {
+  const rows = Array.isArray(payload)
+    ? payload
+    : Array.isArray((payload as { results?: unknown })?.results)
+      ? ((payload as { results: unknown[] }).results)
+      : [];
+  const out: string[] = [];
+  for (const r of rows) {
+    const id = (r as { id?: unknown })?.id;
+    if (typeof id === "string" && id) out.push(id);
+  }
+  return out;
+}
+
 /** Tool ids revealed by prior find_tools results in THIS conversation (025).
  *  Derived statelessly from the transcript, mirroring tool-gate.ts, but over
- *  the persisted message shape. */
+ *  the persisted message shape.
+ *
+ *  Reads the CANONICAL transcript, never the compacted model view (041 R9):
+ *  agent-loop.ts calls this with `messages`, not `contextMessages`. Compaction
+ *  clears older tool results from what the model SEES while the reveal must
+ *  survive — switching this to the view would silently un-reveal tools
+ *  mid-conversation. */
 export function deriveRevealedIds(messages: ChatMessage[]): Set<string> {
   const callNames = new Map<string, string>();
   for (const m of messages) {
@@ -134,12 +171,7 @@ export function deriveRevealedIds(messages: ChatMessage[]): Set<string> {
     if (m.role !== "tool" || !m.toolCallId) continue;
     if (callNames.get(m.toolCallId) !== "find_tools") continue;
     try {
-      const payload = JSON.parse(m.content ?? "");
-      if (!Array.isArray(payload)) continue;
-      for (const r of payload) {
-        const id = (r as { id?: unknown })?.id;
-        if (typeof id === "string" && id) revealed.add(id);
-      }
+      for (const id of idsFromFindToolsPayload(JSON.parse(m.content ?? ""))) revealed.add(id);
     } catch {
       /* malformed find_tools payload — skip */
     }

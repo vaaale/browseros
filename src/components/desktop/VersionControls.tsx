@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { FileText } from "lucide-react";
 import { useLogContextMenu } from "@/components/logging/useLogContextMenu";
 import { useOSStore } from "@/store/os-provider";
-import { supervisorPost, promoteIssues, type SupState, type Branches } from "@/lib/supervisor/client";
+import { supervisorPost, promoteAndWait, promoteIssues, type SupState, type Branches } from "@/lib/supervisor/client";
 import { ConflictSessionBadge } from "@/components/gitops/ConflictSessionBadge";
 
 interface LogRecord {
@@ -100,6 +100,7 @@ export function VersionControls() {
   const [state, setState] = useState<SupState | null>(null);
   const [selectedBranch, setSelectedBranch] = useState("");
   const [busy, setBusy] = useState(false);
+  const [promoting, setPromoting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [showLogs, setShowLogs] = useState(false);
   const [recentErrors, setRecentErrors] = useState(0);
@@ -262,7 +263,20 @@ export function VersionControls() {
   };
   const promotePreview = async () => {
     setErr(null);
-    const r = await post("promote", { branch: selectedBranch });
+    // Not `post()` (a plain supervisorPost) — promote responds immediately
+    // with a job id rather than the real result (see control.mjs/client.ts),
+    // since blocking one HTTP request for the whole rebuild is what a
+    // reverse proxy in front of BOS times out on. promoteAndWait polls until
+    // it's actually done and only then returns the final result — treating
+    // the immediate job-id response as if it were that result (what this
+    // used to do) reloads the page before promote has done any real work,
+    // right as base is about to go down for its own rebuild.
+    setBusy(true);
+    setPromoting(true);
+    const r = await promoteAndWait(selectedBranch).finally(() => {
+      setBusy(false);
+      setPromoting(false);
+    });
     if (r.ok) {
       const issues = promoteIssues(r);
       if (issues) {
@@ -308,6 +322,7 @@ export function VersionControls() {
       {hasFeatureSelection && (
         <>
           {building && <span className="text-amber-300/90">building {selectedBranch}...</span>}
+          {promoting && <span className="text-amber-300/90">promoting {selectedBranch} — this can take a few minutes...</span>}
           {notBuilt && <span className="text-white/50">not built</span>}
           {failed && (
             <span className="max-w-[260px] truncate text-red-300/90" title={preview?.buildError || "build failed"}>
@@ -330,7 +345,18 @@ export function VersionControls() {
           )}
           {previewingSelected && <span className="text-emerald-300/90">previewing</span>}
           {failed && <button disabled={busy} onClick={retryBuild} className={`${btn} bg-amber-500/25 hover:bg-amber-500/40`}>Retry</button>}
-          <button disabled={busy || building || failed} onClick={promotePreview} title="Build if needed, then merge this feature branch — code, specs, and user-apps content — into base." className={`${btn} bg-emerald-500/25 hover:bg-emerald-500/40`}>Promote</button>
+          <button
+            disabled={busy || building || failed || !previewingSelected}
+            onClick={promotePreview}
+            title={
+              previewingSelected
+                ? "Merge this feature branch — code, specs, and user-apps content — into base."
+                : "Switch to Preview first — Promote requires actively viewing the candidate running, not just a passed health check."
+            }
+            className={`${btn} bg-emerald-500/25 hover:bg-emerald-500/40`}
+          >
+            Promote
+          </button>
           <button disabled={busy || building || stopped || notBuilt} onClick={stopPreview} title="Stop the preview server but keep the branch/worktree" className={`${btn} bg-white/10 hover:bg-white/20`}>Stop</button>
           <button disabled={busy || building} onClick={discardPreview} title="Destroy the worktree and delete the feature branch" className={`${btn} bg-red-500/20 hover:bg-red-500/35`}>Discard</button>
         </>

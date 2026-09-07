@@ -1,5 +1,8 @@
 // Core BrowserOS (BOS) types shared between server and client.
 // Keep this module free of React and Node imports so it is safe everywhere.
+// (pipeline test: harmless comment-only change, 2026-09-01.)
+// (pipeline test 2: verifying the promote worktree-teardown race fix.)
+// (pipeline test 3: verifying the async promote fix.)
 
 export interface AppManifest {
   id: string;
@@ -37,11 +40,18 @@ export interface AppManifest {
    *  (src/lib/events/register-ui-handlers.ts). Headless handlers are NOT
    *  declared here — they are runtime-declared by running services (ADR-3). */
   eventHandlers?: AppEventHandlerDeclaration[];
-  /** 034-event-notification-system (FR-023): statically-granted event-type
-   *  namespace prefixes (each a "prefix.*" pattern or exact type) this app
-   *  may register handlers for, beyond its own owned root
-   *  (`com.bos.<id>.*`). Absent ⇒ no extra grants. */
+  /** 034-event-notification-system: event-type namespace prefixes (each a
+   *  "prefix.*" pattern or exact type) this app is interested in. **Advisory
+   *  only since 037 (Event Namespace Relaxation)** — registration is no
+   *  longer namespace-gated, so this documents intent rather than granting
+   *  access. Any app may register a handler for any event type. */
   eventNamespaces?: string[];
+  /** 036-file-type-handlers (FR-001): file types this app can render and/or
+   *  edit. Declarative like `eventHandlers` above — the file-handler registry
+   *  (src/lib/file-handlers/registry.ts) derives the "which apps open this
+   *  type?" answer from every installed app's declarations, so registering a
+   *  handler is a manifest edit with no core code change (FR-013). */
+  fileHandlers?: AppFileHandlerDeclaration[];
 }
 
 /** One statically-declared UI event handler (AppManifest.eventHandlers). */
@@ -54,6 +64,32 @@ export interface AppEventHandlerDeclaration {
   description?: string;
   /** lucide-react icon name; defaults to the app's own icon. */
   icon?: string;
+}
+
+/** What a file handler can do with a type: show it, change it, or both. */
+export type FileHandlerCapability = "render" | "edit";
+
+/** One statically-declared file-type handler (AppManifest.fileHandlers, 036).
+ *  The OS hands the app a file through the open-file launch contract — see
+ *  docs/dev/apps/file-handlers.md. */
+export interface AppFileHandlerDeclaration {
+  /** MIME type handled — an exact base type ("text/html") or a trailing-slash
+   *  prefix covering a whole family ("image/"). Parameters are ignored on both
+   *  sides of the match, so "text/html; charset=utf-8" matches "text/html". */
+  type: string;
+  /** "render" = can preview/display it; "edit" = can modify it. Only a
+   *  render-capable handler may be the SELECTED (double-click) handler. */
+  capabilities: FileHandlerCapability[];
+  /** Shown as "Open with <label>"; defaults to the app's manifest `name`. */
+  label?: string;
+  /** Initial selected handler for the type, until the user picks another. */
+  default?: boolean;
+  /** Which contract fields this handler wants beyond the always-present
+   *  `path` + `action`. A closed vocabulary the platform interprets uniformly —
+   *  no per-app code in core. `url: "raw"` (the file's bytes URL) applies to
+   *  built-in component handlers only: an iframe app's src is always its own
+   *  `manifest.url`, so the OS never supplies it a url. */
+  paramShape?: { url?: "raw"; title?: "basename" };
 }
 
 /** A BOS SDK capability that can be granted to a user-installed iframe app. */

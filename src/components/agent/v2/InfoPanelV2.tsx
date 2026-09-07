@@ -1,8 +1,16 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Wrench, Sparkles, Plug, PlugZap, Loader2 } from "lucide-react";
-import { ASSISTANT_TOOLS } from "@/lib/agent/tool-manifest";
+import { assistantToolsManifest } from "@/lib/agent/tool-manifest";
+import { classifyToolState, DISCOVERY_TOOL_IDS, type ToolState } from "@/lib/agent/tool-state";
+import { useChatSelector } from "@/lib/assistant/client/chat-store";
+// The CLIENT-SAFE deriveRevealedIds (framework-free, zero imports, reads the
+// persisted ChatMessage[] shape) — the exact function agent-loop.ts calls, so
+// the panel's colours cannot diverge from the run's gate. NOT the same-named
+// export in src/lib/agent/tool-gate.ts, which is `import "server-only"` and
+// reads the in-memory model-prompt shape instead (042 design risk 1).
+import { deriveRevealedIds } from "@/lib/assistant/messages";
 import type { Skill } from "@/lib/agent/skills/store";
 import type { McpServerConfig } from "@/lib/mcp/types";
 
@@ -12,22 +20,41 @@ import type { McpServerConfig } from "@/lib/mcp/types";
 
 type Tab = "tools" | "skills" | "mcp";
 
+// Lenient allowlist check for the Skills / MCP tabs: an empty or unknown list
+// means "allow all", which avoids a disabled-flash while the agent fetch is in
+// flight. The Tools tab deliberately does NOT use this — the run's gate is
+// strict (an empty allowlist grants nothing), so tool colouring goes through
+// classifyToolState instead (042).
 function allows(allow: string[] | undefined, id: string): boolean {
   return !allow || allow.length === 0 || allow.includes(id);
 }
 
-export function InfoPanelV2({ agentId }: { agentId?: string }) {
+interface AgentCaps {
+  skills: string[];
+  mcp: string[];
+  tools: string[];
+  deferredTools: string[];
+}
+
+const NO_CAPS: AgentCaps = { skills: [], mcp: [], tools: [], deferredTools: [] };
+
+export function InfoPanelV2({ agentId, conversationId }: { agentId?: string; conversationId?: string }) {
   const [tab, setTab] = useState<Tab>("tools");
-  const [caps, setCaps] = useState<{ skills: string[]; mcp: string[] } | null>(null);
+  const [caps, setCaps] = useState<AgentCaps | null>(null);
 
   useEffect(() => {
     fetch("/api/assistant/agent")
       .then((r) => r.json())
       .then((d) => {
         const agent = (d.agents ?? []).find((a: { id: string }) => a.id === agentId);
-        setCaps({ skills: agent?.skills ?? [], mcp: agent?.mcp ?? [] });
+        setCaps({
+          skills: agent?.skills ?? [],
+          mcp: agent?.mcp ?? [],
+          tools: agent?.tools ?? [],
+          deferredTools: agent?.deferredTools ?? [],
+        });
       })
-      .catch(() => setCaps({ skills: [], mcp: [] }));
+      .catch(() => setCaps(NO_CAPS));
   }, [agentId]);
 
   return (
@@ -44,7 +71,13 @@ export function InfoPanelV2({ agentId }: { agentId?: string }) {
         ))}
       </div>
       <div className="min-h-0 flex-1 overflow-auto p-2 text-xs">
-        {tab === "tools" && <ToolsTab />}
+        {tab === "tools" && (
+          <ToolsTab
+            tools={caps?.tools ?? null}
+            deferredTools={caps?.deferredTools ?? null}
+            conversationId={conversationId ?? ""}
+          />
+        )}
         {tab === "skills" && <SkillsTab allowed={caps?.skills} />}
         {tab === "mcp" && <McpTab allowed={caps?.mcp} />}
       </div>
@@ -52,25 +85,88 @@ export function InfoPanelV2({ agentId }: { agentId?: string }) {
   );
 }
 
-function ToolsTab() {
-  const groups = Array.from(new Set(ASSISTANT_TOOLS.map((t) => t.group)));
+// 042-tool-color-coding: the wrench icon carries the state. `neutral` keeps the
+// grey every row had before this feature, so "no state" is the absence of a
+// colour rather than a fifth one.
+const STATE_COLOR: Record<ToolState, string> = {
+  granted: "text-emerald-400",
+  deferredHidden: "text-amber-400",
+  deferredRevealed: "text-sky-400",
+  neutral: "text-white/40",
+};
+
+function LegendRow({ dot, label }: { dot: string; label: string }) {
   return (
-    <div className="space-y-3">
-      {groups.map((g) => (
-        <div key={g}>
-          <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-white/40">{g}</div>
-          {ASSISTANT_TOOLS.filter((t) => t.group === g).map((t) => (
-            <div key={t.name} className="flex items-start gap-1.5 py-0.5">
-              <Wrench size={11} className="mt-0.5 shrink-0 text-white/40" />
-              <div>
-                <span className="font-mono text-white/85">{t.name}</span>
-                <span className="block text-[10px] text-white/45">{t.description}</span>
-              </div>
-            </div>
-          ))}
-        </div>
-      ))}
+    <div className="flex items-center gap-1.5">
+      <span className={`h-2 w-2 shrink-0 rounded-full ${dot}`} />
+      <span className="text-[10px] text-white/55">{label}</span>
     </div>
+  );
+}
+
+/** `tools` / `deferredTools` are the SELECTED AGENT's lists, or null while the
+ *  /api/assistant/agent fetch is unresolved — null means "unknown", which
+ *  renders every row neutral (no green flash on tools the agent may not have).
+ *  An empty list is the strict "grants nothing" the run's gate applies. */
+function ToolsTab({
+  tools: allowedTools,
+  deferredTools,
+  conversationId,
+}: {
+  tools: string[] | null;
+  deferredTools: string[] | null;
+  conversationId: string;
+}) {
+  // Scoped to this tab on purpose: ToolsTab is mounted only while the Tools tab
+  // is active, so the transcript subscription (and its re-renders) stops on the
+  // Skills / MCP tabs and never reaches the memoized AssistantChatV2. The
+  // selector returns a stable reference on text_delta / tool_progress, so this
+  // re-renders on a real transcript append, not per streamed token.
+  const messages = useChatSelector(conversationId, (s) => s.messages);
+  const revealed = useMemo(() => deriveRevealedIds(messages), [messages]);
+  const allow = useMemo(() => new Set(allowedTools ?? []), [allowedTools]);
+  const deferred = useMemo(() => new Set(deferredTools ?? []), [deferredTools]);
+
+  // Rebuilt per render, not read from a module constant: a marketplace item's
+  // service tools enter and leave the registry as its service starts and stops
+  // (041-tool-groups).
+  const tools = assistantToolsManifest();
+  const groups = Array.from(new Set(tools.map((t) => t.group)));
+  return (
+    <>
+      <div className="mb-3 space-y-1 border-b border-white/10 pb-2">
+        <LegendRow dot="bg-emerald-400" label="Granted" />
+        <LegendRow dot="bg-amber-400" label="Deferred · hidden" />
+        <LegendRow dot="bg-sky-400" label="Deferred · revealed" />
+        <LegendRow dot="bg-white/40" label="Not granted" />
+      </div>
+      <div className="space-y-3">
+        {groups.map((g) => (
+          <div key={g}>
+            <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-white/40">
+              {tools.find((t) => t.group === g)?.groupName ?? `${g} (unknown group)`}
+            </div>
+            {tools.filter((t) => t.group === g).map((t) => {
+              const state = classifyToolState(t.name, {
+                allow,
+                deferred,
+                revealed,
+                isDiscovery: DISCOVERY_TOOL_IDS.has(t.name),
+              });
+              return (
+                <div key={t.name} className="flex items-start gap-1.5 py-0.5">
+                  <Wrench size={11} className={`mt-0.5 shrink-0 ${STATE_COLOR[state]}`} />
+                  <div>
+                    <span className="font-mono text-white/85">{t.name}</span>
+                    <span className="block text-[10px] text-white/45">{t.description}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ))}
+      </div>
+    </>
   );
 }
 

@@ -41,6 +41,7 @@ scheduler lock-file stats). Not exposed over HTTP.
 |---|---|---|
 | `/api/fs` | GET (`op=list\|read`), POST (`op=write\|mkdir\|delete\|rename`) | VFS operations |
 | `/api/fs/raw` | GET `?path=`, PUT `?path=` | Streamed raw file bytes — GET serves (images, etc.), PUT accepts a streamed upload; neither buffers the whole file |
+| `/api/fs/raw/<path>` | GET | The same streamed GET with the path in the URL instead of a query param, so a document loaded from it resolves relative references against its own folder (used by file handlers — see [File-type handlers](../apps/file-handlers.md)) |
 
 Client helpers live in `src/lib/os-client.ts` (`fsClient.list/read/write/mkdir/
 remove/rename/rawUrl`).

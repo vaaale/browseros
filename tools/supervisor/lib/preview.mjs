@@ -115,7 +115,8 @@ export async function firstSourceRemote() {
   let configs;
   try {
     configs = JSON.parse(await fs.readFile(configPath, "utf8"));
-  } catch {
+  } catch (e) {
+    if (e?.code !== "ENOENT") slog("warn", "begin", `reading git-remotes.json (${configPath}) failed: ${e?.message || e}`);
     return null;
   }
   return (Array.isArray(configs) ? configs : []).find((r) => !r.filesystem || r.filesystem === "bos-src") ?? null;
@@ -196,7 +197,7 @@ export async function discardPreview(branch) {
     await discardCoupled(repo, branch, repo.dst, warnings);
   }
   await mutate(`remove preview worktree ${p.worktree}`, () => git(["worktree", "remove", "--force", p.worktree]), warnings);
-  await fs.rm(p.dataDir, { recursive: true, force: true }).catch((e) => warnings.push(`remove data clone ${p.dataDir} failed: ${e?.message || e}`));
+  await mutate(`remove data clone ${p.dataDir}`, () => fs.rm(p.dataDir, { recursive: true, force: true }), warnings);
   await mutate(`delete branch ${p.branch}`, () => git(["branch", "-D", p.branch]), warnings);
   log(`discarded preview ${p.branch} (branch deleted)${warnings.length ? ` — warnings: ${warnings.join("; ")}` : ""}`);
   return { warnings };
@@ -275,15 +276,16 @@ export async function liveBranch(v) {
   let b;
   try {
     b = await git(["rev-parse", "--abbrev-ref", "HEAD"], v.worktree);
-  } catch {
+  } catch (e) {
+    slog("warn", "state", `could not read live branch for ${v.role} at ${v.worktree}: ${e?.message || e}`, { branch: v.branch });
     b = undefined;
   }
-  // The BASE runs from a DETACHED worktree (detached at its commit so the
-  // branch ref stays free for promote/merge), where `rev-parse --abbrev-ref
-  // HEAD` yields the literal "HEAD". Fall back to the version's logical
-  // branch (base → baseBranch) so the toolbar shows/selects the real
-  // branch, not "HEAD" — which otherwise makes base look like a feature
-  // selection and leaves the preview buttons active.
+  // Base runs directly from REPO, normally checked out on baseBranch, so
+  // this reads "HEAD" literally only in an unusual transient state (mid-
+  // checkout, or genuinely detached). Fall back to the version's logical
+  // branch (base → baseBranch) either way, so the toolbar shows/selects the
+  // real branch rather than "HEAD" — which otherwise makes base look like a
+  // feature selection and leaves the preview buttons active.
   return b && b !== "HEAD" ? b : v.branch || undefined;
 }
 

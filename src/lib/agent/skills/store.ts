@@ -7,7 +7,11 @@ import { parseFrontmatter, buildFrontmatter, asString } from "@/lib/agent/subage
 import { reconcileInstalledItemAssets } from "@/system/marketplace/install/bundledAssets";
 import { archiveSeededDir, decideSeedAction, readSeedStamp, seedRev, writeSeedStamp } from "@/lib/agent/seed-sync";
 
-const DIR = path.join(dataDir(), "skills");
+/** Resolved per call, NOT captured at module scope — `dataDir()` is env-driven
+ *  and changes at runtime (branch clone, per-user container). */
+function skillsDir(): string {
+  return path.join(dataDir(), "skills");
+}
 // Root of the seed directory. Each subfolder contains a SKILL.md (+ optional
 // scripts/, references/) copied into data/skills/ on first install (additive —
 // never overwrites edits or later user/agent-created skills of the same id).
@@ -100,10 +104,10 @@ async function seedFromDiskPath(skillDir: string): Promise<void> {
   const { meta, body } = parseFrontmatter(raw);
   const name = asString(meta.name) || path.basename(skillDir);
   const id = slugify(name);
-  const dirPath = path.join(DIR, id);
-  // The legacy flat-file form (DIR/id.md) is never reconciled — it predates
+  const dirPath = path.join(skillsDir(), id);
+  // The legacy flat-file form (skillsDir()/id.md) is never reconciled — it predates
   // both the directory layout and the stamp, so it can only be treated as local.
-  if (await pathExists(path.join(DIR, `${id}.md`))) return;
+  if (await pathExists(path.join(skillsDir(), `${id}.md`))) return;
   const scripts = await readAssetsDir(path.join(skillDir, SCRIPTS_DIR));
   const references = await readAssetsDir(path.join(skillDir, REFERENCES_DIR));
   const skill: Skill = {
@@ -142,11 +146,11 @@ async function seedFromDiskPath(skillDir: string): Promise<void> {
  */
 async function archiveDroppedSeedSkills(seedIds: Set<string>): Promise<void> {
   if (seedIds.size === 0) return;
-  const entries = await fs.readdir(DIR, { withFileTypes: true }).catch(() => []);
+  const entries = await fs.readdir(skillsDir(), { withFileTypes: true }).catch(() => []);
   for (const entry of entries) {
     if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
     if (seedIds.has(entry.name)) continue;
-    const dirPath = path.join(DIR, entry.name);
+    const dirPath = path.join(skillsDir(), entry.name);
     const action = decideSeedAction({
       inSeed: false,
       liveRev: await liveSkillRev(dirPath),
@@ -169,11 +173,16 @@ async function listSeedSkillIds(): Promise<Set<string>> {
   return ids;
 }
 
-let seeded = false;
+// Tracked PER DATA ROOT, not per process. `dataDir()` is env-driven and BOS
+// changes it at runtime (a feature-branch data clone, a per-user container), so
+// a single boolean meant only the FIRST root ever got seeded — after switching
+// roots, the seeded agents/skills would silently never appear there.
+const seededRoots = new Set<string>();
 async function ensureSeed(): Promise<void> {
-  if (seeded) return;
-  seeded = true;
-  await fs.mkdir(DIR, { recursive: true });
+  const root = skillsDir();
+  if (seededRoots.has(root)) return;
+  seededRoots.add(root);
+  await fs.mkdir(root, { recursive: true });
   // Every subfolder of seed/skills/ is reconciled into data/skills/: seeded when
   // absent, refreshed when BOS's own copy is untouched and the shipped version
   // has changed, archived when the seed drops it, and left strictly alone once
@@ -261,11 +270,11 @@ async function writeAssetsDir(dir: string, assets: SkillAsset[] | undefined): Pr
 }
 
 async function listSkillIds(): Promise<string[]> {
-  const names = await fs.readdir(DIR).catch(() => [] as string[]);
+  const names = await fs.readdir(skillsDir()).catch(() => [] as string[]);
   const ids = new Set<string>();
   for (const name of names) {
     if (name.startsWith(".")) continue;
-    const full = path.join(DIR, name);
+    const full = path.join(skillsDir(), name);
     let stat;
     try {
       stat = await fs.stat(full);
@@ -282,7 +291,7 @@ async function listSkillIds(): Promise<string[]> {
 }
 
 async function readSkillById(id: string, withAssets: boolean): Promise<Skill | undefined> {
-  const dirPath = path.join(DIR, id);
+  const dirPath = path.join(skillsDir(), id);
   const dirFile = path.join(dirPath, SKILL_FILE);
   if (await pathExists(dirFile)) {
     const extras: Partial<Pick<Skill, "scripts" | "references">> = {};
@@ -292,7 +301,7 @@ async function readSkillById(id: string, withAssets: boolean): Promise<Skill | u
     }
     return fromMarkdown(id, await fs.readFile(dirFile, "utf8"), extras);
   }
-  const flatFile = path.join(DIR, `${id}.md`);
+  const flatFile = path.join(skillsDir(), `${id}.md`);
   if (await pathExists(flatFile)) {
     const extras = withAssets ? { scripts: [] as SkillAsset[], references: [] as SkillAsset[] } : {};
     return fromMarkdown(id, await fs.readFile(flatFile, "utf8"), extras);
@@ -301,13 +310,13 @@ async function readSkillById(id: string, withAssets: boolean): Promise<Skill | u
 }
 
 async function writeSkill(s: Skill): Promise<void> {
-  const dirPath = path.join(DIR, s.id);
+  const dirPath = path.join(skillsDir(), s.id);
   await fs.mkdir(dirPath, { recursive: true });
   await writeFileAtomic(path.join(dirPath, SKILL_FILE), toMarkdown(s));
   await writeAssetsDir(path.join(dirPath, SCRIPTS_DIR), s.scripts);
   await writeAssetsDir(path.join(dirPath, REFERENCES_DIR), s.references);
   // Remove any legacy flat-file copy.
-  const flatFile = path.join(DIR, `${s.id}.md`);
+  const flatFile = path.join(skillsDir(), `${s.id}.md`);
   if (await pathExists(flatFile)) await fs.rm(flatFile, { force: true });
 }
 
@@ -351,7 +360,7 @@ export async function getSkill(idOrName: string): Promise<Skill | undefined> {
 async function skillDir(idOrName: string): Promise<string | undefined> {
   const skill = await getSkill(idOrName);
   if (!skill) return undefined;
-  const dir = path.join(DIR, skill.id);
+  const dir = path.join(skillsDir(), skill.id);
   return (await pathExists(path.join(dir, SKILL_FILE))) ? dir : undefined;
 }
 
@@ -438,7 +447,7 @@ export async function saveSkill(input: {
   return skill;
 }
 
-const ARCHIVE_DIR = path.join(DIR, ".archive");
+const ARCHIVE_DIR = path.join(skillsDir(), ".archive");
 
 /** Targeted edit: replace the first occurrence of `find` in the skill body. */
 export async function patchSkill(idOrName: string, find: string, replace: string): Promise<Skill | { error: string }> {
@@ -478,12 +487,12 @@ export async function archiveSkill(idOrName: string): Promise<boolean> {
   await fs.mkdir(ARCHIVE_DIR, { recursive: true });
   const to = path.join(ARCHIVE_DIR, skill.id);
   await fs.rm(to, { recursive: true, force: true }).catch(() => {});
-  const dir = path.join(DIR, skill.id);
+  const dir = path.join(skillsDir(), skill.id);
   if (await pathExists(dir)) {
     await fs.rename(dir, to);
     return true;
   }
-  const flat = path.join(DIR, `${skill.id}.md`);
+  const flat = path.join(skillsDir(), `${skill.id}.md`);
   if (await pathExists(flat)) {
     await fs.mkdir(to, { recursive: true });
     await fs.rename(flat, path.join(to, SKILL_FILE));
@@ -495,7 +504,7 @@ export async function archiveSkill(idOrName: string): Promise<boolean> {
 export async function restoreSkill(id: string): Promise<boolean> {
   const from = path.join(ARCHIVE_DIR, id);
   if (!(await pathExists(from))) return false;
-  await fs.rename(from, path.join(DIR, id));
+  await fs.rename(from, path.join(skillsDir(), id));
   return true;
 }
 
@@ -506,8 +515,8 @@ export async function listArchivedIds(): Promise<string[]> {
 export async function removeSkill(idOrName: string): Promise<void> {
   const s = await getSkill(idOrName);
   if (!s) return;
-  const dirPath = path.join(DIR, s.id);
+  const dirPath = path.join(skillsDir(), s.id);
   if (await pathExists(dirPath)) await fs.rm(dirPath, { recursive: true, force: true });
-  const flatFile = path.join(DIR, `${s.id}.md`);
+  const flatFile = path.join(skillsDir(), `${s.id}.md`);
   if (await pathExists(flatFile)) await fs.rm(flatFile, { force: true });
 }

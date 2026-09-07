@@ -5,6 +5,7 @@ import { promisify } from "node:util";
 import { SPECS_ROOT, APPS_REPO } from "./config.mjs";
 import { git, refExists, mutate, GIT_IDENTITY } from "./gitutil.mjs";
 import { reconcileViaApi } from "./reconcile-client.mjs";
+import { runAutoPush } from "./push.mjs";
 import { slog } from "./log.mjs";
 
 const exec = promisify(execFile);
@@ -62,7 +63,12 @@ export async function listSpecStores() {
   let entries;
   try {
     entries = await fs.readdir(SPECS_ROOT, { withFileTypes: true });
-  } catch {
+  } catch (e) {
+    // ENOENT (no specs root provisioned yet) is expected and silent; anything
+    // else (permissions, a broken mount) means store discovery is silently
+    // returning "no stores" when the real answer is "couldn't check" —
+    // exactly the kind of gap that reads as "specs are just empty".
+    if (e?.code !== "ENOENT") slog("warn", "specs", `reading SPECS_ROOT (${SPECS_ROOT}) failed: ${e?.message || e}`);
     return [];
   }
   const stores = [];
@@ -115,23 +121,48 @@ export async function coupledReposFor(worktree, dataDir) {
 /** Mount (or refresh) `repo`'s worktree for `branch` at `dst`. Reuses an
  *  intact existing mount; otherwise prunes stale registrations and adds the
  *  worktree — on the existing branch, or a new one off the repo's current
- *  primary branch. */
+ *  primary branch.
+ *
+ *  `beginPreview` (preview.mjs) remounts every coupled repo on EVERY `/begin`
+ *  call, with no per-branch lock around this step (unlike the worktree/clone
+ *  provisioning above it, which IS de-duped via `previewProvisioning`) — and
+ *  parallel agent tool calls can issue overlapping `/begin`s for the same
+ *  branch. Two concurrent callers can both see `refExists` return false
+ *  (branch doesn't exist yet) and both attempt `worktree add -b`; the loser
+ *  fails with "a branch named … already exists", which `beginPreview`
+ *  degrades to a `mountErrors` warning rather than surfacing loudly — so the
+ *  preview silently keeps running with `specs/<store>` never mounted at all,
+ *  which reads as a bafflingly "blank"/misconfigured preview since anything
+ *  spec-dependent has nothing to read. Rather than chase down every possible
+ *  concurrent caller, make the race self-healing here: if the `-b` create
+ *  loses, the winner's branch now exists — just check that out instead of
+ *  failing the mount. */
 export async function mountCoupled(repo, dst, branch) {
   if (repo.kind === "user-apps") await ensureAppsRepo();
   const mounted = await fs.access(path.join(dst, ".git")).then(() => true).catch(() => false);
   if (mounted) {
     let cur;
-    try { cur = await git(["rev-parse", "--abbrev-ref", "HEAD"], dst); } catch { cur = null; }
+    try {
+      cur = await git(["rev-parse", "--abbrev-ref", "HEAD"], dst);
+    } catch (e) {
+      slog("warn", "mount", `could not read current branch of existing mount ${dst}, remounting: ${e?.message || e}`, { branch });
+      cur = null;
+    }
     if (cur === branch) return;
   }
-  await fs.rm(dst, { recursive: true, force: true }).catch(() => {});
+  await fs.rm(dst, { recursive: true, force: true }).catch((e) => slog("error", "mount", `cleanup of existing mount ${dst} failed: ${e?.message || e}`, { branch }));
   await fs.mkdir(path.dirname(dst), { recursive: true });
-  await git(["worktree", "prune"], repo.root).catch(() => {}); // pruning stale registrations is inherently best-effort; the `worktree add` below still throws if it genuinely can't proceed
+  await git(["worktree", "prune"], repo.root).catch((e) => slog("warn", "mount", `worktree prune in ${repo.root} failed: ${e?.message || e}`, { branch })); // best-effort; the `worktree add` below still throws if it genuinely can't proceed
   if (await refExists(repo.root, `refs/heads/${branch}`)) {
     await git(["worktree", "add", dst, branch], repo.root);
-  } else {
-    const { base } = await coupledMergeTarget(repo);
+    return;
+  }
+  const { base } = await coupledMergeTarget(repo);
+  try {
     await git(["worktree", "add", "-b", branch, dst, base], repo.root);
+  } catch (e) {
+    if (!/already exists/i.test(e?.message || "")) throw e;
+    await git(["worktree", "add", dst, branch], repo.root);
   }
 }
 
@@ -155,7 +186,16 @@ export async function coupledConflicts(repo, branch) {
   if (!(await refExists(repo.root, `refs/heads/${branch}`))) return null;
   const { base } = await coupledMergeTarget(repo);
   let mb;
-  try { mb = await git(["merge-base", base, branch], repo.root); } catch { return null; }
+  try {
+    mb = await git(["merge-base", base, branch], repo.root);
+  } catch (e) {
+    // This pre-check exists specifically to catch a conflict BEFORE promote's
+    // point of no return — silently reading "can't compute merge-base" as
+    // "no conflict" defeats that: a real problem here means promoteCoupled's
+    // actual merge, later, fails unexpectedly with no pre-warning.
+    slog("warn", "promote", `${repo.id}: merge-base(${base}, ${branch}) failed — cannot pre-check for conflicts: ${e?.message || e}`, { branch });
+    return null;
+  }
   try {
     await exec("git", ["merge-tree", "--write-tree", `--merge-base=${mb}`, base, branch], { cwd: repo.root, maxBuffer: 8 * 1024 * 1024 });
   } catch (e) {
@@ -273,6 +313,18 @@ async function removeCoupledWorktree(repo, dst, warnings) {
  * this is the exact bug class (silent spec-store/user-apps merge failure)
  * this refactor exists to eliminate.
  */
+// Push repo's `base` branch to every autoPush-enabled remote configured for
+// it (git-remotes.json, scoped by repo.id — see push.mjs's runAutoPush).
+// Called only after a successful merge; a push failure is recorded as a
+// warning, never thrown — the merge itself already succeeded and must not be
+// undone by a push problem.
+async function pushCoupledBase(repo, base, warnings) {
+  const results = await runAutoPush(repo.root, base, repo.id);
+  for (const r of results) {
+    if (r.status === "failed") warnings.push(`${repo.id}: auto-push to ${r.remoteName} failed: ${r.error}`);
+  }
+}
+
 export async function promoteCoupled(repo, branch, dst, warnings, onEscalate) {
   if (!(await refExists(repo.root, `refs/heads/${branch}`))) return;
   await removeCoupledWorktree(repo, dst, warnings);
@@ -292,6 +344,7 @@ export async function promoteCoupled(repo, branch, dst, warnings, onEscalate) {
       slog("info", "promote", `${repo.id}: merged ${branch} into ${base} via plumbing (primary checkout busy)`, { branch });
     }
     await mutate(`${repo.id}: delete merged branch ${branch}`, () => git(["branch", "-D", branch], repo.root), warnings);
+    await pushCoupledBase(repo, base, warnings);
   } catch (e) {
     // 035 (FR-012a (2)): this used to end here — `merge --abort` plus a
     // "merge manually in <root>" warning, and nothing else. It now routes
@@ -307,6 +360,7 @@ export async function promoteCoupled(repo, branch, dst, warnings, onEscalate) {
     if (resolved.ok) {
       slog("info", "promote", `${repo.id}: merged ${branch} onto ${base} via conflict resolution`, { branch });
       await mutate(`${repo.id}: delete merged branch ${branch}`, () => git(["branch", "-D", branch], repo.root), warnings);
+      await pushCoupledBase(repo, base, warnings);
       return;
     }
     const msg = `${repo.id}: merge of ${branch} FAILED after code promote — ${resolved.message || e?.message || e}`;
@@ -328,6 +382,8 @@ export async function discardCoupled(repo, branch, dst, warnings) {
  *  (their worktrees lived inside code worktrees the Supervisor is about to
  *  remove) so a later mount/branch-delete can't fail on them. */
 export async function pruneAllCoupledWorktrees() {
-  for (const s of await listSpecStores()) await git(["worktree", "prune"], s.root).catch(() => {});
-  await git(["worktree", "prune"], APPS_REPO).catch(() => {});
+  for (const s of await listSpecStores()) {
+    await git(["worktree", "prune"], s.root).catch((e) => slog("warn", "reconcile", `worktree prune in spec store ${s.id} (${s.root}) failed: ${e?.message || e}`));
+  }
+  await git(["worktree", "prune"], APPS_REPO).catch((e) => slog("warn", "reconcile", `worktree prune in ${APPS_REPO} failed: ${e?.message || e}`));
 }

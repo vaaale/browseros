@@ -16,7 +16,7 @@ export interface Agent {
   mcp?: string[];
   /** Knowledge base ids this agent may query (038-knowledge-base). Unset/empty
    *  = all KBs the Knowledge Base item knows about; a non-empty list scopes
-   *  the agent's kbs_tool_search/kbs_tool_retrieve to only these ids. */
+   *  the agent's kb_search/kb_retrieve to only these ids. */
   kbs?: string[];
   /** Tool ids this agent should treat as deferred (hidden from its initial
    *  context, discoverable via find_tools). This is the ONLY source of

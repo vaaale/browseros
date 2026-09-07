@@ -83,6 +83,44 @@ export async function validateManifest(manifest: unknown, itemDir?: string): Pro
     errors.push(`manifest.deploymentMode must be one of "default" | "tools" if provided (got ${JSON.stringify(m.deploymentMode)})`);
   }
 
+  // 041-tool-groups: a tool-exposing item MUST name the group(s) its tools
+  // appear under. Validated here so a malformed or missing declaration fails at
+  // INSTALL rather than at first service start, and so the failure names the
+  // field. There is deliberately no fallback group to absorb this (FR-041).
+  if (m.deploymentMode === "tools") {
+    const groups = m.toolGroups;
+    if (!Array.isArray(groups) || groups.length === 0) {
+      errors.push(
+        'manifest.toolGroups is required when deploymentMode is "tools": declare the group(s) your tools appear under, e.g. [{ "id": "workflows", "name": "Workflows", "description": "…" }]',
+      );
+    } else {
+      const seen = new Set<string>();
+      groups.forEach((raw, i) => {
+        const g = raw as Record<string, unknown>;
+        if (typeof g?.id !== "string" || !/^[a-z0-9][a-z0-9-]*$/.test(g.id)) {
+          errors.push(`manifest.toolGroups[${i}].id must be a lowercase slug (got ${JSON.stringify(g?.id)})`);
+        } else if (seen.has(g.id)) {
+          errors.push(`manifest.toolGroups[${i}].id "${g.id}" is declared more than once`);
+        } else {
+          seen.add(g.id);
+        }
+        if (typeof g?.name !== "string" || !g.name.trim()) {
+          errors.push(`manifest.toolGroups[${i}].name is required`);
+        }
+        if (typeof g?.description !== "string" || !g.description.trim()) {
+          errors.push(
+            `manifest.toolGroups[${i}].description is required — it is what the assistant reads to decide whether this group is relevant`,
+          );
+        }
+        if (g?.aliases !== undefined && (!Array.isArray(g.aliases) || g.aliases.some((a) => typeof a !== "string"))) {
+          errors.push(`manifest.toolGroups[${i}].aliases must be an array of strings if provided`);
+        }
+      });
+    }
+  } else if (m.toolGroups !== undefined) {
+    errors.push('manifest.toolGroups is only meaningful with deploymentMode "tools"');
+  }
+
   if (m.settingsRegistration !== undefined) {
     if (typeof m.settingsRegistration !== "object" || m.settingsRegistration === null) {
       errors.push("manifest.settingsRegistration must be an object if provided");

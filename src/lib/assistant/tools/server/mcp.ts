@@ -62,7 +62,7 @@ export function mcpTools(): Record<string, AssistantTool> {
 
     mcp_tool_search: serverTool(
       "mcp_tool_search",
-      "Search for MCP tools across all servers available to you, or on a specific server. Returns each tool's server, name, and description (not full schemas). Use getMcpToolSchema to inspect the inputSchema before calling.",
+      "Search for MCP tools across all servers available to you, or on a specific server. Returns each tool's server, name, and description (not full schemas). Use mcp_tool_schema to inspect the inputSchema before calling.",
       schema(
         {
           query: p.str("Search text or wildcard pattern, e.g. 'repo*' or 'create issue'"),
@@ -95,7 +95,7 @@ export function mcpTools(): Record<string, AssistantTool> {
 
     mcp_tool_schema: serverTool(
       "mcp_tool_schema",
-      "Get the full input JSON schema for a single MCP tool, so you know exactly what arguments to pass to callMcpTool.",
+      "Get the full input JSON schema for a single MCP tool, so you know exactly what arguments to pass to mcp_tool_call.",
       schema(
         {
           server: p.str("MCP server name"),
@@ -109,7 +109,7 @@ export function mcpTools(): Record<string, AssistantTool> {
 
     mcp_tool_call: serverTool(
       "mcp_tool_call",
-      "Call a tool on an MCP server. Discover the server, tool name, and argument schema first via searchMcpTools + getMcpToolSchema, then pass `args` as a JSON object string matching that schema. The proxy validates arguments against the tool's inputSchema before forwarding.",
+      "Call a tool on an MCP server. Discover the server, tool name, and argument schema first via mcp_tool_search + mcp_tool_schema, then pass `args` as a JSON object string matching that schema. The proxy validates arguments against the tool's inputSchema before forwarding.",
       schema(
         {
           server: p.str("MCP server name"),

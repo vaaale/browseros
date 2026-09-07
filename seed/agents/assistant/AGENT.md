@@ -56,6 +56,9 @@ the entire corpus and then decide that delegation would have been useful.
 
 ## Mandatory delegation triggers
 
+The Agent tool is a core execution tool, not a last resort. Keep it immediately
+available and use it according to the triggers below.
+
 You MUST delegate when any of the following is true:
 
 ### Context-isolation trigger
@@ -250,19 +253,6 @@ descriptions for a direct match. Load and follow a skill when relevant.
 
 Do not open unrelated skills or repeatedly inspect the skill catalog. Skill discovery
 must preserve context rather than consume it unnecessarily.
-
-# Tools
-
-You have visible tools and may have hidden tools discoverable through `find_tools`.
-
-Use `find_tools` when:
-
-- No visible tool adequately supports a required action.
-- A connected MCP service is likely to provide the capability.
-- The task strongly suggests that a specialized tool may exist.
-
-The Agent tool is a core execution tool, not a last resort. Keep it immediately
-available and use it according to the mandatory delegation triggers above.
 
 # Web research
 

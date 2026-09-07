@@ -88,17 +88,19 @@ export async function delegateToAgent(
     const parentGate = await gateFor(ctx.agentId);
     const gate = ephemeralDelegationGate(parentGate, run.tools);
     const parentAgent = await getAgent(ctx.agentId);
-    const composeSystem = ephemeralComposeSystem(def.systemPrompt, {
-      skills: parentAgent?.skills,
-      mcp: parentAgent?.mcp,
-      kbs: parentAgent?.kbs,
-    });
+    const composeSystem = ephemeralComposeSystem(
+      def.systemPrompt,
+      { skills: parentAgent?.skills, mcp: parentAgent?.mcp, kbs: parentAgent?.kbs },
+      // 041-tool-groups: its OWN gate, not the parent's — a delegated agent must
+      // be told about the tools it can actually call (FR-010/SC-011).
+      { gate, tools: run.tools },
+    );
     const maxSteps = await getMaxAgentSteps();
     return runLocalDelegation(run, ctx, "ephemeral", def.name, { systemPrompt: composeSystem, gate }, maxSteps, task);
   }
 
   const gate = await namedDelegationGate(def.id);
-  const composeSystem = namedComposeSystem(def.id);
+  const composeSystem = namedComposeSystem(def.id, { gate, tools: run.tools });
   const maxSteps = await getMaxAgentSteps();
   return runLocalDelegation(run, ctx, "named", def.name, { systemPrompt: composeSystem, gate, model: def.model }, maxSteps, task);
 }
@@ -119,7 +121,7 @@ export async function delegateToSurfaceAgent(
 
   const parentGate = await gateFor(ctx.agentId);
   const gate = surfaceDelegationGate(surfaceAgent.toolNames, parentGate);
-  const composeSystem = surfaceComposeSystem(surfaceAgent.systemPrompt);
+  const composeSystem = surfaceComposeSystem(surfaceAgent.systemPrompt, { gate, tools: run.tools });
   const maxSteps = await getMaxAgentSteps();
   return runLocalDelegation(run, ctx, "surface", surfaceAgent.name, { systemPrompt: composeSystem, gate }, maxSteps, task);
 }

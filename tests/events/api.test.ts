@@ -61,25 +61,26 @@ test.describe("event API facade (validation)", () => {
     }
   });
 
-  test("register rejects a namespace the owner does not own (FR-023)", async () => {
-    const { cleanup } = useEventTestRoot("api-namespace-not-owned");
+  test("register accepts a namespace the owner does not own (037 FR-001)", async () => {
+    const { cleanup } = useEventTestRoot("api-namespace-relaxed");
     try {
       await kernel.startEventKernel();
-      await expect(
-        api.register({
-          handlerId: "h-bad",
-          eventType: "com.bos.someoneelse.thing",
-          mode: "headless",
-          ownerId: "me",
-          displayName: "H",
-        }),
-      ).rejects.toMatchObject({ code: "namespace-not-owned" });
+      const reg = await api.register({
+        handlerId: "h-cross",
+        eventType: "com.bos.someoneelse.thing",
+        mode: "headless",
+        ownerId: "me",
+        displayName: "H",
+      });
+      expect(reg.handlerId).toBe("h-cross");
+      expect(reg.eventType).toBe("com.bos.someoneelse.thing");
+      expect(reg.ownerId).toBe("me");
     } finally {
       await cleanup();
     }
   });
 
-  test("register accepts an owned root and a granted namespace pattern", async () => {
+  test("register accepts an owned root and a wildcard namespace pattern", async () => {
     const { cleanup } = useEventTestRoot("api-namespace-owned");
     try {
       await kernel.startEventKernel();

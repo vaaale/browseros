@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { logger } from "@/lib/logging";
-import { createJob, listJobs, getDaemonStatus } from "@/lib/scheduler/engine";
+import { createJob, listJobs, readDaemonStatus } from "@/lib/scheduler/engine";
 import { installBuiltInHandlers } from "@/lib/scheduler/executor";
 import { runMigrationIfNeeded } from "@/lib/scheduler/migrate";
 import type {
@@ -25,7 +25,10 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   installBuiltInHandlers();
   await runMigrationIfNeeded();
-  const [jobs, daemon] = await Promise.all([listJobs(), Promise.resolve(getDaemonStatus())]);
+  // readDaemonStatus(), not getDaemonStatus(): since 042 only ONE process owns
+  // the daemon, so a request served by any other process must report the
+  // container-wide owner rather than its own idle local state.
+  const [jobs, daemon] = await Promise.all([listJobs(), readDaemonStatus()]);
   // The wire field stays `tasks` for one release so no client blows up mid-deploy.
   return NextResponse.json({ tasks: jobs, jobs, daemon });
 }

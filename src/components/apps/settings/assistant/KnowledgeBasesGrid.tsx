@@ -15,7 +15,7 @@ export interface KnowledgeBasesGridProps {
  * Grid of knowledge-base cards (checkbox + name + description). Same
  * empty-allowlist semantics as SkillsGrid/McpGrid — an empty `allowed` renders
  * every KB as checked; unchecking one converts to an explicit allowlist of the
- * remaining KBs. This scopes the agent's kbs_tool_search/kbs_tool_retrieve.
+ * remaining KBs. This scopes the agent's kb_search/kb_retrieve.
  */
 export function KnowledgeBasesGrid({ all, allowed, onChange }: KnowledgeBasesGridProps) {
   const isImplicitAll = allowed.length === 0;

@@ -49,3 +49,16 @@ test("normalizeMountPrefix canonicalizes leading/trailing slashes", () => {
   assert.equal(normalizeMountPrefix("Documents/Specs/"), "/Documents/Specs");
   assert.equal(normalizeMountPrefix("/Documents/Specs"), "/Documents/Specs");
 });
+
+test("normalizeMountPrefix falls back to root for an empty prefix", () => {
+  assert.equal(normalizeMountPrefix(""), "/");
+});
+
+test("a shorter prefix seen AFTER the longest match is skipped, not swapped in", () => {
+  // Registration order shouldn't matter — only length. Here the longer prefix
+  // is checked first and already wins; the later, shorter match must hit the
+  // `continue` guard rather than displacing it.
+  const r = resolveMountPath("/Documents/Specs/x", ["/Documents/Specs", "/Documents"]);
+  assert.equal(r?.prefix, "/Documents/Specs");
+  assert.equal(r?.rel, "x");
+});

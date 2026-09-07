@@ -2,7 +2,7 @@
 // server-only): the v2 handler (components/agent/v2/FrontendToolsV2.tsx) and the
 // v1 handler (components/agent/OSActions.tsx) both import it so their notion of
 // "this target is an image / a video" cannot drift. The extension sets mirror
-// the raw-file route's MIME map (src/app/api/fs/raw/route.ts) — keep them in
+// the raw-file route's MIME map (src/lib/files/serve.ts) — keep them in
 // sync, otherwise the tool claims a target is video while the route serves it as
 // application/octet-stream and the preview dead-ends in an error card.
 
