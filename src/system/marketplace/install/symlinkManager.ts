@@ -3,7 +3,7 @@ import { promises as fs } from "fs";
 import path from "path";
 import { itemLinkPath, itemConfigDir, isItemInstalled, itemProvenanceKey, RESERVED_ITEM_IDS } from "@/system/items/installed";
 import { dataDir } from "@/os/data-dir";
-import { seedItemBundledAssets, type SeedBundledAssetsResult } from "./bundledAssets";
+import { seedItemBundledAssets, removeItemSkillLinks, type SeedBundledAssetsResult } from "./bundledAssets";
 
 /**
  * Installing = ONE symlink, plus seeding config (035-install-by-symlink).
@@ -107,10 +107,19 @@ export async function installItemLink(itemPath: string, itemId: string, root?: s
 }
 
 /**
- * Uninstall: remove the one symlink. Seeded config is intentionally kept, so
- * reinstalling preserves the user's settings.
+ * Uninstall: remove the item symlink AND the data/skills/ symlinks that route
+ * through it. Seeded config is intentionally kept, so reinstalling preserves
+ * the user's settings; COPIED skills (a locally-edited fork) are kept too —
+ * they are the user's work, not the item's.
+ *
+ * The skill sweep runs FIRST: it identifies this item's links by their
+ * `../system/<id>` text, and while the sweep works on dangling links too,
+ * removing the item link first would leave a window where a crash strands
+ * them. This order fails safe — a crash after the sweep leaves an installed
+ * item that simply re-seeds its links on the next reconcile pass.
  */
 export async function uninstallItemLink(itemId: string): Promise<void> {
+  await removeItemSkillLinks(itemId);
   try {
     await fs.rm(itemLinkPath(itemId), { force: true });
   } catch (err) {

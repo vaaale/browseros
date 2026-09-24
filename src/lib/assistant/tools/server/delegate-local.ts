@@ -51,5 +51,8 @@ export async function runLocalDelegation(
   if (result.error) return `Error: agent_delegate: ${result.error}`;
   const output = result.output;
   const summary = `[${agentLabel} · local] ${result.steps} step(s)\n\n${output}`;
-  return summary + encodeNested({ events: result.toolCalls, output });
+  // 045 US2 (B1): encode the FULL per-child terminal list (result?/status?/
+  // nested?) — not just the starts — so a done delegation's child-card tree
+  // rebuilds from the persisted string after a reload (when progress[] is empty).
+  return summary + encodeNested({ events: result.results, output });
 }

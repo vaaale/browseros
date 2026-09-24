@@ -14,7 +14,7 @@ const script = (turns: unknown[]) => `@@e2e ${JSON.stringify({ turns })}`;
 
 async function writeMockup(page: Page): Promise<void> {
   const res = await page.request.put("/api/specs", {
-    data: { path: HTML_PATH, content: HTML_CONTENT, branch: "bos/e2e-033-resize" },
+    data: { path: HTML_PATH, content: HTML_CONTENT, branch: "bos/testfixture-e2e-033-resize" },
   });
   expect(res.ok()).toBeTruthy();
 }

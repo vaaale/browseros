@@ -32,6 +32,13 @@ const server = http.createServer((req, res) => {
   res.end("ok");
 });
 server.listen(port, "127.0.0.1");
+// FAKE_SERVER_EXITS_AFTER_MS: become ready, then die on our own — what a real
+// preview did when an installed item's entrypoint called process.exit(0) in
+// BOS's own thread. Health then never succeeds, and the reason must be the
+// EXIT, not a timeout that never elapsed.
+if (process.env.FAKE_SERVER_EXITS_AFTER_MS) {
+  setTimeout(() => process.exit(0), Number(process.env.FAKE_SERVER_EXITS_AFTER_MS));
+}
 process.on("SIGTERM", () => process.exit(0));
 process.on("SIGINT", () => process.exit(0));
 `;

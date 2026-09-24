@@ -1,0 +1,408 @@
+{
+  "schemaVersion": 1,
+  "id": "spec-kit",
+  "label": "GitHub Spec Kit",
+  "version": "1.0.0",
+  "builtin": true,
+  "sections": [
+    {
+      "rel": "",
+      "kind": "active",
+      "leafMarker": "spec.md",
+      "numbering": "nnn-slug"
+    }
+  ],
+  "constitution": ".specify/memory/constitution.md",
+  "constitutionRoot": "system",
+  "discrepancies": {
+    "rel": "discrepancies.md",
+    "roots": [
+      "system",
+      "user"
+    ]
+  },
+  "testFile": "e2e/<unit-id>.spec.ts",
+  "artifacts": [
+    {
+      "id": "spec.md",
+      "generates": "specify"
+    },
+    {
+      "id": "plan.md",
+      "generates": "plan",
+      "requires": [
+        "spec.md"
+      ]
+    },
+    {
+      "id": "tasks.md",
+      "generates": "tasks",
+      "requires": [
+        "plan.md"
+      ]
+    },
+    {
+      "id": "research.md"
+    },
+    {
+      "id": "data-model.md"
+    },
+    {
+      "id": "quickstart.md"
+    },
+    {
+      "id": "design.md",
+      "generates": "design"
+    },
+    {
+      "id": "test-results.md",
+      "generates": "test"
+    },
+    {
+      "id": "discrepancies.md",
+      "generates": "converge",
+      "scope": "store"
+    },
+    {
+      "id": "mockup.html",
+      "generates": "ui-design"
+    },
+    {
+      "id": "review.md",
+      "generates": "review"
+    }
+  ],
+  "artifactOrder": [
+    "spec.md",
+    "plan.md",
+    "tasks.md",
+    "research.md",
+    "data-model.md",
+    "quickstart.md"
+  ],
+  "phases": [
+    {
+      "id": "constitution",
+      "label": "Constitution",
+      "requires": [],
+      "rules": [
+        {
+          "when": {
+            "kind": "all",
+            "of": [
+              {
+                "kind": "nonEmpty",
+                "file": {
+                  "rel": ".specify/memory/constitution.md",
+                  "scope": "store",
+                  "roots": [
+                    "system"
+                  ]
+                }
+              },
+              {
+                "kind": "notContains",
+                "file": {
+                  "rel": ".specify/memory/constitution.md",
+                  "scope": "store",
+                  "roots": [
+                    "system"
+                  ]
+                },
+                "text": "[PROJECT_NAME]"
+              }
+            ]
+          },
+          "then": "done"
+        }
+      ],
+      "else": "pending",
+      "instructions": "templates/commands/constitution.md"
+    },
+    {
+      "id": "specify",
+      "label": "Specify",
+      "requires": [],
+      "rules": [
+        {
+          "when": {
+            "kind": "exists",
+            "file": {
+              "rel": "spec.md"
+            }
+          },
+          "then": "done"
+        }
+      ],
+      "else": "pending",
+      "instructions": "templates/commands/specify.md"
+    },
+    {
+      "id": "clarify",
+      "label": "Clarify",
+      "requires": [],
+      "rules": [
+        {
+          "when": {
+            "kind": "contains",
+            "file": {
+              "rel": "spec.md"
+            },
+            "text": "## Clarifications"
+          },
+          "then": "done"
+        },
+        {
+          "when": {
+            "kind": "exists",
+            "file": {
+              "rel": "spec.md"
+            }
+          },
+          "then": "pending"
+        }
+      ],
+      "else": "na",
+      "optional": true,
+      "instructions": "templates/commands/clarify.md"
+    },
+    {
+      "id": "ui-design",
+      "label": "UI Design",
+      "requires": [],
+      "rules": [
+        {
+          "when": {
+            "kind": "exists",
+            "file": {
+              "rel": "mockup.html"
+            }
+          },
+          "then": "done"
+        }
+      ],
+      "else": "na",
+      "optional": true
+    },
+    {
+      "id": "design",
+      "label": "Design",
+      "requires": [],
+      "rules": [
+        {
+          "when": {
+            "kind": "exists",
+            "file": {
+              "rel": "design.md"
+            }
+          },
+          "then": "done"
+        },
+        {
+          "when": {
+            "kind": "exists",
+            "file": {
+              "rel": "spec.md"
+            }
+          },
+          "then": "pending"
+        }
+      ],
+      "else": "na"
+    },
+    {
+      "id": "review",
+      "label": "Review",
+      "requires": [],
+      "rules": [
+        {
+          "when": {
+            "kind": "exists",
+            "file": {
+              "rel": "review.md"
+            }
+          },
+          "then": "done"
+        },
+        {
+          "when": {
+            "kind": "exists",
+            "file": {
+              "rel": "spec.md"
+            }
+          },
+          "then": "pending"
+        }
+      ],
+      "else": "na"
+    },
+    {
+      "id": "plan",
+      "label": "Plan",
+      "requires": [],
+      "rules": [
+        {
+          "when": {
+            "kind": "exists",
+            "file": {
+              "rel": "plan.md"
+            }
+          },
+          "then": "done"
+        },
+        {
+          "when": {
+            "kind": "exists",
+            "file": {
+              "rel": "spec.md"
+            }
+          },
+          "then": "pending"
+        }
+      ],
+      "else": "na",
+      "instructions": "templates/commands/plan.md"
+    },
+    {
+      "id": "tasks",
+      "label": "Tasks",
+      "requires": [],
+      "rules": [
+        {
+          "when": {
+            "kind": "exists",
+            "file": {
+              "rel": "tasks.md"
+            }
+          },
+          "then": "done"
+        },
+        {
+          "when": {
+            "kind": "exists",
+            "file": {
+              "rel": "plan.md"
+            }
+          },
+          "then": "pending"
+        }
+      ],
+      "else": "na",
+      "instructions": "templates/commands/tasks.md"
+    },
+    {
+      "id": "analyze",
+      "label": "Analyze",
+      "requires": [],
+      "rules": [],
+      "else": "na",
+      "instructions": "templates/commands/analyze.md"
+    },
+    {
+      "id": "implement",
+      "label": "Implement",
+      "requires": [],
+      "rules": [
+        {
+          "when": {
+            "kind": "checklist",
+            "file": {
+              "rel": "tasks.md"
+            },
+            "quantifier": "all"
+          },
+          "then": "done"
+        },
+        {
+          "when": {
+            "kind": "checklist",
+            "file": {
+              "rel": "tasks.md"
+            },
+            "quantifier": "any"
+          },
+          "then": "pending"
+        }
+      ],
+      "else": "na",
+      "instructions": "templates/commands/implement.md"
+    },
+    {
+      "id": "converge",
+      "label": "Converge",
+      "requires": [],
+      "rules": [
+        {
+          "when": {
+            "kind": "containsUnitId",
+            "file": {
+              "rel": "discrepancies.md",
+              "scope": "store",
+              "roots": [
+                "system",
+                "user"
+              ]
+            }
+          },
+          "then": "done"
+        }
+      ],
+      "else": "na",
+      "instructions": "templates/commands/converge.md"
+    },
+    {
+      "id": "test",
+      "label": "Test",
+      "requires": [],
+      "rules": [
+        {
+          "when": {
+            "kind": "contains",
+            "file": {
+              "rel": "test-results.md"
+            },
+            "text": "**Status**: PASSED"
+          },
+          "then": "done"
+        },
+        {
+          "when": {
+            "kind": "nonEmpty",
+            "file": {
+              "rel": "test-results.md"
+            }
+          },
+          "then": "pending"
+        }
+      ],
+      "else": "na"
+    }
+  ],
+  "stateLabels": {
+    "done": "Done",
+    "pending": "Pending",
+    "blocked": "Blocked",
+    "na": "N/A"
+  },
+  "templates": "templates",
+  "storeRoot": "specs",
+  "driverSkill": "spec-kit-driver",
+  "agents": [
+    "build-studio",
+    "architect",
+    "architect-reviewer",
+    "ui-designer",
+    "developer",
+    "devil-s-advocate"
+  ],
+  "roles": {
+    "driver": "build-studio",
+    "architect": "architect",
+    "architect-reviewer": "architect-reviewer",
+    "ui-designer": "ui-designer",
+    "implementer": "developer",
+    "critic": "devil-s-advocate"
+  },
+  "agentsDir": "agents",
+  "agentVisibility": "picker"
+}

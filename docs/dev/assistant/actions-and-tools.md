@@ -23,6 +23,14 @@ What BOS controls is *which* tools go into it. `visibleTools(tools, gate, reveal
 |---|---|
 | Server tools | `src/lib/assistant/tools/server/*` via `src/lib/assistant/registry.ts` |
 | Frontend tools | `src/lib/assistant/tools/frontend-declarations.ts`, executed by `src/components/agent/v2/FrontendToolsV2.tsx` |
+
+> A **frontend** tool is dispatched to an attached browser, so it is
+> **unavailable in every headless run** (`headlessGate` filters the allowlist to
+> server-executable tools). Declare one only for work that genuinely requires a
+> browser — a window, the wallpaper, a preview. Anything that merely *ends up*
+> calling an API route belongs on the server. All eleven `file_*` tools were
+> frontend tools until this cost a headless agent 2.3 hours reaching for a
+> `file_write` it could never call; see [file tools §1](../file-tools/file-tools.md#1-the-one-structural-rule).
 | Service tools | A marketplace item with `deploymentMode: "tools"` declares them at startup over worker IPC; they register into the same capability registry at runtime ([Service daemons §15](../apps/services.md#15-services-as-native-assistant-tools-deploymentmode-tools-039-service-tool-exposure)) |
 
 The **capability registry** (`src/lib/agent/capabilities-registry.ts`) is the
@@ -30,6 +38,40 @@ single source of truth for tool ids and gating. Tool naming standard:
 `subsystem_object_verb`, snake_case, one id per logical operation. A capability
 with `context: "both"` is one id exposed on both surfaces (main chat + delegated
 sub-agent), e.g. `file_read`.
+
+### The `file_*` tools
+
+The eleven VFS tools have their own reference —
+**[file tools](../file-tools/file-tools.md)** — covering each tool's contract,
+the mount/branch-coupling rules a VFS path carries, and the recipe for adding
+one. Read it before touching `tools/server/files.ts`. The subtree-vs-single-file
+search split is summarised below because it drives tool *selection*.
+
+### Content search: `file_grep` (one file) vs `file_search` (a subtree)
+
+The FILES group has two literal-substring content searches
+(`src/lib/assistant/tools/server/files.ts`), and they are deliberately not one
+tool (043-file-grep):
+
+- **`file_search`** walks a **directory subtree** (`walkFiles`, optional glob
+  filter, `SEARCHABLE_EXT` extension whitelist, case-insensitive). Its `path`
+  must be a directory — pointed at a *file*, the walk's `readdir` fails and is
+  swallowed, so it returns `[]` with no error. That silence is historical
+  behaviour other agents depend on and is kept as-is.
+- **`file_grep`** searches exactly **one named file**: a single `vfs.readText`,
+  no tree walk, no extension gate (the agent asked for *this* file; undecodable
+  binary content errors explicitly instead). Case-sensitive by default with an
+  `ignoreCase` flag, plus a `context: n` flag for surrounding lines
+  (context rows are marked `context: true`). A non-file target — directory,
+  missing, unreadable — is an **explicit in-band error**, never a silent `[]`.
+  Output is bounded (match-count cap + per-line clip) and truncation is always
+  disclosed with the withheld count.
+
+Both return matches in the same `path:line:text` row form with 1-based line
+numbers, so agents can treat their outputs uniformly. In the capability
+registry the bare `"grep"` alias is intentionally on **both** rows: `file_grep`
+wins the single-file intent (it carries "grep" in its id), while `file_search`
+remains the directory-subtree tool. Tests: `tests/assistant/file-grep.test.ts`.
 
 ## Tool groups (041-tool-groups)
 
@@ -175,20 +217,52 @@ modes**, chosen by the handler and passed to the app as an explicit `mode` param
 
 ## Event rendering
 
-- **`ReasoningAssistantMessage.tsx`** parses `<think>…</think>` into a reasoning
+- **`ReasoningAssistantMessage.tsx`** parses ` think…</think>` into a reasoning
   disclosure and always renders the default assistant message (so tool/subComponent
   UI shows).
-- **`components/agent/v2/ToolCallCard.tsx`** renders each tool call as a collapsible native
-  `<details>` card; renders live delegation events, nested sub‑agent trees, and
-  MCP‑UI iframes.
-- **`card-collapse.ts`** is a **module‑level store with timers OUTSIDE the React
-  lifecycle** — the chat remounts cards while streaming, so a per‑component timer
-  would be cleared and never fire. Use `markComplete(id)` (auto‑collapse) /
-  `useCollapsed(id)`.
+- **`components/agent/v2/ToolCallCard.tsx`** is a SINGLE recursive tool-call card,
+  rendered identically at every nesting depth (045 US3 / FR-011). A collapsed header
+  shows a human one-line action summary — verb + key argument, e.g. "Read file
+  /path", "Web search for …", "Delegate to Researcher" (per-tool in
+  `ToolCardSummary.ts`, tool-name fallback, never a raw JSON blob) — plus a status
+  dot; expanding it reveals two INDEPENDENTLY collapsible sections, both defaulting
+  collapsed: **Input** (structured key‑value rows with the primary argument
+  emphasised, and a raw‑JSON toggle) and **Output** (content-type rendered in fixed
+  precedence: MCP-UI iframe → recursive child cards for a delegation →
+  syntax‑highlighted JSON → markdown via the chat's own `ChatMarkdown`, with a
+  content-type label and a copy button on JSON/code). A delegation's Output section
+  is a list of the same `ToolCallCard`, one per nested tool call: built from the
+  terminal `BOS-NESTED` payload once done (`nestedFromTerminal`) and from the live
+  `tool_progress` entries while running (`childrenFromLive`), so a running
+  delegation streams its nested results as child cards too (FR-016). The
+  presentation logic (summary, arg rows, content-type detection, the
+  terminal/live projections) is JSX-free in `ToolCardSummary.ts` and unit-tested in
+  `tests/components/tool-card.test.ts`.
+- **`ToolCardSectionState.ts`** is the card-LOCAL collapse store for the per-card
+  section units — the Input/Output sections at every depth, and a NESTED child's
+  header — keyed by `callId`, module-side so it survives the card remounts of a
+  streaming turn (ADR-2 option B). A TOP-LEVEL card's header deliberately stays on
+  the shared accordion below (also used by the reasoning cards); the sections
+  never do, which is what lets a parent and its children be open at once.
+- **`card-collapse.ts`** is a **module‑level store OUTSIDE the React lifecycle**
+  (the chat remounts cards while streaming, so per-component state would reset) and
+  is SCOPED per chat surface (012-embeddable-assistant): `registerCard(scope, id)`
+  — the first card seen in a scope becomes the open one (an accordion: opening a
+  new card closes the rest); `toggleCard(scope, id)`; `useCardOpen(scope, id)`.
 - **`subagent-events.ts`** is a live store keyed by task; `/api/subagents/delegate`
   streams **NDJSON** (`{type:"tool"}` per event, then `{type:"done"|"error"}`) so
   sub‑agent activity appears live, not at the end.
-- **`nested-events.ts`** encodes/parses a `BOS-NESTED` marker for nested rendering.
+- **`nested-events.ts`** encodes/parses the `BOS-NESTED` marker around a
+  `{ events, output }` payload. Since 045 (ADR-3 / B1) each `NestedEvent` also
+  carries its settled `result?`/`status?` and its own `nested?` child list
+  (recursion by structure), so a done delegation's child-card tree rebuilds from
+  the persisted string alone after a reload; `parseNested` still tolerates the
+  legacy starts-only `{ tool, input }` shape. The LIVE in-flight projection is
+  the `NestedProgressEntry` discriminated union (start `{tool, input, callId?}` /
+  `tool_result` / `tool_cancelled`, matched by the inner `callId`) forwarded over
+  the delegating call's own `tool_progress` channel — no new run-event type
+  (FR-007). See [Sub‑agents & delegation](sub-agents-and-delegation.md) for the
+  inner-loop forwarding.
 - **`MarkdownRenderers.tsx`** renders fenced ```` ```html ```` as a sandboxed iframe
   preview.
 
@@ -217,6 +291,9 @@ modes**, chosen by the handler and passed to the app as an explicit `mode` param
    and is spread into `assistantTools()` in `src/lib/assistant/registry.ts`. A
    **frontend** tool is declared in `tools/frontend-declarations.ts` and handled
    in `components/agent/v2/FrontendToolsV2.tsx`.
+   **Default to server.** Choose frontend only if the tool cannot work without a
+   browser; a frontend tool is invisible to every headless run. A VFS tool is
+   never a frontend tool — see [file tools](../file-tools/file-tools.md).
 2. Add a capability to `src/lib/agent/capabilities-registry.ts` with the same id,
    the right `context`, and a **group id** from `tool-groups.ts`. Add `aliases`
    for vocabulary a user would plausibly use that your description doesn't

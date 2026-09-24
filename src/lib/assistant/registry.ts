@@ -9,7 +9,7 @@ import { videoTools } from "./tools/server/video-tools";
 import { memoryTools } from "./tools/server/memory";
 import { skillsTools } from "./tools/server/skills";
 import { fileTools } from "./tools/server/files";
-import { itemSpecTools } from "./tools/server/specs";
+import { itemSpecTools, projectLifecycleTools } from "./tools/server/specs";
 import { gitTools } from "./tools/server/git";
 import { gitRemotesTools } from "./tools/server/git-remotes";
 import { gitPushTools } from "./tools/server/git-push";
@@ -17,6 +17,7 @@ import { gitFetchTools } from "./tools/server/git-fetch";
 import { gitMergeTools } from "./tools/server/git-merge";
 import { gitMountTools } from "./tools/server/git-mounts";
 import { runCommandTools } from "./tools/server/run-command";
+import { browserTools } from "./tools/server/browser";
 import { configTools } from "./tools/server/config";
 import { mcpTools } from "./tools/server/mcp";
 import { subAgentTools } from "./tools/server/subagents";
@@ -32,6 +33,8 @@ import { discoveryTools } from "./tools/server/discovery";
 import { claudeCodeTools } from "./tools/server/claude-code-tools";
 import { conversationReviewTools } from "./tools/server/conversation-review";
 import { conflictResolveTools } from "./tools/server/conflict-resolve";
+import { selfHealTools } from "./tools/server/self-heal";
+import { diagnosticsTools } from "./tools/server/diagnostics";
 
 // The assistant tool registry (Milestone C). Server tools call their lib
 // functions in-process; frontend tools are declared here (single source of
@@ -106,6 +109,7 @@ export function assistantTools(): Record<string, AssistantTool> {
     ...skillsTools(),
     ...fileTools(),
     ...itemSpecTools(),
+    ...projectLifecycleTools(),
     ...gitTools(),
     ...gitRemotesTools(),
     ...gitPushTools(),
@@ -113,6 +117,7 @@ export function assistantTools(): Record<string, AssistantTool> {
     ...gitMergeTools(),
     ...gitMountTools(),
     ...runCommandTools(),
+    ...browserTools(),
     ...configTools(),
     ...mcpTools(),
     ...subAgentTools(),
@@ -127,6 +132,8 @@ export function assistantTools(): Record<string, AssistantTool> {
     ...schedulerTools(),
     ...conversationReviewTools(),
     ...conflictResolveTools(),
+    ...selfHealTools(),
+    ...diagnosticsTools(),
   };
   cache = { ...combined, ...discoveryTools((id) => combined[id]) };
   cacheServiceToolsVersion = bridgeVersion;

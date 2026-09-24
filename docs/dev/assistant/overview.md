@@ -25,13 +25,28 @@ and the [Assistant API](api/assistant-api.md).
 2. **Start a run** — `POST /api/assistant/runs { conversationId, agentId, message,
    editOfMessageId?, surfaceTools? }` → `src/lib/assistant/start-run.ts`. The
    **RunManager** (`run-manager.ts`, a `globalThis` singleton) owns one active run
-   per conversation, an append‑only event log, and an `AbortController`.
+   per conversation, an append‑only event log, and an `AbortController`. This
+   route is also the authoritative read‑only gate for **archived** conversations
+   (038): if the conversation's metadata has `archived: true` it returns **409**
+   before any run starts — every send path (textarea, Enter, edit‑resubmit,
+   voice) funnels through here, so the client's locked composer is UX only.
 3. **The loop** (`agent-loop.ts`) composes instructions, then per step: streams a
    model turn (`model-turn.ts`, raw Anthropic/OpenAI SDK, compaction applied via
    `compaction/v2.ts`), gates tools (`gate.ts` + `tools.ts` `visibleTools`), and
    executes tool calls — **server** tools inline (`tools/server/*` + the registry in
    `registry.ts`), **frontend** tools dispatched to an attached browser. Every tool
    failure/timeout/cancel returns to the model as an in‑band `Error: …` result.
+   Adjacent `parallelSafe` calls run concurrently as one batch (`batchToolCalls`),
+   and each call's **terminal event is emitted as that call settles** — completion
+   order, which is what flips the chat cards individually instead of in one burst
+   after the slowest call (045 US1 / ADR-1). The two orderings are deliberately
+   decoupled: the `tool_result`/`tool_cancelled` events follow completion order,
+   while the trailing persistence loop writes the tool *messages* (and fires
+   `afterToolCall`) in the **original call order**, so the persisted transcript —
+   and any replay/reload of it — is deterministic regardless of live timing
+   (FR-002/FR-009). Settle-time is the single terminal-emission authority: a
+   `settled` set de-dupes so a cancelled call emits `tool_cancelled` exactly once
+   (the trailing loop must never re-emit a terminal event).
 4. **The browser** attaches to `GET /api/assistant/runs/[id]/events?since=` (NDJSON;
    replay + live tail), renders events, and for `tool_call{execution:"frontend"}`
    runs the bound handler through the existing tool kernel and POSTs the result to
@@ -43,6 +58,35 @@ and the [Assistant API](api/assistant-api.md).
    `beforeToolCall` / `afterToolCall` / `onRunFinished`, registered globally or
    per‑run. Built‑ins: the active‑feature‑branch prompt note and background
    conversation titling (`title-hook.ts`).
+
+---
+
+## Conversation model
+
+One JSON file per chat at `/Documents/Chats/<id>.json` (user VFS): metadata +
+the full message array. Metadata fields: `id`, `title`, `createdAt`, `agentId`
+(the sole partition key; legacy `group` is migrated on read), optional
+`activeFeatureBranch`, and optional **`archived`** (boolean, missing = `false`
+— additive, no migration; 038‑conversation‑archive).
+
+- The **client store** (`src/lib/agent/conversations.ts`) is a module‑level
+  `useSyncExternalStore` singleton shared by every built‑in window (Assistant's
+  `ConversationPanel`, Build Studio's `ConversationSelector`, `ChatInputV2`), so
+  a metadata change in one app re‑renders the others without any event bus.
+  It always returns the FULL list — each surface splits default vs. archived
+  itself, so the active conversation object stays reachable even when archived.
+- **Metadata writes are queue‑serialized**: `archived` persists via
+  `PATCH /api/assistant/conversations/[id]/archive` →
+  `patchConversationMeta` (`src/lib/assistant/conversation-store.ts`), which
+  shares the per‑conversation `enqueuePerKey` critical section with the loop's
+  transcript saves. Never write conversation metadata through a plain VFS
+  write — that raced the loop and silently reverted `activeFeatureBranch`
+  edits once (see `setConversationActiveFeatureBranch`'s doc comment).
+- **Archived semantics**: hidden from default lists, shown in each surface's
+  always‑visible *Archived* section, read‑only (409 from the runs route)
+  until unarchived. Archiving never deletes anything and does not change
+  which conversation is active; archiving the open conversation leaves it
+  open with a locked composer.
 
 ---
 

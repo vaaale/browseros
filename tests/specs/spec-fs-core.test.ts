@@ -58,7 +58,7 @@ test("writes to a non-writable store always throw SpecFSReadOnlyError, branch or
     const fs = new SpecFS(join(dir, "repo"), "bos-system-specs", join(dir, ".worktrees"), false);
     await expect(fs.writeText("a.md", "x")).rejects.toThrow(SpecFSReadOnlyError);
     await expect(
-      withFeatureScope({ branch: "bos/x" }, () => fs.writeText("a.md", "x")),
+      withFeatureScope({ branch: "bos/testfixture-x" }, () => fs.writeText("a.md", "x")),
     ).rejects.toThrow(SpecFSReadOnlyError);
   } finally {
     cleanup();
@@ -84,7 +84,7 @@ test("standalone dev: writes self-provision a worktree, reads see them, flushPen
     const worktreesBase = join(dir, ".worktrees");
     const fs = new SpecFS(repoRoot, "user-specs", worktreesBase, true);
 
-    await withFeatureScope({ branch: "bos/feature" }, async () => {
+    await withFeatureScope({ branch: "bos/testfixture-feature" }, async () => {
       await fs.writeText("page.md", "content");
       await fs.mkdir("sub");
       await fs.writeBuffer("blob.bin", Buffer.from([1, 2, 3]));
@@ -107,10 +107,10 @@ test("standalone dev: writes self-provision a worktree, reads see them, flushPen
       await fs.remove("renamed.md");
       expect(await fs.exists("renamed.md")).toBe(false);
 
-      await fs.flushPending("bos/feature");
+      await fs.flushPending("bos/testfixture-feature");
     });
 
-    const worktreePath = join(worktreesBase, "bos__feature");
+    const worktreePath = join(worktreesBase, "bos__testfixture-feature");
     expect(sysGit(worktreePath, ["log", "-1", "--format=%s"])).toBeTruthy();
     expect(sysGit(worktreePath, ["status", "--porcelain"])).toBe("");
   } finally {
@@ -122,7 +122,7 @@ test("flushPending() is a no-op when the branch was never written", async () => 
   const { dir, cleanup } = scratchDir("spec-fs-flush-noop");
   try {
     const fs = new SpecFS(join(dir, "repo"), "user-specs", join(dir, ".worktrees"), true);
-    await expect(fs.flushPending("bos/never-touched")).resolves.toBeUndefined();
+    await expect(fs.flushPending("bos/testfixture-never-touched")).resolves.toBeUndefined();
   } finally {
     cleanup();
   }
@@ -156,7 +156,7 @@ test("readRoot(): an active branch that was never materialized falls back to the
     sysGit(repoRoot, ["commit", "--quiet", "-m", "seed"]);
 
     const fs = new SpecFS(repoRoot, "user-specs", join(dir, ".worktrees"), true);
-    await withFeatureScope({ branch: "bos/never-written" }, async () => {
+    await withFeatureScope({ branch: "bos/testfixture-never-written" }, async () => {
       expect(await fs.readText("base.md")).toBe("base content");
     });
   } finally {
@@ -175,7 +175,7 @@ test("readRoot(): resolves through the Supervisor's mounted worktree when one ex
     const restore = stubSupervisor(worktree);
     try {
       const fs = new SpecFS(join(dir, "repo"), "user-specs", join(dir, ".worktrees"), true);
-      await withFeatureScope({ branch: "bos/feature" }, async () => {
+      await withFeatureScope({ branch: "bos/testfixture-feature" }, async () => {
         expect(await fs.readText("branch-only.md")).toBe("branch content");
       });
     } finally {
@@ -198,7 +198,7 @@ test("readRoot(): falls back to the base checkout when the Supervisor's begin ca
     const restore = stubSupervisor("/unused", { fail: true });
     try {
       const fs = new SpecFS(repoRoot, "user-specs", join(dir, ".worktrees"), true);
-      await withFeatureScope({ branch: "bos/feature" }, async () => {
+      await withFeatureScope({ branch: "bos/testfixture-feature" }, async () => {
         expect(await fs.readText("base.md")).toBe("base content");
       });
     } finally {
@@ -217,7 +217,7 @@ test("writeRoot(): under the Supervisor, writes land in its mounted worktree", a
     const restore = stubSupervisor(worktree);
     try {
       const fs = new SpecFS(join(dir, "repo"), "user-specs", join(dir, ".worktrees"), true);
-      await withFeatureScope({ branch: "bos/feature" }, async () => {
+      await withFeatureScope({ branch: "bos/testfixture-feature" }, async () => {
         await fs.writeText("page.md", "content");
       });
       const written = join(worktree, "specs", "user-specs", "page.md");
@@ -240,7 +240,7 @@ test("writeRoot(): under the Supervisor, throws with the mount-error cause when 
     const restore = stubSupervisor(worktree);
     try {
       const fs = new SpecFS(join(dir, "repo"), "user-specs", join(dir, ".worktrees"), true);
-      await withFeatureScope({ branch: "bos/feature" }, async () => {
+      await withFeatureScope({ branch: "bos/testfixture-feature" }, async () => {
         await expect(fs.writeText("page.md", "content")).rejects.toThrow(/not mounted on branch/);
       });
     } finally {
@@ -258,11 +258,11 @@ test("setCommitMessageFn(): a successful custom message is used verbatim (trimme
   try {
     const fs = new SpecFS(join(dir, "repo"), "user-specs", join(dir, ".worktrees"), true);
     fs.setCommitMessageFn(async () => "  custom message  ");
-    await withFeatureScope({ branch: "bos/feature" }, async () => {
+    await withFeatureScope({ branch: "bos/testfixture-feature" }, async () => {
       await fs.writeText("page.md", "content");
-      await fs.flushPending("bos/feature");
+      await fs.flushPending("bos/testfixture-feature");
     });
-    const worktreePath = join(dir, ".worktrees", "bos__feature");
+    const worktreePath = join(dir, ".worktrees", "bos__testfixture-feature");
     expect(sysGit(worktreePath, ["log", "-1", "--format=%s"])).toBe("custom message");
   } finally {
     cleanup();
@@ -274,11 +274,11 @@ test("setCommitMessageFn(): an empty or throwing custom message falls back to th
   try {
     const fsEmpty = new SpecFS(join(dir, "repo-empty"), "user-specs", join(dir, ".worktrees-empty"), true);
     fsEmpty.setCommitMessageFn(async () => "   ");
-    await withFeatureScope({ branch: "bos/feature" }, async () => {
+    await withFeatureScope({ branch: "bos/testfixture-feature" }, async () => {
       await fsEmpty.writeText("page.md", "content");
-      await fsEmpty.flushPending("bos/feature");
+      await fsEmpty.flushPending("bos/testfixture-feature");
     });
-    const emptyMsg = sysGit(join(dir, ".worktrees-empty", "bos__feature"), ["log", "-1", "--format=%s"]);
+    const emptyMsg = sysGit(join(dir, ".worktrees-empty", "bos__testfixture-feature"), ["log", "-1", "--format=%s"]);
     expect(emptyMsg).not.toBe("");
     expect(emptyMsg).not.toBe("   ");
 
@@ -286,11 +286,11 @@ test("setCommitMessageFn(): an empty or throwing custom message falls back to th
     fsThrow.setCommitMessageFn(async () => {
       throw new Error("model unavailable");
     });
-    await withFeatureScope({ branch: "bos/feature" }, async () => {
+    await withFeatureScope({ branch: "bos/testfixture-feature" }, async () => {
       await fsThrow.writeText("page.md", "content");
-      await fsThrow.flushPending("bos/feature");
+      await fsThrow.flushPending("bos/testfixture-feature");
     });
-    const throwMsg = sysGit(join(dir, ".worktrees-throw", "bos__feature"), ["log", "-1", "--format=%s"]);
+    const throwMsg = sysGit(join(dir, ".worktrees-throw", "bos__testfixture-feature"), ["log", "-1", "--format=%s"]);
     expect(throwMsg).toBeTruthy();
   } finally {
     cleanup();
@@ -322,7 +322,7 @@ test("runStartupSweep(): recovers uncommitted edits left on the base checkout an
     writeFileSync(join(repoRoot, "uncommitted.md"), "orphaned edit");
 
     const worktreePath = join(dir, "wt");
-    await ensureWorktree(repoRoot, worktreePath, "bos/orphan");
+    await ensureWorktree(repoRoot, worktreePath, "bos/testfixture-orphan");
     writeFileSync(join(worktreePath, "also-orphaned.md"), "orphaned edit 2");
 
     const fs = new SpecFS(repoRoot, "user-specs", join(dir, ".worktrees"), true);

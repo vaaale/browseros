@@ -6,6 +6,7 @@ import {
   listActiveSessions,
   listSessions,
   readThreeWay,
+  retrySession,
 } from "@/lib/gitops/sessions/store";
 import { gitLogger } from "@/lib/gitops/logging";
 
@@ -97,7 +98,23 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json({ ok: true, session: updated });
     }
 
-    return err("UNKNOWN_ACTION", `Unknown action "${action}" (expected "answer" or "abandon").`);
+    if (action === "retry") {
+      // The escape hatch from a mis-configured conflict agent (and from a
+      // session orphaned in `working` by a dead run): re-point the session and
+      // its conversation at the CURRENTLY configured agent and start again,
+      // instead of rolling back and redoing the whole operation.
+      const agentId = typeof body.agentId === "string" && body.agentId.trim() ? body.agentId.trim() : undefined;
+      const result = await retrySession(id, { agentId });
+      gitLogger().info({
+        op: "api.gitops_sessions.retry",
+        repoPath: session.workContext.repoPath,
+        success: true,
+        error: undefined,
+      });
+      return NextResponse.json({ ok: true, session: result.session, agentId: result.agentId, relaunched: result.relaunched });
+    }
+
+    return err("UNKNOWN_ACTION", `Unknown action "${action}" (expected "answer", "retry", or "abandon").`);
   } catch (e) {
     return err("TRANSITION_FAILED", (e as Error).message);
   }

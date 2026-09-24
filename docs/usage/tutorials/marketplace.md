@@ -14,9 +14,15 @@ A marketplace is a git repository that follows one of three recognised formats:
 |---|---|---|
 | **BOS native** (`marketplace.json` at root) | `vaaale/bos-marketplace` | Apps, specs |
 | **Claude skills** (`skills_index.json` at root) | `ericgandrade/claude-superskills` | Skills |
-| **Anthropic agent-skills** (`.claude-plugin/marketplace.json`) | `anthropics/skills` | Skills |
+| **Claude Code plugin marketplace** (`.claude-plugin/marketplace.json`) | `anthropics/skills`, `obra/superpowers` | Skills |
 
 BOS detects the format automatically when you add the URL — no manual configuration needed.
+
+In the Claude Code plugin format, a plugin may list its skills explicitly
+(`plugins[].skills[]`) or omit the list entirely — the standard convention, used
+by most published plugins — in which case BOS discovers every
+`<source>/skills/<name>/SKILL.md` under the plugin's source directory
+automatically.
 
 ---
 

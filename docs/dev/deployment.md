@@ -20,6 +20,11 @@ Each user gets three isolated volumes:
 docker build -t browseros:latest .
 ```
 
+Optional. If `BOS_IMAGE` doesn't exist when a user's container is first
+created, the bastion builds it automatically from `BOS_REPO_PATH` — see
+[Automatic image builds](#automatic-image-builds). Building it up front just
+means the first login isn't waiting on it.
+
 ### 2. Build the bastion image
 ```bash
 docker compose build bastion
@@ -82,6 +87,44 @@ node -e "const b = require('bcryptjs'); console.log(b.hashSync('mypassword', 12)
 
 The file is hot-reloaded by `chokidar` — changes take effect immediately without a bastion restart.
 
+### Login audit log
+
+Every credential check made by the simple provider is appended to
+`/data/audit/login.log` inside the bastion container (the `bastion-data`
+volume), one JSON object per line — `bastion/src/audit-log.ts`:
+
+```json
+{"ts":"2026-09-16T09:12:44.118Z","event":"login","outcome":"failure","username":"alice","reason":"bad_password","isAdmin":null,"ip":"::ffff:10.0.0.4","forwardedFor":"203.0.113.9","userAgent":"Mozilla/5.0 …"}
+```
+
+- `event` — `login` (a credential check against `POST /login`) or
+  `bootstrap_admin` (first-run setup minting the initial admin session, the one
+  path that grants a session without a credential check).
+- `reason` — on failure: `unknown_user`, `bad_password`, `missing_credentials`
+  or `provider_error`. The HTTP response deliberately collapses the first two
+  into a single "Invalid credentials" to avoid user enumeration; the log keeps
+  them apart, which is what makes a credential-stuffing sweep legible
+  afterwards. Passwords are never recorded.
+- `ip` is the TCP peer — i.e. the reverse proxy's address when one sits in
+  front of the bastion. `forwardedFor` is the raw `X-Forwarded-For` header,
+  client-controlled and spoofable unless a trusted proxy overwrites it; the two
+  are kept separate rather than collapsed so the log never implies more
+  certainty than it has.
+
+The active file rotates at 5 MB, keeping `login.log.1` … `login.log.5` (so an
+unauthenticated login flood cannot fill the disk). It is deliberately **not**
+under `/data/logs/`, which holds per-user provisioning logs that are surfaced
+in the admin UI and deleted along with the user.
+
+**Keycloak deployments have no such file.** There the IdP performs the
+credential check and owns that trail; the bastion never sees a password, so
+`initAuditLog()` disables the module outright for any non-simple provider.
+
+Tail it with:
+```bash
+docker compose exec bastion tail -f /data/audit/login.log
+```
+
 ---
 
 ## Keycloak setup
@@ -127,18 +170,166 @@ BOS feature adopts it.
 
 ---
 
+## Automatic image builds
+
+`BOS_IMAGE` (default `browseros:latest`) is the one prerequisite a user
+container cannot be created without, and it is shared by every user — there is
+no per-user image. `ensureBosImage()` therefore runs inside
+`createBosContainer()` in `bastion/src/docker.ts`, the single place
+`cfg.bosImage` is ever used: if the tag is missing it is built from
+`BOS_REPO_PATH` (default `/bos-src`, the deployment's own source checkout)
+before the container is created.
+
+Putting it at that choke point means every path that makes a container is
+covered by construction — first provision, `rebuild-nm`, `reset-data`, full
+re-provision, and the stale-container self-heal in `lifecycle.ts` — rather
+than each remembering to check. Before this, creating a user in the admin
+portal and logging in as them died on the daemon's `No such image: <tag>`,
+and an operator had to notice and press **Build image** in the admin portal
+by hand before *any* user could log in.
+
+Notes:
+
+- **Progress is visible.** The build takes minutes on a cold deployment, so
+  `Step n/m` lines are reported through the provisioning log — the same
+  channel the "starting your instance" status page polls. Without that the
+  first login looks like a hang.
+- **One build per tag.** `buildImageCoalesced()` holds a single in-flight
+  build per tag, shared by the automatic path *and* the admin portal's
+  explicit **Build image** action (whose `409 "A build is already in
+  progress"` now reflects both). Two first-time logins at once, or an admin
+  build racing a login, join one build instead of racing on the tag. Only the
+  caller that started it streams progress.
+- **Failure is diagnosable.** A failed build raises `Image "<tag>" is missing
+  and could not be built automatically from <path>: <reason>`, and the tag is
+  re-checked against the daemon afterwards, so a build that "succeeds"
+  without producing the tag fails here rather than later at
+  `createContainer`.
+- It does **not** rebuild an image that already exists. Updating a
+  deployment's image is still an explicit action (admin portal → Build image,
+  or `docker build` on the host).
+
+Regression cover: `tests/bastion/image-autobuild.test.ts` (real Docker
+integration tests; they self-skip when no daemon is reachable).
+
+---
+
+## WebSocket upgrades through the Bastion
+
+A WebSocket upgrade does **not** go through Express. `server.on("upgrade")` is
+an event on the HTTP server itself, so none of the middleware stack runs for
+it: not the auth router, not the proxy middleware, not even `cookie-parser`.
+Everything an upgrade needs is therefore done explicitly by
+`createBosProxy(...).upgrade(server)`, which `bastion/src/index.ts` must call
+with the server the middleware is mounted on:
+
+1. Strip any client-supplied `x-bos-auth-scope`/`x-bos-auth-role` headers.
+2. Authenticate — the session JWT read straight out of the raw `Cookie`
+   header (`verifySessionToken` + `sessionTokenFromCookieHeader`), or a
+   headless per-service secret via the same `resolveCredential` path HTTP
+   uses. There is no `/login` redirect fallback: a 302 means nothing to a
+   WebSocket client, so an unauthenticated upgrade is refused outright with
+   `401` + `WWW-Authenticate` written onto the raw socket.
+3. Assert the verified claim headers, plus `x-bos-username`. (The HTTP path
+   injects that one via http-proxy's `proxyReq` hook, which is **not** emitted
+   for upgrades — it emits `proxyReqWs` — so the upgrade path sets it on the
+   request's own headers, which are what get forwarded.)
+4. Dispatch to exactly one user's proxy instance. A WebSocket cannot wait out
+   a cold start the way the HTML status page does, so an instance that isn't
+   `running`/`unhealthy` yet is refused with `503` rather than triggering
+   provisioning; the page that opened the socket is itself served over HTTP,
+   which does start the instance.
+
+### The per-user proxies must keep `ws: false`
+
+`createBosProxy` builds one `createProxyMiddleware` instance **per user**, each
+pinned to that user's own container. Setting `ws: true` on them is a latent
+outage plus an auth bypass, and both halves actually happened:
+http-proxy-middleware lazily self-subscribes to the shared server's `upgrade`
+event on each instance's first HTTP request, and Node invokes **every**
+`upgrade` listener for **every** upgrade. With N users active, one WebSocket
+was proxied into all N containers at once — N `101 Switching Protocols`
+responses written onto a single client socket, which breaks the connection (the
+Terminal app stopped working this way) — and because that self-subscribed
+listener runs outside Express, it performed **no authentication at all**,
+making every provisioned user's container reachable by an unauthenticated
+upgrade. Keep `ws: false` and let `attachUpgrade()` own the dispatch.
+Regression cover: `tests/bastion/proxy-ws-upgrade-auth.test.ts`.
+
+Bastion serves no WebSocket of its own (the admin log stream is SSE, i.e.
+plain HTTP), so the single upgrade listener is deliberately a catch-all.
+
+---
+
 ## Volume layout
 
 ```
 VOLUME_BASE/               (default: ./user-data on the host)
-  {username}/
-    src/   ←── git clone of BOS source (bind → /app/src)
-    data/  ←── BOS_DATA_DIR (bind → /app/data)
+  {username}/               ←── bind → /bos   (covers data/ + data-clones/)
+    src/          ←── git clone of BOS source (bind → /app)
+    data/         ←── BOS_DATA_DIR       (bind → /app/data)
+                       …also reachable as /bos/data (BOS_CLONE_SOURCE)
+    worktrees/    ←── BOS_WORKTREES      (bind → /worktrees)
+    data-clones/  ←── BOS_DATA_CLONES = /bos/data-clones
 
 Docker named volumes:
   bos-nm-{username}  ←── /app/node_modules (per user)
-  bastion-data       ←── /data inside bastion (users.yml, instances.json, config.json)
+  bastion-data       ←── /data inside bastion (users.yml, instances.json, config.json,
+                          logs/<user>.log provisioning logs, audit/login.log)
 ```
+
+`worktrees/` and `data-clones/` sit outside `/app` so `chown -R /app` never walks
+them (a worktree is a full source tree plus `node_modules`; a clone is a full copy
+of `data/`).
+
+> **Why the user's directory is bound a second time at `/bos`.** `link(2)`
+> refuses to cross a mount even when both paths are on one filesystem. With
+> `data/` and `data-clones/` bound separately, `cp -al /app/data /data-clones/…`
+> failed with `EXDEV` on every file, the clone layer fell back to `cp -a`, and
+> every preview clone was a full copy of the user's `data/` — 8.5 GB each, which
+> is how a production host filled 155 GB. Two directories share a mount only if
+> one mount covers both, so the covering parent is bound once at `/bos` and the
+> Supervisor clones `/bos/data` → `/bos/data-clones`, one mount, real hardlinks.
+>
+> `BOS_DATA_DIR` stays `/app/data` on purpose: `installItemLink` writes
+> `data/system/<id>` as an **absolute** symlink, so re-addressing the data dir
+> would break every installed item in every existing container. Only the
+> Supervisor's clone layer reads `BOS_CLONE_SOURCE`. See
+> [DataFS](self-modification/data-isolation-datafs.md).
+
+### The instance registry is a cache
+
+`/data/instances.json` is written temp-then-rename and its write failures are
+contained, not propagated: `reconcileOnStartup` rebuilds it from `docker ps` on
+every boot, and its most frequent writer is `touchInstance` — a cosmetic
+"last active" timestamp on every proxied request, coalesced to at most one write
+per 5 s. A bare `writeFileSync` here once truncated the registry to zero bytes on
+a full disk and served the resulting `EDQUOT` stack trace to every user on every
+page. Failures are logged with their cause; see
+`tests/bastion/instances-persist-atomic.test.ts`.
+
+### Ownership of the data mount
+
+The bastion creates `{username}/data/` as **root**; BOS inside the container runs as
+`user` (uid `BOS_UID`, default 1000). `docker-entrypoint.sh` reconciles the two, and
+the ordering is load-bearing:
+
+1. `chown -R user:user /app/data` — **only when `/app/data`'s own owner differs from
+   `BOS_UID`**. It is a cheap guard against re-walking a large data tree on every
+   start, but it inspects the top directory alone: a root-owned directory *inside* an
+   already-user-owned `data/` is invisible to it and never repaired.
+2. The VFS block then creates `data/vfs/{workspace,Documents}` — still as root, i.e.
+   *after* step 1 has been and gone. So it must chown **the `vfs/` root itself**, not
+   just the leaves it symlinks. Leaving `vfs/` root-owned makes the container come up
+   healthy with a VFS the BOS process cannot extend: `ensureVfs()` in `src/os/vfs.ts`
+   fails with `EACCES ... mkdir '/app/data/vfs/Pictures'`, and every subsystem whose
+   first act is a VFS write (the memory plugin's scheduler seeding, for one) dies with
+   it. The chown is unconditional so an already-broken container self-repairs on its
+   next start.
+
+Anything else added to the entrypoint that creates a directory under the data mount as
+root carries the same obligation. `tests/bastion/docker-entrypoint-vfs-ownership.test.ts`
+enforces it by replaying the script's `mkdir`/`chown` sequence under shims.
 
 ---
 

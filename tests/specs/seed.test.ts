@@ -73,6 +73,46 @@ test("a legitimately customized user-specs label survives, even though owner/wri
   }
 });
 
+test("a store's METHOD and WORKFLOW bindings survive a reseed", async () => {
+  // The same bug, twice. 045 FR-008 added `method` to what ensureUserStore
+  // preserves, because a method assigned through the picker "would survive
+  // exactly until the next restart and then silently revert to spec-kit". 049
+  // then made `workflow` the field that supersedes it (`resolveMethod` reads
+  // `store.workflow ?? store.method`) and nobody added the new field to the
+  // allowlist — so binding a store to a fork, which is how 051 works, reverted
+  // on the next boot with no message at all.
+  //
+  // Both fields are asserted, and `unknownFuture` with them: the manifest now
+  // preserves by default and enforces only the three identity fields, so this
+  // test fails if anyone reintroduces the allowlist.
+  const { cleanup } = useTestDataDir("seed-user-store-bindings");
+  try {
+    const userDir = join(specsRoot(), "user-specs");
+    await mkdir(userDir, { recursive: true });
+    await writeFile(
+      join(userDir, "spec-store.json"),
+      JSON.stringify({
+        label: "User specs", owner: "user", writable: true, requiresPromote: false,
+        method: "bmad", workflow: "lean", unknownFuture: "keep me",
+      }, null, 2),
+    );
+
+    await ensureStores();
+
+    const raw = JSON.parse(await readFile(join(userDir, "spec-store.json"), "utf8")) as Record<string, unknown>;
+    expect(raw.workflow, "049's binding field — the one that was being dropped").toBe("lean");
+    expect(raw.method, "045's, which was already preserved").toBe("bmad");
+    expect(raw.unknownFuture, "preserve-by-default, so the next field needs no code change").toBe("keep me");
+
+    const store = await getStore("user-specs");
+    expect(store?.workflow).toBe("lean");
+    expect(store?.owner, "identity is still enforced").toBe("user");
+    expect(store?.writable).toBe(true);
+  } finally {
+    cleanup();
+  }
+});
+
 test("bos-system-specs' manifest is always enforced too, even if something wrote it as writable", async () => {
   const { cleanup } = useTestDataDir("seed-system-store-tampered");
   try {

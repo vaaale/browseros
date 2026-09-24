@@ -72,6 +72,9 @@ export interface ItemFacets {
   /** `docs/usage/**` + `docs/dev/**` — the item's own documentation, overlaid
    *  into the Docs app's tree by @/lib/docs/store (no second symlink). */
   docs: boolean;
+  /** 045 FR-012: `method/method.json` — a spec-framework pack. Discovered by
+   *  the same depth-2 scan as every other facet; nothing is copied (035). */
+  method: boolean;
 }
 
 export interface InstalledItem {
@@ -97,7 +100,7 @@ async function exists(p: string): Promise<boolean> {
 }
 
 async function readFacets(itemPath: string): Promise<ItemFacets> {
-  const [app, service, plugin, spec, hooks, docs] = await Promise.all([
+  const [app, service, plugin, spec, hooks, docs, method] = await Promise.all([
     // An app is `app/` — either an index.html or just an app.json, the latter
     // being a plugin-served app whose files are served by its plugin.
     exists(path.join(itemPath, "app")),
@@ -106,8 +109,12 @@ async function readFacets(itemPath: string): Promise<ItemFacets> {
     exists(path.join(itemPath, "spec")),
     exists(path.join(itemPath, "hooks")),
     exists(path.join(itemPath, "docs")),
+    // Keyed on the MANIFEST, not the directory: a `method/` folder with no
+    // method.json is an authoring mistake, and treating it as a pack would
+    // register a descriptor that cannot be read.
+    exists(path.join(itemPath, "method", "method.json")),
   ]);
-  return { app, service, plugin, spec, hooks, docs };
+  return { app, service, plugin, spec, hooks, docs, method };
 }
 
 /**
@@ -154,7 +161,7 @@ export async function listInstalledItems(dataRoot?: string): Promise<InstalledIt
       id: entry.name,
       itemPath,
       facets: broken
-        ? { app: false, service: false, plugin: false, spec: false, hooks: false, docs: false }
+        ? { app: false, service: false, plugin: false, spec: false, hooks: false, docs: false, method: false }
         : await readFacets(itemPath),
       ...deriveOrigin(itemPath),
       broken,

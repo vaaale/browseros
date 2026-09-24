@@ -57,7 +57,14 @@ export async function POST(req: NextRequest) {
 export async function DELETE(req: NextRequest) {
   const id = new URL(req.url).searchParams.get("id");
   if (!id) return NextResponse.json({ error: "id query param required" }, { status: 400 });
-  await removeSkill(id);
+  try {
+    await removeSkill(id);
+  } catch (err) {
+    // A read-only (item-installed) skill refuses removal — the message names
+    // the item to uninstall instead. 409: the request is well-formed, the
+    // resource's state forbids it.
+    return NextResponse.json({ error: (err as Error).message }, { status: 409 });
+  }
   logger().info("skills", "skill deleted", { id });
   return NextResponse.json({ skills: await listSkills() });
 }

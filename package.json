@@ -14,11 +14,15 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test:unit": "NODE_OPTIONS=--conditions=react-server playwright test -c playwright.unit.config.ts",
-    "test:coverage": "c8 npm run test:unit",
+    "test:unit": "NODE_OPTIONS='--conditions=react-server --require ./tests/_no-external-network.cjs --require ./tests/_no-live-deployment.cjs' playwright test -c playwright.unit.config.ts",
+    "test:bench": "NODE_OPTIONS='--conditions=react-server --require ./tests/_no-external-network.cjs --require ./tests/_no-live-deployment.cjs' playwright test -c playwright.bench.config.ts",
+    "test:supervisor": "node --test \"tests/supervisor/*.test.mjs\"",
+    "coverage:clean": "rm -rf coverage",
+    "test:coverage": "npm run coverage:clean && c8 --no-clean --reporter=none npm run test:unit && c8 --no-clean --reporter=none npm run test:supervisor && c8 report",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
-    "supervisor": "node tools/supervisor/supervisor.mjs"
+    "supervisor": "node tools/supervisor/supervisor.mjs",
+    "validate:methods": "node scripts/validate-method-layer.mjs"
   },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.75",

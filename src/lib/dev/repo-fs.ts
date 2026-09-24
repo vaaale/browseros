@@ -25,7 +25,12 @@ const READ_DENY: RegExp[] = [
 // Note: `specs/` is intentionally absent — since 018 specs live in external
 // stores (not the BOS source repo), the developer harness must not write there;
 // spec edits go through Build Studio's spec-fs / the spec stores instead.
-const WRITE_ALLOW_PREFIXES = ["src/", ".specify/", "public/", "docs/", "data/"];
+// 046 FR-003/FR-004: `.specify/` is gone — the spec-kit engine moved into the
+// built-in method pack (seed/method-packs/spec-kit/). A grant for a path that
+// no longer exists is not harmless: it would silently re-create the directory
+// the moment anything wrote there, resurrecting the second engine location
+// this feature exists to remove.
+const WRITE_ALLOW_PREFIXES = ["src/", "seed/", "public/", "docs/", "data/"];
 
 const MAX_READ_BYTES = 512 * 1024;
 const MAX_SEARCH_RESULTS = 200;

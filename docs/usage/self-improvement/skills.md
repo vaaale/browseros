@@ -55,6 +55,11 @@ You can see the current skills in the Assistant's right **Skills** panel.
   [self‑improvement](learning-from-experience.md) loop — e.g. after you correct its
   approach, it embeds the lesson into the relevant skill so the next session starts
   already corrected.
+- **Marketplace items** can carry skills. These are installed as links into the
+  item's own files and shown with a **read‑only** badge: they update together
+  with the item and can't be edited or deleted in the editor. To remove one,
+  uninstall its item in the Marketplace; to customize one, duplicate it under a
+  new name and edit the copy.
 
 Skills are **archived, never silently deleted** by the system, and you can **pin**
 one to protect it from automatic archiving.

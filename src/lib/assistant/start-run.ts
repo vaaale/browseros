@@ -14,7 +14,7 @@ import { composePluginHooks, listPlugins } from "@/lib/plugins/registry";
 import { composeInstructions } from "@/lib/agent/instructions";
 import { getConversationActiveFeatureBranch } from "@/lib/agent/conversations-server";
 import { getConfigValue, getMaxAgentSteps } from "@/lib/config/registry";
-import { listSubAgents } from "@/lib/agent/subagents/store";
+import { listDelegatableAgents } from "@/lib/agent/subagents/store";
 import { logger } from "@/lib/logging";
 
 // Glue between the HTTP routes and the framework-free run core: builds the
@@ -46,7 +46,11 @@ export interface StartRunOptions {
  *  mechanism — `client/surface-agents.ts`'s registration-time check is. */
 async function addSurfaceAgentsWithBackstop(run: Run, agents: SurfaceAgentEntry[]): Promise<void> {
   if (agents.length === 0) return;
-  const persistedIds = new Set((await listSubAgents().catch(() => [])).map((a) => a.id));
+  // 048 FR-001b — DELEGATABLE, not picker-visible. This backstop stops a
+  // surface agent from shadowing a persisted one; a delegate-only agent is
+  // still persisted and still shadowable, so filtering it out here would let a
+  // surface agent silently take over a pack persona's id.
+  const persistedIds = new Set((await listDelegatableAgents().catch(() => [])).map((a) => a.id));
   const accepted: SurfaceAgentEntry[] = [];
   for (const a of agents) {
     if (persistedIds.has(a.id)) {

@@ -1,10 +1,11 @@
 import "server-only";
 import type { AssistantTool } from "../../tools";
 import { serverTool, parallel, schema, p } from "./util";
-import { listSubAgents, getAgent, createSubAgent } from "@/lib/agent/subagents/store";
+import { listDelegatableAgents, getAgent, createSubAgent } from "@/lib/agent/subagents/store";
 import type { Agent } from "@/lib/agent/subagents/types";
 import { runManager } from "../../run-manager";
 import { delegateToAgent, delegateToSurfaceAgent } from "./delegate-common";
+import { missingPackForAgent } from "@/lib/specs/method/install";
 
 // Delegation tools (ported from SubAgentActions.tsx): list/create agents and
 // delegate a task. agent_delegate's branching (type: "claude" via runSubAgent,
@@ -23,7 +24,11 @@ export function subAgentTools(): Record<string, AssistantTool> {
       schema(),
       async (_input, ctx) => {
         const run = runManager().get(ctx.runId);
-        const persisted = (await listSubAgents()).map((a) => ({
+        // 048 FR-001b — DELEGATABLE, not picker-visible. This tool's own
+        // description says "agents you can delegate to": a delegate-only
+        // agent IS one, and hiding it here means the model cannot know to
+        // delegate to it. `visibility` scopes the HUMAN picker, not this.
+        const persisted = (await listDelegatableAgents()).map((a) => ({
           id: a.id,
           type: a.type as string,
           description: a.description,
@@ -125,6 +130,17 @@ export function subAgentTools(): Record<string, AssistantTool> {
           const run = runManager().get(ctx.runId);
           const surfaceAgent = run?.agents.get(idOrName.toLowerCase());
           if (surfaceAgent) return delegateToSurfaceAgent(surfaceAgent, task, ctx, "agent_delegate");
+        }
+
+        // 045 FR-016: if the id belongs to a method pack that is no longer
+        // installed, say THAT. A bare "no matching agent found" sends the
+        // reader looking for a typo in a name that was correct yesterday —
+        // the agent did not disappear, its pack was uninstalled.
+        if (input.agent) {
+          const missing = await missingPackForAgent(String(input.agent));
+          if (missing) {
+            return `Error: agent_delegate: "${input.agent}" is provided by the method pack "${missing}", which is not installed. Reinstall that pack, or delegate to an agent from an installed one.`;
+          }
         }
 
         return `Error: agent_delegate: no matching agent found${input.agent ? ` for "${input.agent}"` : ""} and no ephemeral spec provided. Supply either an existing \`agent\` id/name, or all three of \`ephemeralName\` + \`ephemeralType\` + \`ephemeralSystemPrompt\`.`;

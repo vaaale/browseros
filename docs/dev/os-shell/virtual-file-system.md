@@ -23,7 +23,7 @@ returns `{ stream, done }` — always await `done`, not the stream's own
 `finish` fires before the atomic rename over the real target, so `done` is
 what actually means "durably persisted at this path" (same write-temp-then-
 rename discipline as `writeFileAtomic`, just spread across a stream). A mounted
-path (`/Specs`, `/Docs`, `/Templates` — `FSBackend` has no streaming surface,
+path (`/Specs`, `/Docs`, `/Methods/<id>/templates` — `FSBackend` has no streaming surface,
 those stores are never huge) buffers the stream and delegates to the backend's
 own `writeBuffer`/`readBuffer` instead; still correct, just not memory-saving
 for that subtree.
@@ -55,7 +55,7 @@ on `localhost` (not a browser request, so none of the same-origin/CORS
 sandboxing that applies to iframe apps is relevant). Small/metadata operations
 (list, stat, mkdir, delete, rename, small read/write) go through `/api/fs`;
 large file transfers go through `/api/fs/raw`'s streaming GET/PUT. See the
-Build Studio skill's `references/target-marketplace-item.md` (`seed/skills/
+`bos-domain` skill's `references/target-marketplace-item.md` (`seed/skills/
 build-studio/`) for the full guidance a spec/plan should follow here.
 
 ---
@@ -71,6 +71,10 @@ build-studio/`) for the full guidance a spec/plan should follow here.
 - Sub‑agents get VFS tools (`file_list`/`file_read`/`file_write`/`file_mkdir`)
   as their **default** toolset — see
   [Sub‑agents](../assistant/sub-agents-and-delegation.md).
+- The agent-facing surface is the eleven `file_*` tools, all **server** tools in
+  `src/lib/assistant/tools/server/files.ts` — their contracts, the branch‑coupling
+  rules, and the recipe for adding one are in
+  [file tools](../file-tools/file-tools.md).
 
 ---
 

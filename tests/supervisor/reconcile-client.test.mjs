@@ -74,7 +74,7 @@ test("reconcileViaApi: a non-200 poll response throws", async () => {
 });
 
 test("requireReconciled: status 'failed' throws with the suggestion appended when present", async () => {
-  const cand = { branch: "bos/x", state: "escalated" };
+  const cand = { branch: "bos/testfixture-x", state: "escalated" };
   await assert.rejects(
     requireReconciled(cand, { status: "failed", error: { message: "merge conflict", suggestion: "resolve manually" } }, "/repo", "test op"),
     /test op failed: merge conflict \(resolve manually\)/,
@@ -82,7 +82,7 @@ test("requireReconciled: status 'failed' throws with the suggestion appended whe
 });
 
 test("requireReconciled: status 'timed-out' throws naming the conversation", async () => {
-  const cand = { branch: "bos/x", state: "escalated" };
+  const cand = { branch: "bos/testfixture-x", state: "escalated" };
   await assert.rejects(
     requireReconciled(cand, { status: "timed-out", devopsConversationId: "conv-9" }, "/repo", "test op"),
     /did not finish within the wait limit.*conv-9/s,
@@ -90,7 +90,7 @@ test("requireReconciled: status 'timed-out' throws naming the conversation", asy
 });
 
 test("requireReconciled: status 'success' is a no-op — does not touch cand.state", async () => {
-  const cand = { branch: "bos/x", state: "ready" };
+  const cand = { branch: "bos/testfixture-x", state: "ready" };
   await requireReconciled(cand, { status: "success" }, "/repo", "test op");
   assert.equal(cand.state, "ready");
 });
@@ -102,7 +102,7 @@ test("requireReconciled: status 'escalated' with a CLEAN repo sets ready and cle
     writeFileSync(join(repo, "f"), "x\n");
     git(repo, ["add", "-A"]);
     git(repo, ["commit", "-q", "-m", "init"]);
-    const cand = { branch: "bos/x", state: "escalated", devopsConversationId: "conv-1" };
+    const cand = { branch: "bos/testfixture-x", state: "escalated", devopsConversationId: "conv-1" };
     await requireReconciled(cand, { status: "escalated", devopsConversationId: "conv-1" }, repo, "test op");
     assert.equal(cand.state, "ready");
     assert.equal(cand.devopsConversationId, undefined);
@@ -119,7 +119,7 @@ test("requireReconciled: status 'escalated' with a DIRTY repo throws — resolut
     git(repo, ["add", "-A"]);
     git(repo, ["commit", "-q", "-m", "init"]);
     writeFileSync(join(repo, "f"), "uncommitted change\n");
-    const cand = { branch: "bos/x", state: "escalated" };
+    const cand = { branch: "bos/testfixture-x", state: "escalated" };
     await assert.rejects(
       requireReconciled(cand, { status: "escalated", devopsConversationId: "conv-1" }, repo, "test op"),
       /still has uncommitted\/conflicted changes/,
@@ -130,7 +130,7 @@ test("requireReconciled: status 'escalated' with a DIRTY repo throws — resolut
 });
 
 test("requireReconciled: status 'escalated' but the repo can't even be read — throws rather than assuming clean", async () => {
-  const cand = { branch: "bos/x", state: "escalated" };
+  const cand = { branch: "bos/testfixture-x", state: "escalated" };
   await assert.rejects(
     requireReconciled(cand, { status: "escalated", devopsConversationId: "conv-1" }, "/nonexistent/not-a-repo", "test op"),
     /could not verify .* is clean after DevOps Agent escalation/,

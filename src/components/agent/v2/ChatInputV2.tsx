@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowUp, Square, X, Paperclip, FileText } from "lucide-react";
+import { ArrowUp, Square, X, Paperclip, FileText, Archive, Lock } from "lucide-react";
 import { useChatSelector, setEditing } from "@/lib/assistant/client/chat-store";
+import { setConversationArchived, useAllConversations } from "@/lib/agent/conversations";
 import { sendMessage, stopRun } from "@/lib/assistant/client/run-client";
 import type { Attachment } from "@/lib/assistant/messages";
 import { VoiceMicButton } from "@/components/voice/VoiceMicButton";
@@ -46,6 +47,12 @@ export function ChatInputV2({
   const editingMessage = useChatSelector(conversationId, (s) =>
     s.editingMessageId ? s.messages.find((m) => m.id === s.editingMessageId) : undefined,
   );
+  // Archived conversations are read-only (038): the composer locks and offers
+  // Unarchive. This is UX sugar only — POST /api/assistant/runs is the
+  // authoritative gate. The conversations store changes rarely (never per
+  // streamed token), so subscribing here doesn't fight keystrokes.
+  const { conversations } = useAllConversations();
+  const archived = conversations.find((c) => c.id === conversationId)?.archived === true;
   const [text, setText] = useState("");
   const [error, setError] = useState<string | undefined>();
   const [attachments, setAttachments] = useState<Attachment[]>([]);
@@ -147,6 +154,35 @@ export function ChatInputV2({
   }, [text, busy, uploading, attachments, conversationId, agentId, editingMessage, ensureConversation, autoResize]);
 
   const cancelEdit = useCallback(() => setEditing(conversationId, undefined), [conversationId]);
+
+  if (archived) {
+    return (
+      <div className="shrink-0 border-t border-white/10 px-3 py-2.5">
+        <div
+          data-testid="archived-banner"
+          className="mb-1.5 flex items-center gap-2 rounded-md border border-amber-400/25 bg-amber-400/10 px-2 py-1.5 text-[11px] text-amber-200"
+        >
+          <Archive size={12} className="shrink-0" />
+          <span className="min-w-0 flex-1">This conversation is archived and read-only. Nothing has been deleted.</span>
+          <button
+            type="button"
+            data-testid="archived-banner-unarchive"
+            onClick={() => void setConversationArchived(conversationId, false)}
+            className="shrink-0 rounded bg-amber-400/20 px-2 py-0.5 font-medium text-amber-50 hover:bg-amber-400/30"
+          >
+            Unarchive to continue
+          </button>
+        </div>
+        <div
+          data-testid="archived-composer-lock"
+          className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-white/30"
+        >
+          <Lock size={13} />
+          Unarchive this conversation to send a message
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="shrink-0 border-t border-white/10 px-3 py-2.5">

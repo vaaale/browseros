@@ -162,6 +162,14 @@ test.describe("OAuth client configuration", () => {
     expect(typeof client.exchangeCode).toBe("function");
   });
 
+  // These two assert only that a failed exchange REJECTS rather than hanging
+  // or resolving. They do not reach github.com/gitlab.com: the unit suite's
+  // network guard (tests/_no-external-network.cjs) refuses non-loopback
+  // egress, so the failure is a blocked connection, deterministically and
+  // instantly. Until that guard existed they really did POST a fake code to
+  // the live provider and depended on how it answered — which is a
+  // network-availability test, not a unit test. Provider-side error handling
+  // (a 401 with an `error` body) needs a stub server and is not covered here.
   test("GitHub client exchangeCode rejects on network error", async () => {
     const client = createGitHubClient("id", "secret", "http://localhost/callback", ["read:user"]);
     await expect(client.exchangeCode("fake-code")).rejects.toThrow();

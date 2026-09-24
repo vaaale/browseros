@@ -8,6 +8,7 @@ import {
   ChevronDown,
   ChevronRight,
   FileText,
+  HeartPulse,
   Folder,
   FolderTree,
   Hammer,
@@ -15,9 +16,11 @@ import {
   RefreshCw,
   Save,
   Search,
+  Workflow,
   X,
 } from "lucide-react";
 import type { PipelinePhase, Specification, SpecTreeNode } from "@/lib/specs/types";
+import type { MethodSummary } from "@/lib/specs/method/types";
 import { AssistantChatV2 } from "@/components/agent/v2/AssistantChatV2";
 import { ResizeHandle } from "@/components/apps/ResizeHandle";
 import { registerAppSurfaceTools } from "@/lib/assistant/client/surface-tools";
@@ -25,9 +28,16 @@ import { useActiveConversation, selectConversationById } from "@/lib/agent/conve
 import type { AppProps } from "@/components/apps/types";
 import { buildStudioSurfaceTools } from "./agent-tools-v2";
 import { featureIdOf, findBranchInTree, findInTree, storeIdOf } from "./tree-helpers";
+import { BRANCH_REQUIRED } from "@/lib/specs/error-codes";
+import { resolveCentreMode } from "./centre-mode";
+import { WorkflowCanvas } from "./workflow/WorkflowCanvas";
+import { suggestFeatureBranchName } from "@/lib/agent/feature-branch";
+import { createAndActivateFeatureBranch } from "@/lib/agent/create-feature-branch";
 import { ContextMenu, ConfirmDialog, PromptDialog, type MenuItem } from "./Dialogs";
 import { HistoryDialog } from "./HistoryDialog";
 import { ConflictPane } from "./conflict/ConflictPane";
+import { MethodPicker } from "./MethodPicker";
+import { SelfHealPane } from "./selfheal/SelfHealPane";
 import { findActiveConflictSession } from "./conflict/useConflictSession";
 import type { ConflictSession } from "@/lib/gitops/sessions/types";
 
@@ -59,31 +69,16 @@ function clamp(value: number, min: number, max: number): number {
 interface SpecsResponse {
   tree?: SpecTreeNode[];
   specs?: Specification[];
+  /** 045 FR-014 (T028): the active method descriptor, so the client never
+   *  re-derives phase metadata it does not own. */
+  method?: MethodSummary;
 }
 
-const PHASE_ORDER: PipelinePhase["id"][] = [
-  "constitution",
-  "specify",
-  "clarify",
-  "plan",
-  "tasks",
-  "analyze",
-  "implement",
-  "converge",
-  "test",
-];
-
-const PHASE_LABEL: Record<PipelinePhase["id"], string> = {
-  constitution: "Const",
-  specify: "Spec",
-  clarify: "Clarify",
-  plan: "Plan",
-  tasks: "Tasks",
-  analyze: "Analyze",
-  implement: "Impl",
-  converge: "Converge",
-  test: "Test",
-};
+// 045 FR-007: the phase vocabulary is GONE from the client. PHASE_ORDER and
+// PHASE_LABEL used to hardcode spec-kit's nine phases here, which meant every
+// new framework needed a UI change to show its own pipeline. The server sends
+// `{id, label, state}` in descriptor order and this file renders whatever
+// arrives — it no longer knows what a phase is called or how many there are.
 
 // The `NNN-` numbering prefix of a feature folder's slug (e.g. "035" from
 // "035-spec-promote-conflict") — shown alongside the resolved spec title so
@@ -128,6 +123,11 @@ function filterTreeNodes(nodes: SpecTreeNode[], query: string, specByPath: Map<s
 function phaseClass(state: PipelinePhase["state"]): string {
   if (state === "done") return "border-emerald-500/30 bg-emerald-500/15 text-emerald-300";
   if (state === "pending") return "border-amber-500/30 bg-amber-500/10 text-amber-300";
+  // `blocked` must not look like `na`. They mean opposite things to a user:
+  // `na` is "this step does not apply here", `blocked` is "this step applies
+  // and is unreachable until a prerequisite completes". Rendering both as
+  // dimmed grey hides real work from whoever is looking for what to do next.
+  if (state === "blocked") return "border-rose-500/30 bg-rose-500/10 text-rose-300/80";
   return "border-white/10 bg-white/5 text-white/30";
 }
 
@@ -135,6 +135,17 @@ function phaseClass(state: PipelinePhase["state"]): string {
 // cloned spec store, Item is one installed item's own bundled spec (spec/
 // facet, discovered from item-stores.ts). Distinct colors per kind.
 const OWNER_LABEL: Record<string, string> = { system: "System", user: "User", marketplace: "Marketplace", item: "Item" };
+// 045 FR-010b: a section's KIND. Generic, so 047/048 stay code-free.
+//   active  — work in progress
+//   truth   — the current agreed state
+//   archive — completed and frozen
+const SECTION_KIND_LABEL: Record<string, string> = { active: "Active", truth: "Truth", archive: "Archive" };
+const SECTION_KIND_CLASS: Record<string, string> = {
+  active: "bg-amber-500/15 text-amber-200/80",
+  truth: "bg-sky-500/15 text-sky-200/80",
+  archive: "bg-white/10 text-white/40",
+};
+
 const OWNER_BADGE_CLASS: Record<string, string> = {
   system: "bg-violet-500/20 text-violet-200",
   user: "bg-emerald-500/20 text-emerald-200",
@@ -145,6 +156,28 @@ const OWNER_BADGE_CLASS: Record<string, string> = {
 // GitHub-style heading slug (the anchor `buildstudio_artifact_highlight`
 // expects) — derived independently on every heading so it stays stable
 // across re-renders without a rehype-slug dependency.
+/** A branch-scope choice per installed marketplace item.
+ *
+ *  One per item, NOT one lump "a marketplace item": the coupling is identical
+ *  whichever item it is, so the distinction looked cosmetic — but `itemId` is
+ *  the only thing that can tell the item being worked on from the others sharing
+ *  user-apps, and a branch created without it can never be shown against its
+ *  item. Items are deliberately not repositories, so /api/repositories cannot
+ *  list them; the spec tree already in hand can.
+ *
+ *  A plain function, not a hook: a useCallback capturing `treeRef` makes the ref
+ *  an argument to a hook, and the React Compiler then (correctly) refuses the
+ *  `treeRef.current = tree` assignment that keeps it fresh. */
+function itemScopeChoices(tree: SpecTreeNode[]): Array<{ id: string; label: string; hint?: string }> {
+  return tree
+    .filter((g) => g.owner === "item")
+    .map((g) => ({
+      id: `marketplace-item:${g.path}`,
+      label: g.label ?? g.name,
+      hint: "branches BOS's source and user-apps",
+    }));
+}
+
 function slugify(text: string): string {
   return text
     .toLowerCase()
@@ -199,27 +232,39 @@ function extractHeadingAnchors(markdown: string): Set<string> {
 // a node in the react-markdown tree — it's a run of flat DOM siblings.
 const HIGHLIGHT_CLASSES = ["bg-amber-400/15", "-mx-2", "rounded", "px-2", "transition-colors", "duration-300"];
 
-function PhaseStrip({ phases }: { phases: PipelinePhase[] }) {
-  const byId = new Map(phases.map((p) => [p.id, p.state]));
+/** Renders the phases the SERVER resolved, in the order it sent them.
+ *
+ *  `stateLabels` comes from the active descriptor: 047 displays `pending` as
+ *  "Available" without renaming the state, so the label is looked up rather
+ *  than assumed (design.md §3.5). The chip text stays the phase label; the
+ *  state name appears in the tooltip. */
+function PhaseStrip({ phases, stateLabels }: { phases: PipelinePhase[]; stateLabels?: Record<string, string> }) {
   return (
     <div className="flex flex-wrap gap-1">
-      {PHASE_ORDER.map((id) => (
+      {phases.map((p) => (
         <span
-          key={id}
-          className={`rounded border px-1.5 py-0.5 text-[10px] font-medium ${phaseClass(byId.get(id) ?? "na")}`}
-          title={`${id}: ${byId.get(id) ?? "na"}`}
+          key={p.id}
+          className={`rounded border px-1.5 py-0.5 text-[10px] font-medium ${phaseClass(p.state)}`}
+          title={`${p.id}: ${stateLabels?.[p.state] ?? p.state}`}
         >
-          {PHASE_LABEL[id]}
+          {p.label ?? p.id}
         </span>
       ))}
     </div>
   );
 }
 
+const warnWorkflows = (err: unknown) =>
+  console.warn("[build-studio] could not load workflows", err);
+
 export default function BuildStudioApp({ windowId, params }: AppProps) {
   const [buildStudioAgent, setBuildStudioAgent] = useState("build-studio");
   const [tree, setTree] = useState<SpecTreeNode[]>([]);
   const [specs, setSpecs] = useState<Specification[]>([]);
+  // 045 FR-014: the active method descriptor's client-safe summary. Supplies
+  // the state LABELS the phase strip names states with — 047 shows `pending`
+  // as "Available" without renaming the state itself.
+  const [method, setMethod] = useState<MethodSummary | undefined>(undefined);
   const [activeFeature, setActiveFeature] = useState<string>("");
   const [activePath, setActivePath] = useState<string>("");
   // Non-empty when viewing a DRAFT artifact from a `bos/*` store branch (020):
@@ -280,7 +325,9 @@ export default function BuildStudioApp({ windowId, params }: AppProps) {
     prefix?: string;
     initialValue?: string;
     confirmLabel?: string;
-    onConfirm: (value: string) => void | Promise<void>;
+    choiceLabel?: string;
+    choices?: Array<{ id: string; label: string; hint?: string }>;
+    onConfirm: (value: string, choiceId?: string) => void | Promise<void>;
   } | null>(null);
   const [confirmDialog, setConfirmDialog] = useState<{
     title: string;
@@ -289,6 +336,66 @@ export default function BuildStudioApp({ windowId, params }: AppProps) {
     danger?: boolean;
     onConfirm: () => void | Promise<void>;
   } | null>(null);
+  // A branch to be ELICITED before an action that needs one, with the action
+  // held until it exists. Build Studio used to grey those actions out instead —
+  // correct about the requirement, and a dead end in a REGISTERED repository,
+  // where there is no other way to make a feature branch: the only branch UI is
+  // the assistant chat's selector, and it is about BOS's own branches.
+  type BranchScopeChoice = { scope: "bos-core" | "marketplace-item" | "repository"; scopeId?: string };
+  const [branchPrompt, setBranchPrompt] = useState<
+    { suggestion: string; run: () => void; fixedScope?: BranchScopeChoice } | null
+  >(null);
+  /** What a new feature branch may be FOR. Derived from the registered
+   *  repositories, so one the user adds shows up here without a code change —
+   *  and so the list can never name a repository that does not exist.
+   *
+   *  This is the same decision `dev_branch_request` makes for the agent, made by
+   *  the user instead. Both end at `createAndActivateFeatureBranch`. */
+  // Declared HERE, above the first hook that captures it (the branch-scope
+  // effect below reads treeRef.current).
+  const treeRef = useRef(tree);
+  useEffect(() => { treeRef.current = tree; }, [tree]);
+  const [scopeChoices, setScopeChoices] = useState<Array<{ id: string; label: string; hint?: string }>>([]);
+  useEffect(() => {
+    if (!branchPrompt) return;
+    let ignore = false;
+    fetch("/api/repositories")
+      .then((r) => r.json())
+      .then((d: { repositories?: Array<{ id: string; label?: string; kind?: string }> }) => {
+        if (ignore) return;
+        const arbitrary = (d.repositories ?? []).filter((r) => r.kind === "arbitrary");
+        setScopeChoices([
+          { id: "bos-core", label: "BrowserOS core", hint: "branches BOS's source and user-specs" },
+          // ONE CHOICE PER ITEM, not one lump "a marketplace item". The
+          // coupling is the same whichever item it is, so this looked like a
+          // distinction without a difference — but `itemId` is the only thing
+          // that can tell the item being worked on from the ten others sharing
+          // user-apps, so a branch created without it can never be shown
+          // against its item. Read off the tree already in hand; items are
+          // deliberately not repositories, so /api/repositories cannot list
+          // them.
+          ...itemScopeChoices(treeRef.current),
+          ...arbitrary.map((r) => ({
+            id: `repository:${r.id}`,
+            label: r.label || r.id,
+            hint: `branches ${r.id} only`,
+          })),
+        ]);
+      })
+      .catch((err: unknown) => {
+        // Not fatal — the branch can still be created, unscoped, which couples
+        // BOS's own repos only. But the user is then choosing blind, so say so
+        // rather than silently offering two options where there were five.
+        if (ignore) return;
+        console.warn("[build-studio] could not list repositories for the branch scope", err);
+        // Items come from the tree, not from this request, so they survive it.
+        setScopeChoices([
+          { id: "bos-core", label: "BrowserOS core", hint: "branches BOS's source and user-specs" },
+          ...itemScopeChoices(treeRef.current),
+        ]);
+      });
+    return () => { ignore = true; };
+  }, [branchPrompt]);
   const [dialogBusy, setDialogBusy] = useState(false);
   const [dialogError, setDialogError] = useState("");
   const [historyPath, setHistoryPath] = useState<string>("");
@@ -297,8 +404,6 @@ export default function BuildStudioApp({ windowId, params }: AppProps) {
   const highlightedElsRef = useRef<HTMLElement[]>([]);
   const specsRef = useRef(specs);
   useEffect(() => { specsRef.current = specs; }, [specs]);
-  const treeRef = useRef(tree);
-  useEffect(() => { treeRef.current = tree; }, [tree]);
 
   // user-specs' write-gating branch: the SAME "Active feature branch" this
   // window's own embedded chat conversation already exposes (its
@@ -366,7 +471,94 @@ export default function BuildStudioApp({ windowId, params }: AppProps) {
     };
   }, [conflictSessionId]);
 
-  const showConflictPane = !conflictDismissed && !!conflictSessionId;
+  // ── Self-Heal pane (031-self-healing, FR-022) ────────────────────────────
+  //
+  // A navigation PEER of the conflict pane: it owns the centre column while
+  // selected, the left spec tree stays for context, and the right column stays
+  // this window's own chat. Deep-linkable via `params` so the `fix_ready` /
+  // `decision_needed` event handlers (manifest.ts) can open Build Studio
+  // straight on one case.
+  const selfHealCaseParam =
+    paneParam === "self-heal" && typeof params?.caseId === "string" ? (params.caseId as string) : "";
+  const [showSelfHeal, setShowSelfHeal] = useState<boolean>(paneParam === "self-heal");
+  const [selfHealEventCaseId, setSelfHealEventCaseId] = useState<string>("");
+  useEffect(() => {
+    if (paneParam === "self-heal") {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- following an external launch param, same shape as sessionIdParam above
+      setShowSelfHeal(true);
+    }
+  }, [paneParam, selfHealCaseParam]);
+
+  // The other way in: the user clicked a `self_heal.*` event in the Event
+  // Viewer, which launches us with `{event:{id,…}, handler}` and no payload —
+  // so the case id is fetched from the event itself rather than guessed.
+  const launchHandler = typeof params?.handler === "string" ? (params.handler as string) : "";
+  const launchEventId =
+    params?.event && typeof params.event === "object" ? String((params.event as { id?: unknown }).id ?? "") : "";
+  useEffect(() => {
+    if (!launchHandler.startsWith("build-studio:self-heal") || !launchEventId) return;
+    let alive = true;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- following an external launch param
+    setShowSelfHeal(true);
+    void fetch(`/api/events/${encodeURIComponent(launchEventId)}`)
+      .then((r) => r.json())
+      .then((d: { payload?: { caseId?: unknown } }) => {
+        const caseId = typeof d.payload?.caseId === "string" ? d.payload.caseId : "";
+        if (alive && caseId) setSelfHealEventCaseId(caseId);
+      })
+      .catch((err: unknown) => {
+        // The pane still opens — the case id only pre-selects a case — but a
+        // launch that silently lands on the wrong one is worse than a log line.
+        console.warn("[build-studio] could not read the launch event", launchEventId, err);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [launchHandler, launchEventId]);
+
+  // 051 — the installed workflows, for the tree's own section. Counts come from
+  // the server, which derives the graph; the tree only displays them.
+  type WorkflowRow = { id: string; label: string; phases: number; links: number; gates: number; owned?: { from: string } };
+  const [workflows, setWorkflows] = useState<WorkflowRow[]>([]);
+  const fetchWorkflows = useCallback(async (): Promise<WorkflowRow[]> => {
+    const d = (await (await fetch("/api/workflows")).json()) as { workflows?: WorkflowRow[] };
+    return d.workflows ?? [];
+  }, []);
+  // Failing to load them is not fatal — the rest of the tree is unaffected — but
+  // it is not silent either: an empty Workflows section and a failed fetch look
+  // identical otherwise.
+  //
+  // For handlers, where setState is unrestricted.
+  const reloadWorkflows = useCallback(() => {
+    fetchWorkflows().then(setWorkflows, (err: unknown) => warnWorkflows(err));
+  }, [fetchWorkflows]);
+  // For mount, where it is not: setState goes in the promise CALLBACK, guarded
+  // so a response arriving after unmount does not write to a dead component.
+  useEffect(() => {
+    let ignore = false;
+    fetchWorkflows().then(
+      (rows) => {
+        if (!ignore) setWorkflows(rows);
+      },
+      (err: unknown) => warnWorkflows(err),
+    );
+    return () => {
+      ignore = true;
+    };
+  }, [fetchWorkflows]);
+
+  // Which workflow the canvas is showing, if any (051). Empty = not that mode.
+  const [workflowId, setWorkflowId] = useState<string>("");
+
+  // ONE resolved mode with a stated precedence (centre-mode.ts). The chain this
+  // replaces needed `&& !showSelfHeal` hand-written into showConflictPane to
+  // break the tie; a fourth arm would have meant six pairwise interactions.
+  const centre = resolveCentreMode({
+    selfHeal: { active: showSelfHeal, caseId: selfHealCaseParam || selfHealEventCaseId || undefined },
+    conflict: { sessionId: conflictSessionId, dismissed: conflictDismissed },
+    workflowId,
+  });
+  const showConflictPane = centre.kind === "conflict";
   const onConflictSettled = useCallback((s: ConflictSession) => {
     // Terminal ⇒ the centre reverts to the artifact viewer, but not until the
     // user has had a moment to read the outcome banner.
@@ -420,6 +612,7 @@ export default function BuildStudioApp({ windowId, params }: AppProps) {
       const res = (await r.json()) as SpecsResponse;
       setTree(res.tree ?? []);
       setSpecs(res.specs ?? []);
+      setMethod(res.method);
       setError(""); // clear any stale load error (e.g. from a cold-start miss) on success
       return res.tree ?? [];
     } catch {
@@ -523,7 +716,20 @@ export default function BuildStudioApp({ windowId, params }: AppProps) {
   const liveBranch = activeGroup?.writable ? userBranch : "";
   // Writable at all (never true for bos-system-specs), AND a real feature
   // branch is selected — the same condition for every writable store now.
-  const canEdit = Boolean(activeGroup?.writable) && Boolean(liveBranch);
+  // 047 FR-009: a unit in a `terminal` section is frozen history. The server
+  // refuses the write regardless (assertEditablePath) — this is so the UI says
+  // so BEFORE the user retypes a paragraph, rather than after.
+  const isFrozen = useMemo(() => {
+    if (!activePath) return false;
+    const walk = (nodes: SpecTreeNode[]): boolean =>
+      nodes.some((n) =>
+        n.terminal && (activePath === n.path || activePath.startsWith(`${n.path}/`))
+          ? true
+          : activePath.startsWith(`${n.path}/`) && walk(n.children ?? []),
+      );
+    return walk(tree);
+  }, [activePath, tree]);
+  const canEdit = Boolean(activeGroup?.writable) && Boolean(liveBranch) && !isFrozen;
 
   useEffect(() => {
     if (!activePath) return;
@@ -583,6 +789,16 @@ export default function BuildStudioApp({ windowId, params }: AppProps) {
     activePathRef.current = path;
     loadingRef.current = true;
     setActivePath(path);
+    // Opening an artifact LEAVES the workflow canvas. `resolveCentreMode`
+    // ranks `workflow` above `artifact`, so without this the canvas keeps the
+    // column and the spec the user just clicked is simply unreachable —
+    // nothing errors, the click merely appears to do nothing.
+    //
+    // The asymmetry is deliberate and only this half was missing: opening a
+    // workflow does NOT clear `activePath`, so the canvas's "Back to specs"
+    // returns you to the artifact you were reading. Whichever side is being
+    // LEFT has to clear itself, and the artifact side never did.
+    setWorkflowId("");
     setActiveBranch(resolvedBranch);
     // Force a fresh fetch even when re-opening the SAME path (e.g. the agent
     // edits a spec then re-opens it) — activePath/activeBranch alone wouldn't
@@ -803,24 +1019,258 @@ export default function BuildStudioApp({ windowId, params }: AppProps) {
     [loadTree, activePath],
   );
 
+  /** 049 T012/T013 — project lifecycle from the tree. Calls the SAME API ops the
+   *  agent tools call (FR-010/SC-005): two paths to one outcome is the shape
+   *  every divergence in this subsystem has taken, and the UI path is the one
+   *  found last. */
+  const lifecycleOp = useCallback(
+    async (body: Record<string, unknown>): Promise<Record<string, unknown> | null> => {
+      // The busy/error discipline lives HERE, not in each caller. It used to be
+      // the caller's job, and the project actions simply did not do it: every
+      // click went straight to a slow POST with the dialog still enabled and no
+      // sign anything was happening, so an impatient second and third click
+      // each created another folder. The file actions next door had it right
+      // the whole time — which is the tell that it belonged in the shared path.
+      setDialogBusy(true);
+      setDialogError("");
+      try {
+        const r = await fetch("/api/specs", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ ...body, branch: userBranchRef.current || undefined }),
+        });
+        const d = (await r.json()) as Record<string, unknown>;
+        if (!r.ok) {
+          // Show the server's refusal verbatim — each one names WHY (read-only
+          // store, a store that binds one workflow, an item whose id is its
+          // install identity) — EXCEPT the one refusal whose message is written
+          // for an agent. A person was being told to call `dev_branch_request`,
+          // a tool they do not have, to do what the branch dropdown above them
+          // already does.
+          const msg =
+            d.code === BRANCH_REQUIRED
+              ? "Pick a feature branch first — use the branch selector at the top of the assistant chat. Every change to a repository lands on a branch, never on its default branch."
+              : String(d.error ?? "Operation failed.");
+          setError(msg);
+          setDialogError(msg);
+          return null;
+        }
+        // A read (describe-project-deletion) changes nothing, so refreshing the
+        // whole tree after it is pure latency in front of a confirmation dialog.
+        if (body.op !== "describe-project-deletion") await refreshTree();
+        return d;
+      } catch (e) {
+        const msg = (e as Error).message;
+        setError(msg);
+        setDialogError(msg);
+        return null;
+      } finally {
+        setDialogBusy(false);
+      }
+    },
+    [refreshTree],
+  );
+
+  /** Run `action`, first eliciting a feature branch if none is active.
+   *
+   *  Every write to a repository rides a branch (050 FR-013). Asking for one AT
+   *  THE POINT OF THE EDIT is the only way that rule is reachable for a
+   *  registered repository: its branch is created for it when the Supervisor
+   *  mounts the repo, so the only thing a user can actually supply is the NAME —
+   *  and there is nowhere else in the product to supply it. Greying the action
+   *  out stated the requirement and offered no way to meet it.
+   *
+   *  `task` only seeds a suggested name; the user can replace it. */
+  /** `fixedScope` is for actions whose scope is not in question. Creating a NEW
+   *  app is the case that forced this: the picker lists one choice per INSTALLED
+   *  marketplace item, and an app that does not exist yet is in none of them —
+   *  so the dialog asked "which item is this work on?" about a thing being
+   *  created, and reads as a method/target picker. Answering it scoped the
+   *  branch to some unrelated existing item. */
+  const withFeatureBranch = useCallback(
+    (task: string, action: () => void, fixedScope?: BranchScopeChoice) => {
+      if (userBranchRef.current) { action(); return; }
+      setDialogError("");
+      setBranchPrompt({ suggestion: suggestFeatureBranchName(task), run: action, fixedScope });
+    },
+    [],
+  );
+
+  /** Right-click a STORE row → New folder / New app. */
+  const openStoreMenu = useCallback(
+    (e: React.MouseEvent, group: SpecTreeNode) => {
+      e.preventDefault();
+      e.stopPropagation();
+      // Nothing is offered where nothing can happen: a read-only store, or one
+      // whose kind has no projects (an item IS a project).
+      if (!group.writable || group.projectUnit === "none") return;
+      // A marketplace's projects ARE its items, so creating one creates an app.
+      // Everywhere else the thing being made is an ORGANISATIONAL FOLDER, and
+      // saying "project" for it was actively misleading: a repository the user
+      // added IS the project (050), so "New project" inside their project read
+      // as nonsense. The server op is still `create-project` — that is the
+      // model's name for the unit, not a word to put in front of a person.
+      const items = group.projectUnit === "items";
+      const unit = items ? "app" : "folder";
+      const label = group.label ?? group.name;
+      setMenu({
+        x: e.clientX,
+        y: e.clientY,
+        items: [
+          {
+            label: `New ${unit}…`,
+            // ENABLED with no branch. An item store never needs one; everything
+            // else elicits one when the action is taken.
+            onSelect: () => {
+              // AN APP IS NAMED FIRST. The branch used to come first, which put
+              // an unanswerable question in front of the one thing the user
+              // actually came to say: the scope picker asked "which installed
+              // marketplace item is this work on?" about an app that does not
+              // exist yet, and the branch name had to be invented before the app
+              // had a name to derive one from. Name + method, then a branch
+              // suggested from that name.
+              if (items) {
+                setPromptDialog({
+                  title: `New app in ${label}`,
+                  message: "The method decides the pipeline this app's spec follows. It is bound when the app is created.",
+                  confirmLabel: "Continue",
+                  initialValue: "",
+                  choiceLabel: "Method",
+                  choices: workflows.map((w) => ({
+                    id: w.id,
+                    label: w.label,
+                    hint: `${w.phases} phase${w.phases === 1 ? "" : "s"}`,
+                  })),
+                  onConfirm: (name: string, workflow?: string) => {
+                    if (!name.trim()) return;
+                    setPromptDialog(null);
+                    // The app's NAME is the branch suggestion — "Follow the
+                    // Money" proposes bos/follow-money, editable in the next
+                    // step. A new app lives in user-apps and nowhere else, so
+                    // the scope is declared rather than asked.
+                    withFeatureBranch(
+                      name,
+                      () => {
+                        void lifecycleOp({ op: "create-project", store: group.name, name: name.trim(), workflow });
+                      },
+                      { scope: "marketplace-item" },
+                    );
+                  },
+                });
+                return;
+              }
+              withFeatureBranch(`${unit} in ${label}`, () =>
+                setPromptDialog({
+                  title: `New ${unit} in ${label}`,
+                  message: "A folder groups related features. Feature numbering restarts inside it.",
+                  confirmLabel: "Create",
+                  initialValue: "",
+                  onConfirm: async (name: string) => {
+                    if (!name.trim()) return;
+                    if (await lifecycleOp({ op: "create-project", store: group.name, name })) setPromptDialog(null);
+                  },
+                }),
+              );
+            },
+          },
+        ],
+      });
+    },
+    [lifecycleOp, withFeatureBranch, workflows],
+  );
+
+  /** Right-click a PROJECT row → Rename / Delete. */
+  const openProjectMenu = useCallback(
+    (e: React.MouseEvent, node: SpecTreeNode) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const storeId = storeIdOf(node.path);
+      const group = treeRef.current.find((g) => g.path === storeId);
+      if (!group?.writable) return;
+      // An ITEM's rename/delete are refused server-side — its id is its install
+      // identity, and deleting it is an uninstall. An action that always errors
+      // is worse than no action.
+      if (group.projectUnit !== "folders") return;
+      const projectId = node.path.split("/").pop() ?? "";
+      const label = node.label ?? node.name;
+      setMenu({
+        x: e.clientX,
+        y: e.clientY,
+        items: [
+          {
+            label: "Rename…",
+            onSelect: () =>
+              withFeatureBranch(`rename ${label}`, () =>
+                setPromptDialog({
+                  title: `Rename ${label}`,
+                  confirmLabel: "Rename",
+                  initialValue: label,
+                  onConfirm: async (name: string) => {
+                    if (!name.trim()) return;
+                    if (await lifecycleOp({ op: "rename-project", store: storeId, project: projectId, name })) setPromptDialog(null);
+                  },
+                }),
+              ),
+          },
+          {
+            label: "Delete…",
+            danger: true,
+            onSelect: () => withFeatureBranch(`delete ${label}`, async () => {
+              // The dialog opens FIRST, then fills in. Asking the server what
+              // would be lost is a round trip, and doing it before showing
+              // anything meant the menu closed and nothing happened — for long
+              // enough that the click read as ignored. Confirm stays disabled
+              // (dialogBusy) until the count arrives, so nothing can be
+              // confirmed against a number that is not there yet.
+              setConfirmDialog({
+                title: `Delete ${label}?`,
+                message: "Checking what this would remove…",
+                confirmLabel: "Delete",
+                danger: true,
+                onConfirm: async () => {
+                  if (await lifecycleOp({ op: "delete-project", store: storeId, project: projectId, confirm: true })) setConfirmDialog(null);
+                },
+              });
+              // A count is what separates "delete the empty folder I just made"
+              // from "delete 30 specs" (FR-006).
+              const d = await lifecycleOp({ op: "describe-project-deletion", store: storeId, project: projectId });
+              const info = d?.deletion as { label?: string; units?: number } | undefined;
+              // lifecycleOp already surfaced the reason; closing avoids leaving
+              // a dialog that can only ever say "Checking…".
+              if (!info) { setConfirmDialog(null); return; }
+              setConfirmDialog((c) =>
+                c && {
+                  ...c,
+                  message: `This removes ${info.units} unit(s) and everything in the folder. It lands on your active feature branch.`,
+                },
+              );
+            }),
+          },
+        ],
+      });
+    },
+    [lifecycleOp, withFeatureBranch],
+  );
+
   const openFileMenu = useCallback(
     (e: React.MouseEvent, node: SpecTreeNode) => {
       e.preventDefault();
       e.stopPropagation();
       const group = treeRef.current.find((g) => g.path === storeIdOf(node.path));
       if (!group?.writable) return; // read-only store — right-click does nothing
-      const active = group.owner === "item" ? true : Boolean(userBranchRef.current);
       setMenu({
         x: e.clientX,
         y: e.clientY,
         items: [
+          // History is a READ — it needs no branch and must stay reachable on a
+          // repository the user has not started work in.
           { label: "View history", onSelect: () => setHistoryPath(node.path) },
-          { label: "Rename", disabled: !active, onSelect: () => renameFileAction(node) },
-          { label: "Delete", disabled: !active, danger: true, onSelect: () => deleteFileAction(node) },
+          { label: "Rename", onSelect: () => withFeatureBranch(`rename ${node.name}`, () => renameFileAction(node)) },
+          { label: "Delete", danger: true, onSelect: () => withFeatureBranch(`delete ${node.name}`, () => deleteFileAction(node)) },
         ],
       });
     },
-    [renameFileAction, deleteFileAction],
+    [renameFileAction, deleteFileAction, withFeatureBranch],
   );
 
   // Surface tools the build-studio agent can call to drive this app —
@@ -897,18 +1347,48 @@ export default function BuildStudioApp({ windowId, params }: AppProps) {
     // drops the "NNN-" numbering that makes similarly-titled features
     // identifiable at a glance — prefix it back on whenever a title is shown.
     const featureNumber = node.type === "feature" ? featureNumberPrefix(node.name) : "";
+    // An ITEM's row is the APP, so it is labelled by the app's name — never by
+    // its spec's H1. For every other feature the H1 IS the best label, and for
+    // an app created here the two coincide (`createItemSpec` writes `# <name>`),
+    // which is why this went unnoticed: bmad's spec was imported from BOS's own
+    // 048 feature spec, so its H1 reads "The BMAD pack — a framework that brings
+    // its own cast and its own runtime" and an installed app appeared in the
+    // sidebar under a name nobody recognised — reported as a mystery app that
+    // had created itself.
     const label = isForeignDraft
       ? node.name
-      : node.type === "feature"
-        ? spec?.title
-          ? featureNumber
-            ? `${featureNumber} · ${spec.title}`
-            : spec.title
-          : node.name
-        : (node.label ?? node.name);
+      : node.owner === "item"
+        ? node.name
+        : node.type === "feature"
+          ? spec?.title
+            ? featureNumber
+              ? `${featureNumber} · ${spec.title}`
+              : spec.title
+            : node.name
+          : (node.label ?? node.name);
+
+    // 045 FR-008/FR-009: a Project may override its store's method, and an item
+    // store's row IS this synthetic feature node. Both need a picker, and a
+    // <select> cannot live inside the row's <button> — so the row is a flex
+    // wrapper with the button and the picker as siblings.
+    const bindable =
+      node.method && (node.type === "project" || (node.type === "feature" && node.owner === "item"));
+    const bindableWritable =
+      node.type === "feature"
+        ? !!node.writable
+        : !!tree.find((g) => g.path === storeIdOf(node.path))?.writable;
+
+    // 049 T014/FR-011b: a per-PROJECT picker in a store that binds at STORE
+    // level advertises a choice the product never honours. It rendered in
+    // user-specs, where a project-level binding does nothing.
+    const projectBindingHonoured = (n: SpecTreeNode): boolean => {
+      if (n.type !== "project") return true; // group and item rows bind at their own level
+      return tree.find((g) => g.path === storeIdOf(n.path))?.bindingScope === "project";
+    };
 
     return (
       <div key={nodeKey}>
+        <div className="flex items-center gap-1 pr-2">
         <button
           data-key={nodeKey}
           data-node-type={node.type}
@@ -916,14 +1396,32 @@ export default function BuildStudioApp({ windowId, params }: AppProps) {
             if (node.type === "feature") setActiveFeature(node.path);
             toggle(nodeKey);
           }}
+          // 049 T013. Only a "project" node: a plain "dir" is organisational
+          // with no manifest to rename, and a "feature" is a unit, not a
+          // project. openProjectMenu refuses the rest by store kind.
+          onContextMenu={node.type === "project" ? (e) => openProjectMenu(e, node) : undefined}
           style={{ paddingLeft }}
-          className={`flex w-full items-center gap-1 rounded py-1 text-left text-xs font-medium hover:bg-white/5 ${
+          className={`flex min-w-0 flex-1 items-center gap-1 rounded py-1 text-left text-xs font-medium hover:bg-white/5 ${
             node.type === "feature" && activeFeature === node.path && !activePath ? "text-white" : "text-white/70"
           }`}
         >
           {isCollapsed ? <ChevronRight size={12} className="shrink-0" /> : <ChevronDown size={12} className="shrink-0" />}
           {node.type === "feature" ? <FolderTree size={12} className="shrink-0 opacity-60" /> : <Folder size={12} className="shrink-0 opacity-60" />}
           <span className="truncate">{label}</span>
+          {/* 047 US4: `specs/` (current truth) is not a peer of `changes/` (a
+              proposal), and `archive/` is history. The badge sits on the
+              SECTION ROW, where the distinction is actually needed — a
+              store-header list cannot say which folder you are looking at, and
+              it read the app-level method, so it showed nothing at all for a
+              store bound to anything other than user-specs' method. */}
+          {node.sectionKind && (
+            <span
+              title={`${SECTION_KIND_LABEL[node.sectionKind] ?? node.sectionKind}${node.terminal ? " — units here are finished; no live phase state" : ""}`}
+              className={`shrink-0 rounded px-1 py-0.5 text-[9px] font-normal normal-case ${SECTION_KIND_CLASS[node.sectionKind] ?? "bg-white/10 text-white/50"}`}
+            >
+              {SECTION_KIND_LABEL[node.sectionKind] ?? node.sectionKind}
+            </span>
+          )}
           {isForeignDraft && (
             <span
               title={`Draft on ${node.branch} — read-only here; lands when the feature is promoted`}
@@ -932,7 +1430,42 @@ export default function BuildStudioApp({ windowId, params }: AppProps) {
               {node.branch}
             </span>
           )}
+          {/* An item store IS on a branch — the live, writable user-apps
+              worktree its edits go to — and said so nowhere. With branch
+              coupling scoped, a marketplace change branches user-apps and
+              NOTHING else, so this is the only row that can report it.
+              Emerald, not the sky of `branch` above: that badge means
+              "someone else's draft, read-only", this one means "you are
+              editing here". */}
+          {node.liveBranch && (
+            <span
+              title={`On ${node.liveBranch} — live and editable; this store's writes land on that branch`}
+              className="shrink-0 rounded bg-emerald-500/20 px-1 text-[9px] font-normal normal-case text-emerald-200"
+            >
+              {node.liveBranch}
+            </span>
+          )}
+          {node.offBranch && (
+            <span
+              title={`Showing base — ${node.offBranch}. The active branch does not include marketplace items; create one scoped to a marketplace item to edit here.`}
+              className="shrink-0 rounded bg-white/10 px-1 text-[9px] font-normal normal-case text-white/50"
+            >
+              base
+            </span>
+          )}
         </button>
+        {bindable && bindableWritable && projectBindingHonoured(node) && (
+          <MethodPicker
+            storeId={node.type === "feature" ? node.path : storeIdOf(node.path)}
+            projectId={node.type === "project" ? node.path.split("/").pop() : undefined}
+            current={node.method}
+            inherited={!node.methodBound}
+            writable={bindableWritable}
+            branch={userBranch || undefined}
+            onChanged={() => void refreshTree()}
+          />
+        )}
+        </div>
         {!isCollapsed && node.children?.map((child) => renderNode(child, depth + 1, forceExpand))}
       </div>
     );
@@ -1017,7 +1550,40 @@ export default function BuildStudioApp({ windowId, params }: AppProps) {
             className="w-full rounded border border-white/10 bg-black/20 py-1 pl-6 pr-2 text-xs text-white/80 placeholder:text-white/30 outline-none focus:border-white/25"
           />
         </div>
+        <div className="px-2 pt-2">
+          <button
+            data-testid="build-studio-self-heal-nav"
+            onClick={() => setShowSelfHeal((v) => !v)}
+            className={`flex w-full items-center gap-1.5 rounded px-2 py-1 text-left text-xs transition-colors ${
+              showSelfHeal ? "bg-white/15 text-white" : "text-white/70 hover:bg-white/10"
+            }`}
+          >
+            <HeartPulse size={12} /> Self-Heal
+          </button>
+        </div>
         <div ref={treeScrollRef} className="min-h-0 flex-1 overflow-auto px-1 py-2">
+          {/* 051 — the pipelines themselves, not the specs written under them.
+              Above the stores because a workflow is what a store is BOUND to. */}
+          {workflows.length > 0 && (
+            <div className="mb-2">
+              <div className="flex items-center gap-1.5 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-white/40">
+                <Workflow size={11} /> Workflows
+              </div>
+              {workflows.map((w) => (
+                <button
+                  key={w.id}
+                  onClick={() => setWorkflowId(w.id)}
+                  title={`${w.phases} phases · ${w.links} links · ${w.gates} enforced gates`}
+                  className={`flex w-full items-center gap-1.5 rounded px-2 py-1 text-left text-xs ${
+                    workflowId === w.id ? "bg-white/15 text-white" : "text-white/60 hover:bg-white/10"
+                  }`}
+                >
+                  <span className="truncate">{w.label}</span>
+                  <span className="ml-auto shrink-0 text-[9px] text-white/30">{w.phases}</span>
+                </button>
+              ))}
+            </div>
+          )}
           {tree.length === 0 ? (
             <p className="px-3 py-2 text-xs text-white/40">No specs yet. Describe a feature in the chat to create one.</p>
           ) : (
@@ -1029,8 +1595,19 @@ export default function BuildStudioApp({ windowId, params }: AppProps) {
                   if (isSearchingTree && children.length === 0) return null;
                   return (
                     <div key={group.path} className="mb-1.5">
-                      <div className="flex items-center gap-1.5 px-2 pb-0.5 pt-1 text-[10px] font-semibold uppercase tracking-wide text-white/35">
+                      <div
+                        onContextMenu={(e) => openStoreMenu(e, group)}
+                        className="flex items-center gap-1.5 px-2 pb-0.5 pt-1 text-[10px] font-semibold uppercase tracking-wide text-white/35"
+                      >
                         <span className="truncate">{group.label ?? group.name}</span>
+                        {group.methodMissing && (
+                          <span
+                            title={`This store is bound to the spec method "${group.methodMissing}", which is not installed. Its content is intact — BOS cannot interpret it until the method pack is installed.`}
+                            className="shrink-0 rounded bg-rose-500/20 px-1 py-0.5 text-[9px] font-normal normal-case text-rose-200"
+                          >
+                            method not installed
+                          </span>
+                        )}
                         {group.owner && (
                           <span
                             title={group.originLabel ? `${OWNER_LABEL[group.owner] ?? group.owner} · ${group.originLabel}` : OWNER_LABEL[group.owner] ?? group.owner}
@@ -1039,19 +1616,58 @@ export default function BuildStudioApp({ windowId, params }: AppProps) {
                             {OWNER_LABEL[group.owner] ?? group.owner}
                           </span>
                         )}
+                        {/* 045 FR-010b: one badge per section kind the active
+                            method declares. A store whose method has a single
+                            section (spec-kit) shows nothing — a lone "Active"
+                            badge on every store is noise, not information. */}
+                        {group.method === method?.id &&
+                          (method?.sections?.length ?? 0) > 1 &&
+                          method!.sections.map((s) => (
+                            <span
+                              key={s.rel || "root"}
+                              title={`${s.rel || "/"} — ${SECTION_KIND_LABEL[s.kind] ?? s.kind}${s.terminal ? " (terminal: units here are finished)" : ""}`}
+                              className={`shrink-0 rounded px-1 py-0.5 text-[9px] font-normal normal-case ${SECTION_KIND_CLASS[s.kind] ?? "bg-white/10 text-white/50"}`}
+                            >
+                              {s.rel || "/"}
+                            </span>
+                          ))}
+                        {group.writable && (
+                          <MethodPicker
+                            storeId={group.name}
+                            current={group.method ?? method?.id}
+                            inherited={!group.methodBound}
+                            writable={!!group.writable}
+                            branch={userBranch || undefined}
+                            onChanged={() => void refreshTree()}
+                          />
+                        )}
+                        {/* Whether THIS store rides the active branch is a
+                            per-store fact, and the server computes it
+                            (`group.liveBranch`) from the same scope the
+                            Supervisor couples repositories by.
+                            It used to paint `userBranch` — one global — on
+                            every `owner: "user"` store. That was right while
+                            user-specs was the only one; 050 made every
+                            registered repository `owner: "user"` too, so an
+                            unrelated police-mcp announced "Editable on
+                            bos/<feature>" for a branch that does not exist in
+                            it. A store with no branch of its own now says so,
+                            which is the useful half of the badge anyway. */}
                         {group.owner === "user" && (
                           <span
                             data-testid="user-specs-branch-badge"
                             title={
-                              userBranch
-                                ? `Editable on "${userBranch}" — pick a different one in the chat's "Active feature branch" dropdown`
-                                : "Pick a feature branch in the chat's \"Active feature branch\" dropdown to make this store editable"
+                              group.liveBranch
+                                ? `Editable on "${group.liveBranch}" — pick a different one in the chat's "Active feature branch" dropdown`
+                                : userBranch
+                                  ? `"${userBranch}" does not cover this store — it was created for different work, so edits here have no branch to ride`
+                                  : "Pick a feature branch in the chat's \"Active feature branch\" dropdown to make this store editable"
                             }
                             className={`ml-auto shrink-0 rounded px-1 py-0.5 text-[9px] font-normal normal-case ${
-                              userBranch ? "bg-emerald-500/20 text-emerald-200" : "bg-white/10 text-white/40"
+                              group.liveBranch ? "bg-emerald-500/20 text-emerald-200" : "bg-white/10 text-white/40"
                             }`}
                           >
-                            {userBranch || "no branch selected"}
+                            {group.liveBranch || "not on this branch"}
                           </span>
                         )}
                       </div>
@@ -1072,9 +1688,27 @@ export default function BuildStudioApp({ windowId, params }: AppProps) {
                 const rawChildren = itemGroups.flatMap((group) => group.children ?? []);
                 const children = isSearchingTree ? filterTreeNodes(rawChildren, treeQuery, specByPath) : rawChildren;
                 if (isSearchingTree && children.length === 0) return null;
+                // 049 T012: the marketplace STORE has no node of its own —
+                // listStores() yields item-<id> stores, not the repo that holds
+                // them — so this heading is synthetic, and it is the only row
+                // where "New app" belongs. It mirrors the single place
+                // lifecycle.ts synthesises the same store server-side; `050`
+                // makes a marketplace a real store and closes both seams.
+                const marketplaceRow: SpecTreeNode = {
+                  type: "group",
+                  name: "user-apps",
+                  path: "user-apps",
+                  label: "User Apps",
+                  writable: true,
+                  projectUnit: "items",
+                  bindingScope: "project",
+                };
                 return (
                   <div className="mb-1.5">
-                    <div className="flex items-center gap-1.5 px-2 pb-0.5 pt-1 text-[10px] font-semibold uppercase tracking-wide text-white/35">
+                    <div
+                      onContextMenu={(e) => openStoreMenu(e, marketplaceRow)}
+                      className="flex items-center gap-1.5 px-2 pb-0.5 pt-1 text-[10px] font-semibold uppercase tracking-wide text-white/35"
+                    >
                       <span className="truncate">User Apps</span>
                     </div>
                     {children.map((node) => renderNode(node, 0, isSearchingTree))}
@@ -1088,11 +1722,23 @@ export default function BuildStudioApp({ windowId, params }: AppProps) {
 
       <ResizeHandle getWidth={() => leftWidth} setWidth={setLeftWidth} min={160} max={420} />
 
-      {/* Center: the conflict-resolution pane while a session is active (D5),
-          otherwise the artifact viewer / editor. */}
-      {showConflictPane ? (
+      {/* Center: ONE resolved mode (centre-mode.ts), never a chain of booleans
+          that each have to remember to exclude the others. */}
+      {centre.kind === "self-heal" ? (
         <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-          <ConflictPane sessionId={conflictSessionId} onSettled={onConflictSettled} />
+          <SelfHealPane initialCaseId={centre.caseId} />
+        </div>
+      ) : centre.kind === "conflict" ? (
+        <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+          <ConflictPane sessionId={centre.sessionId} onSettled={onConflictSettled} />
+        </div>
+      ) : centre.kind === "workflow" ? (
+        <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
+          <WorkflowCanvas
+              workflowId={centre.workflowId}
+              onClose={() => { setWorkflowId(""); reloadWorkflows(); }}
+              onOpen={(id) => { setWorkflowId(id); reloadWorkflows(); }}
+            />
         </div>
       ) : (
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
@@ -1102,7 +1748,7 @@ export default function BuildStudioApp({ windowId, params }: AppProps) {
               <span className="text-xs font-semibold text-white/80">{activeSpec.title}</span>
               <span className="text-[10px] text-white/35">{activeSpec.id}</span>
             </div>
-            <PhaseStrip phases={activeSpec.phases} />
+            <PhaseStrip phases={activeSpec.phases} stateLabels={method?.stateLabels} />
           </div>
         )}
         <div ref={viewerRef} onClick={onViewerClick} className={`min-h-0 flex-1 overflow-auto ${isHtmlPath && !editing ? "" : "p-5"}`}>
@@ -1203,6 +1849,60 @@ export default function BuildStudioApp({ windowId, params }: AppProps) {
       </aside>
 
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} />}
+      {branchPrompt && (
+        <PromptDialog
+          title="Name this piece of work"
+          message="Every change to a repository lands on a feature branch, never on its default branch. What the work IS decides which repositories get one — pick wrong and BrowserOS branches a project this has nothing to do with."
+          prefix="bos/"
+          initialValue={branchPrompt.suggestion.replace(/^bos\//, "")}
+          confirmLabel="Start"
+          busy={dialogBusy}
+          error={dialogError}
+          choiceLabel={branchPrompt.fixedScope ? undefined : "This work is on"}
+          choices={branchPrompt.fixedScope ? undefined : scopeChoices}
+          onConfirm={async (name, choiceId) => {
+            setDialogBusy(true);
+            setDialogError("");
+            try {
+              // `repository:<id>` carries the id in the choice itself, so the
+              // list is built from real repositories with no parallel lookup.
+              // `<kind>:<id>` carries the id in the choice itself, so the list
+              // is built from real repositories and real items with no parallel
+              // lookup. The route accepts the store id (`item-<id>`) or the
+              // bare one, so the tree's own path can be passed straight through.
+              const scope = branchPrompt.fixedScope
+                ? branchPrompt.fixedScope
+                : choiceId?.startsWith("repository:")
+                ? { scope: "repository" as const, scopeId: choiceId.slice("repository:".length) }
+                : choiceId?.startsWith("marketplace-item:")
+                  ? { scope: "marketplace-item" as const, scopeId: choiceId.slice("marketplace-item:".length) }
+                  : choiceId === "marketplace-item"
+                    ? { scope: "marketplace-item" as const }
+                    : choiceId === "bos-core"
+                      ? { scope: "bos-core" as const }
+                      : undefined;
+              const { branch } = await createAndActivateFeatureBranch(name, conv?.id, scope);
+              // Set the REF directly rather than waiting for the conversation
+              // state to round-trip: the held action runs on the next line and
+              // reads this to decide which branch its write rides. Without it
+              // the very write that asked for the branch would go out without
+              // one, and be refused.
+              userBranchRef.current = branch;
+              const run = branchPrompt.run;
+              setBranchPrompt(null);
+              run();
+            } catch (e) {
+              setDialogError((e as Error).message);
+            } finally {
+              setDialogBusy(false);
+            }
+          }}
+          onCancel={() => {
+            setBranchPrompt(null);
+            setDialogError("");
+          }}
+        />
+      )}
       {promptDialog && (
         <PromptDialog
           title={promptDialog.title}
@@ -1210,6 +1910,8 @@ export default function BuildStudioApp({ windowId, params }: AppProps) {
           prefix={promptDialog.prefix}
           initialValue={promptDialog.initialValue}
           confirmLabel={promptDialog.confirmLabel}
+          choiceLabel={promptDialog.choiceLabel}
+          choices={promptDialog.choices}
           busy={dialogBusy}
           error={dialogError}
           onConfirm={promptDialog.onConfirm}

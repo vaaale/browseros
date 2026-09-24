@@ -81,3 +81,8 @@ from the **Assistant** and **Workflow Manager** apps.
 The assistant can list, read, write, create, and delete files here on your behalf
 (for example, "save these notes to Documents/notes.md"). It confirms destructive
 operations. Everything it does is confined to this sandbox.
+
+**[Working with your files](../file-tools/working-with-your-files.md)** covers
+this in full: what the assistant can and cannot reach, how it searches and edits,
+and why `/Specs` and `/Docs` need an active feature branch before it can write
+to them.

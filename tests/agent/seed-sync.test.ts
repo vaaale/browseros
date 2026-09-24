@@ -92,11 +92,14 @@ test("an untouched seeded agent is refreshed when the shipped copy changes", asy
     const live = join(agentDir, "AGENT.md");
     const shipped = readFileSync(live, "utf8");
 
-    // The stamp records BOS's final bytes — which include the allowlist the
-    // backfill migration adds after seeding, NOT the raw seed file.
+    // The stamp records BOS's final bytes. Those diverge from the raw seed file
+    // only when a post-seed migration rewrites the agent — which the tool-allowlist
+    // backfill used to do for every agent, back when no seed shipped a `tools`
+    // field. Every seeded agent except `default_agent` now carries an explicit
+    // allowlist, so the backfill is a no-op and the two hashes agree.
     const stamp = JSON.parse(readFileSync(join(agentDir, ".seed-rev"), "utf8")) as { seed: string; live: string };
     expect(stamp.live).toBe(seedRev([shipped]));
-    expect(stamp.seed).not.toBe(stamp.live);
+    expect(stamp.seed).toBe(stamp.live);
 
     // Rewind to an older revision BOS wrote and nobody edited: older bytes,
     // with `live` pointing at those bytes and `seed` at a superseded revision.
@@ -106,9 +109,9 @@ test("an untouched seeded agent is refreshed when the shipped copy changes", asy
 
     await agentStore().listSubAgents();
     expect(readFileSync(live, "utf8")).toBe(shipped);
-    // …and the refreshed agent kept its tool allowlist: the update clears the
-    // one-shot migration markers so the backfill re-applies over the seed's
-    // own frontmatter, which carries no `tools` field.
+    // …and the refreshed agent has a tool allowlist, so an update can never
+    // leave it mute under *empty allowlist = zero tools*. It now comes straight
+    // from the seed; historically the backfill migration supplied it.
     expect(readFileSync(live, "utf8")).toContain("tools: [");
   } finally {
     cleanup();
@@ -215,9 +218,22 @@ test("a seeded skill lands stamped, with its reference documents", async () => {
   const { dir, cleanup } = useTestDataDir("seed-sync-skill-seed");
   try {
     await skillStore().listSkills();
-    expect(existsSync(join(dir, "skills", "build-studio", ".seed-rev"))).toBe(true);
+    expect(existsSync(join(dir, "skills", "bos-domain", ".seed-rev"))).toBe(true);
     // Reference assets are part of the seeded skill, and part of its revision.
-    expect(readFileSync(join(dir, "skills", "build-studio", "references", "target-marketplace-item.md"), "utf8")).toContain("docs/` facet");
+    // The target-*.md references moved build-studio -> bos-domain in 044: they
+    // are BOS facts (what a marketplace item is made of), not spec-kit process,
+    // so they survived build-studio becoming pack-owned in 046.
+    expect(readFileSync(join(dir, "skills", "bos-domain", "references", "target-marketplace-item.md"), "utf8")).toContain("docs/` facet");
+
+    // spec-kit-driver is a PACK skill since 046 and reconciles by the
+    // bundled-asset provenance contract, NOT by `.seed-rev`. Asserting a stamp
+    // on it would pass only while the relocation was incomplete — this
+    // asymmetry is the feature's known shape (agents discovered, skills
+    // copied), so pin it rather than leaving the old assertion to fail
+    // confusingly. It is named for its METHOD: each pack ships its own driver,
+    // and the generic routing lives in the agent's prompt.
+    expect(existsSync(join(dir, "skills", "spec-kit-driver", ".seed-rev")), "a pack skill carries no seed stamp").toBe(false);
+    expect(existsSync(join(dir, "skills", "spec-kit-driver", ".installed-from.json")), "it carries provenance instead").toBe(true);
   } finally {
     cleanup();
   }
@@ -227,8 +243,8 @@ test("a locally edited skill is never overwritten by re-seeding", async () => {
   const { dir, cleanup } = useTestDataDir("seed-sync-skill-local");
   try {
     await skillStore().listSkills();
-    const live = join(dir, "skills", "build-studio", "SKILL.md");
-    writeFileSync(live, "---\nname: Build Studio\n---\nMY OWN SKILL BODY\n");
+    const live = join(dir, "skills", "spec-kit-driver", "SKILL.md");
+    writeFileSync(live, "---\nname: Spec Kit Driver\n---\nMY OWN SKILL BODY\n");
 
     await skillStore().listSkills();
     expect(readFileSync(live, "utf8")).toContain("MY OWN SKILL BODY");

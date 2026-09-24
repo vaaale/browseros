@@ -1,9 +1,11 @@
 import { promises as fs } from "node:fs";
+import path from "node:path";
+import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { BASE_PORT, REMOTE, REPO } from "./config.mjs";
+import { BASE_PORT, CANONICAL_DATA, REMOTE, REPO } from "./config.mjs";
 import { git, mutate, meaningfulDirtyLines, GIT_IDENTITY, tagStamp, requireFeatureBranch } from "./gitutil.mjs";
-import { coupledReposFor, commitCoupled, resolveCoupledConflicts, promoteCoupled } from "./coupled-repos.mjs";
+import { coupledReposFor, commitCoupled, resolveCoupledConflicts, promoteCoupled, clearCoupledBranchScope } from "./coupled-repos.mjs";
 import { buildAndStart, runBuild } from "./build.mjs";
 import { regenApps, startBaseDevProc } from "./base.mjs";
 import { startProc, stopProc, waitHealthy } from "./proc.mjs";
@@ -34,6 +36,71 @@ async function isFastForwardable(repoPath, base, candidateCommit) {
     slog("warn", "promote", `is-ancestor(${base}, ${candidateCommit}) in ${repoPath} failed: ${e?.message || e}`);
     return false;
   }
+}
+
+// ---- Fix C: preview service-config data-loss warning --------------------
+// promote() is code-only: after merging the candidate's CODE (and coupled
+// repos) into base, the preview's data clone (cand.dataDir) is destroyed.
+// Any service runtime config a user set in preview — an item's data/secret.json
+// (API key) or data/config.json (settings) — lives in that clone and is
+// disposable by design (ADR-c: base is canonical, preview data is not carried
+// over). That is correct, but it was SILENT: a user who configured an API key
+// in preview and promoted found it gone on base with no warning.
+//
+// This is a WARNING, never a data-carry: it does not copy anything into base.
+// It only surfaces, in the promote response, which per-item service configs
+// set in preview will be lost so the user re-configures them on base.
+const DATA_LOSS_FILES = ["secret.json", "config.json"];
+const DATA_LOSS_FILE_LABEL = { "secret.json": "API key", "config.json": "settings" };
+
+async function pathExists(p) {
+  try { await fs.access(p); return true; } catch { return false; }
+}
+async function hashFile(p) {
+  const buf = await fs.readFile(p);
+  return createHash("sha256").update(buf).digest("hex");
+}
+
+/**
+ * Scan a preview's data clone for per-item service runtime config and report
+ * any file that is present in the preview but divergent from base's canonical
+ * data dir (absent on base, or different content). Pure — takes both dirs as
+ * arguments, touches nothing else, so it is testable in isolation.
+ *
+ * Returns one entry per divergent item:
+ *   { item, files: ["secret.json", ...], message }
+ * or [] when nothing set in preview differs from base (nothing to warn about).
+ */
+export async function scanDataLossWarnings(candDataDir, baseDataDir) {
+  const candConfigRoot = path.join(candDataDir, "system", "config");
+  let items = [];
+  try {
+    items = await fs.readdir(candConfigRoot, { withFileTypes: true });
+  } catch {
+    return []; // no config root in the preview — nothing could have been set there
+  }
+  const warnings = [];
+  for (const item of items) {
+    if (!item.isDirectory()) continue;
+    const itemData = path.join(candConfigRoot, item.name, "data");
+    const divergent = [];
+    for (const file of DATA_LOSS_FILES) {
+      const candFile = path.join(itemData, file);
+      if (!(await pathExists(candFile))) continue; // not set in preview
+      const baseFile = path.join(baseDataDir, "system", "config", item.name, "data", file);
+      if (!(await pathExists(baseFile))) { divergent.push(file); continue; }
+      if ((await hashFile(candFile)) !== (await hashFile(baseFile))) divergent.push(file);
+    }
+    if (divergent.length) {
+      const label = divergent.map((f) => DATA_LOSS_FILE_LABEL[f] || f).join(" + ");
+      warnings.push({
+        item: item.name,
+        files: divergent,
+        message: `Service config (${label}) for ${item.name} set in preview will NOT be promoted — re-configure it on base after promote.`,
+      });
+    }
+  }
+  return warnings;
 }
 
 /**
@@ -181,6 +248,10 @@ export async function promote(branch) {
   // 035 (FR-018): whichever step escalated, the promote response carries the
   // resolution session id so the UI can link straight into the conflict pane.
   let conflictSessionId;
+  // Fix C: per-item service-config data-loss warnings (structured) computed
+  // just before the preview's data clone is destroyed. Surfaced in the response
+  // AND folded into `warnings` via promoteIssues on the client.
+  let dataLossWarnings = [];
   if (dirty) {
     // Only package-lock.json drift from a previous promote's npm install is
     // present — discard it so the upcoming fast-forward merge below isn't
@@ -192,7 +263,7 @@ export async function promote(branch) {
   // Commit any pending worktree edits, then pre-check every merge — a
   // conflict in ANY coupled repo must fail the promote before anything
   // irreversible happens.
-  const repos = await coupledReposFor(cand.worktree, cand.dataDir);
+  const repos = await coupledReposFor(cand.worktree, cand.dataDir, cand.branch);
   // 035 (FR-012a / the reported bug): a coupled-repo conflict no longer throws
   // `promote blocked — …` with no agent. It is handed to the shared pipeline,
   // which creates a resolution session, emits the auto-launch event, and runs
@@ -338,6 +409,16 @@ export async function promote(branch) {
   // (see deployToBase) — so the preview's worktree, data clone, and branch
   // are always fully disposable once promoted, in every mode.
   await mutate(`remove preview worktree ${cand.worktree}`, () => git(["worktree", "remove", "--force", cand.worktree]), warnings);
+  // Fix C: the data clone is destroyed next. Warn about any per-item service
+  // config (API key / settings) set in preview that will not survive. A scan
+  // failure must NOT block the promote, but it must be loud — silently
+  // swallowing it would reintroduce the exact data-loss blindness being fixed.
+  dataLossWarnings = await scanDataLossWarnings(cand.dataDir, CANONICAL_DATA).catch((e) => {
+    const msg = `data-loss warning scan failed: ${e?.message || e}`;
+    slog("warn", "promote", msg, { branch: cand.branch });
+    warnings.push(msg);
+    return [];
+  });
   await mutate(`remove data clone ${cand.dataDir}`, () => fs.rm(cand.dataDir, { recursive: true, force: true }), warnings);
   await mutate(`delete merged branch ${cand.branch}`, () => git(["branch", "-D", cand.branch]), warnings);
   // Any conversation still pointing at this now-deleted branch must be reset
@@ -346,6 +427,9 @@ export async function promote(branch) {
   // which looks like "the branch came back" and, before REPO became base's
   // only home, could land the new preview on a path base itself still used.
   await clearActiveFeatureBranch(cand.branch, warnings);
+  // The scope outlived the branch: nothing cleared it, so every branch ever
+  // created kept an entry and a REUSED name silently inherited the old scope.
+  await clearCoupledBranchScope(cand.branch, warnings);
 
-  return { tag: deploy.tag, branch: cand.branch, pushResults: deploy.pushResults, needsRestart: deploy.needsRestart, message: deploy.message, dev: deploy.mode === "dev", reused: deploy.mode === "reused", warnings, ...(conflictSessionId ? { sessionId: conflictSessionId } : {}) };
+  return { tag: deploy.tag, branch: cand.branch, pushResults: deploy.pushResults, needsRestart: deploy.needsRestart, message: deploy.message, dev: deploy.mode === "dev", reused: deploy.mode === "reused", warnings, ...(dataLossWarnings.length ? { dataLossWarnings } : {}), ...(conflictSessionId ? { sessionId: conflictSessionId } : {}) };
 }

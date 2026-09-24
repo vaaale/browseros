@@ -52,8 +52,8 @@ const NESTED_TREE: SpecTreeNode[] = [
             type: "feature",
             name: "001-foo",
             path: "user-specs/beta/001-foo",
-            branch: "bos/some-draft", // a draft-branch-only feature, per 020
-            children: [{ type: "file", name: "spec.md", path: "user-specs/beta/001-foo/spec.md", branch: "bos/some-draft" }],
+            branch: "bos/testfixture-some-draft", // a draft-branch-only feature, per 020
+            children: [{ type: "file", name: "spec.md", path: "user-specs/beta/001-foo/spec.md", branch: "bos/testfixture-some-draft" }],
           },
         ],
       },
@@ -102,8 +102,8 @@ test("featureIdOf treats an item-owned store's bare store id as the feature, una
 });
 
 test("findBranchInTree finds a draft branch at any depth, not just a fixed 3 levels", () => {
-  expect(findBranchInTree(NESTED_TREE, "user-specs/beta/001-foo/spec.md")).toBe("bos/some-draft");
-  expect(findBranchInTree(NESTED_TREE, "user-specs/beta/001-foo")).toBe("bos/some-draft");
+  expect(findBranchInTree(NESTED_TREE, "user-specs/beta/001-foo/spec.md")).toBe("bos/testfixture-some-draft");
+  expect(findBranchInTree(NESTED_TREE, "user-specs/beta/001-foo")).toBe("bos/testfixture-some-draft");
   // A file with no branch (base content) has none.
   expect(findBranchInTree(NESTED_TREE, "user-specs/assistant-app/agent-loop/003-compaction/spec.md")).toBe("");
 });

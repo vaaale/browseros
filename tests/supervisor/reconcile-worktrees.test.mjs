@@ -29,20 +29,20 @@ mkdirSync(join(env.repo, "node_modules"), { recursive: true });
 writeFileSync(join(env.repo, "node_modules", ".keep"), "");
 
 test("reconcileWorktrees: a CLEAN worktree is removed outright, no phantom commit", async () => {
-  git(env.repo, ["branch", "bos/clean-branch"]);
-  const wt = await addWorktreeForBranch("bos/clean-branch");
-  const tipBefore = git(env.repo, ["rev-parse", "bos/clean-branch"]);
+  git(env.repo, ["branch", "bos/testfixture-clean-branch"]);
+  const wt = await addWorktreeForBranch("bos/testfixture-clean-branch");
+  const tipBefore = git(env.repo, ["rev-parse", "bos/testfixture-clean-branch"]);
 
   await reconcileWorktrees();
 
   assert.equal(existsSync(wt), false, "the worktree directory must be gone");
-  assert.equal(git(env.repo, ["rev-parse", "bos/clean-branch"]), tipBefore, "a clean worktree must not gain a spurious commit");
+  assert.equal(git(env.repo, ["rev-parse", "bos/testfixture-clean-branch"]), tipBefore, "a clean worktree must not gain a spurious commit");
 });
 
 test("reconcileWorktrees: a DIRTY worktree is safety-committed before removal â€” the edit survives", async () => {
-  git(env.repo, ["branch", "bos/dirty-branch"]);
-  const wt = await addWorktreeForBranch("bos/dirty-branch");
-  const tipBefore = git(env.repo, ["rev-parse", "bos/dirty-branch"]);
+  git(env.repo, ["branch", "bos/testfixture-dirty-branch"]);
+  const wt = await addWorktreeForBranch("bos/testfixture-dirty-branch");
+  const tipBefore = git(env.repo, ["rev-parse", "bos/testfixture-dirty-branch"]);
 
   // Simulate an agent's dev_delegate edit that never reached buildAndStart's
   // own commit step before the Supervisor restarted.
@@ -51,12 +51,12 @@ test("reconcileWorktrees: a DIRTY worktree is safety-committed before removal â€
   await reconcileWorktrees();
 
   assert.equal(existsSync(wt), false, "the worktree directory is still torn down");
-  const tipAfter = git(env.repo, ["rev-parse", "bos/dirty-branch"]);
+  const tipAfter = git(env.repo, ["rev-parse", "bos/testfixture-dirty-branch"]);
   assert.notEqual(tipAfter, tipBefore, "the branch must have gained a new, safety-net commit");
 
   // The edit must be recoverable: check the branch out fresh and confirm the file is there.
   const recovered = join(env.worktrees, "..", "recovered-dirty-branch");
-  git(env.repo, ["worktree", "add", recovered, "bos/dirty-branch"]);
+  git(env.repo, ["worktree", "add", recovered, "bos/testfixture-dirty-branch"]);
   assert.equal(existsSync(join(recovered, "uncommitted-edit.txt")), true, "the uncommitted edit must have been preserved by the safety-net commit");
   git(env.repo, ["worktree", "remove", "--force", recovered]);
 });
@@ -67,9 +67,9 @@ test("reconcileWorktrees: uncommitted edits in a NESTED spec-store mount also su
   const storeRoot = makeSpecStore(specsRoot, "bos-system-specs", "master");
   const storeTipBefore = git(storeRoot, ["rev-parse", "master"]);
 
-  git(env.repo, ["branch", "bos/spec-dirty-branch"]);
-  const wt = await addWorktreeForBranch("bos/spec-dirty-branch");
-  await mountCoupled({ id: "bos-system-specs", root: storeRoot, kind: "spec-store" }, join(wt, "specs", "bos-system-specs"), "bos/spec-dirty-branch");
+  git(env.repo, ["branch", "bos/testfixture-spec-dirty-branch"]);
+  const wt = await addWorktreeForBranch("bos/testfixture-spec-dirty-branch");
+  await mountCoupled({ id: "bos-system-specs", root: storeRoot, kind: "spec-store" }, join(wt, "specs", "bos-system-specs"), "bos/testfixture-spec-dirty-branch");
   writeFileSync(join(wt, "specs", "bos-system-specs", "new-spec.md"), "# a spec the agent was writing\n");
 
   await reconcileWorktrees();
@@ -80,11 +80,11 @@ test("reconcileWorktrees: uncommitted edits in a NESTED spec-store mount also su
   await pruneAllCoupledWorktrees();
 
   assert.equal(existsSync(wt), false);
-  const storeTipAfter = git(storeRoot, ["rev-parse", "bos/spec-dirty-branch"]);
+  const storeTipAfter = git(storeRoot, ["rev-parse", "bos/testfixture-spec-dirty-branch"]);
   assert.notEqual(storeTipAfter, storeTipBefore, "the spec store's feature branch must have gained a safety-net commit");
 
   const recovered = join(specsRoot, "..", "recovered-spec-branch");
-  git(storeRoot, ["worktree", "add", recovered, "bos/spec-dirty-branch"]);
+  git(storeRoot, ["worktree", "add", recovered, "bos/testfixture-spec-dirty-branch"]);
   assert.equal(existsSync(join(recovered, "new-spec.md")), true, "the uncommitted spec edit must have been preserved");
   git(storeRoot, ["worktree", "remove", "--force", recovered]);
 });

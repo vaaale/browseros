@@ -28,17 +28,19 @@ async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<voi
 }
 
 // 039-service-tool-exposure — declares "echo_tool" right after "initialized"
-// (mirrors TOOL_DECLARING_WORKER), but self-exits ~50ms later ONCE (tracked via
-// a marker file in its config dir) to simulate an unexpected crash. On a
-// subsequent start (after the marker exists) it behaves like a normal
-// tool-declaring, dispose-handling worker — letting the same test drive a
-// clean stop() afterward.
-const TOOL_DECLARE_THEN_SELF_EXIT_ONCE = `
+// (mirrors TOOL_DECLARING_WORKER), then hard-exits ONCE to simulate an
+// unexpected crash — but only when the test drops a `.exit-now` file in its
+// config dir, never on a timer, so the test can observe the declaration first
+// without racing it. "Once" is tracked by a `.crashed-once` marker: on a
+// subsequent start it behaves like a normal tool-declaring, dispose-handling
+// worker, letting the same test drive a clean stop() afterward.
+const TOOL_DECLARE_THEN_EXIT_ON_SIGNAL_ONCE = `
 const { parentPort, workerData } = require("node:worker_threads");
 const fs = require("fs");
 const path = require("path");
 if (parentPort) {
   const markerPath = path.join(workerData.configDirPath, ".crashed-once");
+  const exitSignalPath = path.join(workerData.configDirPath, ".exit-now");
   parentPort.on("message", (msg) => {
     if (!msg) return;
     if (msg.type === "initialize") {
@@ -56,7 +58,20 @@ if (parentPort) {
       });
       if (!fs.existsSync(markerPath)) {
         fs.writeFileSync(markerPath, "1");
-        setTimeout(() => process.exit(1), 50);
+        // Crash only when the test says so, by dropping a .exit-now file.
+        // This used to be setTimeout(() => process.exit(1), 50), which made
+        // the test race a 50ms window: it has to OBSERVE the tool registered
+        // before the crash unregisters it, and its poll loop ticks every
+        // 10ms. Under CPU contention a tick can slip past 50ms, the window
+        // closes unseen, and the wait can then never succeed — so it burned
+        // its full timeout and failed. Waiting for an explicit signal makes
+        // the ordering guaranteed instead of probable.
+        const exitTimer = setInterval(() => {
+          if (fs.existsSync(exitSignalPath)) {
+            clearInterval(exitTimer);
+            process.exit(1);
+          }
+        }, 10);
       }
     }
     if (msg.type === "dispose") {
@@ -409,15 +424,20 @@ test.describe("service-tool lifecycle cleanup (039-service-tool-exposure)", () =
     const { dir, registry, manager, dispose } = setupTest("manager-crash-unregisters-tools");
     try {
       mkdirSync(join(dir, "system", "config", "svc"), { recursive: true });
-      installFixtureService(dir, "svc", { entrySource: TOOL_DECLARE_THEN_SELF_EXIT_ONCE, deploymentMode: "tools" });
+      installFixtureService(dir, "svc", { entrySource: TOOL_DECLARE_THEN_EXIT_ON_SIGNAL_ONCE, deploymentMode: "tools" });
       registry.registerInstalled("svc", manifest("svc", { deploymentMode: "tools" }), "/items/svc");
 
       await manager.start("svc", { startupTimeout: 30_000 });
       await waitFor(() => serviceToolBridge().registry.has("svc:echo_tool"), 30_000);
 
-      // The fixture worker self-exits ~50ms after declaring — an unexpected
-      // exit that CH-001/handleCrash must treat as a crash, unregistering its
-      // tools (FR-006) rather than leaving a stale entry pointing at a dead worker.
+      // Now that the declaration has been observed, tell the fixture to exit.
+      // Its crash is signal-driven rather than timer-driven precisely so this
+      // ordering is guaranteed — see the fixture source.
+      writeFileSync(join(dir, "system", "config", "svc", ".exit-now"), "1");
+
+      // An unexpected exit that CH-001/handleCrash must treat as a crash,
+      // unregistering its tools (FR-006) rather than leaving a stale entry
+      // pointing at a dead worker.
       await waitFor(() => !serviceToolBridge().registry.has("svc:echo_tool"), 30_000);
       expect(registry.getService("svc")?.restartCount).toBeGreaterThan(0);
 

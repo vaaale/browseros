@@ -309,12 +309,32 @@ export async function handleControl(req, res, sub) {
       // `<dataDir>/user-apps/items/<id>/spec` — which lives in a different
       // repo from the `<worktree>/specs/<store>` mounts and so can't be
       // derived from `worktree`.
-      return sendJson(res, { ok: true, branch: v.branch, worktree: v.worktree, dataDir: v.dataDir, ...(v.mountErrors ? { mountErrors: v.mountErrors } : {}) });
+      // `baseWarning` rides along for the same reason `mountErrors` does: the
+      // call SUCCEEDED, but something the caller would want to know went wrong
+      // on the way — here, the branch was cut from a stale local base because
+      // the remote could not be refreshed. Dropping it here would make that
+      // invisible to the only party that can judge whether it matters.
+      return sendJson(res, {
+        ok: true,
+        branch: v.branch,
+        worktree: v.worktree,
+        dataDir: v.dataDir,
+        ...(v.mountErrors ? { mountErrors: v.mountErrors } : {}),
+        ...(v.baseWarning ? { baseWarning: v.baseWarning } : {}),
+        // Same contract, different failure: the data clone silently fell back
+        // to a full copy of the data dir. Invisible per-branch, ruinous in
+        // aggregate — it belongs in the caller's result, not only the log.
+        ...(v.cloneWarning ? { cloneWarning: v.cloneWarning } : {}),
+      });
     }
     if (sub === "build" && req.method === "POST") {
       const branch = String(body.branch || "");
       if (!branch) return sendJson(res, { ok: false, error: "branch required" }, 400);
-      const p = previews.get(branch) || (await provisionPreview(branch));
+      // Not `previews.get(branch) || …`: a preview REGISTERED by
+      // restorePreviews but not yet materialized is in the map with
+      // `worktree: null`, so the short-circuit would skip the provisioning
+      // this build depends on. provisionPreview is the idempotent way to ask.
+      const p = await provisionPreview(branch);
       const st = await buildPreview(branch, { sessionId });
       return sendJson(res, { ok: st === "ready", state: st, ...(p.buildError ? { error: p.buildError } : {}), ...(p.buildLog ? { buildLog: p.buildLog } : {}) });
     }

@@ -3,7 +3,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { DEFAULT_MAX_TOKENS, getProviderConfig, type ProviderConfig } from "@/lib/agent/provider";
 import { familyOf, normalizeApiBase } from "@/lib/agent/provider-meta";
-import type { StreamTurn, TurnResult, TurnToolCall } from "./agent-loop";
+import type { StreamTurn, TokenUsage, TurnResult, TurnToolCall } from "./agent-loop";
 import type { ChatMessage } from "./messages";
 import { compactChatMessages } from "@/lib/agent/compaction/v2";
 
@@ -100,6 +100,62 @@ function openAIClient(c: ProviderConfig): OpenAI {
     fetch: errorAwareFetch,
   });
 }
+
+// ── Token usage (031-self-healing ADR-5) ────────────────────────────────────
+//
+// BOS surfaces what its own model turns cost so features can budget against
+// real numbers instead of estimates. Every provider reports usage in a
+// different place and some (local inference servers, older proxies) never
+// report it at all — so this is strictly best-effort: absent usage stays
+// `undefined` and callers treat that as "unknown", never as zero.
+
+/** Normalize any `{input_tokens|prompt_tokens, output_tokens|completion_tokens}`
+ *  shaped object into a TokenUsage, or undefined when neither field is a
+ *  finite number (an all-zero/garbage body is not "usage"). */
+function toTokenUsage(raw: unknown): TokenUsage | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const u = raw as Record<string, unknown>;
+  const num = (...keys: string[]): number | undefined => {
+    for (const k of keys) {
+      const v = u[k];
+      if (typeof v === "number" && Number.isFinite(v)) return v;
+    }
+    return undefined;
+  };
+  const inputTokens = num("input_tokens", "prompt_tokens");
+  const outputTokens = num("output_tokens", "completion_tokens");
+  if (inputTokens === undefined && outputTokens === undefined) return undefined;
+  const cacheRead = num("cache_read_input_tokens", "cached_tokens");
+  const cacheWrite = num("cache_creation_input_tokens");
+  return {
+    inputTokens: inputTokens ?? 0,
+    outputTokens: outputTokens ?? 0,
+    ...(cacheRead ? { cacheReadTokens: cacheRead } : {}),
+    ...(cacheWrite ? { cacheWriteTokens: cacheWrite } : {}),
+  };
+}
+
+/** Merge a later usage report over an earlier one for the SAME turn. Anthropic
+ *  splits it: `message_start` carries the input/cache counts and a partial
+ *  output count, `message_delta` carries the final output count. Taking the max
+ *  per field means neither report can regress the other. */
+function mergeTurnUsage(a: TokenUsage | undefined, b: TokenUsage | undefined): TokenUsage | undefined {
+  if (!a) return b;
+  if (!b) return a;
+  const cacheRead = Math.max(a.cacheReadTokens ?? 0, b.cacheReadTokens ?? 0);
+  const cacheWrite = Math.max(a.cacheWriteTokens ?? 0, b.cacheWriteTokens ?? 0);
+  return {
+    inputTokens: Math.max(a.inputTokens, b.inputTokens),
+    outputTokens: Math.max(a.outputTokens, b.outputTokens),
+    ...(cacheRead ? { cacheReadTokens: cacheRead } : {}),
+    ...(cacheWrite ? { cacheWriteTokens: cacheWrite } : {}),
+  };
+}
+
+/** Exported for unit tests (tests/self-heal/usage-surface.test.ts) — the
+ *  per-provider extraction is the part most likely to silently drift when a
+ *  provider changes its stream shape. */
+export const _usageInternals = { toTokenUsage, mergeTurnUsage };
 
 function parseArgs(raw: string): Record<string, unknown> {
   try {
@@ -202,11 +258,17 @@ async function anthropicTurn(c: ProviderConfig, opts: TurnOpts): Promise<TurnRes
 
   let text = "";
   const calls: TurnToolCall[] = [];
+  let usage: TokenUsage | undefined;
   // Index-addressed open blocks: text/thinking stream deltas, tool_use
   // accumulates partial JSON args.
   const openCalls = new Map<number, TurnToolCall>();
   for await (const ev of stream) {
-    if (ev.type === "content_block_start") {
+    if (ev.type === "message_start") {
+      usage = mergeTurnUsage(usage, toTokenUsage(ev.message?.usage));
+    } else if (ev.type === "message_delta") {
+      // Where Anthropic reports the FINAL output_tokens for the turn.
+      usage = mergeTurnUsage(usage, toTokenUsage(ev.usage));
+    } else if (ev.type === "content_block_start") {
       if (ev.content_block.type === "tool_use") {
         const call: TurnToolCall = { id: ev.content_block.id, name: ev.content_block.name, arguments: "" };
         openCalls.set(ev.index, call);
@@ -224,7 +286,7 @@ async function anthropicTurn(c: ProviderConfig, opts: TurnOpts): Promise<TurnRes
       }
     }
   }
-  return { text, toolCalls: calls };
+  return { text, toolCalls: calls, ...(usage ? { usage } : {}) };
 }
 
 // ── OpenAI Chat Completions (openai / openai-compatible / local) ────────────
@@ -304,14 +366,22 @@ async function openaiChatTurn(c: ProviderConfig, opts: TurnOpts): Promise<TurnRe
           }
         : {}),
       stream: true,
+      // Usage on a STREAMING chat completion is opt-in for OpenAI proper (it
+      // arrives on a final, choice-less chunk). Only sent for `openai`: some
+      // OpenAI-COMPATIBLE servers reject unknown request fields outright, and
+      // the ones that report usage do so unprompted — so asking would cost
+      // compatibility for nothing (031-self-healing ADR-5).
+      ...(c.provider === "openai" ? { stream_options: { include_usage: true } } : {}),
       ...openaiTokenParam(c),
     },
     { signal: opts.signal, headers: { "X-Correlation-Id": opts.runId } },
   );
 
   let text = "";
+  let usage: TokenUsage | undefined;
   const byIndex = new Map<number, TurnToolCall>();
   for await (const chunk of stream) {
+    usage = mergeTurnUsage(usage, toTokenUsage((chunk as { usage?: unknown }).usage));
     const delta = chunk.choices?.[0]?.delta as
       | { content?: string | null; reasoning_content?: string; tool_calls?: Array<{ index: number; id?: string; function?: { name?: string; arguments?: string } }> }
       | undefined;
@@ -335,7 +405,7 @@ async function openaiChatTurn(c: ProviderConfig, opts: TurnOpts): Promise<TurnRe
     }
   }
   const toolCalls = [...byIndex.values()].filter((call) => call.name);
-  return { text, toolCalls };
+  return { text, toolCalls, ...(usage ? { usage } : {}) };
 }
 
 // ── OpenAI Responses API ─────────────────────────────────────────────────────
@@ -398,12 +468,18 @@ async function responsesTurn(c: ProviderConfig, opts: TurnOpts): Promise<TurnRes
   )) as unknown as AsyncIterable<OpenAI.Responses.ResponseStreamEvent>;
 
   let text = "";
+  let usage: TokenUsage | undefined;
   // function_call items keyed by output-item id; arguments accumulate across
   // delta events, finalized (authoritatively) on the matching done event.
   const openCalls = new Map<string, TurnToolCall>();
   const calls: TurnToolCall[] = [];
   for await (const ev of stream) {
     switch (ev.type) {
+      // The Responses API reports usage once, on the terminal response object.
+      case "response.completed":
+      case "response.incomplete":
+        usage = mergeTurnUsage(usage, toTokenUsage(ev.response?.usage));
+        break;
       // The Responses stream reports provider failures as in-band events, NOT
       // as an HTTP error or a top-level `error` field — so the OpenAI SDK does
       // not throw on them (it only throws for `data.error` / an `error` SSE
@@ -447,5 +523,5 @@ async function responsesTurn(c: ProviderConfig, opts: TurnOpts): Promise<TurnRes
     }
   }
   for (const call of calls) if (!call.arguments) call.arguments = "{}";
-  return { text, toolCalls: calls };
+  return { text, toolCalls: calls, ...(usage ? { usage } : {}) };
 }

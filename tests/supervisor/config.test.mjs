@@ -27,8 +27,8 @@ test("config: un-overridden defaults", () => {
 });
 
 test("config: worktreePath/clonePath join the branch under the configured roots", () => {
-  assert.equal(config.worktreePath("bos/my-feature"), path.join(config.WORKTREES, "bos/my-feature"));
-  assert.equal(config.clonePath("bos/my-feature"), path.join(config.CLONES, "bos/my-feature"));
+  assert.equal(config.worktreePath("bos/testfixture-my-feature"), path.join(config.WORKTREES, "bos/testfixture-my-feature"));
+  assert.equal(config.clonePath("bos/testfixture-my-feature"), path.join(config.CLONES, "bos/testfixture-my-feature"));
 });
 
 test("config: BASE_RESTART_MAX matches the backoff schedule's length", () => {

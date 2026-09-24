@@ -7,8 +7,19 @@ import type { Agent, AgentType } from "./types";
 import { parseFrontmatter, buildFrontmatter, asString, asList, asBool } from "./markdown";
 import { DEFAULT_AGENT_ID } from "@/lib/agent/agent-ids";
 import { CAPABILITIES } from "@/lib/agent/capabilities-registry";
-import { reconcileInstalledItemAssets } from "@/system/marketplace/install/bundledAssets";
+import { reconcileInstalledItemAssets, restampInstalledAsset } from "@/system/marketplace/install/bundledAssets";
+// Marker filenames are declared centrally (`@/os/asset-bookkeeping`) because
+// bundled-asset seeding hashes these same directories to decide whether the USER
+// edited an installed agent. A marker declared privately here counts as content
+// there, and BOS's own migration then reports itself as a user edit.
+import {
+  CAPABILITIES_MIGRATED_MARKER,
+  CONFLICT_TOOLS_BACKFILL_MARKER,
+  SELF_HEAL_TOOLS_BACKFILL_MARKER,
+  BROWSER_TOOLS_BACKFILL_MARKER,
+} from "@/os/asset-bookkeeping";
 import { archiveSeededDir, decideSeedAction, readSeedStamp, seedRev, writeSeedStamp } from "@/lib/agent/seed-sync";
+import { agentRoots, collisionsAmong, shadowedPackAgents, type AgentCollision, type AgentRoot, type ProviderAgentRoot, type ProviderOutput, type ShadowedPackAgent } from "./roots";
 
 /** Resolved per call, NOT captured at module scope. `dataDir()` is env-driven
  *  (`BOS_DATA_DIR`) and BOS changes it at runtime — a feature-branch data clone
@@ -70,8 +81,8 @@ async function applySeedAgent(id: string): Promise<string | null> {
   // Without this an updated agent would come back with an EMPTY allowlist, and
   // under `empty allowlist = zero tools` that is a silently mute agent.
   if (action === "update") {
-    await fs.rm(path.join(dir, MIGRATION_MARKER), { force: true });
-    await fs.rm(path.join(dir, CONFLICT_BACKFILL_MARKER), { force: true });
+    await fs.rm(path.join(dir, CAPABILITIES_MIGRATED_MARKER), { force: true });
+    await fs.rm(path.join(dir, CONFLICT_TOOLS_BACKFILL_MARKER), { force: true });
   }
   return id;
 }
@@ -197,7 +208,19 @@ async function ensureSeed(): Promise<void> {
   // exists — so it would silently lack the conflict_* tools and every
   // escalation would fail at the first tool call. Backfill the ids explicitly.
   await backfillConflictTools();
-  // LAST: the two backfills above rewrite the files applySeedAgent just wrote,
+  // 031: the same problem for self-healing. The autonomous fix pipeline runs as
+  // the build-studio agent and reports through `self_heal_complete_fix` /
+  // `self_heal_request_decision`; the Diagnostician is the conversation-reviewer
+  // agent and writes through `submit_diagnostics_report`. A pre-existing copy of
+  // either agent would lack all of them, so a diagnosed fix could be built and
+  // then never reported — the mechanism would look broken rather than absent.
+  await backfillSelfHealTools();
+  // Browser automation v2: same problem again for the browser_* driving tools.
+  // A pre-existing assistant (seeded before the redesign) would silently lack
+  // every browser tool, so Settings → Browser Automation would toggle a feature
+  // the main agent cannot reach.
+  await backfillBrowserTools();
+  // LAST: the backfills above rewrite the files applySeedAgent just wrote,
   // so the stamp has to describe the bytes that ended up on disk. Stamping any
   // earlier makes every seeded agent look locally edited on the next boot.
   await stampSeededAgents(written);
@@ -212,13 +235,12 @@ const CONFLICT_TOOL_IDS = [
   "conflict_complete",
   "conflict_abandon",
 ] as const;
-const CONFLICT_BACKFILL_MARKER = ".conflict-tools-backfilled";
 
 /** Additive, idempotent, and marker-guarded, exactly like the allowlist
  *  migration above: a user who later removes these ids keeps them removed. */
 async function backfillConflictTools(): Promise<void> {
   const agentDir = path.join(agentsDir(), "devops");
-  const marker = path.join(agentDir, CONFLICT_BACKFILL_MARKER);
+  const marker = path.join(agentDir, CONFLICT_TOOLS_BACKFILL_MARKER);
   try {
     await fs.access(marker);
     return;
@@ -239,10 +261,90 @@ async function backfillConflictTools(): Promise<void> {
   await writeFileAtomic(marker, "1").catch(() => undefined);
 }
 
+/** Tool ids each agent needs for the self-healing mechanism to function (031). */
+const SELF_HEAL_TOOL_IDS: Record<string, readonly string[]> = {
+  "build-studio": ["self_heal_request_decision", "self_heal_complete_fix", "self_heal_status"],
+  "conversation-reviewer": ["submit_diagnostics_report", "app_list", "query_events", "get_event"],
+  assistant: ["self_heal_request", "self_heal_status"],
+};
+
+/** Additive, idempotent and marker-guarded, exactly like the conflict backfill
+ *  above: a user who later removes one of these ids keeps it removed. */
+async function backfillSelfHealTools(): Promise<void> {
+  for (const [id, toolIds] of Object.entries(SELF_HEAL_TOOL_IDS)) {
+    const agentDir = path.join(agentsDir(), id);
+    const marker = path.join(agentDir, SELF_HEAL_TOOLS_BACKFILL_MARKER);
+    try {
+      await fs.access(marker);
+      continue;
+    } catch { /* not backfilled yet */ }
+
+    const file = path.join(agentDir, "AGENT.md");
+    let src: string;
+    try {
+      src = await fs.readFile(file, "utf8");
+    } catch {
+      continue; // not installed here — the seed brings the new definition
+    }
+    const agent = fromMarkdown(id, src);
+    const missing = toolIds.filter((toolId) => !agent.tools?.includes(toolId));
+    if (missing.length > 0) {
+      await writeFileAtomic(file, toMarkdown({ ...agent, tools: [...missing, ...(agent.tools ?? [])] }));
+    }
+    await writeFileAtomic(marker, "1").catch(() => undefined);
+  }
+}
+
+/** Tool ids the browser-automation redesign adds (004 v2) — the stateful
+ *  browser driving tools, granted to the main assistant. */
+const BROWSER_TOOL_IDS = [
+  "browser_navigate",
+  "browser_navigate_back",
+  "browser_snapshot",
+  "browser_click",
+  "browser_type",
+  "browser_fill_form",
+  "browser_press_key",
+  "browser_hover",
+  "browser_select_option",
+  "browser_handle_dialog",
+  "browser_wait_for",
+  "browser_evaluate",
+  "browser_take_screenshot",
+  "browser_console_messages",
+  "browser_resize",
+  "browser_tabs",
+  "browser_close",
+] as const;
+
+/** Additive, idempotent, and marker-guarded, exactly like the self-heal
+ *  backfill above: a user who later removes one of these ids keeps it removed. */
+async function backfillBrowserTools(): Promise<void> {
+  const agentDir = path.join(agentsDir(), "assistant");
+  const marker = path.join(agentDir, BROWSER_TOOLS_BACKFILL_MARKER);
+  try {
+    await fs.access(marker);
+    return;
+  } catch { /* not backfilled yet */ }
+
+  const file = path.join(agentDir, "AGENT.md");
+  let src: string;
+  try {
+    src = await fs.readFile(file, "utf8");
+  } catch {
+    return; // no assistant agent on this install — the seed will bring the new one
+  }
+  const agent = fromMarkdown("assistant", src);
+  const missing = BROWSER_TOOL_IDS.filter((id) => !agent.tools?.includes(id));
+  if (missing.length > 0) {
+    await writeFileAtomic(file, toMarkdown({ ...agent, tools: [...(agent.tools ?? []), ...missing] }));
+  }
+  await writeFileAtomic(marker, "1").catch(() => undefined);
+}
+
 // One-time backfill executed at first read after upgrade. Uses a per-agent
 // marker file (.capabilities-migrated) instead of a frontmatter field so the
 // Agent schema stays clean.
-const MIGRATION_MARKER = ".capabilities-migrated";
 const ALL_CAPABILITY_IDS: string[] = CAPABILITIES.map((c) => c.id);
 
 async function backfillLegacyAllowlists(): Promise<void> {
@@ -251,7 +353,7 @@ async function backfillLegacyAllowlists(): Promise<void> {
     if (!d.isDirectory()) continue;
     if (d.name === DEFAULT_PROMPT_AGENT_ID) continue;
     const agentDir = path.join(agentsDir(), d.name);
-    const marker = path.join(agentDir, MIGRATION_MARKER);
+    const marker = path.join(agentDir, CAPABILITIES_MIGRATED_MARKER);
     try {
       await fs.access(marker);
       continue; // already migrated
@@ -268,6 +370,12 @@ async function backfillLegacyAllowlists(): Promise<void> {
     if (!agent.tools || agent.tools.length === 0) {
       const updated: Agent = { ...agent, tools: [...ALL_CAPABILITY_IDS] };
       await writeFileAtomic(file, toMarkdown(updated));
+      // This loop walks EVERY directory under data/agents/, which includes
+      // agents installed from a marketplace item. Their provenance hash means
+      // "unchanged since BOS installed it", so a rewrite BOS just performed has
+      // to be recorded as BOS's — otherwise the next reconciliation pass reports
+      // it to the user as an edit they made.
+      await restampInstalledAsset(agentDir);
     }
     // Marker written regardless — a user who deliberately saves an empty
     // allowlist after this point should not be re-migrated.
@@ -276,20 +384,154 @@ async function backfillLegacyAllowlists(): Promise<void> {
 }
 
 
+/** 048 T004 — provider results, cached on (packId, max mtime over watch[]).
+ *
+ *  NOT a boolean and NOT per-process. `ensureSeed` above already learned that
+ *  the hard way: it keys its guard on a Set of data roots because `dataDir()`
+ *  is env-driven and BOS moves it at runtime (a feature-branch data clone, a
+ *  per-user container), so a single flag meant only the FIRST root was ever
+ *  seeded.
+ *
+ *  This is a CORRECTNESS mechanism, not a performance one. A stale entry means
+ *  an agent BMB just authored does not appear, which reads to a user as BMB
+ *  being broken rather than as a cache being stale — so when the mtime scan is
+ *  ambiguous (an unreadable path, an empty `watch`), we RE-RESOLVE rather than
+ *  serve what we have. */
+const providerCache = new Map<string, { stamp: string; output: ProviderOutput }>();
+
+export function __resetProviderCacheForTest(): void {
+  providerCache.clear();
+}
+
+/** Max mtime across the root's watched paths, or null when it cannot be
+ *  determined — which forces a re-resolve. */
+async function watchStamp(root: ProviderAgentRoot): Promise<string | null> {
+  if (root.watch.length === 0) return null; // nothing to key on ⇒ never cache
+  let newest = 0;
+  for (const target of root.watch) {
+    try {
+      newest = Math.max(newest, await newestMtime(target));
+    } catch {
+      return null; // unreadable ⇒ ambiguous ⇒ re-resolve
+    }
+  }
+  return `${root.watch.length}:${newest}`;
+}
+
+/** Newest mtime at or under `target`. Directories are walked, because a pack's
+ *  agents live in files BELOW the directory the root points at — stat'ing the
+ *  directory alone misses an edit to a file inside it on most filesystems. */
+async function newestMtime(target: string): Promise<number> {
+  const st = await fs.stat(target);
+  if (!st.isDirectory()) return st.mtimeMs;
+  let newest = st.mtimeMs;
+  for (const entry of await fs.readdir(target, { withFileTypes: true })) {
+    newest = Math.max(newest, await newestMtime(path.join(target, entry.name)));
+  }
+  return newest;
+}
+
+async function resolveProvider(root: ProviderAgentRoot): Promise<ProviderOutput> {
+  const stamp = await watchStamp(root);
+  const hit = providerCache.get(root.packId);
+  if (stamp !== null && hit && hit.stamp === stamp) return hit.output;
+
+  const output = await root.resolve().catch(() => ({ agents: [] }) as ProviderOutput);
+  if (stamp !== null) providerCache.set(root.packId, { stamp, output });
+  else providerCache.delete(root.packId);
+  return output;
+}
+
+/** One agent offered by a root, with its body deferred.
+ *
+ *  THE single place either root kind is interpreted (048 T003). Four call
+ *  sites previously read `root.path` directly — `idsIn`, `listAgentsAcrossRoots`,
+ *  and `agentRootCollisions`/`shadowedPackAgentReport` through `idsIn`. A
+ *  provider root has no `path` at all, so rather than four
+ *  `kind === "provider"` branches (the four-copies-of-the-leaf-rule shape 045
+ *  had to undo), every consumer goes through `entriesIn` below. */
+interface RootEntry {
+  id: string;
+  /** Resolves the agent, or null when it cannot be read. */
+  load: () => Promise<Agent | null>;
+}
+
+/** Everything a root offers. Providers are invoked here — at DISCOVERY, never
+ *  at boot (FR-002) — and their result cached on (root, max mtime of watch[]). */
+async function entriesIn(root: AgentRoot): Promise<RootEntry[]> {
+  if (root.kind === "provider") {
+    const output = await resolveProvider(root);
+    return output.agents
+      .filter((a) => a.id !== DEFAULT_PROMPT_AGENT_ID)
+      .map((a) => ({ id: a.id, load: async () => a }));
+  }
+  const dirs = await fs.readdir(root.path, { withFileTypes: true }).catch(() => []);
+  return dirs
+    .filter((d) => d.isDirectory())
+    // `.archive/` holds agents seed reconciliation moved aside — not agents.
+    .filter((d) => !d.name.startsWith("."))
+    .filter((d) => d.name !== DEFAULT_PROMPT_AGENT_ID)
+    .map((d) => ({
+      id: d.name,
+      load: async () => {
+        try {
+          return fromMarkdown(d.name, await fs.readFile(path.join(root.path, d.name, "AGENT.md"), "utf8"));
+        } catch {
+          return null; // a directory without an AGENT.md is not an agent
+        }
+      },
+    }));
+}
+
+/** Agent ids in one root, excluding archives and the default-prompt template. */
+async function idsIn(root: AgentRoot): Promise<string[]> {
+  return (await entriesIn(root)).map((e) => e.id);
+}
+
+/** Ids offered by more than one installed pack (FR-001a). Surfaced to the
+ *  picker rather than resolved silently by precedence. */
+export async function agentRootCollisions(): Promise<AgentCollision[]> {
+  const roots = agentRoots();
+  return collisionsAmong(await Promise.all(roots.map(async (root) => ({ root, ids: await idsIn(root) }))));
+}
+
+/** Pack agents hidden by a higher-precedence local copy (046 FR-010). */
+export async function shadowedPackAgentReport(): Promise<ShadowedPackAgent[]> {
+  const roots = agentRoots();
+  return shadowedPackAgents(await Promise.all(roots.map(async (root) => ({ root, ids: await idsIn(root) }))));
+}
+
+/** Every discoverable agent, merged across roots by precedence (FR-001).
+ *
+ *  Highest-precedence root wins per id: a `data/agents/` copy shadows a pack's,
+ *  which shadows `seed/agents/`. `delegate-only` roots are EXCLUDED here and
+ *  only here — see listDelegatableAgents. */
 export async function listSubAgents(): Promise<Agent[]> {
   await ensureSeed();
-  const dirs = await fs.readdir(agentsDir(), { withFileTypes: true }).catch(() => []);
+  return listAgentsAcrossRoots(agentRoots().filter((r) => r.visibility === "picker"));
+}
+
+/** Every agent that can be DELEGATED to, including `delegate-only` roots.
+ *
+ *  Registration and delegability are unconditional; visibility scopes
+ *  discovery only (FR-001b). An agent a pack's own driver delegates to must
+ *  resolve even though it is deliberately absent from the picker — a hidden
+ *  agent that cannot be delegated to is not hidden, it is broken. */
+export async function listDelegatableAgents(): Promise<Agent[]> {
+  await ensureSeed();
+  return listAgentsAcrossRoots(agentRoots());
+}
+
+async function listAgentsAcrossRoots(roots: AgentRoot[]): Promise<Agent[]> {
   const agents: Agent[] = [];
-  for (const d of dirs) {
-    if (!d.isDirectory()) continue;
-    // `.archive/` holds agents seed reconciliation moved aside — not agents.
-    if (d.name.startsWith(".")) continue;
-    if (d.name === DEFAULT_PROMPT_AGENT_ID) continue;
-    try {
-      const src = await fs.readFile(path.join(agentsDir(), d.name, "AGENT.md"), "utf8");
-      agents.push(fromMarkdown(d.name, src));
-    } catch {
-      /* skip dirs without AGENT.md */
+  const claimed = new Set<string>();
+  for (const root of roots) {
+    for (const entry of await entriesIn(root)) {
+      if (claimed.has(entry.id)) continue; // an earlier (higher-precedence) root won
+      const agent = await entry.load();
+      if (!agent) continue;
+      agents.push({ ...agent, sourceRoot: root.label, ...(root.packId ? { packId: root.packId } : {}) });
+      claimed.add(entry.id);
     }
   }
   return agents;
@@ -326,9 +568,22 @@ export async function setDefaultPromptAgent(input: { systemPrompt: string; descr
   return updated;
 }
 
+/** Resolve one agent by id or name, for DELEGATION and prompt composition.
+ *
+ *  Resolves across DELEGATABLE roots, not just picker-visible ones (048
+ *  FR-001b). This previously went through `listSubAgents()`, which filters to
+ *  `visibility === "picker"` — so a `delegate-only` agent was absent from the
+ *  picker AND unreachable by `agent_delegate`, i.e. undeliverable. That is the
+ *  exact failure FR-001b names: a hidden agent that cannot be delegated to is
+ *  not hidden, it is broken.
+ *
+ *  It made BMM's entire cast (five personas, all delegate-only by design)
+ *  impossible to reach. The unit test missed it by asserting against
+ *  `listDelegatableAgents()` directly rather than through this function, which
+ *  is the path a real delegation takes. */
 export async function getAgent(idOrName: string): Promise<Agent | undefined> {
   const key = idOrName.toLowerCase();
-  return (await listSubAgents()).find((a) => a.id.toLowerCase() === key || a.name.toLowerCase() === key);
+  return (await listDelegatableAgents()).find((a) => a.id.toLowerCase() === key || a.name.toLowerCase() === key);
 }
 
 export async function createSubAgent(input: {
@@ -351,7 +606,7 @@ export async function createSubAgent(input: {
   await fs.mkdir(path.join(agentsDir(), id), { recursive: true });
   await writeFileAtomic(path.join(agentsDir(), id, "AGENT.md"), toMarkdown(agent));
   // Mark migrated so ensureSeed doesn't try to re-backfill this agent.
-  await writeFileAtomic(path.join(agentsDir(), id, MIGRATION_MARKER), "1");
+  await writeFileAtomic(path.join(agentsDir(), id, CAPABILITIES_MIGRATED_MARKER), "1");
   return agent;
 }
 

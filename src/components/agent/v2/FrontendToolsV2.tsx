@@ -19,9 +19,17 @@ export function FrontendToolsV2(_: { conversationId: string }) {
 
   useEffect(() => {
     const handlers: Record<string, FrontendToolHandler> = {
-      bos_app_launch: async ({ appId }) => {
-        const id = store.getState().launch(String(appId ?? ""));
-        return id ? `Launched ${appId} (window ${id}).` : `No app with id "${appId}".`;
+      bos_app_launch: async ({ appId, params }) => {
+        // `params` is forwarded to store.launch's second argument, which is
+        // what every app reads as `AppProps.params` — so a window can be
+        // opened already pointed at a file/url/pane instead of on its default
+        // view. The store has always accepted this; the tool used to drop it.
+        const launchParams = params && typeof params === "object" ? (params as Record<string, unknown>) : undefined;
+        const id = store.getState().launch(String(appId ?? ""), launchParams);
+        if (!id) return `No app with id "${appId}".`;
+        return launchParams
+          ? `Launched ${appId} (window ${id}) with ${JSON.stringify(launchParams)}.`
+          : `Launched ${appId} (window ${id}).`;
       },
       bos_app_list: async () =>
         JSON.stringify(
@@ -124,30 +132,14 @@ export function FrontendToolsV2(_: { conversationId: string }) {
         if (!id) return "Could not open the preview.";
         return mode ? `Opened ${mode} preview (window ${id}).` : `Opened HTML preview (window ${id}).`;
       },
-      // Scoped to the dispatching conversation so a write under a branch-coupled
-      // mount (/Specs, /Docs) resolves that conversation's active feature branch
-      // server-side (see fsClient.scoped in os-client.ts).
-      file_list: async ({ path }, { conversationId }) => {
-        const entries = await fsClient.scoped(conversationId).list(String(path ?? "") || "/");
-        return JSON.stringify(entries.map((e) => ({ name: e.name, path: e.path, type: e.type, size: e.size })));
-      },
-      file_read: ({ path }, { conversationId }) => fsClient.scoped(conversationId).read(String(path ?? "")),
-      file_write: async ({ path, content }, { conversationId }) => {
-        await fsClient.scoped(conversationId).write(String(path ?? ""), String(content ?? ""));
-        return `Wrote ${path}.`;
-      },
-      file_mkdir: async ({ path }, { conversationId }) => {
-        await fsClient.scoped(conversationId).mkdir(String(path ?? ""));
-        return `Created folder ${path}.`;
-      },
-      file_delete: async ({ path }, { conversationId }) => {
-        await fsClient.scoped(conversationId).remove(String(path ?? ""));
-        return `Deleted ${path}.`;
-      },
-      file_rename: async ({ path, to }, { conversationId }) => {
-        await fsClient.scoped(conversationId).rename(String(path ?? ""), String(to ?? ""));
-        return `Renamed ${path} to ${to}.`;
-      },
+      // NOTE: no file_* handlers here. The six VFS CRUD tools are server tools
+      // (src/lib/assistant/tools/server/files.ts) — these handlers were a bare
+      // `fsClient.scoped(conversationId)` fetch to /api/fs, so the browser trip
+      // added a hop and nothing else, while making them uncallable in any
+      // headless run. `fsClient` is still the right client for UI code (the
+      // Files app); it is just no longer on the agent tool path.
+      // See docs/dev/file-tools/file-tools.md.
+
       // App management: the install/build happen server-side, but the desktop
       // store update (registerApp/launch) is a client effect → frontend tools.
       app_install: async ({ name, html, icon }, { conversationId }) => {

@@ -17,7 +17,8 @@ import {
 import {
   killContainer,
   listBosImages,
-  buildImage,
+  buildImageCoalesced,
+  isBuildInProgress,
   getContainerRuntime,
   getContainerUsage,
   getCgroupMemoryEvents,
@@ -233,14 +234,17 @@ export function createAdminRouter(cfg: Config, provider: AuthProvider): Router {
     }
   });
 
-  let buildInProgress = false;
   router.post("/image/build", guard, async (req, res) => {
-    if (buildInProgress) {
+    // Shared with the automatic build a first login triggers when the image is
+    // missing (docker.ts's ensureBosImage) — a router-local flag would only
+    // have seen admin-initiated builds, and two builds of one tag at once
+    // race on the result.
+    if (isBuildInProgress()) {
       res.status(409).json({ error: "A build is already in progress" });
       return;
     }
     const { dockerfile = "Dockerfile", tag = "browseros:latest" } = req.body as { dockerfile?: string; tag?: string };
-    const repoPath = process.env.BOS_REPO_PATH ?? "/bos-src";
+    const repoPath = cfg.bosRepoPath;
 
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache");
@@ -249,14 +253,12 @@ export function createAdminRouter(cfg: Config, provider: AuthProvider): Router {
 
     const send = (data: object): void => { res.write(`data: ${JSON.stringify(data)}\n\n`); };
 
-    buildInProgress = true;
     try {
-      await buildImage(repoPath, dockerfile, tag, (event) => send(event));
+      await buildImageCoalesced(repoPath, dockerfile, tag, (event) => send(event));
       send({ status: "success", tag });
     } catch (err) {
       send({ status: "error", error: String(err) });
     } finally {
-      buildInProgress = false;
       res.end();
     }
   });

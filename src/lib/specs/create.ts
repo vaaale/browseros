@@ -21,9 +21,34 @@ async function uniqueItemId(base: string): Promise<string> {
   return id;
 }
 
+/** 045 FR-015: the primary artifact is whatever the active method calls it,
+ *  not the literal "spec.md". An item store created under a framework whose
+ *  leaf marker is `proposal.md` would otherwise be written with a spec.md
+ *  nothing then discovers. */
+async function primaryArtifactName(workflow?: string): Promise<string> {
+  const { leafMarkerFor } = await import("./leaf");
+
+  // 049 FR-002: an explicitly named workflow wins, so "create a document
+  // processing app using the bmad-enterprise workflow" gets THAT method's
+  // artifact name rather than the default's.
+  if (workflow) {
+    const { resolveWorkflow } = await import("./method/workflows");
+    return leafMarkerFor(resolveWorkflow(workflow).method);
+  }
+
+  // Nothing exists yet to resolve against, so this is the DEFAULT question,
+  // asked by name rather than by assembling a partial binding — which is how
+  // this line came to pass an EMPTY one and make Settings' default inert.
+  const { defaultMethod } = await import("./pipeline");
+  return leafMarkerFor(await defaultMethod());
+}
+
 async function itemHasSpec(item: InstalledItem): Promise<boolean> {
   try {
-    await fs.access(path.join(item.itemPath, "spec", "spec.md"));
+    // Deliberately unparameterised: this asks whether THIS item already has a
+    // primary artifact, which is a question about the item's own binding — not
+    // about a workflow being requested for some other item.
+    await fs.access(path.join(item.itemPath, "spec", await primaryArtifactName()));
     return true;
   } catch {
     return false;
@@ -63,6 +88,11 @@ export interface CreateItemSpecInput {
   /** Explicit item id (new or existing). Omit to derive a fresh, collision-free id from `name`. */
   id?: string;
   specBody: string;
+  /** 049 FR-002: the workflow this item's specs are authored under. Decides the
+   *  PRIMARY ARTIFACT'S NAME, so it must be known at creation — binding
+   *  afterwards orphans the first artifact, which was written under the old
+   *  method's leaf marker and is not discovered by the new one. */
+  workflow?: string;
   /** The active `bos/*` feature branch. REQUIRED: creating an item's spec is a
    *  write to `user-apps`, and every write to a writable spec store is
    *  branch-gated (dev/spec-fs.ts's prepareWrite). Without this, app_spec_create
@@ -99,6 +129,7 @@ export async function createItemSpec(input: CreateItemSpecInput): Promise<{ id: 
         "wait for the user to confirm the branch name, then retry this exact call. Do not look for another tool.",
     );
   }
+  const branch = input.branch;
   const explicitId = input.id?.trim();
   if (explicitId !== undefined) {
     if (!explicitId) throw new Error("id must not be empty.");
@@ -120,7 +151,25 @@ export async function createItemSpec(input: CreateItemSpecInput): Promise<{ id: 
     if (existing && (await itemHasSpec(existing))) {
       throw new Error(`Item "${id}" already has a spec — use app_spec_write/app_spec_edit/app_spec_patch to modify it.`);
     }
-    await installItem({ name, id, files: { "spec/spec.md": input.specBody } }, { draft: true, branch: input.branch });
-    return { id, path: `${ITEM_STORE_PREFIX}${id}/spec.md` };
+    const primary = await primaryArtifactName(input.workflow);
+    await installItem({ name, id, files: { [`spec/${primary}`]: input.specBody } }, { draft: true, branch: input.branch });
+    // BIND AT BIRTH, here rather than in each caller. The workflow already
+    // decided this file's NAME; recording it is the other half of the same
+    // fact, and leaving it to the caller is why an app created by the AGENT
+    // ("build an app using the BMAD method") came out reporting the global
+    // default — Build Studio's dialog bound afterwards, app_spec_create did
+    // not, and nothing said so. One creation path, one binding.
+    if (input.workflow) {
+      const { resolveWorkflow } = await import("./method/workflows");
+      const { setItemWorkflow } = await import("./item-binding");
+      await setItemWorkflow(id, resolveWorkflow(input.workflow).qualified, input.branch);
+    }
+    // The branch now knows which item it is for. It usually could not know
+    // before: the branch is created first, so a new app's id does not exist yet
+    // to be passed to dev_branch_request — and an unattributed marketplace
+    // branch is one no row in the tree can badge.
+    const { attributeBranchToItem } = await import("./branch-scope");
+    await attributeBranchToItem(branch, id);
+    return { id, path: `${ITEM_STORE_PREFIX}${id}/${primary}` };
   });
 }

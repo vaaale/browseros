@@ -12,6 +12,7 @@ import { createSetupRouter } from "./routers/setup";
 import { createBosProxy } from "./proxy";
 import { initLifecycle, reconcileOnStartup, getAllInstances, stopInstance } from "./lifecycle";
 import { initLogStore } from "./log-store";
+import { initAuditLog } from "./audit-log";
 import { resolveOwnMountSource } from "./docker";
 import { ensureSourceRepoHasHistory } from "./provision";
 
@@ -40,6 +41,8 @@ async function main(): Promise<void> {
 
   initLifecycle(cfg);
   initLogStore(cfg.dataDir);
+  // Login audit trail — a no-op unless AUTH_PROVIDER=simple (see audit-log.ts).
+  initAuditLog(cfg);
 
   const app = express();
 
@@ -84,6 +87,14 @@ async function main(): Promise<void> {
   app.use(bosProxy);
 
   const server = http.createServer(app);
+
+  // WebSocket upgrades bypass Express entirely (`server.on("upgrade")` is a
+  // server-level event, not a middleware), so they must be wired explicitly
+  // to the proxy — which authenticates them and routes each to exactly one
+  // user's container. Without this call no upgrade is served at all; the
+  // per-user proxies deliberately set `ws: false` so nothing can self-wire an
+  // unauthenticated, fan-out listener behind our back (see proxy.ts).
+  bosProxy.upgrade(server);
 
   server.listen(cfg.port, () => {
     console.log(`[bastion] Listening on :${cfg.port}  auth=${cfg.authProvider}`);

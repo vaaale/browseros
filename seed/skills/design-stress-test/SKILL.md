@@ -1,7 +1,7 @@
 ---
 name: design-stress-test
 description: Delegates to the devil-s-advocate agent for Socratic stress-testing of designs and plans.
-created_by: agent
+created_by: seed
 ---
 
 # Design Stress Test

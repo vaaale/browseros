@@ -115,6 +115,11 @@ function SkillsList({ skills, onSelect, onNew }: { skills: Skill[]; onSelect: (i
             <div className="flex-1 overflow-hidden">
               <div className="flex items-center gap-2">
                 <span className="truncate font-medium text-white/85">{s.name}</span>
+                {s.readOnly && (
+                  <span className="shrink-0 rounded bg-sky-500/15 px-1.5 py-0.5 text-[10px] text-sky-300/90">
+                    read-only{s.sourceItemId ? ` · ${s.sourceItemId}` : ""}
+                  </span>
+                )}
                 {typeof s.score === "number" && (
                   <span className="text-[10px] text-emerald-300/80">score {s.score.toFixed(1)}</span>
                 )}
@@ -147,6 +152,9 @@ function SkillEditor({ skillId, onBack, onSaved, onDeleted }: EditorProps) {
   const [score, setScore] = useState<number | undefined>(undefined);
   const [status, setStatus] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  /** An item-installed (symlinked) skill: viewable, never editable here. */
+  const [readOnly, setReadOnly] = useState(false);
+  const [sourceItemId, setSourceItemId] = useState<string | undefined>(undefined);
 
   useEffect(() => {
     if (!skillId) return;
@@ -158,6 +166,8 @@ function SkillEditor({ skillId, onBack, onSaved, onDeleted }: EditorProps) {
       if (s) {
         setDraft(toDraft(s));
         setScore(s.score);
+        setReadOnly(!!s.readOnly);
+        setSourceItemId(s.sourceItemId);
       }
       setLoaded(true);
     })();
@@ -216,7 +226,7 @@ function SkillEditor({ skillId, onBack, onSaved, onDeleted }: EditorProps) {
           <ArrowLeft size={12} /> Back to skills
         </button>
         <div className="flex items-center gap-2">
-          {skillId && (
+          {skillId && !readOnly && (
             <button
               onClick={remove}
               className="flex items-center gap-1 rounded px-2 py-1 text-[11px] text-red-300 hover:bg-red-500/15"
@@ -224,16 +234,27 @@ function SkillEditor({ skillId, onBack, onSaved, onDeleted }: EditorProps) {
               <Trash2 size={12} /> Delete
             </button>
           )}
-          <button
-            onClick={save}
-            disabled={!canSave || saving}
-            className="flex items-center gap-1 rounded bg-white/10 px-2.5 py-1 text-[11px] hover:bg-white/20 disabled:opacity-40"
-          >
-            <Save size={12} /> {saving ? "Saving…" : "Save"}
-          </button>
+          {!readOnly && (
+            <button
+              onClick={save}
+              disabled={!canSave || saving}
+              className="flex items-center gap-1 rounded bg-white/10 px-2.5 py-1 text-[11px] hover:bg-white/20 disabled:opacity-40"
+            >
+              <Save size={12} /> {saving ? "Saving…" : "Save"}
+            </button>
+          )}
         </div>
       </div>
 
+      {readOnly && (
+        <p className="rounded-lg border border-sky-500/20 bg-sky-500/10 px-3 py-2 text-xs text-sky-200/90">
+          This skill is installed {sourceItemId ? `from item “${sourceItemId}”` : "from a marketplace item"} and is
+          read-only — its content lives in the item&apos;s source and updates with it. Update or uninstall the item in the
+          Marketplace, or duplicate the skill under a new name to edit it.
+        </p>
+      )}
+
+      <fieldset disabled={readOnly} className="space-y-4">
       <section className="space-y-2 rounded-lg border border-white/10 bg-white/[0.02] p-3">
         <h4 className="text-xs font-semibold uppercase tracking-wide text-white/50">Skill file</h4>
         <Field label="Name">
@@ -291,6 +312,7 @@ function SkillEditor({ skillId, onBack, onSaved, onDeleted }: EditorProps) {
         defaultName="reference.md"
         onChange={(next) => setDraft({ ...draft, references: next })}
       />
+      </fieldset>
 
       {status && <p className="text-xs text-white/60">{status}</p>}
     </div>

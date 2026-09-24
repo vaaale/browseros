@@ -104,6 +104,33 @@ export function removeRemoteConfig(name: string, filesystem?: string): boolean {
   return true
 }
 
+/**
+ * Drop EVERY remote config belonging to one GitFS instance. Returns how many.
+ *
+ * For deregistering a repository (050): a config whose filesystem no longer
+ * exists is unreachable — no page lists it — but not harmless. `getUniqueRemoteName`
+ * still counts it, so re-adding the same repository produced a second remote
+ * called `origin-2` beside the orphan, and "the remote named origin" then
+ * resolved to the DEAD one.
+ *
+ * Credentials are deliberately NOT touched here. `deleteRemoteCredentials` is
+ * keyed by remote NAME alone (`token:origin`), with no filesystem in the key, so
+ * clearing them for one repository's `origin` would clear every other
+ * repository's `origin` too. Provider-wide OAuth lives in Settings → Integrations
+ * and is shared by design; a leftover per-remote secret is inert, whereas
+ * deleting the wrong one breaks a repository the user did not touch.
+ */
+export function removeRemoteConfigsForFilesystem(filesystem: string): number {
+  const configs = readRemoteConfigs()
+  const kept = configs.filter((c) => (c.filesystem ?? SOURCE_FS_ID) !== filesystem)
+  const removed = configs.length - kept.length
+  if (removed > 0) {
+    writeRemoteConfigs(kept)
+    gitLogger().info({ op: "remove_remote_configs_for_filesystem", remote: `${filesystem} (${removed})` })
+  }
+  return removed
+}
+
 // Remote names must be unique WITHIN a filesystem (git enforces this per repo).
 // When a filesystem is given, only that filesystem's remotes are considered, so
 // two filesystems may each have an "origin". When omitted, uniqueness is global

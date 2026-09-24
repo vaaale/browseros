@@ -57,15 +57,23 @@ test("build-studio.conflictAgent defaults to devops and reflects a saved value (
   }
 });
 
-test("reconcile reads the configured agent at escalation time, defaulting to devops (FR-023/FR-025)", () => {
-  const src = readFileSync(join(__dirname, "..", "..", "src/lib/gitops/reconcile.ts"), "utf8");
+test("the configured agent is resolved by ONE shared helper, defaulting to devops (FR-023/FR-025)", () => {
+  const helper = readFileSync(join(__dirname, "..", "..", "src/lib/gitops/conflict-agent.ts"), "utf8");
   // The hard-coded constant is no longer what the escalation uses...
-  expect(src).toContain('getConfigValue("build-studio", "conflictAgent")');
-  expect(src).toContain("const agentId = await conflictAgentId()");
+  expect(helper).toContain('getConfigValue("build-studio", "conflictAgent")');
   // ...but it IS still the default, which is what keeps the pre-existing
   // source-repo escalation byte-identical (FR-023).
-  expect(src).toContain('const DEVOPS_AGENT_ID = "devops"');
-  expect(src).toMatch(/configured\.trim\(\)\s*:\s*DEVOPS_AGENT_ID/);
+  expect(helper).toContain('export const DEVOPS_AGENT_ID = "devops"');
+  expect(helper).toMatch(/configured\.trim\(\)\s*:\s*DEVOPS_AGENT_ID/);
+
+  const src = readFileSync(join(__dirname, "..", "..", "src/lib/gitops/reconcile.ts"), "utf8");
+  expect(src).toContain("const agentId = await conflictAgentId()");
+  // The escalation and the retry path MUST read the same helper: that sharing
+  // is what lets a session escalated to a mis-configured agent be corrected by
+  // re-reading the setting, instead of only by rolling back.
+  expect(src).toContain('from "./conflict-agent"');
+  const store = readFileSync(join(__dirname, "..", "..", "src/lib/gitops/sessions/store.ts"), "utf8");
+  expect(store).toContain('import("../conflict-agent")).conflictAgentId()');
   // And the conversation is created with the resolved agent, not the constant.
   expect(src).toContain("createDevOpsConversation(\n      agentId,");
 });

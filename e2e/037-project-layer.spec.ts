@@ -60,7 +60,7 @@ async function rightClick(locator: Locator) {
 test.describe("user-specs branch-coupled editing — Build Studio", () => {
   test("selecting a feature branch makes user-specs editable; edit -> history -> rename -> delete; deselecting makes it read-only again", async ({ page }) => {
     test.setTimeout(120_000);
-    const branch = "bos/e2e-user-specs-work";
+    const branch = "bos/testfixture-e2e-user-work";
     await stubFeatureBranchList(page, branch);
     const win = await openBuildStudio(page);
 

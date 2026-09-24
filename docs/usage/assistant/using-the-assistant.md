@@ -9,7 +9,12 @@ panels, and how the assistant shows its work.
 
 - **New conversation** — starts a fresh thread.
 - **Switch** — click any conversation to resume it; its messages reload from disk.
-- **Delete** — remove a conversation you no longer want.
+- **Row menu (⋯)** — hover a conversation and open its menu to **Rename**,
+  **Archive** (or **Unarchive**), or **Delete** it. See
+  [Archiving conversations](archiving-conversations.md) — archiving hides a
+  conversation without deleting anything.
+- **Archived section** — the always-visible list at the bottom of each agent's
+  conversations, holding what you've archived.
 
 Each conversation is saved as a file in your VFS (`Documents/Chats/<id>.json`),
 so history survives reloads. New conversations get an **auto‑generated title**
@@ -74,6 +79,32 @@ happens** as collapsible cards:
 - **Tool calls and results** — each action it takes (open app, read file, …).
 - **Sub‑agent activity** — when it delegates, the sub‑agent's own steps stream in,
   **nested** under the delegation so you can see who did what.
+
+**Each tool completes on its own.** When the assistant runs several independent
+tools at once (e.g. delegating to several sub‑agents in parallel), every tool's
+card flips to **done** the moment *that* tool finishes — not when the slowest one
+in the group does. The fast ones stop spinning as soon as they're actually done,
+so you can see real progress instead of one big "everything finished" burst.
+
+**Delegations stream their output live.** While a sub‑agent is still working, its
+own tool results appear in the delegation's card **as each one completes** (with a
+"n of m nested" counter), rather than as a single dump when the delegation returns.
+
+**The card is a recursive, human-readable tree.** A card's header is a one-line
+action summary — *"Read file /path"*, *"Web search for …"*, *"Delegate to
+Researcher"* — not a raw JSON blob. Click the header to expand it; inside, the
+**Input** and **Output** sections each open and close **independently** (both
+start collapsed):
+
+- **Input** shows the tool's arguments as structured key–value rows, with the main
+  one (the path, query, URL, …) emphasised. The **raw** button switches it to the
+  full JSON dump if you want to see exactly what was sent.
+- **Output** renders the result as its natural type — Markdown, syntax‑highlighted
+  JSON, or highlighted code — with a small label saying which, and a **copy**
+  button on JSON/code. For a delegation, the Output is the list of the
+  sub‑agent's own tool‑call cards: the same card, one level in, so you can drill
+  into a sub‑agent's nested work exactly as you would any other tool call (and
+  recurse again if that sub‑agent delegated further).
 
 A card expands when its event arrives and **auto‑collapses** shortly after (or when
 the next event comes in), leaving just a heading. You can click any card to expand

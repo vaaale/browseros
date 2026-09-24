@@ -185,8 +185,9 @@ must not complete the operation.
 ### Giving another agent the job
 
 `Settings → Build Studio → Conflict agent` (`build-studio.conflictAgent`,
-default `devops`). Read on **every** escalation, so a change takes effect with
-no reload.
+default `devops`). Resolved by `conflictAgentId()` in
+`src/lib/gitops/conflict-agent.ts`, read fresh on **every** escalation and on
+every retry, so a change takes effect with no reload.
 
 The selected agent must list the six `conflict_*` ids in its allowlist — `gate.ts`
 only offers a run the tools its agent declares. The Settings dropdown warns when
@@ -194,6 +195,37 @@ the selected agent lacks them. The seeded `devops` agent has them, and
 `backfillConflictTools` in `src/lib/agent/subagents/store.ts` adds them (once,
 additively) to a `data/agents/devops/AGENT.md` left over from an older install —
 without that, an upgrade would silently break every escalation.
+
+### Retrying with a corrected agent
+
+Changing that setting after an escalation has already happened does **not** move
+a session that is already running: the agent is written onto the session *and*
+onto its conversation, and `AssistantChatV2` pins an existing conversation to its
+stored `agentId`. The `conflict_*` tools bind to that one conversation
+(`getConversationConflictSessionId`), so a fresh chat with the corrected agent
+can never reach them — it only ever gets
+
+> this conversation is not bound to a conflict-resolution session
+
+**Retry with configured agent** in the pane header (or
+`PATCH {action:"retry"}`) is the way out. `retrySession()` cancels any run still
+nominally alive, re-reads `conflictAgentId()`, re-points both the session and its
+conversation (re-asserting `conflictSessionId` at the same time), and starts a
+fresh run on the same conversation with a `conflict_status`-first resume prompt.
+The transcript is continuous — this is the same park→rewake mechanism an answered
+decision uses, with a different trigger.
+
+- A **parked** (`awaiting-user`) session is re-pointed but *not* relaunched
+  (`relaunched: false`): it is waiting on you, and the new agent picks it up when
+  you answer.
+- A **terminal** session is refused. Nothing to retry — re-run the operation.
+
+It is also the recovery for an **orphaned** session. `waitForSession` polls from
+inside the request that started the reconciliation, so if that request dies (a
+dropped promote, a killed client) the session can sit in `working` with a dead
+run indefinitely — blocking every later reconcile on that repo via the S12 guard,
+with rollback as the only exit. The boot sweep only covers this on restart.
+Retrying relaunches it in place.
 
 ---
 
@@ -296,11 +328,12 @@ the way their hand-written dead-end strings did.
 | `/api/gitops/sessions` | GET | list non-terminal (`?status=all` for everything) |
 | `/api/gitops/sessions?id=` | GET | one session |
 | `/api/gitops/sessions?id=&file=` | GET | that file's three-way content + hunks |
-| `/api/gitops/sessions?id=` | PATCH | `{action:"answer"\|"abandon"}` — the only client mutation |
+| `/api/gitops/sessions?id=` | PATCH | `{action:"answer"\|"retry"\|"abandon"}` — the only client mutations |
 | `/api/gitops/sessions?id=` | DELETE | abandon + roll back |
 
 The client never runs git. It sees the serialized session and can answer a
-decision or abandon; everything else is server-side.
+decision, retry with the configured agent, or abandon; everything else is
+server-side.
 
 ## Gotchas
 
@@ -323,7 +356,9 @@ decision or abandon; everything else is server-side.
   base, merge-tree parsing, marker rendering.
 - `tests/gitops/conflict-session-store.test.ts` — the state machine, durability
   across a simulated restart, decision answering, completion (merge / ff /
-  plumbing), rollback, the binary refusal, the concurrent-op guard, the boot sweep.
+  plumbing), rollback, the binary refusal, the concurrent-op guard, the boot
+  sweep, and the agent retry (re-point + relaunch, parked re-point without
+  relaunch, refusal on a settled session).
 - `tests/gitops/conflict-callsites.test.ts` — every conversion, plus the FR-016
   completeness sweep over the whole source.
 - `tests/gitops/conflict-agent-config.test.ts` — the configurable agent, tool

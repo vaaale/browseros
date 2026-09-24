@@ -1,6 +1,7 @@
 import "server-only";
 import { promises as fs } from "fs";
 import path from "path";
+import { execFile } from "child_process";
 import Ajv from "ajv";
 import type { ServiceManifest } from "./types";
 
@@ -153,12 +154,39 @@ export async function validateServiceJson(content: string, itemDir?: string): Pr
   }
 }
 
+/** How long the isolated load check may take before the child is killed and the
+ *  entry reported as failing to load. Generous: it only has to require/import
+ *  the module graph, not run the service. */
+const LOAD_CHECK_TIMEOUT_MS = 15_000;
+
+// Runs in a throwaway `node -e` child: argv[1] is the entry path. Dynamic
+// import() (via a file URL) loads both CJS and ESM entries, matching what the
+// old in-process check accepted. Exit 0 = loaded; exit 1 + stderr = load error.
+const LOAD_CHECK_SCRIPT =
+  'import(require("node:url").pathToFileURL(process.argv[1]).href)' +
+  ".then(() => process.exit(0), (err) => { console.error((err && (err.stack || err.message)) || String(err)); process.exit(1); });";
+
 /**
- * At-start validation (CH-011): the entrypoint must actually be require()-able,
- * not just present on disk. Catches syntax errors / missing dependencies before
- * a worker thread is spun up. Does not execute module top-level side effects
- * beyond what require() itself triggers (CommonJS), and never throws — callers
- * get a clear pass/fail plus the caught error message.
+ * At-start validation (CH-011): the entrypoint must actually be loadable, not
+ * just present on disk. Catches syntax errors / missing dependencies before a
+ * worker thread is spun up. Never throws — callers get a clear pass/fail plus
+ * the load error.
+ *
+ * The load check runs in a DISPOSABLE CHILD PROCESS, never in the server
+ * process. It used to `await import(entryPath)` right here, on the assumption
+ * that worker entrypoints only touch parentPort inside their message handlers
+ * — an assumption BOS cannot enforce on installed items, whose entry code is
+ * not BOS's. Services start from instrumentation.ts, so this import ran
+ * during SERVER BOOT: one item whose entry guarded `!parentPort` with
+ * `process.exit(0)` took the entire preview server down with a clean code-0
+ * exit and no error, on every boot. Any other top-level side effect (binding
+ * a port, an infinite loop) would equally have hit the server itself. The
+ * child inherits process.env — NODE_PATH (set per-process by
+ * tools/supervisor/lib/proc.mjs) must keep resolving bare imports exactly as
+ * it does for the real Worker. A module that itself exits 0 while loading
+ * still passes: the check's only job is "does it load", and the real run
+ * happens in a Worker where parentPort is set. SIGKILL on timeout, because a
+ * top-level busy loop can install a SIGTERM handler it never services.
  */
 /**
  * `serviceDirPath` is the service's OWN directory — `dataDir()/system/<id>/services`
@@ -167,20 +195,33 @@ export async function validateServiceJson(content: string, itemDir?: string): Pr
  */
 export async function validateManifestAtStart(manifest: ServiceManifest, serviceDirPath: string): Promise<ValidationResult> {
   const entryPath = path.resolve(serviceDirPath, manifest.entry);
-  try {
-    const exists = await fs.access(entryPath).then(() => true).catch(() => false);
-    if (!exists) {
-      return { valid: false, errors: [`entrypoint not found: ${entryPath}`] };
-    }
-    // Dynamic import with webpackIgnore mirrors src/lib/plugins/loader.ts's
-    // loadPluginFromDir — without the comment, Turbopack/webpack try (and fail)
-    // to statically resolve this variable path at build time. This actually
-    // loads the module (not just a syntax check) to catch missing deps too;
-    // worker entrypoints only touch parentPort inside their message handlers,
-    // so importing them from the main thread is safe (parentPort is just null).
-    await import(/* webpackIgnore: true */ entryPath);
-    return { valid: true, errors: [] };
-  } catch (err) {
-    return { valid: false, errors: [`entrypoint failed to load: ${(err as Error).message}`] };
+  const exists = await fs.access(entryPath).then(() => true).catch(() => false);
+  if (!exists) {
+    return { valid: false, errors: [`entrypoint not found: ${entryPath}`] };
   }
+  // No NODE_OPTIONS: a worker thread never re-applies it (it holds flags the
+  // PARENT node was started with — under `npm run test:unit`, a --require of a
+  // cwd-relative preload that doesn't resolve from the child's cwd at all), so
+  // a faithful load check must not either. NODE_PATH stays inherited — the
+  // real Worker resolves bare imports through it (tools/supervisor/lib/proc.mjs).
+  const env = { ...process.env };
+  delete env.NODE_OPTIONS;
+  return await new Promise<ValidationResult>((resolve) => {
+    execFile(
+      process.execPath,
+      ["-e", LOAD_CHECK_SCRIPT, entryPath],
+      { cwd: serviceDirPath, env, timeout: LOAD_CHECK_TIMEOUT_MS, killSignal: "SIGKILL", maxBuffer: 256 * 1024 },
+      (err, _stdout, stderr) => {
+        if (!err) return resolve({ valid: true, errors: [] });
+        if (err.killed) {
+          return resolve({
+            valid: false,
+            errors: [`entrypoint did not finish loading within ${LOAD_CHECK_TIMEOUT_MS}ms: ${entryPath}`],
+          });
+        }
+        const detail = (stderr || err.message || "unknown error").trim().split("\n").slice(0, 20).join("\n");
+        resolve({ valid: false, errors: [`entrypoint failed to load: ${detail}`] });
+      },
+    );
+  });
 }

@@ -52,6 +52,13 @@ export interface PostResult {
    *  spec-store or user-apps merge conflict during promote) — the operation
    *  still succeeded overall, but this must be shown, not silently dropped. */
   warnings?: string[];
+  /** Fix C: per-item service config (API key / settings) set in preview that
+   *  will NOT survive the promote (preview data is disposable — base is
+   *  canonical). Computed at the destructive step, so only available in the
+   *  post-promote result; surfaced prominently so the user re-configures on
+   *  base. A dedicated structured field (not folded into `warnings: string[]`)
+   *  so the item + files survive for the UI to render. */
+  dataLossWarnings?: { item: string; files: string[]; message: string }[];
   /** 035 (FR-018): set when a conflict during this operation was escalated. */
   sessionId?: string;
   /** Present on promote's initial (immediate) response — see promoteAndWait. */
@@ -137,7 +144,32 @@ export async function promoteAndWait(branch: string): Promise<PostResult> {
 export function promoteIssues(r: PostResult): string[] | null {
   const issues = [
     ...(r.pushResults ?? []).filter((p) => p.status === "failed").map((p) => `push to ${p.remoteName}: ${p.error || "unknown error"}`),
+    // Fix C: data-loss warnings are the most consequential (a silently dropped
+    // API key) — list them first, with a marker, so they aren't buried.
+    ...(r.dataLossWarnings ?? []).map((w) => `DATA NOT PROMOTED: ${w.message}`),
     ...(r.warnings ?? []),
   ];
   return issues.length ? issues : null;
+}
+
+/** Does this Supervisor action replace the build THIS WINDOW is served by?
+ *
+ *  The only reason to reload the page. It used to happen for every one of
+ *  pin/stop/discard/promote, so deleting a branch threw the user out of
+ *  Settings and back to a fresh desktop — and deleting several meant navigating
+ *  back in each time. Nothing about discarding a branch you are not running
+ *  changes the code answering these requests: the worktree destroyed is not the
+ *  one serving them.
+ *
+ *    promote / pin  — the served build changes by definition
+ *    stop / discard — only when we are serving THAT branch's preview
+ */
+export function replacesServedBuild(
+  action: string,
+  targetBranch: string,
+  serving: SupState["serving"],
+): boolean {
+  if (action === "promote" || action === "pin") return true;
+  if (action !== "stop" && action !== "discard") return false;
+  return serving?.role === "preview" && serving.branch === targetBranch;
 }

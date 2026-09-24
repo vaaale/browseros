@@ -23,6 +23,9 @@ export interface Conversation {
   createdAt: number;
   agentId: string;
   activeFeatureBranch?: string;
+  /** Archived conversations are hidden from default lists and read-only until
+   *  unarchived. Missing = false — the flag is additive, no migration. */
+  archived?: boolean;
 }
 
 interface State {
@@ -64,6 +67,7 @@ interface ConversationFile {
   agentId?: string;
   group?: string; // legacy field — read for migration, never written
   activeFeatureBranch?: string;
+  archived?: boolean;
   messages: unknown[];
 }
 
@@ -87,6 +91,7 @@ async function readConversationFile(id: string): Promise<ConversationFile | null
       createdAt: typeof parsed.createdAt === "number" ? parsed.createdAt : 0,
       agentId,
       activeFeatureBranch: typeof parsed.activeFeatureBranch === "string" && parsed.activeFeatureBranch ? parsed.activeFeatureBranch : undefined,
+      archived: typeof parsed.archived === "boolean" ? parsed.archived : false,
       messages: Array.isArray(parsed.messages) ? parsed.messages : [],
     };
   } catch {
@@ -149,7 +154,7 @@ async function loadFromVfs(): Promise<void> {
         const id = e.name.replace(/\.json$/, "");
         const file = await readConversationFile(id);
         if (!file) return null;
-        return { id: file.id, title: file.title, createdAt: file.createdAt, agentId: file.agentId!, activeFeatureBranch: file.activeFeatureBranch };
+        return { id: file.id, title: file.title, createdAt: file.createdAt, agentId: file.agentId!, activeFeatureBranch: file.activeFeatureBranch, archived: file.archived };
       }),
     );
     conversations = loaded.filter((c): c is Conversation => c !== null);
@@ -211,6 +216,7 @@ export async function newConversation(agentId: string = DEFAULT_AGENT_ID): Promi
         title: conv.title,
         createdAt: conv.createdAt,
         agentId: conv.agentId,
+        archived: false,
         messages: [],
       };
       if (conv.activeFeatureBranch) file.activeFeatureBranch = conv.activeFeatureBranch;
@@ -261,6 +267,81 @@ export async function setConversationActiveFeatureBranch(id: string, branch: str
     if (!res.ok) throw new Error(`PATCH /api/assistant/feature-branches failed: ${res.status}`);
   } catch (err) {
     console.error("Failed to persist active feature branch change", err);
+  }
+}
+
+/** Archive or unarchive a conversation. Archived conversations are hidden from
+ *  the default lists of every surface and read-only (server-enforced at
+ *  POST /api/assistant/runs) until unarchived; nothing is deleted.
+ *
+ *  Optimistic: the in-memory store updates immediately (both app surfaces
+ *  re-render off the same singleton), then the change persists via a dedicated
+ *  endpoint that funnels through conversation-store.ts's per-conversation
+ *  queue — NOT a plain VFS write, which would race the agent loop's own
+ *  message saves (see setConversationActiveFeatureBranch's doc comment for
+ *  the incident that motivated this pattern). */
+export async function setConversationArchived(id: string, archived: boolean): Promise<void> {
+  await ensureLoading();
+  const current = state ?? get();
+  const conv = current.conversations.find((c) => c.id === id);
+  if (!conv || (conv.archived ?? false) === archived) return;
+  const next = { ...conv, archived };
+  setState({
+    ...current,
+    conversations: current.conversations.map((c) => (c.id === id ? next : c)),
+  });
+  try {
+    const res = await fetch(`/api/assistant/conversations/${encodeURIComponent(id)}/archive`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ archived }),
+    });
+    if (!res.ok) throw new Error(`PATCH /api/assistant/conversations/${id}/archive failed: ${res.status}`);
+  } catch (err) {
+    console.error("Failed to persist conversation archive change", err);
+  }
+}
+
+/** Auto-archive every conversation whose active feature branch is `branch` —
+ *  called by both promote surfaces (desktop-topbar VersionControls and
+ *  Settings → Versions) right after a successful promote and BEFORE their
+ *  `window.location.reload()`, which must await it (ADR-7).
+ *
+ *  Leads with `ensureLoading()` — load-bearing, not style: the store is a lazy
+ *  singleton and neither promote surface subscribes to it, so a topbar promote
+ *  with no chat/Build Studio window ever opened would otherwise read an empty
+ *  snapshot and archive nothing. Dispatches the keepalive PATCHes directly
+ *  rather than through `setConversationArchived` — its optimistic setState is
+ *  dead weight on a path that reloads immediately. Best-effort by contract: a
+ *  failure here must never fail the promote, so nothing thrown escapes. */
+export async function archiveConversationsForBranch(branch: string): Promise<void> {
+  if (!branch) return;
+  try {
+    await ensureLoading();
+    const current = state ?? get();
+    // Only currently-non-archived conversations: archive is a state, not a
+    // one-shot — a conversation the user manually unarchived after an earlier
+    // promote of the same branch is simply matched (and re-archived) or not
+    // based on its flag right now.
+    const targets = current.conversations.filter((c) => c.activeFeatureBranch === branch && !c.archived);
+    const results = await Promise.allSettled(
+      targets.map(async (c) => {
+        const res = await fetch(`/api/assistant/conversations/${encodeURIComponent(c.id)}/archive`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ archived: true }),
+          // The caller reloads right after — keepalive lets an in-flight PATCH
+          // survive the navigation instead of being aborted with it.
+          keepalive: true,
+        });
+        if (!res.ok) throw new Error(`PATCH /api/assistant/conversations/${c.id}/archive failed: ${res.status}`);
+      }),
+    );
+    for (const r of results) {
+      if (r.status === "rejected") console.warn(`Auto-archive on promote of ${branch} skipped a conversation`, r.reason);
+    }
+  } catch (err) {
+    console.warn(`Auto-archive on promote of ${branch} failed`, err);
   }
 }
 
@@ -399,6 +480,7 @@ export async function saveConversationMessages(id: string, messages: unknown[]):
       createdAt: existing?.createdAt ?? meta?.createdAt ?? Date.now(),
       agentId: meta?.agentId ?? existing?.agentId ?? DEFAULT_AGENT_ID,
       activeFeatureBranch: meta?.activeFeatureBranch ?? existing?.activeFeatureBranch,
+      archived: meta?.archived ?? existing?.archived ?? false,
       messages: normalizeMessages(messages),
     };
     await writeConversationFile(file);

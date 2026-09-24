@@ -209,11 +209,11 @@ test("an item's spec write lands on the shared user-apps repo's checkout once a 
     const userAppsRoot = join(dir, "user-apps");
     // With no Supervisor there is no branch-coupled worktree to route into, so
     // the write lands in the base checkout — whichever branch that is.
-    git(userAppsRoot, ["checkout", "-b", "bos/some-feature"]);
+    git(userAppsRoot, ["checkout", "-b", "bos/testfixture-some-feature"]);
 
-    await specfs.writeFile("item-widget/spec.md", "# Widget Spec\n\nv2.\n", { branch: "bos/some-feature" });
+    await specfs.writeFile("item-widget/spec.md", "# Widget Spec\n\nv2.\n", { branch: "bos/testfixture-some-feature" });
     expect(git(userAppsRoot, ["log", "-1", "--pretty=%s"])).toContain("spec: write spec.md");
-    expect(git(userAppsRoot, ["show", "bos/some-feature:items/widget/spec/spec.md"])).toContain("v2");
+    expect(git(userAppsRoot, ["show", "bos/testfixture-some-feature:items/widget/spec/spec.md"])).toContain("v2");
 
     // The write landed on that branch specifically — master never saw it.
     git(userAppsRoot, ["checkout", "master"]);
@@ -243,7 +243,7 @@ test("resolveInStore ACCEPTS a feature-branch context for an item-owned store", 
     // context every other store does. Without a Supervisor there is no worktree
     // to route into, so this reads the base checkout rather than throwing —
     // it used to be refused outright ("does not support feature-branch context").
-    expect(await specfs.readFile("item-widget/spec.md", { branch: "bos/some-feature" })).toContain("Widget Spec");
+    expect(await specfs.readFile("item-widget/spec.md", { branch: "bos/testfixture-some-feature" })).toContain("Widget Spec");
   } finally {
     cleanup();
   }
@@ -262,7 +262,7 @@ test("writing an item's spec commits only that item — a sibling item's unrelat
     const dirtyBefore = git(userAppsRoot, ["status", "--porcelain"]);
     expect(dirtyBefore).toContain("items/other/app/index.html");
 
-    await specfs.writeFile("item-widget/spec.md", "# Widget Spec\n\nv2.\n", { branch: "bos/some-feature" });
+    await specfs.writeFile("item-widget/spec.md", "# Widget Spec\n\nv2.\n", { branch: "bos/testfixture-some-feature" });
 
     // The widget's edit landed and was committed...
     const latestLog = git(userAppsRoot, ["log", "-1", "--name-only", "--pretty=%s"]);
@@ -337,8 +337,8 @@ test("an item store's READS use the same branch as its writes — no read/write 
     await listCatalog();
 
     const userAppsRoot = join(dir, "user-apps");
-    git(userAppsRoot, ["checkout", "-b", "bos/some-feature"]);
-    const ctx = { branch: "bos/some-feature" };
+    git(userAppsRoot, ["checkout", "-b", "bos/testfixture-some-feature"]);
+    const ctx = { branch: "bos/testfixture-some-feature" };
 
     await specfs.writeFile("item-widget/spec.md", "# Widget Spec\n\nv2.\n", ctx);
 

@@ -58,7 +58,7 @@ test("buildAndStart: a worktree that isn't a git repo at all aborts at the `git 
   mkdirSync(notAWorktree, { recursive: true });
   writeFileSync(join(notAWorktree, "some-file.txt"), "irrelevant\n");
 
-  const v = fakeVersion({ worktree: notAWorktree, branch: "bos/not-a-repo", role: "preview" });
+  const v = fakeVersion({ worktree: notAWorktree, branch: "bos/testfixture-not-a-repo", role: "preview" });
   const result = await buildAndStart(v);
 
   assert.equal(result, "failed");
@@ -67,14 +67,14 @@ test("buildAndStart: a worktree that isn't a git repo at all aborts at the `git 
 });
 
 test("buildAndStart: a build FAILURE never loses the commit — the edit lands before npm run build even runs", async () => {
-  git(env.repo, ["branch", "bos/build-fails"]);
-  const wt = await addWorktreeForBranch("bos/build-fails"); // inherits REPO's always-fails build script
+  git(env.repo, ["branch", "bos/testfixture-build-fails"]);
+  const wt = await addWorktreeForBranch("bos/testfixture-build-fails"); // inherits REPO's always-fails build script
 
   // The agent's in-flight, UNCOMMITTED edit.
   writeFileSync(join(wt, "agent-edit.txt"), "the change the user actually asked for\n");
   assert.notEqual(git(wt, ["status", "--porcelain"]), "", "precondition: the worktree must be dirty before buildAndStart runs");
 
-  const v = fakeVersion({ worktree: wt, branch: "bos/build-fails", role: "preview" });
+  const v = fakeVersion({ worktree: wt, branch: "bos/testfixture-build-fails", role: "preview" });
   const result = await buildAndStart(v);
 
   assert.equal(result, "failed");
@@ -88,8 +88,8 @@ test("buildAndStart: a build FAILURE never loses the commit — the edit lands b
 });
 
 test("buildAndStart: nothing to commit (clean worktree) is not treated as a commit failure", async () => {
-  git(env.repo, ["branch", "bos/build-clean"]);
-  const wt = await addWorktreeForBranch("bos/build-clean");
+  git(env.repo, ["branch", "bos/testfixture-build-clean"]);
+  const wt = await addWorktreeForBranch("bos/testfixture-build-clean");
   assert.equal(git(wt, ["status", "--porcelain"]), "", "precondition: freshly-provisioned worktree is clean");
   const tipBefore = git(wt, ["rev-parse", "HEAD"]);
 
@@ -98,7 +98,7 @@ test("buildAndStart: nothing to commit (clean worktree) is not treated as a comm
   // here, and health-gating would need the full 120s timeout to give up) —
   // the point of this test is only "nothing to commit" isn't misreported as
   // a commit failure, which the build outcome doesn't affect either way.
-  const v = fakeVersion({ worktree: wt, branch: "bos/build-clean", role: "preview" });
+  const v = fakeVersion({ worktree: wt, branch: "bos/testfixture-build-clean", role: "preview" });
   const result = await buildAndStart(v);
 
   assert.equal(result, "failed");

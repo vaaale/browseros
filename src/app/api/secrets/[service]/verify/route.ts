@@ -6,7 +6,7 @@ export const dynamic = "force-dynamic";
 
 // Loopback-only verify — the bridge a worker-thread SERVICE (which cannot
 // `import` service-secrets.ts directly, see
-// seed/skills/build-studio/references/target-marketplace-item.md) calls over
+// seed/skills/bos-domain/references/target-marketplace-item.md) calls over
 // a plain loopback HTTP request on every incoming request it needs to
 // authenticate, the same pattern already used for VFS access (/api/fs). This
 // is what makes "the consuming service never has to think about propagating

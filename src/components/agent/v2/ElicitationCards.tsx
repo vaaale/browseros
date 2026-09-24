@@ -45,6 +45,17 @@ function ClaudeConsentCard({ e }: { e: PendingElicitation }) {
 function FeatureBranchCard({ e, existingBranch }: { e: PendingElicitation; existingBranch?: string }) {
   const task = String(e.input.task ?? "");
   const suggested = typeof e.input.suggestedBranch === "string" ? e.input.suggestedBranch : undefined;
+  // What the branch is FOR — which decides WHICH REPOSITORIES get it. Shown,
+  // because this is the last point before BOS creates branches in the user's own
+  // repositories, and a change to one marketplace app was silently branching
+  // five of them.
+  const scope = typeof e.input.scope === "string" ? e.input.scope : "";
+  const scopeId = typeof e.input.scopeId === "string" ? e.input.scopeId : "";
+  const willBranch =
+    scope === "bos-core" ? "BrowserOS's source and user-specs"
+      : scope === "marketplace-item" ? `BrowserOS's source and user-apps (for "${scopeId}")`
+        : scope === "repository" ? `the "${scopeId}" repository only`
+          : "BrowserOS's own repositories — the assistant declared no scope";
   const [name, setName] = useState(() => {
     if (suggested) {
       const normalized = normalizeFeatureBranch(suggested);
@@ -81,7 +92,10 @@ function FeatureBranchCard({ e, existingBranch }: { e: PendingElicitation; exist
     const res = await fetch("/api/assistant/feature-branches", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name }),
+      // The agent's declared scope rides along: it decided what KIND of change
+      // this is before asking for a branch, and that decides which repositories
+      // the branch is created in.
+      body: JSON.stringify({ name, scope, scopeId }),
     })
       .then((r) => r.json())
       .catch(() => null);
@@ -108,6 +122,9 @@ function FeatureBranchCard({ e, existingBranch }: { e: PendingElicitation; exist
           className="min-w-0 flex-1 rounded border border-white/10 bg-black/30 px-2 py-1 text-white/90 outline-none focus:border-white/30"
           placeholder="my-change"
         />
+      </div>
+      <div className="mb-2 text-[11px] text-white/45">
+        Will branch: <span className="text-white/70">{willBranch}</span>
       </div>
       {err && <div className="mb-2 text-red-300">{err}</div>}
       <div className="flex flex-wrap gap-2">

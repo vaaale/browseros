@@ -3,6 +3,7 @@ import express from "express";
 import type { Config } from "../config";
 import type { AuthProvider } from "../auth/index";
 import { issueSession } from "../sessions";
+import { recordBootstrapAdmin } from "../audit-log";
 
 const parseBody = [express.json(), express.urlencoded({ extended: false })];
 
@@ -48,6 +49,9 @@ export function createSetupRouter(cfg: Config, provider: AuthProvider): Router {
       }
       const adminUser = process.env.ADMIN_USER ?? "admin";
       await provider.createUser(adminUser, password, true);
+      // Audited like a login: this hands out an admin session without a
+      // credential check, so it must be visible in the same trail.
+      recordBootstrapAdmin(req, adminUser);
       issueSession(res, { username: adminUser, isAdmin: true }, cfg);
       res.json({ ok: true, redirect: "/app/admin" });
     } catch (err) {

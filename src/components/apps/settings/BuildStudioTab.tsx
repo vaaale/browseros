@@ -42,6 +42,11 @@ export function BuildStudioTab() {
   const [agents, setAgents] = useState<AgentOption[]>([]);
   const [agent, setAgent] = useState<string>("");
   const [conflictAgent, setConflictAgent] = useState<string>("devops");
+  // 045 FR-008/FR-008a — the LAST link in the binding chain
+  // (project.json -> spec-store.json -> here -> spec-kit), and PER USER:
+  // `data/` is a per-user volume under Bastion.
+  const [defaultMethod, setDefaultMethod] = useState<string>("spec-kit");
+  const [methods, setMethods] = useState<{ id: string; label: string; builtin?: boolean }[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -50,12 +55,15 @@ export function BuildStudioTab() {
     void Promise.all([
       fetch("/api/config").then((r) => r.json()),
       fetch("/api/subagents").then((r) => r.json()),
+      fetch("/api/methods").then((r) => r.json()).catch(() => ({ methods: [] })),
     ])
-      .then(([cfg, subs]) => {
+      .then(([cfg, subs, meth]) => {
         const s = (cfg.schemas ?? []).find((x: { namespace: string }) => x.namespace === "build-studio");
-        const values = s?.values as { agent?: string; conflictAgent?: string } | undefined;
+        const values = s?.values as { agent?: string; conflictAgent?: string; defaultMethod?: string } | undefined;
         setAgent(String(values?.agent || "build-studio"));
         setConflictAgent(String(values?.conflictAgent || "devops"));
+        setDefaultMethod(String(values?.defaultMethod || "spec-kit"));
+        setMethods((meth.methods ?? []) as { id: string; label: string; builtin?: boolean }[]);
         setAgents(((subs.subAgents ?? []) as AgentOption[]).map((a) => ({ id: a.id, name: a.name, description: a.description, tools: a.tools })));
       })
       .catch(() => {})
@@ -70,7 +78,7 @@ export function BuildStudioTab() {
       await fetch("/api/config", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ namespace: "build-studio", values: { agent, conflictAgent } }),
+        body: JSON.stringify({ namespace: "build-studio", values: { agent, conflictAgent, defaultMethod } }),
       });
       setSaved(true);
     } finally {
@@ -137,6 +145,47 @@ export function BuildStudioTab() {
           ))}
         </select>
       </label>
+
+      <h3 className="mt-4 font-medium text-white/80">Default spec method</h3>
+      <p className="text-white/50">
+        The spec framework a store uses when it sets none of its own. A store&rsquo;s own binding
+        (<code>spec-store.json</code>) and a Project&rsquo;s override both win over this. Applies to{" "}
+        <strong>your account only</strong> &mdash; each user has their own <code>data/</code> volume, so changing
+        this never moves anyone else&rsquo;s stores.
+      </p>
+
+      <label className="grid grid-cols-[120px_1fr] items-center gap-2">
+        <span className="text-white/60">Default method</span>
+        <select
+          data-testid="build-studio-default-method"
+          value={defaultMethod}
+          onChange={(e) => {
+            setDefaultMethod(e.target.value);
+            setSaved(false);
+          }}
+          className="rounded border border-white/10 bg-black/30 px-2 py-1.5 outline-none focus:border-white/30"
+        >
+          {/* A method named here but not installed must stay selectable, or
+              saving would silently change the binding to whatever happens to be
+              first in the list. */}
+          {!methods.some((m) => m.id === defaultMethod) && (
+            <option value={defaultMethod}>{defaultMethod} (not installed)</option>
+          )}
+          {methods.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.label}
+              {m.builtin ? " (built in)" : ""}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      {methods.length <= 1 && (
+        <p className="pl-[128px] text-white/40">
+          Only the built-in method is installed, so there is nothing else to choose yet. Install a method pack
+          from the Marketplace to get more options.
+        </p>
+      )}
 
       {selectedConflict && (
         <p className="pl-[128px] text-white/40">

@@ -17,6 +17,12 @@ import { listProjects, createProject } from "../../src/lib/specs/projects";
 import { specTree, listSpecifications, getSpecification, nextFeatureId } from "../../src/lib/specs/pipeline";
 import * as specfs from "../../src/lib/dev/spec-fs";
 
+// Creating a folder is a WRITE like any other now: the `project.json`
+// exemption from the feature-branch rule is gone (spec-fs.ts prepareWrite),
+// because it let a folder land on a user repository's default branch and
+// then refused every attempt to put anything in it.
+const BR = { branch: "bos/testfixture-project-layer" };
+
 function git(cwd: string, args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 }
@@ -130,8 +136,8 @@ test("per-project feature numbering: the same NNN-slug can recur across two proj
   try {
     await ensureStores(); // fresh, empty system/user stores — nothing to migrate
 
-    await createProject("user-specs", "Alpha");
-    await createProject("user-specs", "Beta");
+    await createProject("user-specs", "Alpha", undefined, BR);
+    await createProject("user-specs", "Beta", undefined, BR);
 
     const alphaId = await nextFeatureId("Foo", "user-specs/alpha");
     expect(alphaId).toBe("user-specs/alpha/001-foo");
@@ -158,7 +164,7 @@ test("recursive walk: a feature nested under an arbitrary plain sub-folder is di
   const { cleanup } = useTestDataDir("project-layer-nesting");
   try {
     await ensureStores();
-    await createProject("user-specs", "Assistant App");
+    await createProject("user-specs", "Assistant App", undefined, BR);
     await specfs.writeFile(
       "user-specs/assistant-app/agent-loop/003-compaction/spec.md",
       "# Compaction\n",
@@ -188,7 +194,7 @@ test("project.json is hidden from directory listings, same as spec-store.json", 
   const { cleanup } = useTestDataDir("project-layer-hidden-manifest");
   try {
     await ensureStores();
-    await createProject("user-specs", "Alpha");
+    await createProject("user-specs", "Alpha", undefined, BR);
     const entries = await specfs.listDir("user-specs/alpha");
     expect(entries.map((e) => e.name)).not.toContain("project.json");
   } finally {
@@ -204,7 +210,7 @@ test("converge phase reads discrepancies.md from user-specs too, not just the (n
   const { cleanup } = useTestDataDir("project-layer-discrepancies-user-store");
   try {
     await ensureStores();
-    await createProject("user-specs", "Alpha");
+    await createProject("user-specs", "Alpha", undefined, BR);
     await specfs.writeFile("user-specs/alpha/001-foo/spec.md", "# Foo\n", branchCtx("alpha"));
     await specfs.writeFile("user-specs/discrepancies.md", "- user-specs/alpha/001-foo: found a drift\n", branchCtx("alpha"));
 

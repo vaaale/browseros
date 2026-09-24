@@ -130,9 +130,15 @@ inside the table above.
 Validation lives in `src/core/service/manifestValidator.ts`:
 `validateManifest()` (structural — required fields, self-dependency check, entry
 existence if `itemDir` is passed) and `validateManifestAtStart()` (CH-011 —
-actually `import()`s the entry from the **main thread**, where `parentPort` is
-`null`, to catch load-time errors before a worker is ever spawned). See §6 for
-the guard this requires in your worker script.
+entry **presence** only).
+
+**Neither one loads your entry.** `validateManifestAtStart` used to `import()` it
+from the main thread to catch load-time errors early; that ran an installed
+item's code inside BrowserOS's own process, and an item whose entry began
+`if (!parentPort) process.exit(0)` — a guard written for exactly that import —
+ended the BOS process with it. Your entry is loaded **once**, by the real worker
+`ServiceManager.start()` spawns, where `parentPort` and `workerData` are both
+present; a module that throws at load surfaces there instead.
 
 ---
 
@@ -252,10 +258,12 @@ Your worker script (the `entry` file) MUST:
 ```js
 const { parentPort } = require("worker_threads");
 
-// Every top-level use of parentPort MUST be guarded — this same file is
-// import()ed from the MAIN thread (parentPort === null) by
-// validateManifestAtStart's CH-011 load check. An unguarded top-level call
-// throws there and fails manifest validation before a worker ever spawns.
+// This file runs ONLY as a worker thread, so parentPort is always present.
+// (BOS no longer import()s it from the main thread — see §3.) The `if` below
+// is belt-and-braces, and if you keep one it must never do more than skip
+// work: NEVER call process.exit() at module load. A real item shipped
+// `if (!parentPort) process.exit(0)` and took the BrowserOS process with it
+// the moment anything loaded the file outside a worker.
 if (parentPort) {
   parentPort.on("message", async (msg) => {
     if (msg.type === "initialize") {

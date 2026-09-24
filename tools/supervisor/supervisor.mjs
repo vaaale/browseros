@@ -29,7 +29,7 @@ import { PUBLIC_PORT, BASE_PORT, POOL_SIZE, CANONICAL_DATA, BASE_DEV, REUSE_BASE
 import { git } from "./lib/gitutil.mjs";
 import { initLogStore, getLogStore, startPruneInterval, log, slog } from "./lib/log.mjs";
 import { probeOnce, reapOrphanedPreviewServers, stopProc } from "./lib/proc.mjs";
-import { reconcileWorktrees, assertRepoIntegrity } from "./lib/worktree.mjs";
+import { reconcileWorktrees, reconcileWorktreeDirs, reconcileFeatureBranches, reconcileDataClones, assertRepoIntegrity } from "./lib/worktree.mjs";
 import { pruneAllCoupledWorktrees } from "./lib/coupled-repos.mjs";
 import { buildAndStartBase, buildAndStartBaseDev } from "./lib/base.mjs";
 import { restorePreviews } from "./lib/preview.mjs";
@@ -40,7 +40,21 @@ initLogStore(CANONICAL_DATA);
 
 async function main() {
   if (!state.baseBranch) state.baseBranch = await git(["rev-parse", "--abbrev-ref", "HEAD"]);
+  // Order matters, and each step depends on the one before it.
+  //
+  //   worktrees      registration-driven; safety-COMMITS a dirty worktree
+  //                  before removing it, so work in flight becomes a commit
+  //   branches       merged-only, so the commit just made protects its branch
+  //   worktree dirs  what git has disowned; a branch reclaimed above makes its
+  //                  leftover directory reclaimable in this same boot
+  //   clones         same, for the data clone
+  //
+  // Running the two directory-driven sweeps AFTER the branch pass is what lets
+  // one boot finish the job instead of leaving debris for the next one.
   await reconcileWorktrees();
+  await reconcileFeatureBranches();
+  await reconcileWorktreeDirs();
+  await reconcileDataClones();
   await pruneAllCoupledWorktrees();
   await reapOrphanedPreviewServers();
   // Post-start safety gate: assert (and restore) the live checkout before accepting traffic.

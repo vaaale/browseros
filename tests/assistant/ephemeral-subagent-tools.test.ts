@@ -244,18 +244,24 @@ test("ADR-13 (c): the headless ephemeral run's onEvent emits tool_result (name+r
   }
 });
 
-test("ADR-12 (b): an ephemeral agent's declared file tools land in its visible set (VFS bridge)", async () => {
-  const { bridgeEphemeralFrontendTools, headlessGate } = await import("../../src/lib/agent/subagents/ephemeral-tools");
+test("ADR-12 (b): an ephemeral agent's declared file tools land in its visible set", async () => {
+  const { headlessGate } = await import("../../src/lib/agent/subagents/ephemeral-tools");
   const { gateFromAgent } = await import("../../src/lib/assistant/gate");
-  const { visibleTools } = await import("../../src/lib/assistant/tools");
+  const { assistantTools, visibleTools } = await import("../../src/lib/assistant/tools").then(async (t) => ({
+    ...t,
+    assistantTools: (await import("../../src/lib/assistant/registry")).assistantTools,
+  }));
 
-  // In the registry, file_read/file_write are FRONTEND-execution tools (see
-  // frontend-declarations.ts). For an ephemeral agent, runner.ts bridges them
-  // to server-side VFS calls before building the gate.
-  const baseTools: Record<string, AssistantTool> = {
-    file_read: { name: "file_read", description: "d", parameters: {}, execution: "frontend" },
-    file_write: { name: "file_write", description: "d", parameters: {}, execution: "frontend" },
-  };
+  // ADR-12 originally satisfied this by BRIDGING file_read/file_write, which
+  // were frontend-execution tools, into server-side VFS calls — but only for
+  // ephemeral agents. The six VFS CRUD tools are ordinary server tools now
+  // (tools/server/files.ts), so the gate's server-executable filter keeps them
+  // with no bridge at all. The guarantee under test is unchanged: both are
+  // visible from step 1 of the run, not hidden behind find_tools.
+  //
+  // Drives the REAL registry rather than a hand-built map: a fixture asserting
+  // `execution === "server"` on tools it created itself proves nothing about
+  // what the run would actually execute.
   const eph: Agent = {
     id: "eph-vis",
     name: "Eph Vis",
@@ -266,18 +272,27 @@ test("ADR-12 (b): an ephemeral agent's declared file tools land in its visible s
     tools: ["file_read", "file_write"],
   };
 
-  const bridged = bridgeEphemeralFrontendTools(baseTools, eph.tools);
-  assert.equal(bridged.file_read.execution, "server"); // bridged
-  assert.equal(bridged.file_write.execution, "server"); // bridged
+  const tools = assistantTools();
+  assert.equal(tools.file_read.execution, "server");
+  assert.equal(tools.file_write.execution, "server");
 
-  // The ephemeral headless gate keeps the declared tools in `allow` (filtered to
-  // server-executable against the bridged map) — so both are visible from step
-  // 1 of the run, not hidden behind find_tools.
-  const gate = headlessGate(eph, bridged, await gateFromAgent(eph));
+  const gate = headlessGate(eph, tools, await gateFromAgent(eph));
   assert.ok(gate.allow.has("file_read"));
   assert.ok(gate.allow.has("file_write"));
-  const visible = visibleTools(bridged, gate, new Set()).map((d) => d.name).sort();
-  assert.deepEqual(visible, ["file_read", "file_write"]);
+
+  // Containment, not equality: `visibleTools` only gates names present in
+  // `gate.registryIds`, so driving the real registry (rather than a two-entry
+  // fixture) legitimately surfaces ungated tools alongside these. What matters
+  // is that the declared pair is visible without a find_tools round-trip…
+  const visible = new Set(visibleTools(tools, gate, new Set()).map((d) => d.name));
+  assert.ok(visible.has("file_read"));
+  assert.ok(visible.has("file_write"));
+
+  // …and that the gate still drops a genuinely frontend-only tool. Without this
+  // the assertions above would also pass if the filter had been removed
+  // outright rather than made unnecessary for the VFS tools.
+  assert.equal(tools.bos_app_launch.execution, "frontend");
+  assert.ok(!gate.allow.has("bos_app_launch"));
 });
 
 test("ADR-13 (d): /api/subagents/delegate streams tool_result + done{text} for an ephemeral agent", async () => {

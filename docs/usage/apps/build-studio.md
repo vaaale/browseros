@@ -59,8 +59,8 @@ before moving on.
 
 ## Good to know
 
-- Build Studio only ever edits files under `specs/` and `.specify/` — it never writes app
+- Build Studio only ever edits files under `specs/` — it never writes app
   code itself; implementation always goes to the Developer.
-- Project-wide principles live in the **constitution** (`.specify/memory/constitution.md`).
+- Project-wide principles live in the **constitution**, at the path the active spec method declares (for spec-kit, `.specify/memory/constitution.md` inside the system store).
 - New feature folders are numbered automatically (`001-…`, `002-…`) — numbering restarts
   for each Project.

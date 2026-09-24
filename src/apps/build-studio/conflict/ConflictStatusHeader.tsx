@@ -1,8 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { Copy, Undo2 } from "lucide-react";
-import type { ConflictSession } from "@/lib/gitops/sessions/types";
+import { Copy, RotateCw, Undo2 } from "lucide-react";
+import { isTerminalStatus, type ConflictSession } from "@/lib/gitops/sessions/types";
 import { STATUS_META, baseName } from "./status";
 
 // The pane's status header (mockup `.status`): the status pill, the session
@@ -14,11 +14,12 @@ interface Props {
   session: ConflictSession;
   selected: string | undefined;
   onSelect: (path: string) => void;
+  onRetry: () => void;
   onAbandon: () => void;
   busy: boolean;
 }
 
-export function ConflictStatusHeader({ session, selected, onSelect, onAbandon, busy }: Props) {
+export function ConflictStatusHeader({ session, selected, onSelect, onRetry, onAbandon, busy }: Props) {
   const [copied, setCopied] = useState(false);
   const meta = STATUS_META[session.status];
   const awaitingPath = session.pendingDecision?.path;
@@ -64,10 +65,25 @@ export function ConflictStatusHeader({ session, selected, onSelect, onAbandon, b
             </button>
           </span>
           <span className="whitespace-nowrap">
+            <Key>agent</Key>
+            <code className="text-white/75">{session.agentId}</code>
+          </span>
+          <span className="whitespace-nowrap">
             <Key>op</Key>
             <code className="text-white/75">{session.operationLabel}</code>
           </span>
         </div>
+
+        <button
+          data-testid="conflict-retry"
+          onClick={onRetry}
+          disabled={busy || isTerminalStatus(session.status)}
+          title={`Re-point this session at the agent configured in Settings → Build Studio → Conflict agent (currently running as "${session.agentId}") and start it again on the same conversation. Use this when the escalation went to the wrong agent, or when its run died without finishing.`}
+          className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-white/15 bg-white/[0.06] px-2.5 py-1.5 text-[11px] text-white/70 hover:bg-white/[0.12] disabled:opacity-40"
+        >
+          <RotateCw size={12} />
+          Retry with configured agent
+        </button>
 
         <button
           data-testid="conflict-abandon"

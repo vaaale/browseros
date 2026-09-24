@@ -29,9 +29,37 @@ export interface TurnToolCall {
   arguments: string;
 }
 
+/** Provider-reported token usage for ONE model turn (031-self-healing ADR-5).
+ *  Optional everywhere: some providers (and most local inference servers) never
+ *  report it, so every consumer must tolerate `undefined` rather than assume 0. */
+export interface TokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+}
+
+/** Sum two usages, treating `undefined` as "nothing reported" (not zero) — so
+ *  a run where no turn reported usage stays `undefined` instead of becoming a
+ *  misleading 0. */
+export function addUsage(a: TokenUsage | undefined, b: TokenUsage | undefined): TokenUsage | undefined {
+  if (!a) return b;
+  if (!b) return a;
+  const cacheRead = (a.cacheReadTokens ?? 0) + (b.cacheReadTokens ?? 0);
+  const cacheWrite = (a.cacheWriteTokens ?? 0) + (b.cacheWriteTokens ?? 0);
+  return {
+    inputTokens: a.inputTokens + b.inputTokens,
+    outputTokens: a.outputTokens + b.outputTokens,
+    ...(cacheRead ? { cacheReadTokens: cacheRead } : {}),
+    ...(cacheWrite ? { cacheWriteTokens: cacheWrite } : {}),
+  };
+}
+
 export interface TurnResult {
   text: string;
   toolCalls: TurnToolCall[];
+  /** Provider-reported usage for this turn, when the provider reports it. */
+  usage?: TokenUsage;
 }
 
 export type StreamTurn = (opts: {
@@ -246,14 +274,21 @@ async function runServerTool(
 export interface AgentLoopResult {
   reason: "completed" | "cancelled" | "error" | "max_steps";
   error?: string;
+  /** Token usage summed across every model turn in this run (031-self-healing
+   *  ADR-5). `undefined` when no turn reported any — never a fabricated 0. */
+  usage?: TokenUsage;
 }
 
 export async function runAgentLoop(deps: AgentLoopDeps, input: AgentLoopInput): Promise<AgentLoopResult> {
   const { signal, emit, io, hooks } = deps;
   const hookCtx: HookContext = { runId: deps.runId, conversationId: deps.conversationId, agentId: deps.agentId };
+  // Accumulated across every completed model turn, so the run's total is
+  // available on EVERY exit path (completed, cancelled, error, max_steps) —
+  // a cancelled run still cost what it cost (031-self-healing ADR-5).
+  let runUsage: TokenUsage | undefined;
   const finish = async (r: AgentLoopResult): Promise<AgentLoopResult> => {
     await hooks?.onRunFinished?.({ reason: r.reason, error: r.error }, hookCtx);
-    return r;
+    return runUsage ? { ...r, usage: runUsage } : r;
   };
 
   try {
@@ -331,6 +366,7 @@ export async function runAgentLoop(deps: AgentLoopDeps, input: AgentLoopInput): 
         return finish({ reason: "error", error: errorText });
       }
       if (signal.aborted) return finish({ reason: "cancelled" });
+      runUsage = addUsage(runUsage, turn.usage);
 
       // Leaked tool-call markup in TEXT (local inference servers): retry the
       // turn without persisting the broken one.
@@ -421,11 +457,22 @@ export async function runAgentLoop(deps: AgentLoopDeps, input: AgentLoopInput): 
       };
 
       for (const batch of batchToolCalls(turn.toolCalls, deps.tools, deps.maxParallelTools ?? DEFAULT_MAX_PARALLEL_TOOLS)) {
+        // Outcomes in ORIGINAL batch order (Promise.all preserves index), consumed
+        // by the persistence loop below. `settled` tracks which calls have already
+        // emitted their terminal event so each gets EXACTLY ONE (tool_result or
+        // tool_cancelled) — the de-dup rule (ADR-1 / S2): settle-time is the single
+        // terminal-emission authority; the trailing loop only persists and must not
+        // re-emit, or a cancelled call would surface two terminal events.
         const outcomes: CallOutcome[] = [];
+        const settled = new Set<string>();
 
         if (cancelledMidTools || signal.aborted) {
+          // A stop landed before this batch started: never start the calls. Each
+          // gets its terminal cancel now (promptly, not held for the batch — FR-004)
+          // and is persisted in the original-order loop below.
           cancelledMidTools = true;
           for (const call of batch) {
+            settled.add(call.id);
             emit({ type: "tool_cancelled", callId: call.id });
             outcomes.push({ result: CANCELLED_RESULT });
           }
@@ -442,25 +489,42 @@ export async function runAgentLoop(deps: AgentLoopDeps, input: AgentLoopInput): 
               execution: deps.tools[call.name]?.execution ?? "frontend",
             });
           }
-          // executeCall never throws, so allSettled isn't needed — but a
-          // rejection here would strand tool_use ids with no tool_result and
-          // wedge the next model turn, so map defensively anyway.
+          // 045 US1 (ADR-1): emit each call's terminal event AS IT SETTLES — in
+          // completion order, which is what flips the client cards individually —
+          // decoupled from the persistence below (original call order, the
+          // deterministic transcript). executeCall never throws, so allSettled
+          // isn't needed — but a rejection here would strand a tool_use id with no
+          // tool_result and wedge the next model turn, so map defensively PER CALL
+          // (N1): an erroring call settles only ITSELF and never holds its
+          // siblings' emissions (FR-008).
           outcomes.push(
             ...(await Promise.all(
               batch.map((call) =>
-                executeCall(call).catch((e) => ({ result: toolError(call.name, (e as Error).message) })),
+                executeCall(call)
+                  .catch((e) => ({ result: toolError(call.name, (e as Error).message) }))
+                  .then((outcome) => {
+                    if (settled.has(call.id)) return outcome;
+                    settled.add(call.id);
+                    emit(
+                      outcome.result === CANCELLED_RESULT
+                        ? { type: "tool_cancelled", callId: call.id }
+                        : { type: "tool_result", callId: call.id, result: outcome.result },
+                    );
+                    return outcome;
+                  }),
               ),
             )),
           );
           if (signal.aborted) cancelledMidTools = true;
-          batch.forEach((call, i) => {
-            if (outcomes[i].result === CANCELLED_RESULT) emit({ type: "tool_cancelled", callId: call.id });
-          });
         }
 
-        // Append in the ORIGINAL call order, never completion order, so the
-        // transcript is deterministic and a replay of the same run reads the
-        // same way regardless of which tool happened to finish first.
+        // Persist in the ORIGINAL call order, never completion order, so the
+        // transcript is deterministic and a replay of the same run reads the same
+        // way regardless of which tool happened to finish first (FR-002/FR-009).
+        // The terminal tool_result/tool_cancelled events were ALREADY emitted at
+        // settle above; this loop only persists the tool message, fires the
+        // afterToolCall hook, and emits the `message` event (which is what reload
+        // orders by). It MUST NOT re-emit a terminal event.
         for (let i = 0; i < batch.length; i++) {
           const call = batch[i];
           const { result, attachments } = outcomes[i];
@@ -474,7 +538,6 @@ export async function runAgentLoop(deps: AgentLoopDeps, input: AgentLoopInput): 
           };
           messages = [...messages, toolMessage];
           contextMessages = [...contextMessages, toolMessage];
-          emit({ type: "tool_result", callId: call.id, result });
           emit({ type: "message", message: toolMessage });
         }
         // One save per batch (a batch of 1 — every sequential tool — is exactly

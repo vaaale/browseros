@@ -2,7 +2,7 @@
 // (027-vfs-specfs). A backend receives paths RELATIVE to its mount root; the
 // mount table (src/os/mount-table.ts) has already stripped the mount prefix.
 // LocalFS is the default backend; SpecFS mounts at /Specs/<store-id>, DocsFS at
-// /Docs, and ReadonlyFS at /Templates.
+// /Docs, and ReadonlyFS at /Methods/<id>/templates.
 //
 // The surface mirrors the public vfs.ts functions so a backend is a drop-in for
 // any sub-path. Keep this a type-only module (no `server-only`) so it is safe to

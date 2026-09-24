@@ -16,7 +16,7 @@ import "../services/_stub-server-only";
 import { test, expect } from "@playwright/test";
 import { join } from "path";
 import { mkdirSync, rmSync, writeFileSync } from "fs";
-import { isBosSourceTask, isStandaloneContentTask } from "../../src/lib/agent/subagents/claude-runner";
+import { isBosSourceTask, isStandaloneContentTask, bosSourceTrigger } from "../../src/lib/agent/subagents/claude-runner";
 
 // A stand-in source checkout carrying one page BOS "ships".
 function fakeSourceRoot(label: string): { root: string; cleanup: () => void } {
@@ -85,4 +85,27 @@ test("the other BOS-source signals are untouched", () => {
   } finally {
     cleanup();
   }
+});
+
+// The refusal has to say WHICH condition failed. Both used to produce the same
+// paragraph, so a live session whose task merely lacked a trigger phrase read
+// the BOS-source half of it and spent two more turns deleting wording that was
+// never the problem — at the `implement` step, with the app already specced.
+test("the refusal names the phrase that tripped it, or says the trigger is missing", () => {
+  const root = process.cwd();
+
+  // A task that reads as BOS source: the trigger is quoted back.
+  expect(bosSourceTrigger("Write a bos app project; also fix the api route", root)).toBe('"api route"');
+  expect(bosSourceTrigger("staging directory work under src/lib/specs/", root)).toContain("src/lib/");
+  expect(bosSourceTrigger(`${STAGED_ITEM_TASK} Then update docs/dev/architecture-overview.md.`, root)).toContain(
+    "docs/dev/",
+  );
+
+  // A clean item task trips nothing — so a refusal for THAT task can only be
+  // the missing-trigger half, and the message can say so without hedging.
+  expect(bosSourceTrigger(STAGED_ITEM_TASK, root)).toBeNull();
+  expect(
+    bosSourceTrigger("Implement the marketplace item by reading its spec files from /data-clones/bos/testfixture-x/user-apps/items/y/spec/", root),
+    "the real session's second attempt: no BOS-source phrase in it at all",
+  ).toBeNull();
 });

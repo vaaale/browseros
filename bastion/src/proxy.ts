@@ -1,11 +1,27 @@
 import { createProxyMiddleware } from "http-proxy-middleware";
+import type { RequestHandler as ProxyRequestHandler } from "http-proxy-middleware";
 import type { Request, Response, NextFunction, RequestHandler } from "express";
-import type { Server } from "http";
+import type { IncomingMessage, Server } from "http";
+import type { Socket } from "net";
 import type { Config } from "./config";
-import { verifySession, clearSession, shouldRefreshSession, sessionSetCookie } from "./sessions";
+import {
+  verifySession,
+  verifySessionToken,
+  sessionTokenFromCookieHeader,
+  clearSession,
+  shouldRefreshSession,
+  sessionSetCookie,
+} from "./sessions";
 import { getOrProvision, touchInstance, getInstanceState } from "./lifecycle";
 import { containerName } from "./docker";
 import { resolveCredential } from "./credential-routing";
+
+/** The subset of a request both transports share: an Express `Request` and a
+ *  bare `IncomingMessage` (what `server.on("upgrade")` hands us) alike. Header
+ *  helpers below take this so ONE implementation covers both paths — a
+ *  divergent second copy for upgrades is exactly how the WebSocket path came
+ *  to skip authentication in the first place. */
+type HeaderCarrier = Pick<IncomingMessage, "headers">;
 
 // Per-request stash for a rolling-session refresh cookie. Set in the middleware
 // when the token crosses its refresh threshold; consumed either by the proxyRes
@@ -43,7 +59,7 @@ interface RefreshReq {
 const AUTH_SCOPE_HEADER = "x-bos-auth-scope";
 const AUTH_ROLE_HEADER = "x-bos-auth-role";
 
-function stripClaimHeaders(req: Request): void {
+function stripClaimHeaders(req: HeaderCarrier): void {
   delete req.headers[AUTH_SCOPE_HEADER];
   delete req.headers[AUTH_ROLE_HEADER];
 }
@@ -52,7 +68,7 @@ function stripClaimHeaders(req: Request): void {
 // Extracts the password half of a parseable `Authorization: Basic <b64>`
 // header — the presented secret. The username half is never used for
 // anything; only the secret determines routing (see credential-routing.ts).
-function parseBasicAuthSecret(req: Request): string | null {
+function parseBasicAuthSecret(req: HeaderCarrier): string | null {
   const header = req.headers.authorization;
   if (!header || !header.startsWith("Basic ")) return null;
   let decoded: string;
@@ -64,6 +80,24 @@ function parseBasicAuthSecret(req: Request): string | null {
   const sep = decoded.indexOf(":");
   if (sep === -1) return null;
   return decoded.slice(sep + 1);
+}
+
+// ── Webhook secret-header routing ─────────────────────────────────────────────
+// Webhook providers deliver with NO cookie and NO Authorization header — their
+// shared secret rides in a provider-specific header instead (Telegram echoes
+// setWebhook's `secret_token` back as `X-Telegram-Bot-Api-Secret-Token` on
+// every delivery). Resolution reuses the same protocol-agnostic
+// credentials-index scan Basic-auth routing uses (034-secrets-authentication);
+// only the extraction point is provider-shaped. Adding a provider is one
+// header name here + the container-side handler indexing its secret.
+const WEBHOOK_SECRET_HEADERS = ["x-telegram-bot-api-secret-token"] as const;
+
+function parseWebhookSecret(req: HeaderCarrier): string | null {
+  for (const name of WEBHOOK_SECRET_HEADERS) {
+    const value = req.headers[name];
+    if (typeof value === "string" && value.length > 0) return value;
+  }
+  return null;
 }
 
 // ── Status page ───────────────────────────────────────────────────────────────
@@ -220,16 +254,39 @@ text-decoration:none;border:1px solid transparent}
 </div></body></html>`;
 
 // ── Proxy factory ─────────────────────────────────────────────────────────────
-export function createBosProxy(cfg: Config): RequestHandler & { upgrade?: (server: Server) => void } {
-  const proxyMap = new Map<string, RequestHandler>();
+/** The catch-all BOS proxy. `upgrade(server)` MUST be called with the HTTP
+ *  server this middleware is mounted on — WebSocket upgrades are authenticated
+ *  and routed there, and are not served at all until it is (see attachUpgrade). */
+export interface BosProxy extends RequestHandler {
+  upgrade: (server: Server) => void;
+}
 
-  function getProxy(username: string): RequestHandler {
+export function createBosProxy(cfg: Config): BosProxy {
+  // Typed as http-proxy-middleware's OWN handler (not Express's) so `.upgrade`
+  // — the per-instance WebSocket dispatcher — stays reachable; Express's
+  // RequestHandler erases it.
+  const proxyMap = new Map<string, ProxyRequestHandler>();
+
+  function getProxy(username: string): ProxyRequestHandler {
     if (!proxyMap.has(username)) {
       const target = `http://${containerName(username)}:8090`;
       proxyMap.set(username, createProxyMiddleware({
         target,
         changeOrigin: true,
-        ws: true,
+        // MUST stay false. `ws: true` makes http-proxy-middleware lazily
+        // self-subscribe to the shared server's "upgrade" event on its first
+        // HTTP request (dist/http-proxy-middleware.js's catchUpgradeRequest).
+        // One proxy instance exists PER USER, each pinned to that user's own
+        // container, and Node invokes EVERY "upgrade" listener for EVERY
+        // upgrade — so N active users meant each WebSocket was proxied into
+        // all N containers at once: N "101 Switching Protocols" responses
+        // written onto one client socket (which breaks the connection
+        // outright — this is what stopped the Terminal app working), and,
+        // because that self-subscribed listener runs OUTSIDE Express, with no
+        // session check whatsoever. Upgrades are dispatched explicitly by
+        // attachUpgrade() below instead, after authentication, to exactly one
+        // container.
+        ws: false,
         on: {
           proxyReq: (proxyReq) => {
             // Inject the authenticated username so BOS can surface it in the
@@ -340,6 +397,135 @@ export function createBosProxy(cfg: Config): RequestHandler & { upgrade?: (serve
       });
   }
 
+  // A webhook delivery routed by its provider's secret header. Unlike
+  // routeHeadlessCredential, the Authorization header is NOT rewritten: the
+  // provider's own header travels through untouched and the container-side
+  // webhook handler (e.g. TelegramBotWebhookHandler.verify) remains the
+  // authoritative check — Bastion only routes (the same
+  // routes-vs-authenticates split as FR-007). On no match: a plain 401 with
+  // no WWW-Authenticate challenge — a webhook provider cannot answer a Basic
+  // challenge, so issuing one would be noise.
+  function routeWebhookSecret(secret: string, req: Request, res: Response, next: NextFunction): void {
+    resolveCredential(secret, cfg.volumeBase)
+      .then((resolved) => {
+        if (!resolved) {
+          res.status(401).end();
+          return;
+        }
+        req.headers[AUTH_SCOPE_HEADER] = `secret:${resolved.service}`;
+        routeToUser(resolved.username, req, res, next);
+      })
+      .catch((err: Error) => {
+        console.error("[bastion] webhook credential routing failed:", err.stack ?? err.message);
+        res.status(401).end();
+      });
+  }
+
+  // ── WebSocket upgrades ──────────────────────────────────────────────────
+  // `server.on("upgrade")` fires outside Express, so NONE of the middleware
+  // above it runs: not the auth router, not this middleware, not
+  // cookie-parser. Everything an upgrade needs — authentication, instance
+  // lookup, claim propagation, per-user target selection — therefore has to
+  // happen here, explicitly. There is no `next()` and no response object: the
+  // only way to refuse is to put a status line onto the raw socket and close
+  // it.
+
+  /** Refuse an upgrade with a minimal HTTP response, per RFC 6455 §4.2.2 (a
+   *  server that declines an upgrade replies with a normal status code).
+   *  `end()` rather than `write()` + `destroy()`: the latter can discard the
+   *  response before it is flushed, turning a diagnosable 401/503 into what
+   *  looks to the client like an unexplained dropped connection. */
+  function denyUpgrade(socket: Socket, status: number, reason: string, extraHeaders: string[] = []): void {
+    if (!socket.writable) {
+      socket.destroy();
+      return;
+    }
+    try {
+      socket.end([`HTTP/1.1 ${status} ${reason}`, ...extraHeaders, "Connection: close", "", ""].join("\r\n"));
+    } catch {
+      // Client vanished mid-write — nothing left to say to it.
+      socket.destroy();
+    }
+  }
+
+  function denyUnauthenticated(socket: Socket): void {
+    denyUpgrade(socket, 401, "Unauthorized", ['WWW-Authenticate: Basic realm="BrowserOS"']);
+  }
+
+  /** Hand the upgrade to exactly ONE user's proxy instance. */
+  function dispatchUpgrade(username: string, req: IncomingMessage, socket: Socket, head: Buffer): void {
+    const state = getInstanceState(username);
+    // Same "running or unhealthy proxies, anything else doesn't" rule
+    // routeToUser applies. A WebSocket has no equivalent of the status page —
+    // it can't wait out a cold start — so a not-yet-running instance is
+    // refused here rather than triggering provisioning; the page that opened
+    // this socket is itself served through the HTTP path, which does start the
+    // instance and can retry the connection once it's up.
+    if (state?.status !== "running" && state?.status !== "unhealthy") {
+      denyUpgrade(socket, 503, "Service Unavailable");
+      return;
+    }
+    touchInstance(username);
+    // The HTTP path injects this via the `proxyReq` hook, which http-proxy
+    // does NOT emit for upgrades (it emits `proxyReqWs`). Setting it on the
+    // request's own headers covers both, since those are what get forwarded.
+    req.headers["x-bos-username"] = username;
+    getProxy(username).upgrade(req, socket, head);
+  }
+
+  async function handleUpgrade(req: IncomingMessage, socket: Socket, head: Buffer): Promise<void> {
+    // Forged claim headers are discarded before we assert our own, exactly as
+    // on the HTTP path — an upgrade request is no more trustworthy.
+    stripClaimHeaders(req);
+
+    const session = verifySessionToken(sessionTokenFromCookieHeader(req.headers.cookie), cfg);
+    if (session) {
+      req.headers[AUTH_SCOPE_HEADER] = "session";
+      if (session.isAdmin) req.headers[AUTH_ROLE_HEADER] = "admin";
+      dispatchUpgrade(session.username, req, socket, head);
+      return;
+    }
+
+    // Headless per-service secret (034-secrets-authentication), same
+    // resolve-by-secret rule as routeHeadlessCredential: the Basic-auth
+    // username is ignored, only the secret decides routing. No /login
+    // redirect fallback exists here — a 302 is meaningless to a WebSocket
+    // client, so an unauthenticated upgrade is simply refused.
+    const secret = parseBasicAuthSecret(req);
+    if (!secret) {
+      denyUnauthenticated(socket);
+      return;
+    }
+
+    let resolved: Awaited<ReturnType<typeof resolveCredential>>;
+    try {
+      resolved = await resolveCredential(secret, cfg.volumeBase);
+    } catch (err) {
+      console.error("[bastion] upgrade credential routing failed:", (err as Error).stack ?? (err as Error).message);
+      denyUnauthenticated(socket);
+      return;
+    }
+    if (!resolved) {
+      denyUnauthenticated(socket);
+      return;
+    }
+    req.headers.authorization = `Bearer ${secret}`;
+    req.headers[AUTH_SCOPE_HEADER] = `secret:${resolved.service}`;
+    dispatchUpgrade(resolved.username, req, socket, head);
+  }
+
+  function attachUpgrade(server: Server): void {
+    server.on("upgrade", (req: IncomingMessage, socket: Socket, head: Buffer) => {
+      // Every upgrade reaching Bastion is destined for a user's container —
+      // Bastion serves no WebSocket of its own (its admin log stream is SSE,
+      // i.e. plain HTTP), so this handler is deliberately a catch-all.
+      void handleUpgrade(req, socket, head).catch((err: Error) => {
+        console.error("[bastion] upgrade failed:", err.stack ?? err.message);
+        socket.destroy();
+      });
+    });
+  }
+
   const middleware: RequestHandler = (req, res, next) => {
     stripClaimHeaders(req);
     const session = verifySession(req, cfg);
@@ -347,6 +533,14 @@ export function createBosProxy(cfg: Config): RequestHandler & { upgrade?: (serve
       const basicSecret = parseBasicAuthSecret(req);
       if (basicSecret) {
         routeHeadlessCredential(basicSecret, req, res, next);
+        return;
+      }
+
+      // A webhook provider's delivery — no cookie, no Authorization, but a
+      // recognised secret header (see WEBHOOK_SECRET_HEADERS).
+      const webhookSecret = parseWebhookSecret(req);
+      if (webhookSecret) {
+        routeWebhookSecret(webhookSecret, req, res, next);
         return;
       }
 
@@ -397,5 +591,7 @@ export function createBosProxy(cfg: Config): RequestHandler & { upgrade?: (serve
     routeToUser(session.username, req, res, next, refreshCookie);
   };
 
-  return middleware;
+  const proxy = middleware as BosProxy;
+  proxy.upgrade = attachUpgrade;
+  return proxy;
 }

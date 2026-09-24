@@ -11,6 +11,7 @@ import { IntegrationsTab } from "@/components/apps/settings/IntegrationsTab";
 import { DevHarnessTab } from "@/components/apps/settings/DevHarnessTab";
 import { DataFsTab } from "@/components/apps/settings/DataFsTab";
 import { VersionsTab } from "@/components/apps/settings/VersionsTab";
+import { RepositoriesTab } from "@/components/apps/settings/RepositoriesTab";
 import { McpServersTab } from "@/components/apps/settings/McpServersTab";
 import { LogsTab } from "@/components/apps/settings/LogsTab";
 import { BuildStudioTab } from "@/components/apps/settings/BuildStudioTab";
@@ -18,6 +19,7 @@ import { RunCommandTab } from "@/components/apps/settings/RunCommandTab";
 import { VoiceTab } from "@/components/apps/settings/VoiceTab";
 import { PluginsTab } from "@/components/apps/settings/PluginsTab";
 import { CompactionTab } from "@/components/apps/settings/CompactionTab";
+import { SelfImprovementTab } from "@/components/apps/settings/SelfImprovementTab";
 import { ConfigForm } from "@/components/apps/settings/ConfigForm";
 import { ProviderSettings } from "@/components/apps/ProviderSettings";
 
@@ -34,12 +36,14 @@ const CUSTOM_TABS: Record<string, React.ComponentType> = {
   "build-studio": BuildStudioTab,
   "dev-harness": DevHarnessTab,
   datafs: DataFsTab,
-  "self-modification": VersionsTab,
+  "self-modification": RepositoriesTab,
+  "supervisor-versions": VersionsTab,
   logging: LogsTab,
   "run-command": RunCommandTab,
   voice: VoiceTab,
   plugins: PluginsTab,
   compaction: CompactionTab,
+  "self-improvement": SelfImprovementTab,
 };
 
 export default function SettingsApp() {

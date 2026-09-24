@@ -53,7 +53,7 @@ export const BUILTIN_TOOL_GROUPS: readonly ToolGroup[] = [
     id: "files",
     name: "Files",
     description:
-      "Virtual file system operations including listing, reading, writing, editing, patching, searching, and globbing files, and creating/deleting directories — including mounted paths like /Specs, /Docs, and /Templates. Also converts documents to markdown and views images and video frames.",
+      "Virtual file system operations including listing, reading, writing, editing, patching, searching, and globbing files, and creating/deleting directories — including mounted paths like /Specs, /Docs, and /Methods/<method-id>/templates. Also converts documents to markdown and views images and video frames.",
     aliases: ["folder", "directory", "document", "pdf", "docx", "spreadsheet", "image", "video", "vfs"],
     origin: "builtin",
   },
@@ -125,7 +125,15 @@ export const BUILTIN_TOOL_GROUPS: readonly ToolGroup[] = [
     name: "Specs",
     description:
       "Marketplace-item specifications: creating, listing, reading, and editing the spec that lives inside an item's own folder — distinct from BOS-core/user specs, which use the file_* tools on /Specs/ instead.",
-    aliases: ["specification", "requirements", "spec-kit", "feature spec"],
+    aliases: ["specification", "requirements", "spec-kit", "openspec", "bmad", "spec method", "feature spec"],
+    origin: "builtin",
+  },
+  {
+    id: "methods",
+    name: "Methods",
+    description:
+      "Spec METHODS themselves — the pipelines a spec follows: which methods are installed, what phases each declares and in what sequence, which driver skill runs one, forking a pack's method to make it yours, and editing a fork's structure or a phase's prompt. About the PROCESS, not any one feature's spec.",
+    aliases: ["method pack", "workflow", "pipeline", "phases", "spec-kit", "bmad", "openspec", "fork", "driver skill", "gates"],
     origin: "builtin",
   },
   {
@@ -142,6 +150,14 @@ export const BUILTIN_TOOL_GROUPS: readonly ToolGroup[] = [
     description:
       "Resolving a git merge conflict in an active conflict-resolution session: reading the ours/base/theirs content of conflicting files, writing resolved content back, escalating genuinely ambiguous hunks to the user, and completing or abandoning the underlying git operation.",
     aliases: ["merge conflict", "rebase", "ours", "theirs", "reconcile"],
+    origin: "builtin",
+  },
+  {
+    id: "self-heal",
+    name: "Self Heal",
+    description:
+      "BrowserOS's self-healing mechanism: reporting a problem for autonomous diagnosis, submitting a diagnostics report, asking the user a question the autonomous fix pipeline cannot decide, and declaring a fix ready for review.",
+    aliases: ["self-healing", "diagnose", "diagnostician", "healing case", "auto-fix", "report a problem", "gap"],
     origin: "builtin",
   },
   {

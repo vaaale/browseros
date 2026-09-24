@@ -88,19 +88,19 @@ test("GET / returns the control page HTML", async () => {
 });
 
 test("GET /branches lists real git branches including base", async () => {
-  git(env.repo, ["branch", "bos/ctl-branch-a"]);
+  git(env.repo, ["branch", "bos/testfixture-ctl-branch-a"]);
   const { status, json } = await getJson("/branches");
   assert.equal(status, 200);
   assert.equal(json.ok, true);
   assert.ok(json.branches.includes(env.baseBranch));
-  assert.ok(json.branches.includes("bos/ctl-branch-a"));
-  git(env.repo, ["branch", "-D", "bos/ctl-branch-a"]);
+  assert.ok(json.branches.includes("bos/testfixture-ctl-branch-a"));
+  git(env.repo, ["branch", "-D", "bos/testfixture-ctl-branch-a"]);
 });
 
 test("GET /preview-changes and /next-changes: no branch/preview -> candidate:null", async () => {
   const a = await getJson("/preview-changes");
   assert.deepEqual(a.json, { ok: true, candidate: null });
-  const b = await getJson("/next-changes?branch=bos/never-existed");
+  const b = await getJson("/next-changes?branch=bos/testfixture-never-existed");
   assert.deepEqual(b.json, { ok: true, candidate: null });
 });
 
@@ -165,7 +165,7 @@ test("POST /pin: base clears the pin cookie; a branch that isn't ready is reject
   const noBranch = await post("/pin", { version: "preview" });
   assert.equal(noBranch.status, 400);
 
-  const notReady = await post("/pin", { version: "preview", branch: "bos/never-provisioned" });
+  const notReady = await post("/pin", { version: "preview", branch: "bos/testfixture-never-provisioned" });
   assert.equal(notReady.status, 400);
   assert.match(notReady.json.error, /not ready/);
 });
@@ -180,7 +180,7 @@ test("POST /begin: missing branch -> 400; success provisions and returns worktre
   const missing = await post("/begin", {});
   assert.equal(missing.status, 400);
 
-  const branch = "bos/ctl-begin";
+  const branch = "bos/testfixture-ctl-begin";
   const { status, json } = await post("/begin", { branch });
   try {
     assert.equal(status, 200);
@@ -196,7 +196,7 @@ test("POST /begin: missing branch -> 400; success provisions and returns worktre
 test("POST /build + GET /state serving + POST /pin: a built branch can be pinned and is reflected in /state's serving field", async () => {
   const { restore } = installFakeNpx();
   try {
-    const branch = "bos/ctl-build-pin";
+    const branch = "bos/testfixture-ctl-build-pin";
     const built = await post("/build", { branch });
     assert.equal(built.status, 200);
     assert.equal(built.json.ok, true);
@@ -224,7 +224,7 @@ test("POST /build: missing branch -> 400", async () => {
 test("POST /pin: a STOPPED preview resumes and pins in one call", async () => {
   const { restore } = installFakeNpx();
   try {
-    const branch = "bos/ctl-pin-resume";
+    const branch = "bos/testfixture-ctl-pin-resume";
     await post("/build", { branch });
     await post("/stop", { branch });
     // stopPreview runs in the background (control.mjs sends the response
@@ -267,7 +267,7 @@ test("POST /promote: missing branch -> 400; success returns a jobId immediately,
   // postJson/getJson always target that frozen config constant, regardless
   // of what state.base.port is set to below.
   await new Promise((resolve) => fakeBaseApi.listen(reservedBasePort, "127.0.0.1", resolve));
-  const branch = "bos/ctl-promote";
+  const branch = "bos/testfixture-ctl-promote";
   git(env.repo, ["branch", branch]);
   const { addWorktreeForBranch, provisionClone } = await import("../../tools/supervisor/lib/worktree.mjs");
   const { ensureAppsRepo, mountCoupled } = await import("../../tools/supervisor/lib/coupled-repos.mjs");
@@ -307,7 +307,7 @@ test("POST /stop: missing branch -> 400; clears the pin cookie immediately even 
   const missing = await post("/stop", {});
   assert.equal(missing.status, 400);
 
-  const { status, headers } = await post("/stop", { branch: "bos/never-provisioned" });
+  const { status, headers } = await post("/stop", { branch: "bos/testfixture-never-provisioned" });
   assert.equal(status, 200);
   assert.match(headers.get("set-cookie"), /bos_pin=;/);
 });
@@ -316,7 +316,7 @@ test("POST /discard: missing branch -> 400; a clean discard returns ok:true and 
   const missing = await post("/discard", {});
   assert.equal(missing.status, 400);
 
-  const branch = "bos/ctl-discard";
+  const branch = "bos/testfixture-ctl-discard";
   await post("/begin", { branch });
   const { status, headers, json } = await post("/discard", { branch });
   assert.equal(status, 200);
@@ -348,12 +348,12 @@ test("pinnedVersion: falls back to base when the pin cookie names a not-ready/ab
   state.base = { role: "base", port: 1 };
   assert.equal(pinnedVersion(fakeReq("")), state.base);
   assert.equal(pinnedVersion(fakeReq("bos_pin=base")), state.base);
-  assert.equal(pinnedVersion(fakeReq("bos_pin=bos%2Fabsent")), state.base);
-  previews.set("bos/pin-target", { state: "building" });
-  assert.equal(pinnedVersion(fakeReq("bos_pin=bos%2Fpin-target")), state.base, "not ready yet -> falls back to base");
-  previews.get("bos/pin-target").state = "ready";
-  assert.equal(pinnedVersion(fakeReq("bos_pin=bos%2Fpin-target")), previews.get("bos/pin-target"));
-  previews.delete("bos/pin-target");
+  assert.equal(pinnedVersion(fakeReq("bos_pin=bos%2Ftestfixture-absent")), state.base);
+  previews.set("bos/testfixture-pin-target", { state: "building" });
+  assert.equal(pinnedVersion(fakeReq("bos_pin=bos%2Ftestfixture-pin-target")), state.base, "not ready yet -> falls back to base");
+  previews.get("bos/testfixture-pin-target").state = "ready";
+  assert.equal(pinnedVersion(fakeReq("bos_pin=bos%2Ftestfixture-pin-target")), previews.get("bos/testfixture-pin-target"));
+  previews.delete("bos/testfixture-pin-target");
   state.base = null;
 });
 

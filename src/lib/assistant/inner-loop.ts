@@ -6,6 +6,7 @@ import type { RunEventInput } from "./run-events";
 import { runManager, type Run } from "./run-manager";
 import { streamModelTurn } from "./model-turn";
 import { e2eScriptedTurn } from "./e2e-provider";
+import { parseNested, type NestedEvent } from "@/lib/agent/nested-events";
 import { logger } from "@/lib/logging";
 
 // The shared delegation execution primitive (025-agent-delegation-v2). Every
@@ -27,7 +28,15 @@ export interface InnerLoopResult {
   output: string;
   error?: string;
   steps: number;
+  /** The inner loop's own tool STARTS ({ tool, input }) — the legacy shape the
+   *  claude/OpenCode path (starts-only, S1) still encodes via this field. */
   toolCalls: { tool: string; input: unknown }[];
+  /** 045 US2 (ADR-3 / B1): the FULL per-child terminal list, in original inner
+   *  call order. Each entry carries the child's settled `result?`/`status?` and
+   *  its own `nested?` child list (when the child is itself a delegation). The
+   *  local path encodes THIS (not just the starts) so a done delegation's
+   *  child-card tree rebuilds from the persisted string after a reload. */
+  results: NestedEvent[];
   /** The underlying runAgentLoop outcome — kept precise (not reverse-derived
    *  from `output`/`error`) so callers can log an exact "delegation finished:
    *  <reason>" record (FR-027) without guesswork. */
@@ -91,6 +100,10 @@ export async function runInnerLoop(
 
   let steps = 0;
   const toolCalls: { tool: string; input: unknown }[] = [];
+  // 045 US2 (B1): per inner callId, the settled result + status. Map insertion
+  // order is the inner call order — the original order the terminal payload must
+  // keep (FR-002/FR-009 applied one level down).
+  const innerCalls = new Map<string, { tool: string; input?: unknown; result?: string; status?: "running" | "done" | "cancelled" }>();
   // Tracks which in-flight callIds belong to a FRONTEND-execution tool, so
   // the matching tool_result/tool_cancelled can also be forwarded (below).
   const frontendCallIds = new Set<string>();
@@ -106,8 +119,11 @@ export async function runInnerLoop(
       } catch {
         input = e.args;
       }
-      const entry = { tool: e.name, input };
+      // 045 US2: carry the INNER callId so the card's live projection can match a
+      // nested result/cancel to its start exactly (not by tool name alone).
+      const entry = { tool: e.name, input, callId: e.callId };
       toolCalls.push(entry);
+      innerCalls.set(e.callId, { tool: e.name, input, status: "running" });
       ctx.onEvent(entry); // informational nested-progress entry (FR-013)
 
       // A FRONTEND-execution tool (e.g. a surface agent's own Tier-2 tools,
@@ -124,8 +140,28 @@ export async function runInnerLoop(
       }
       return;
     }
-    if ((e.type === "tool_result" || e.type === "tool_cancelled") && frontendCallIds.has(e.callId)) {
-      manager.emit(parentRun, e);
+    if (e.type === "tool_result" || e.type === "tool_cancelled") {
+      const inner = innerCalls.get(e.callId);
+      if (inner) {
+        if (e.type === "tool_result") {
+          inner.result = e.result;
+          inner.status = "done";
+          // 045 US2 (FR-005): forward the nested RESULT live through the
+          // per-call tool_progress channel (ctx.onEvent → the parent card's
+          // progress[]), so a running delegation streams nested completions —
+          // not only nested starts. No new run-event type: this rides the
+          // existing tool_progress conduit (ADR-3).
+          ctx.onEvent({ tool: inner.tool, type: "tool_result", callId: e.callId, result: e.result });
+        } else {
+          inner.status = "cancelled";
+          ctx.onEvent({ tool: inner.tool, type: "tool_cancelled", callId: e.callId });
+        }
+      }
+      // (unchanged) a frontend-exec inner call ALSO gets a REAL event on the
+      // parent run so the browser dispatches/handles it.
+      if (frontendCallIds.has(e.callId)) {
+        manager.emit(parentRun, e);
+      }
     }
   };
 
@@ -156,15 +192,30 @@ export async function runInnerLoop(
     { userMessage: { content: task } },
   );
 
+  // 045 US2 (B1): build the full per-child terminal list in original inner call
+  // order. A child that is itself a delegation carries its own encodeNested
+  // result; resolve it into this child's nested list (recursion by structure).
+  const results: NestedEvent[] = [...innerCalls.values()].map((c) => {
+    const ev: NestedEvent = { tool: c.tool };
+    if (c.input !== undefined) ev.input = c.input;
+    if (c.result !== undefined) ev.result = c.result;
+    if (c.status !== undefined) ev.status = c.status;
+    if (c.result) {
+      const parsed = parseNested(c.result);
+      if (parsed) ev.nested = parsed.events;
+    }
+    return ev;
+  });
+
   if (result.reason === "error") {
-    return { output: "", error: result.error ?? "unknown error", steps, toolCalls, reason: "error" };
+    return { output: "", error: result.error ?? "unknown error", steps, toolCalls, results, reason: "error" };
   }
   if (result.reason === "cancelled") {
-    return { output: "Delegation cancelled.", steps, toolCalls, reason: "cancelled" };
+    return { output: "Delegation cancelled.", steps, toolCalls, results, reason: "cancelled" };
   }
   // "completed" or "max_steps": runAgentLoop already appended the right final
   // assistant message (the model's own answer, or STEP_LIMIT_TEXT) — read it
   // back verbatim rather than reconstructing either string ourselves.
   const last = [...messages].reverse().find((m) => m.role === "assistant");
-  return { output: last?.content ?? "", steps, toolCalls, reason: result.reason };
+  return { output: last?.content ?? "", steps, toolCalls, results, reason: result.reason };
 }

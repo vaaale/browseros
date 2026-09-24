@@ -12,15 +12,21 @@ import { listCapabilities, unregisterCapabilities } from "../../src/lib/agent/ca
 import { unregisterToolGroups } from "../../src/lib/agent/tool-groups";
 import type { ToolInvocation, ToolInvocationResult } from "../../src/core/service/serviceToolTypes";
 
-// Every declaration() name used anywhere in this file, so a single afterEach
-// can always leave the shared (globalThis) dynamic-capabilities registry clean
-// regardless of which test ran — tests in this file share a Playwright worker
-// process with every other unit-test file, so an un-cleaned dynamic capability
-// id would otherwise leak into unrelated tests (same convention as gate.test.ts
-// / tool-gate.test.ts's per-test try/finally).
-const ALL_TEST_TOOL_NAMES = ["echo_tool", "tool_one", "tool_two", "tool_three"];
+// Leave the shared (globalThis) dynamic-capabilities registry clean, whichever
+// test ran: tests in this file share a Playwright worker process with every other
+// unit-test file, so an un-cleaned dynamic capability leaks into unrelated ones.
+//
+// DERIVED FROM THE REGISTRY, not a hand-kept list. It used to be
+// `["echo_tool", "tool_one", "tool_two", "tool_three"]` — and drifted the moment
+// a test registered `read_thing`/`write_thing` without updating it. The leak was
+// invisible here and surfaced as an intermittent failure in
+// tool-groups.test.ts ("capabilities pointing at a non-existent group"), because
+// the GROUP was unregistered while the capabilities naming it were not.
+//
+// Everything this file registers belongs to GROUPS below, so filtering on that
+// catches any name a future test invents.
 test.afterEach(() => {
-  unregisterCapabilities(ALL_TEST_TOOL_NAMES);
+  unregisterCapabilities(listCapabilities().filter((c) => c.group === "test-tools").map((c) => c.id));
   unregisterToolGroups(["test-tools"]);
 });
 

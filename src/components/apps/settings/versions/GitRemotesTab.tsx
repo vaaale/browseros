@@ -24,7 +24,7 @@ import { ConflictSessionBadge } from "@/components/gitops/ConflictSessionBadge";
 type Provider = "github" | "gitlab" | "generic";
 type AuthType = "token" | "oauth" | "ssh";
 
-interface GitRemote {
+export interface GitRemote {
   name: string;
   url: string;
   provider: Provider;
@@ -38,7 +38,7 @@ interface GitRemote {
   lastError?: string;
 }
 
-interface GitFsInstance {
+export interface GitFsInstance {
   id: string;
   label: string;
   vfsPath: string;
@@ -435,7 +435,7 @@ function EditRemoteModal({ open, remote, filesystem, onClose, onSave }: EditRemo
 }
 
 // ── Filesystem card ─────────────────────────────────────────────────────────────
-interface FilesystemCardProps {
+export interface FilesystemCardProps {
   fs: GitFsInstance;
   remotes: GitRemote[] | undefined;
   busyAction: string | null;
@@ -445,29 +445,43 @@ interface FilesystemCardProps {
   onAction: (action: string, remote: GitRemote) => void;
   onPull: (remote: GitRemote) => void;
   onPush: (remote: GitRemote) => void;
+  /** Rendered INSIDE a repository's own card (Settings → Repositories), where
+   *  the repository name, path and border are already on screen. Only the
+   *  chrome changes — the remote list and every action below it are the same
+   *  code, so the two pages cannot drift. */
+  embedded?: boolean;
 }
 
-function FilesystemCard({ fs, remotes, busyAction, msg, onAdd, onEdit, onAction, onPull, onPush }: FilesystemCardProps) {
+export function FilesystemCard({ fs, remotes, busyAction, msg, onAdd, onEdit, onAction, onPull, onPush, embedded }: FilesystemCardProps) {
   const btn = "rounded px-2 py-1 text-[11px] font-medium disabled:opacity-40";
   const loading = remotes === undefined;
   return (
-    <div className="rounded-lg border border-white/10 bg-white/[0.03]">
-      <div className="flex items-start justify-between border-b border-white/10 px-3.5 py-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <GitBranch size={14} className="text-white/40" />
-            <h4 className="text-[13px] font-semibold">{fs.label}</h4>
-          </div>
-          <p className="mt-0.5 truncate text-[11px] text-white/40" title={fs.root}>{fs.vfsPath}</p>
+    <div className={embedded ? "" : "rounded-lg border border-white/10 bg-white/[0.03]"}>
+      {embedded ? (
+        <div className="flex items-center justify-between gap-2 px-3 pt-3 text-[10px] uppercase tracking-wide text-white/40">
+          <span>Remotes</span>
+          <button onClick={onAdd} className="inline-flex items-center gap-1 rounded px-1.5 py-1 text-[11px] normal-case text-white/70 hover:bg-white/10">
+            <Plus size={10} /> Add remote
+          </button>
         </div>
-        <button
-          onClick={onAdd}
-          className="inline-flex shrink-0 items-center gap-1.5 rounded bg-violet-500/80 px-2.5 py-1.5 text-[11px] font-medium text-white hover:bg-violet-500"
-        >
-          <Plus size={12} />
-          Add Remote
-        </button>
-      </div>
+      ) : (
+        <div className="flex items-start justify-between border-b border-white/10 px-3.5 py-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <GitBranch size={14} className="text-white/40" />
+              <h4 className="text-[13px] font-semibold">{fs.label}</h4>
+            </div>
+            <p className="mt-0.5 truncate text-[11px] text-white/40" title={fs.root}>{fs.vfsPath}</p>
+          </div>
+          <button
+            onClick={onAdd}
+            className="inline-flex shrink-0 items-center gap-1.5 rounded bg-violet-500/80 px-2.5 py-1.5 text-[11px] font-medium text-white hover:bg-violet-500"
+          >
+            <Plus size={12} />
+            Add Remote
+          </button>
+        </div>
+      )}
 
       <div className="p-3">
         {loading ? (
@@ -566,8 +580,14 @@ function FilesystemCard({ fs, remotes, busyAction, msg, onAdd, onEdit, onAction,
   );
 }
 
-// ── Main tab ────────────────────────────────────────────────────────────────────
-export function GitRemotesTab() {
+// ── Shared state + handlers ─────────────────────────────────────────────────────
+// A HOOK rather than a component, because two pages need these flows and only
+// one of them can own a list. Pull and Push in particular are not "POST and show
+// the result": a pull can come back `unrelatedHistory` (needs the Adopt
+// confirmation) and a push can come back diverged-with-a-live-conflict-session
+// (needs the force-push dialog and the session badge). Re-deriving any of that
+// beside a second copy of the buttons is how the two would drift.
+export function useGitRemotes() {
   const [filesystems, setFilesystems] = useState<GitFsInstance[]>([]);
   const [remotesByFs, setRemotesByFs] = useState<Record<string, GitRemote[]>>({});
   const [loading, setLoading] = useState(true);
@@ -754,55 +774,8 @@ export function GitRemotesTab() {
     setUnrelatedState(null);
   }, [api, unrelatedState]);
 
-  if (loading) {
-    return (
-      <div className="flex items-center gap-2 text-xs text-white/40">
-        <Loader2 size={14} className="animate-spin" />
-        Loading GitFS instances…
-      </div>
-    );
-  }
-
-  return (
-    <div className="space-y-4">
-      <div>
-        <h4 className="text-xs font-semibold uppercase tracking-wide text-white/50">GitFS Remotes</h4>
-        <p className="mt-1 text-[11px] text-white/40">
-          Configure external repositories for each GitFS filesystem. Remotes are used for push/pull operations.
-        </p>
-      </div>
-
-      {error && (
-        <div className="flex items-start gap-2 rounded border border-red-400/30 bg-red-500/10 p-2.5 text-[11px] text-red-200">
-          <AlertCircle size={12} className="mt-0.5 shrink-0" />
-          <span>{error}</span>
-        </div>
-      )}
-
-      {filesystems.length === 0 ? (
-        <div className="rounded-lg border border-white/10 bg-white/[0.03] p-6 text-center">
-          <GitBranch size={24} className="mx-auto mb-2 text-white/20" />
-          <p className="text-[12px] text-white/40">No GitFS instances found.</p>
-        </div>
-      ) : (
-        <div className="space-y-3">
-          {filesystems.map((fs) => (
-            <FilesystemCard
-              key={fs.id}
-              fs={fs}
-              remotes={remotesByFs[fs.id]}
-              busyAction={busyAction}
-              msg={msgByFs[fs.id] ?? null}
-              onAdd={() => setAddFor(fs)}
-              onEdit={(remote) => setEditState({ fs, remote })}
-              onAction={(action, remote) => void onRemoteAction(fs.id, action, remote)}
-              onPull={(remote) => void onPull(fs, remote)}
-              onPush={(remote) => void onPush(fs, remote)}
-            />
-          ))}
-        </div>
-      )}
-
+  const dialogs = (
+    <>
       <AddRemoteModal
         open={addFor !== null}
         filesystem={addFor}
@@ -913,6 +886,79 @@ export function GitRemotesTab() {
           </div>
         </div>
       )}
+    </>
+  );
+
+  return {
+    filesystems,
+    remotesByFs,
+    busyAction,
+    msgByFs,
+    loading,
+    error,
+    openAdd: (fs: GitFsInstance) => setAddFor(fs),
+    openEdit: (fs: GitFsInstance, remote: GitRemote) => setEditState({ fs, remote }),
+    remoteAction: (fsId: string, action: string, remote: GitRemote) => void onRemoteAction(fsId, action, remote),
+    pull: (fs: GitFsInstance, remote: GitRemote) => void onPull(fs, remote),
+    push: (fs: GitFsInstance, remote: GitRemote) => void onPush(fs, remote),
+    /** Render ONCE per page. Every flow above can open one of these. */
+    dialogs,
+  };
+}
+
+// ── Settings → Versions: every GitFS instance, one card each ────────────────────
+export function GitRemotesTab() {
+  const r = useGitRemotes();
+
+  if (r.loading) {
+    return (
+      <div className="flex items-center gap-2 text-xs text-white/40">
+        <Loader2 size={14} className="animate-spin" />
+        Loading GitFS instances…
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <h4 className="text-xs font-semibold uppercase tracking-wide text-white/50">GitFS Remotes</h4>
+        <p className="mt-1 text-[11px] text-white/40">
+          Configure external repositories for each GitFS filesystem. Remotes are used for push/pull operations.
+        </p>
+      </div>
+
+      {r.error && (
+        <div className="flex items-start gap-2 rounded border border-red-400/30 bg-red-500/10 p-2.5 text-[11px] text-red-200">
+          <AlertCircle size={12} className="mt-0.5 shrink-0" />
+          <span>{r.error}</span>
+        </div>
+      )}
+
+      {r.filesystems.length === 0 ? (
+        <div className="rounded-lg border border-white/10 bg-white/[0.03] p-6 text-center">
+          <GitBranch size={24} className="mx-auto mb-2 text-white/20" />
+          <p className="text-[12px] text-white/40">No GitFS instances found.</p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {r.filesystems.map((fs) => (
+            <FilesystemCard
+              key={fs.id}
+              fs={fs}
+              remotes={r.remotesByFs[fs.id]}
+              busyAction={r.busyAction}
+              msg={r.msgByFs[fs.id] ?? null}
+              onAdd={() => r.openAdd(fs)}
+              onEdit={(remote) => r.openEdit(fs, remote)}
+              onAction={(action, remote) => r.remoteAction(fs.id, action, remote)}
+              onPull={(remote) => r.pull(fs, remote)}
+              onPush={(remote) => r.push(fs, remote)}
+            />
+          ))}
+        </div>
+      )}
+      {r.dialogs}
     </div>
   );
 }

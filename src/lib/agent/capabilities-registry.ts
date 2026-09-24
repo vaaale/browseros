@@ -89,7 +89,7 @@ const TELEGRAM_BOT_CAPABILITIES = integrationCapabilities("telegram", "bot", "te
 // the operation's implementation.
 export const CAPABILITIES: Capability[] = [
   // OS
-  { id: "bos_app_launch", group: "os", aliases: ["open app", "start application", "launch window"], context: "action", description: "Open an application window." },
+  { id: "bos_app_launch", group: "os", aliases: ["open app", "start application", "launch window", "open file in app"], context: "action", description: "Open an application window, optionally with launch parameters the app reads (e.g. a file path for the Editor, a url for the browser)." },
   { id: "bos_window_close", group: "os", context: "action", description: "Close an open window." },
   { id: "bos_app_list", group: "os", context: "action", description: "List installed applications." },
   { id: "bos_wallpaper_set", group: "os", aliases: ["background", "desktop picture", "theme"], context: "action", description: "Change the desktop wallpaper." },
@@ -105,16 +105,47 @@ export const CAPABILITIES: Capability[] = [
     description: "Open an HTML document, URL, image, or video in a sandboxed preview window.",
   },
 
+  // Browser automation (004 redesign) — DRIVE a real, stateful browser: one
+  // live headless Chromium per (conversation, agent), held open across calls.
+  // Gated at execute time by Settings → Browser Automation.
+  { id: "browser_navigate", group: "web", aliases: ["drive browser", "open website", "browse", "click around"], context: "both", description: "Open a URL in the stateful driven browser; returns the page snapshot with clickable element refs." },
+  { id: "browser_navigate_back", group: "web", context: "both", description: "Go back in the driven browser's history." },
+  { id: "browser_snapshot", group: "web", aliases: ["page contents", "accessibility tree"], context: "both", description: "Accessibility snapshot of the current page — the element refs other browser tools target." },
+  { id: "browser_click", group: "web", aliases: ["press button", "click link"], context: "both", description: "Click an element in the driven browser." },
+  { id: "browser_type", group: "web", aliases: ["fill input", "enter text"], context: "both", description: "Type text into an element in the driven browser." },
+  { id: "browser_fill_form", group: "web", context: "both", description: "Fill multiple form fields in the driven browser." },
+  { id: "browser_press_key", group: "web", context: "both", description: "Press a keyboard key in the driven browser." },
+  { id: "browser_hover", group: "web", context: "both", description: "Hover over an element in the driven browser." },
+  { id: "browser_select_option", group: "web", context: "both", description: "Select dropdown option(s) in the driven browser." },
+  { id: "browser_handle_dialog", group: "web", context: "both", description: "Accept or dismiss a browser dialog (alert/confirm/prompt)." },
+  { id: "browser_wait_for", group: "web", context: "both", description: "Wait for text to appear/disappear or for a fixed time in the driven browser." },
+  { id: "browser_evaluate", group: "web", aliases: ["extract data", "scrape structured"], context: "both", description: "Run a JavaScript function on the page and return its result (structured scraping)." },
+  { id: "browser_take_screenshot", group: "web", aliases: ["screenshot", "capture page", "documentation image"], context: "both", description: "Screenshot the current page into /Screenshots and return it as a vision block." },
+  { id: "browser_console_messages", group: "web", context: "both", description: "Read the page's console messages from the driven browser." },
+  { id: "browser_resize", group: "web", context: "both", description: "Resize the driven browser viewport." },
+  { id: "browser_tabs", group: "web", context: "both", description: "List/create/close/select tabs in the driven browser." },
+  { id: "browser_close", group: "web", context: "both", description: "End the driven browser session and free its resources." },
+
   // Files (VFS) — one id per op, used by the main chat and delegated sub-agents.
   { id: "file_list", group: "files", aliases: ["folder contents", "directory listing", "what files", "pictures", "documents"], context: "both", description: "List a virtual file system directory." },
   { id: "file_read", group: "files", aliases: ["open file", "show file", "contents of"], context: "both", description: "Read a text file." },
   { id: "file_write", group: "files", context: "both", description: "Create or overwrite a text file." },
   { id: "file_mkdir", group: "files", context: "both", description: "Create a directory." },
-  { id: "file_delete", group: "files", context: "action", description: "Delete a file or folder." },
-  { id: "file_rename", group: "files", context: "action", description: "Rename or move a file or folder." },
+  // "both", not "action": these are server tools now, like every other file_*
+  // entry here. (No behaviour rides on the distinction today — the only reader,
+  // assistantToolsManifest(), filters on `!== "tool"` — but a field that
+  // misdescribes where a tool executes is exactly what mis-routes the next
+  // change that does depend on it.)
+  { id: "file_delete", group: "files", context: "both", description: "Delete a file or folder." },
+  { id: "file_rename", group: "files", context: "both", description: "Rename or move a file or folder." },
   { id: "file_edit", group: "files", context: "both", description: "Find and replace a unique string in a VFS file." },
   { id: "file_patch", group: "files", context: "both", description: "Apply multiple find/replace hunks atomically to a VFS file." },
   { id: "file_search", group: "files", aliases: ["grep", "find text", "mention", "occurrence", "where is"], context: "both", description: "Search file content across a VFS subtree." },
+  // FR-013 (043-file-grep): the bare "grep" alias is deliberately shared with
+  // file_search — single-file grep intent must surface file_grep (its id +
+  // aliases outrank the alias-only claim), while file_search stays the
+  // directory-subtree tool.
+  { id: "file_grep", group: "files", aliases: ["grep", "grep this file", "search inside one file", "find text in a single file"], context: "both", description: "Search a single named VFS file for a literal string; returns matching lines with 1-based line numbers (path:line:text)." },
   { id: "file_glob", group: "files", aliases: ["find files", "by pattern", "wildcard"], context: "both", description: "Find files matching a glob pattern in a VFS subtree." },
   { id: "file_to_markdown", group: "files", aliases: ["pdf", "word document", "powerpoint", "excel", "spreadsheet", "extract text", "convert document"], context: "both", description: "Convert a PDF/DOCX/PPTX/XLSX file under /workspace to markdown (via the sandbox's markitdown)." },
   { id: "view_image", group: "files", aliases: ["screenshot", "photo", "picture", "look at image"], context: "both", description: "View an image at a VFS path as a real vision content block (not OCR)." },
@@ -178,6 +209,19 @@ export const CAPABILITIES: Capability[] = [
   { id: "app_uninstall", group: "apps", aliases: ["remove app", "get rid of application", "delete app"], context: "action", description: "Uninstall an app." },
 
   // Specs (marketplace-item specs only — BOS-core/user specs use file_* on /Specs/)
+  // 041 — the method layer. These six were registered NOWHERE, so they had no
+  // group and, more to the point, `find_tools` could not surface them:
+  // discovery searches this registry, and a tool absent from it is
+  // undiscoverable by search even for an agent that holds it. A real session
+  // ran two find_tools queries aimed squarely at `methods_list`, got zero
+  // matches both times, and went reading BOS source instead.
+  { id: "methods_list", group: "methods", context: "tool", description: "List every installed spec method: the phases it declares and their sequence, its driver skill, and what each store is bound to." },
+  { id: "methods_fork", group: "methods", context: "tool", description: "Fork a pack's method so its structure becomes the user's to edit." },
+  { id: "methods_fork_status", group: "methods", context: "tool", description: "Report how a fork has drifted from the pack it came from." },
+  { id: "methods_edit", group: "methods", context: "tool", description: "Change a forked method's STRUCTURE: add, remove, rename, reorder, gate or re-skill a phase." },
+  { id: "methods_phase_instructions", group: "methods", context: "tool", description: "Read the prompt a method's phase runs." },
+  { id: "methods_phase_instructions_set", group: "methods", context: "tool", description: "Replace the prompt a method's phase runs, as an overlay — no fork needed." },
+  { id: "methods_project_runtime", group: "methods", context: "tool", description: "Report, and optionally install, the supporting files a method needs inside the user's own repository — BMAD's `_bmad/` scripts and team customisations, without which 75 of its skills cannot run." },
   { id: "app_spec_create", group: "specs", context: "both", description: "Create a marketplace item's spec, bringing the item into existence even before any code does." },
   { id: "app_spec_list", group: "specs", context: "both", description: "List a marketplace item's spec artifacts." },
   { id: "app_spec_read", group: "specs", context: "both", description: "Read a marketplace item's spec artifact." },
@@ -205,6 +249,14 @@ export const CAPABILITIES: Capability[] = [
   { id: "conflict_status", group: "conflict-resolution", context: "tool", description: "Report the conflict session's status, per-file progress, and decision timeline." },
   { id: "conflict_complete", group: "conflict-resolution", context: "tool", description: "Declare the conflict resolved and complete the underlying git operation." },
   { id: "conflict_abandon", group: "conflict-resolution", context: "tool", description: "Abandon the resolution and roll the repo back to its pre-reconciliation state." },
+
+  // Self-healing (031-self-healing). All server tools: the autonomous pipeline
+  // runs headless, where a frontend tool could never be dispatched.
+  { id: "self_heal_request", group: "self-heal", aliases: ["report a problem", "something is broken", "bug report", "self-heal", "fix bos"], context: "tool", description: "Report a problem to the self-healing mechanism — creates a Healing Case the Diagnostician investigates and, for a genuine gap, fixes autonomously on a preview." },
+  { id: "self_heal_request_decision", group: "self-heal", aliases: ["ask the user", "suspend the fix", "decision needed"], context: "tool", description: "Suspend an autonomous self-heal fix and ask the user a decision the pipeline must not guess." },
+  { id: "self_heal_complete_fix", group: "self-heal", aliases: ["fix ready", "notify the fix"], context: "tool", description: "Declare a self-heal fix complete — verifies the preview is really built, then notifies the user. Never promotes." },
+  { id: "self_heal_status", group: "self-heal", aliases: ["healing cases", "is anything being fixed"], context: "tool", description: "Report the self-healing mechanism's state and every Healing Case with its status and scope class." },
+  { id: "submit_diagnostics_report", group: "self-heal", aliases: ["diagnostics report", "scope class", "classify the gap"], context: "tool", description: "The Diagnostician's only write: save a self-heal case's markdown diagnostics report and its scope-class verdict." },
 
   // Scheduler (025-agent-delegation-v2, Phase 4 — ported natively into v2's
   // registry; these existed only in the legacy engine before, so no agent's

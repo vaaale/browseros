@@ -52,13 +52,36 @@ ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
 # Match the package set from docker/run-command/Dockerfile so local-backend
 # run_command behaves identically to the Docker-backend sandbox.
+#
+# `uv` and `ruamel.yaml` are here for METHOD PACKS, not for BOS itself
+# (048 FR-025). BMAD v6 ships ~5,200 lines of Python and 75 of its files shell
+# out to `uv run` against scripts installed at `{project-root}/_bmad/scripts/`.
+#
+# `uv` INSTALLS NOTHING here — every one of those scripts declares only
+# `requires-python` in its PEP 723 block, so uv is pinning an interpreter, and
+# node:trixie's Python 3.13 already satisfies `>=3.11`. It is carried so those 75
+# files run VERBATIM: the alternative is rewriting `uv run` -> `python3` across
+# all of them, which forks the skills' text and has to be re-applied on every
+# upstream release — the drift 048's amended FR-010 exists to end.
+#
+# `ruamel.yaml` is the single third-party dependency in the whole of BMAD's
+# Python: `bmad-sprint-planning/scripts/sprint_plan.py` declares it. Everything
+# else is stdlib, verified by running it.
+#
+# Python itself is NOT new here — this venv already carries six packages for
+# run_command skills. What a missing `uv` would cost: `resolve_customization.py`
+# documents a fallback, but `memlog.py` explicitly has none ("All writes go
+# through the shared script, never by hand"), so it is a silently broken run log
+# rather than degraded operation.
 RUN pip install --no-cache-dir \
     ipython \
     "markitdown[all]" \
     Pillow \
     python-pptx \
     python-docx \
-    jq
+    jq \
+    uv \
+    ruamel.yaml
 
 # pptxgenjs is a Node package (used by run_command skills for pptx generation).
 # Make it resolvable from /workspace scripts via NODE_PATH.

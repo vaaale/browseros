@@ -13,6 +13,34 @@ export async function register(): Promise<void> {
   if (process.env.NEXT_RUNTIME !== "nodejs") return;
 
   try {
+    // Method packs (045): register the built-in spec-kit descriptor BEFORE the
+    // first spec-store read. Every Build Studio surface resolves a descriptor,
+    // and an unresolved one is refused rather than defaulted (FR-016) — so
+    // ordering is load-bearing, not cosmetic. ensureSystemMounts/
+    // ensureStoresOnce run lazily on first access (os/vfs.ts), which makes
+    // "whoever touches a store first" the real trigger; registering up here
+    // means no route can win that race.
+    //
+    // Asserted rather than left to import side-effects: a descriptor that
+    // silently failed to register surfaces as an EMPTY store, which reads as
+    // data loss rather than as a boot-order bug.
+    // 046 T004: the built-in spec-kit PACK, registered through the same
+    // sequence a marketplace pack's install uses — descriptor, agent root,
+    // template mount. Extends 045 T006a rather than adding a second hook.
+    const { registerBuiltinPack } = await import("@/lib/specs/method/builtin-pack");
+    const { getMethod } = await import("@/lib/specs/method/registry");
+    await registerBuiltinPack();
+    if (!getMethod("spec-kit")) throw new Error("built-in spec-kit method failed to register");
+
+    // Installed method packs. Without this a pack registers at INSTALL and
+    // never again — it works until the first restart, then silently vanishes
+    // while its symlink, overlay and marketplace entry all still say installed.
+    // Runs after the built-in so spec-kit is always present even if a pack
+    // fails, and before the first spec-store read for the same reason the
+    // built-in does.
+    const { registerInstalledMethodPacks } = await import("@/lib/specs/method/install");
+    await registerInstalledMethodPacks();
+
     // Assistant plugins (compaction, memory, …). Loaded before the scheduler so
     // their lifecycle hooks (e.g. the memory plugin seeding system jobs) run
     // before the daemon starts ticking.
@@ -24,6 +52,11 @@ export async function register(): Promise<void> {
     // Imports are idempotent; route.ts imports them too.
     await import("@/plugins/compaction/init");
     await import("@/plugins/memory/init");
+    // 031-self-healing: the trigger-capture plugin (hard-error +
+    // repeated-failure). Its hooks fire on main chat runs only — headless runs
+    // pass no `hooks` into the loop — which is what keeps the mechanism from
+    // diagnosing its own runs (design ADR-4).
+    await import("@/plugins/self-heal/init");
 
     // ensurePluginInitialized is idempotent and shared with the Settings toggle
     // path (src/lib/plugins/settings.ts), so both stay in sync.
@@ -129,6 +162,43 @@ export async function register(): Promise<void> {
     await recoverSessions().catch((err) => {
       console.error("[instrumentation] conflict-session recovery failed:", err);
     });
+
+    // Self-healing mechanism (031-self-healing). Ordered AFTER the event kernel
+    // (the spine is a 034 core headless handler) and after the scheduler (the
+    // boot reconcile borrows its daemon lock, and the scheduled Diagnostician is
+    // a system job).
+    //
+    // The reconcile MUST be single-owner: every server process runs this hook,
+    // and the Supervisor keeps a BASE plus (while previewing) a PREVIEW alive —
+    // two processes both re-deriving "this preview is ready" would emit
+    // `fix_ready` twice for the same case (design R9). The scheduler's
+    // container-wide daemon lock is the existing election mechanism, so the
+    // reconcile competes for it rather than inventing a second one.
+    try {
+      const { registerSelfHealSpine } = await import("@/lib/self-heal/spine-handler");
+      await registerSelfHealSpine();
+
+      const { ensureScheduledDiagnosticianJob } = await import("@/lib/self-heal/diagnostician");
+      await ensureScheduledDiagnosticianJob().catch((err) => {
+        console.error("[instrumentation] seeding the scheduled Diagnostician job failed:", err);
+      });
+
+      const { acquireLock, releaseLock } = await import("@/lib/scheduler/lock");
+      const handle = await acquireLock("self-heal-reconcile", { label: process.env.BOS_VERSION_LABEL });
+      if (handle) {
+        try {
+          const { reconcileInFlightCases } = await import("@/lib/self-heal/intake");
+          const summary = await reconcileInFlightCases();
+          if (summary.fixReadyEmitted.length || summary.failed.length || summary.abandoned.length || summary.requeued.length) {
+            console.log("[instrumentation] self-heal reconcile:", JSON.stringify(summary));
+          }
+        } finally {
+          await releaseLock(handle);
+        }
+      }
+    } catch (err) {
+      console.error("[instrumentation] self-heal startup failed:", err);
+    }
   } catch (err) {
     // Never let a startup failure crash server boot.
     console.error("[instrumentation] server-boot hook failed:", err);

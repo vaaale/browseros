@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Plus, Trash2, MessageSquare, Pencil } from "lucide-react";
+import { Plus, Trash2, MessageSquare, Pencil, MoreVertical, Archive, ArchiveRestore, ChevronRight } from "lucide-react";
 import {
   useConversations,
   useAllConversations,
@@ -9,6 +9,7 @@ import {
   selectConversation,
   deleteConversation,
   renameConversation,
+  setConversationArchived,
   type Conversation,
 } from "@/lib/agent/conversations";
 import { DEFAULT_AGENT_ID } from "@/lib/agent/agent-ids";
@@ -91,9 +92,12 @@ function humanize(id: string): string {
 function ConvRow({ c, active, onPick }: { c: Conversation; active: boolean; onPick?: () => void }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(c.title);
+  const [menuOpen, setMenuOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const rowRef = useRef<HTMLDivElement | null>(null);
 
   const startEditing = () => {
+    setMenuOpen(false);
     setDraft(c.title);
     setEditing(true);
     requestAnimationFrame(() => inputRef.current?.select());
@@ -104,9 +108,26 @@ function ConvRow({ c, active, onPick }: { c: Conversation; active: boolean; onPi
     if (title && title !== c.title) void renameConversation(c.id, title);
   };
 
+  // Close the row menu on any press outside this row.
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (!rowRef.current?.contains(e.target as Node)) setMenuOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [menuOpen]);
+
+  const archived = c.archived === true;
+  const menuItem =
+    "flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs text-white/70 hover:bg-white/10 hover:text-white";
+
   return (
     <div
-      className={`group flex items-center gap-1.5 rounded px-2 py-1.5 text-xs ${
+      ref={rowRef}
+      data-testid="conv-row"
+      data-conv-id={c.id}
+      className={`group relative flex items-center gap-1.5 rounded px-2 py-1.5 text-xs ${
         active ? "bg-white/15 text-white" : "text-white/70 hover:bg-white/10"
       }`}
     >
@@ -139,20 +160,90 @@ function ConvRow({ c, active, onPick }: { c: Conversation; active: boolean; onPi
       )}
       {!editing && (
         <button
-          onClick={startEditing}
-          title="Rename"
-          className="rounded p-0.5 text-white/30 opacity-0 hover:bg-white/10 hover:text-white group-hover:opacity-100"
+          onClick={() => setMenuOpen((v) => !v)}
+          title="More"
+          data-testid="conv-row-menu"
+          className={`rounded p-0.5 text-white/40 hover:bg-white/10 hover:text-white ${
+            menuOpen ? "" : "opacity-0 group-hover:opacity-100"
+          }`}
         >
-          <Pencil size={11} />
+          <MoreVertical size={13} />
         </button>
       )}
+      {menuOpen && (
+        <div className="absolute right-1.5 top-full z-50 mt-1 w-36 rounded-lg border border-white/10 bg-[#15171e] p-1 shadow-2xl">
+          <button onClick={startEditing} data-testid="conv-menu-rename" className={menuItem}>
+            <Pencil size={13} className="opacity-70" />
+            Rename
+          </button>
+          <button
+            onClick={() => {
+              setMenuOpen(false);
+              void setConversationArchived(c.id, !archived);
+            }}
+            data-testid={archived ? "conv-menu-unarchive" : "conv-menu-archive"}
+            className={menuItem}
+          >
+            {archived ? <ArchiveRestore size={13} className="opacity-70" /> : <Archive size={13} className="opacity-70" />}
+            {archived ? "Unarchive" : "Archive"}
+          </button>
+          <button
+            onClick={() => {
+              setMenuOpen(false);
+              void deleteConversation(c.id);
+            }}
+            data-testid="conv-menu-delete"
+            className={menuItem}
+          >
+            <Trash2 size={13} className="opacity-70" />
+            Delete
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Collapsible "Archived" sub-section (FR-008) rendered beneath a bucket's
+ *  default rows — per agent bucket in the all-agents view, once in the
+ *  single-agent view. Collapsed by default: the tidy-up intent is the resting
+ *  state, so archived rows only render once the user expands the section. The
+ *  collapse state is local UI state per section — never persisted, and
+ *  independent of the `archived` flag itself. */
+function ArchivedSection({
+  conversations,
+  isActive,
+  onPick,
+}: {
+  conversations: Conversation[];
+  isActive: (c: Conversation) => boolean;
+  onPick?: (c: Conversation) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="mt-1.5 border-t border-white/10 pt-1.5" data-testid="archived-section">
       <button
-        onClick={() => void deleteConversation(c.id)}
-        title="Delete"
-        className="rounded p-0.5 text-white/30 opacity-0 hover:bg-white/10 hover:text-white group-hover:opacity-100"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        title={open ? "Collapse archived conversations" : "Expand archived conversations"}
+        data-testid="archived-section-toggle"
+        className="flex w-full items-center gap-1.5 rounded px-1 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white/35 hover:bg-white/5 hover:text-white/60"
       >
-        <Trash2 size={11} />
+        <ChevronRight size={10} className={`shrink-0 transition-transform ${open ? "rotate-90" : ""}`} />
+        <Archive size={10} />
+        Archived
+        <span className="rounded bg-white/10 px-1 text-[9px] font-medium text-white/50">{conversations.length}</span>
       </button>
+      {open &&
+        (conversations.length === 0 ? (
+          <div className="px-2 py-1.5 text-[11px] text-white/30">Nothing archived yet.</div>
+        ) : (
+          <div className="space-y-0.5">
+            {conversations.map((c) => (
+              <ConvRow key={c.id} c={c} active={isActive(c)} onPick={onPick ? () => onPick(c) : undefined} />
+            ))}
+          </div>
+        ))}
     </div>
   );
 }
@@ -203,10 +294,18 @@ export function ConversationPanel({
             <Plus size={14} />
           </button>
         </div>
-        <div className="min-h-0 flex-1 space-y-0.5 overflow-auto px-1.5 pb-2">
-          {single.conversations.map((c) => (
-            <ConvRow key={c.id} c={c} active={single.activeId === c.id} />
-          ))}
+        <div className="min-h-0 flex-1 overflow-auto px-1.5 pb-2">
+          <div className="space-y-0.5">
+            {single.conversations
+              .filter((c) => !c.archived)
+              .map((c) => (
+                <ConvRow key={c.id} c={c} active={single.activeId === c.id} />
+              ))}
+          </div>
+          <ArchivedSection
+            conversations={single.conversations.filter((c) => c.archived)}
+            isActive={(c) => single.activeId === c.id}
+          />
         </div>
       </ResizablePanel>
     );
@@ -246,15 +345,22 @@ export function ConversationPanel({
               </button>
             </div>
             <div className="space-y-0.5">
-              {(buckets.get(aid) ?? []).map((c) => (
-                <ConvRow
-                  key={c.id}
-                  c={c}
-                  active={c.agentId === (currentAgentId ?? DEFAULT_AGENT_ID) && all.activeByAgent[c.agentId] === c.id}
-                  onPick={() => onPickAgent?.(c.agentId)}
-                />
-              ))}
+              {(buckets.get(aid) ?? [])
+                .filter((c) => !c.archived)
+                .map((c) => (
+                  <ConvRow
+                    key={c.id}
+                    c={c}
+                    active={c.agentId === (currentAgentId ?? DEFAULT_AGENT_ID) && all.activeByAgent[c.agentId] === c.id}
+                    onPick={() => onPickAgent?.(c.agentId)}
+                  />
+                ))}
             </div>
+            <ArchivedSection
+              conversations={(buckets.get(aid) ?? []).filter((c) => c.archived)}
+              isActive={(c) => c.agentId === (currentAgentId ?? DEFAULT_AGENT_ID) && all.activeByAgent[c.agentId] === c.id}
+              onPick={(c) => onPickAgent?.(c.agentId)}
+            />
           </div>
         ))}
       </div>

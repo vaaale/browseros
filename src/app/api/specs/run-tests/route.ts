@@ -3,12 +3,13 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import * as specfs from "@/lib/dev/spec-fs";
+import { listStores } from "@/lib/specs/stores";
 
 export const dynamic = "force-dynamic";
 
 // POST /api/specs/run-tests { featurePath, branch? } -> { summary, ok, ... } | { error }
-// Runs the Playwright e2e suite for one feature (buildstudio_run_tests tool,
-// feature-wizard Phase 6) and writes test-results.md into the feature's spec
+// Runs the Playwright e2e suite for one feature (buildstudio_run_tests tool) and
+// writes test-results.md into the feature's spec
 // folder. `featurePath` is store-prefixed (e.g. "user-specs/<project>/<id>");
 // the test file is located by convention at e2e/<feature-id>.spec.ts, where
 // <feature-id> is the LAST path segment of featurePath. `branch` is the same
@@ -67,7 +68,29 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: `"${featurePath}" does not point to a feature folder.` }, { status: 400 });
   }
 
-  const specFileRel = path.posix.join("e2e", `${featureId}.spec.ts`);
+  // 046 FR-014 / T015 — THE one behavioural change in this feature, which 045's
+  // parity harness cannot catch. Before this, every store's tests were probed
+  // and executed inside process.cwd() regardless of store kind: asking an ITEM
+  // store to run tests ran BOS's own suite and reported the result as the
+  // item's. Refuse, and say why.
+  const store = (await listStores()).find((s) => s.id === storeId);
+  if (!store?.testRoot) {
+    return NextResponse.json({
+      error:
+        `Store "${storeId}" has no test root. Its content lives inside the item, not in BOS's checkout, ` +
+        `so BOS cannot run its tests — running them from here would execute BOS's own suite and report that as the item's result.`,
+    }, { status: 400 });
+  }
+
+  // The test file's NAME comes from the active method descriptor (045's
+  // `testFile`); its LOCATION comes from the store kind above.
+  // THE entry point, not a hand-assembled chain: this previously passed
+  // `{ store: store.method }` alone, so a store bound by workflow — or relying
+  // on the configured default — ran its tests under a different descriptor than
+  // every other surface resolved for the same unit.
+  const { methodForStore } = await import("@/lib/specs/pipeline");
+  const descriptor = await methodForStore(storeId);
+  const specFileRel = (descriptor.testFile ?? "e2e/<unit-id>.spec.ts").replace("<unit-id>", featureId);
   try {
     await fs.access(path.join(process.cwd(), specFileRel));
   } catch {
@@ -124,7 +147,12 @@ export async function POST(req: NextRequest) {
     lines.push("", "## Errors", "", ...errors.map((e) => `- ${(e.message ?? "(no message)").split("\n")[0]}`));
   }
 
-  const resultsPath = `${storeId}/${path.posix.join(rel, "test-results.md")}`;
+  // 046 FR-013: the results artifact is whatever the active method calls it.
+  // `test-results.md` is spec-kit's name and is the artifact 045 added
+  // `testFile?`/`artifacts[]` for — hardcoding it here would write a file a
+  // different method's `test` phase never looks at.
+  const resultsArtifact = descriptor.artifacts.find((a) => a.generates === "test")?.id ?? "test-results.md";
+  const resultsPath = `${storeId}/${path.posix.join(rel, resultsArtifact)}`;
   try {
     await specfs.writeFile(resultsPath, lines.join("\n") + "\n", branch ? { branch } : undefined);
   } catch (err) {

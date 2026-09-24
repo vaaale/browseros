@@ -19,6 +19,12 @@ import * as specfs from "../../src/lib/dev/spec-fs";
 import { GET, POST } from "../../src/app/api/specs/history/route";
 import { gitLogger } from "../../src/lib/gitops/logging";
 
+// Creating a folder is a WRITE like any other now: the `project.json`
+// exemption from the feature-branch rule is gone (spec-fs.ts prepareWrite),
+// because it let a folder land on a user repository's default branch and
+// then refused every attempt to put anything in it.
+const BR = { branch: "bos/testfixture-history" };
+
 function git(cwd: string, args: string[]): string {
   return execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd, encoding: "utf8" }).trim();
 }
@@ -53,7 +59,7 @@ test("history() lists every commit that touched a path; readFileAtRef reads any 
   const { cleanup } = useTestDataDir("history-basic");
   try {
     await ensureStores();
-    await createProject("user-specs", "Alpha");
+    await createProject("user-specs", "Alpha", undefined, BR);
     const root = storeRoot();
     commitDirect(root, "alpha/001-foo/spec.md", "# Foo v1\n", "v1");
     commitDirect(root, "alpha/001-foo/spec.md", "# Foo v2\n", "v2");
@@ -75,7 +81,7 @@ test("history({all:true}) spans any branch in the repo, not just the current che
   const { cleanup } = useTestDataDir("history-cross-branch");
   try {
     await ensureStores();
-    await createProject("user-specs", "Alpha");
+    await createProject("user-specs", "Alpha", undefined, BR);
     const root = storeRoot();
 
     // This commit exists ONLY on "alpha/work" — the store's own default
@@ -97,7 +103,7 @@ test("GET lists history and reads content at a ref through the route", async () 
   const { cleanup } = useTestDataDir("history-route-get");
   try {
     await ensureStores();
-    await createProject("user-specs", "Alpha");
+    await createProject("user-specs", "Alpha", undefined, BR);
     commitDirect(storeRoot(), "alpha/001-foo/spec.md", "# Foo v1\n", "v1");
 
     const listRes = await GET(new NextRequest(`http://local/api/specs/history?path=${encodeURIComponent("user-specs/alpha/001-foo/spec.md")}`));
@@ -119,7 +125,7 @@ test("POST restores a historical version as a NEW commit, gated by the active-fe
   const { cleanup } = useTestDataDir("history-route-restore");
   try {
     await ensureStores();
-    await createProject("user-specs", "Alpha");
+    await createProject("user-specs", "Alpha", undefined, BR);
     const root = storeRoot();
     commitDirect(root, "alpha/001-foo/spec.md", "# Foo v1\n", "v1");
     const [v1] = await history(root, "alpha/001-foo/spec.md", 50, { all: true });
@@ -147,7 +153,7 @@ test("POST restore is refused with no feature branch given, same as any other wr
   const { cleanup } = useTestDataDir("history-route-restore-gated");
   try {
     await ensureStores();
-    await createProject("user-specs", "Alpha");
+    await createProject("user-specs", "Alpha", undefined, BR);
     const root = storeRoot();
     commitDirect(root, "alpha/001-foo/spec.md", "# Foo on base\n", "seed on base");
 

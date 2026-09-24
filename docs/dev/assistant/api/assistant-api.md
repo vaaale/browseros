@@ -9,6 +9,7 @@ Server endpoints behind the assistant subsystem. See the full table in
 
 | Route | Methods | Purpose |
 |---|---|---|
+| `/api/assistant/conversations/[id]/archive` | PATCH | `{ archived: boolean }` → set/clear the conversation's archived flag via `patchConversationMeta` (same per‑conversation write queue as the loop's transcript saves). 400 bad body, 404 unknown conversation. Archived conversations are read‑only: `POST /api/assistant/runs` returns **409** for them until unarchived (038). |
 | `/api/copilotkit` | POST | CopilotKit runtime endpoint. Builds the runtime + provider adapter **per request** (Anthropic → `AnthropicAdapter` with prompt caching; OpenAI family → `OpenAIChatAdapter` via the in‑app proxy). Wires MCP servers via `buildRuntimeOptions`. |
 | `/api/llm/openai/[...path]` | POST (proxy) | OpenAI normalization proxy: forces **Chat Completions** (not Responses), injects `max_tokens`, surfaces `reasoning_content` as `<think>…</think>`. Keeps the real key server‑side. |
 

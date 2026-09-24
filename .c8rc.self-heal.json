@@ -1,0 +1,20 @@
+{
+  "include": [
+    "src/lib/self-heal/**/*.ts",
+    "src/lib/agent/subagents/transcript.ts",
+    "src/lib/agent/subagents/run-registry.ts"
+  ],
+  "exclude": [
+    "**/*.test.ts",
+    "**/*.d.ts"
+  ],
+  "all": true,
+  "reporter": [
+    "text",
+    "json-summary"
+  ],
+  "reports-dir": "coverage/self-heal",
+  "lines": 95,
+  "branches": 95,
+  "check-coverage": true
+}

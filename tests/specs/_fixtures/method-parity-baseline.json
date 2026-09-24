@@ -1,0 +1,1129 @@
+[
+  {
+    "id": "item-item-with-spec",
+    "store": "item-item-with-spec",
+    "title": "Item spec",
+    "path": "item-item-with-spec",
+    "branch": null,
+    "artifacts": [
+      {
+        "name": "spec.md",
+        "path": "item-item-with-spec/spec.md"
+      },
+      {
+        "name": "plan.md",
+        "path": "item-item-with-spec/plan.md"
+      }
+    ],
+    "taskProgress": null,
+    "phases": [
+      {
+        "id": "constitution",
+        "state": "done"
+      },
+      {
+        "id": "specify",
+        "state": "done"
+      },
+      {
+        "id": "clarify",
+        "state": "pending"
+      },
+      {
+        "id": "ui-design",
+        "state": "na"
+      },
+      {
+        "id": "design",
+        "state": "pending"
+      },
+      {
+        "id": "review",
+        "state": "pending"
+      },
+      {
+        "id": "plan",
+        "state": "done"
+      },
+      {
+        "id": "tasks",
+        "state": "pending"
+      },
+      {
+        "id": "analyze",
+        "state": "na"
+      },
+      {
+        "id": "implement",
+        "state": "na"
+      },
+      {
+        "id": "converge",
+        "state": "na"
+      },
+      {
+        "id": "test",
+        "state": "na"
+      }
+    ]
+  },
+  {
+    "id": "item-item-without-spec",
+    "store": "item-item-without-spec",
+    "title": "Item Without Spec",
+    "path": "item-item-without-spec",
+    "branch": null,
+    "artifacts": [
+      {
+        "name": "notes.md",
+        "path": "item-item-without-spec/notes.md"
+      }
+    ],
+    "taskProgress": null,
+    "phases": [
+      {
+        "id": "constitution",
+        "state": "done"
+      },
+      {
+        "id": "specify",
+        "state": "pending"
+      },
+      {
+        "id": "clarify",
+        "state": "na"
+      },
+      {
+        "id": "ui-design",
+        "state": "na"
+      },
+      {
+        "id": "design",
+        "state": "na"
+      },
+      {
+        "id": "review",
+        "state": "na"
+      },
+      {
+        "id": "plan",
+        "state": "na"
+      },
+      {
+        "id": "tasks",
+        "state": "na"
+      },
+      {
+        "id": "analyze",
+        "state": "na"
+      },
+      {
+        "id": "implement",
+        "state": "na"
+      },
+      {
+        "id": "converge",
+        "state": "na"
+      },
+      {
+        "id": "test",
+        "state": "na"
+      }
+    ]
+  },
+  {
+    "id": "parity/001-spec-only",
+    "store": "user-specs",
+    "title": "Spec only",
+    "path": "user-specs/parity/001-spec-only",
+    "branch": null,
+    "artifacts": [
+      {
+        "name": "spec.md",
+        "path": "user-specs/parity/001-spec-only/spec.md"
+      }
+    ],
+    "taskProgress": null,
+    "phases": [
+      {
+        "id": "constitution",
+        "state": "done"
+      },
+      {
+        "id": "specify",
+        "state": "done"
+      },
+      {
+        "id": "clarify",
+        "state": "pending"
+      },
+      {
+        "id": "ui-design",
+        "state": "na"
+      },
+      {
+        "id": "design",
+        "state": "pending"
+      },
+      {
+        "id": "review",
+        "state": "pending"
+      },
+      {
+        "id": "plan",
+        "state": "pending"
+      },
+      {
+        "id": "tasks",
+        "state": "na"
+      },
+      {
+        "id": "analyze",
+        "state": "na"
+      },
+      {
+        "id": "implement",
+        "state": "na"
+      },
+      {
+        "id": "converge",
+        "state": "na"
+      },
+      {
+        "id": "test",
+        "state": "na"
+      }
+    ]
+  },
+  {
+    "id": "parity/002-clarified",
+    "store": "user-specs",
+    "title": "Clarified",
+    "path": "user-specs/parity/002-clarified",
+    "branch": null,
+    "artifacts": [
+      {
+        "name": "spec.md",
+        "path": "user-specs/parity/002-clarified/spec.md"
+      }
+    ],
+    "taskProgress": null,
+    "phases": [
+      {
+        "id": "constitution",
+        "state": "done"
+      },
+      {
+        "id": "specify",
+        "state": "done"
+      },
+      {
+        "id": "clarify",
+        "state": "done"
+      },
+      {
+        "id": "ui-design",
+        "state": "na"
+      },
+      {
+        "id": "design",
+        "state": "pending"
+      },
+      {
+        "id": "review",
+        "state": "pending"
+      },
+      {
+        "id": "plan",
+        "state": "pending"
+      },
+      {
+        "id": "tasks",
+        "state": "na"
+      },
+      {
+        "id": "analyze",
+        "state": "na"
+      },
+      {
+        "id": "implement",
+        "state": "na"
+      },
+      {
+        "id": "converge",
+        "state": "na"
+      },
+      {
+        "id": "test",
+        "state": "na"
+      }
+    ]
+  },
+  {
+    "id": "parity/003-planned",
+    "store": "user-specs",
+    "title": "Planned",
+    "path": "user-specs/parity/003-planned",
+    "branch": null,
+    "artifacts": [
+      {
+        "name": "spec.md",
+        "path": "user-specs/parity/003-planned/spec.md"
+      },
+      {
+        "name": "plan.md",
+        "path": "user-specs/parity/003-planned/plan.md"
+      }
+    ],
+    "taskProgress": null,
+    "phases": [
+      {
+        "id": "constitution",
+        "state": "done"
+      },
+      {
+        "id": "specify",
+        "state": "done"
+      },
+      {
+        "id": "clarify",
+        "state": "pending"
+      },
+      {
+        "id": "ui-design",
+        "state": "na"
+      },
+      {
+        "id": "design",
+        "state": "pending"
+      },
+      {
+        "id": "review",
+        "state": "pending"
+      },
+      {
+        "id": "plan",
+        "state": "done"
+      },
+      {
+        "id": "tasks",
+        "state": "pending"
+      },
+      {
+        "id": "analyze",
+        "state": "na"
+      },
+      {
+        "id": "implement",
+        "state": "na"
+      },
+      {
+        "id": "converge",
+        "state": "na"
+      },
+      {
+        "id": "test",
+        "state": "na"
+      }
+    ]
+  },
+  {
+    "id": "parity/004-tasks-unparseable",
+    "store": "user-specs",
+    "title": "T",
+    "path": "user-specs/parity/004-tasks-unparseable",
+    "branch": null,
+    "artifacts": [
+      {
+        "name": "spec.md",
+        "path": "user-specs/parity/004-tasks-unparseable/spec.md"
+      },
+      {
+        "name": "plan.md",
+        "path": "user-specs/parity/004-tasks-unparseable/plan.md"
+      },
+      {
+        "name": "tasks.md",
+        "path": "user-specs/parity/004-tasks-unparseable/tasks.md"
+      }
+    ],
+    "taskProgress": null,
+    "phases": [
+      {
+        "id": "constitution",
+        "state": "done"
+      },
+      {
+        "id": "specify",
+        "state": "done"
+      },
+      {
+        "id": "clarify",
+        "state": "pending"
+      },
+      {
+        "id": "ui-design",
+        "state": "na"
+      },
+      {
+        "id": "design",
+        "state": "pending"
+      },
+      {
+        "id": "review",
+        "state": "pending"
+      },
+      {
+        "id": "plan",
+        "state": "done"
+      },
+      {
+        "id": "tasks",
+        "state": "done"
+      },
+      {
+        "id": "analyze",
+        "state": "na"
+      },
+      {
+        "id": "implement",
+        "state": "na"
+      },
+      {
+        "id": "converge",
+        "state": "na"
+      },
+      {
+        "id": "test",
+        "state": "na"
+      }
+    ]
+  },
+  {
+    "id": "parity/005-tasks-none-done",
+    "store": "user-specs",
+    "title": "T",
+    "path": "user-specs/parity/005-tasks-none-done",
+    "branch": null,
+    "artifacts": [
+      {
+        "name": "spec.md",
+        "path": "user-specs/parity/005-tasks-none-done/spec.md"
+      },
+      {
+        "name": "plan.md",
+        "path": "user-specs/parity/005-tasks-none-done/plan.md"
+      },
+      {
+        "name": "tasks.md",
+        "path": "user-specs/parity/005-tasks-none-done/tasks.md"
+      }
+    ],
+    "taskProgress": {
+      "done": 0,
+      "total": 4
+    },
+    "phases": [
+      {
+        "id": "constitution",
+        "state": "done"
+      },
+      {
+        "id": "specify",
+        "state": "done"
+      },
+      {
+        "id": "clarify",
+        "state": "pending"
+      },
+      {
+        "id": "ui-design",
+        "state": "na"
+      },
+      {
+        "id": "design",
+        "state": "pending"
+      },
+      {
+        "id": "review",
+        "state": "pending"
+      },
+      {
+        "id": "plan",
+        "state": "done"
+      },
+      {
+        "id": "tasks",
+        "state": "done"
+      },
+      {
+        "id": "analyze",
+        "state": "na"
+      },
+      {
+        "id": "implement",
+        "state": "na"
+      },
+      {
+        "id": "converge",
+        "state": "na"
+      },
+      {
+        "id": "test",
+        "state": "na"
+      }
+    ]
+  },
+  {
+    "id": "parity/006-tasks-partial",
+    "store": "user-specs",
+    "title": "T",
+    "path": "user-specs/parity/006-tasks-partial",
+    "branch": null,
+    "artifacts": [
+      {
+        "name": "spec.md",
+        "path": "user-specs/parity/006-tasks-partial/spec.md"
+      },
+      {
+        "name": "plan.md",
+        "path": "user-specs/parity/006-tasks-partial/plan.md"
+      },
+      {
+        "name": "tasks.md",
+        "path": "user-specs/parity/006-tasks-partial/tasks.md"
+      }
+    ],
+    "taskProgress": {
+      "done": 2,
+      "total": 4
+    },
+    "phases": [
+      {
+        "id": "constitution",
+        "state": "done"
+      },
+      {
+        "id": "specify",
+        "state": "done"
+      },
+      {
+        "id": "clarify",
+        "state": "pending"
+      },
+      {
+        "id": "ui-design",
+        "state": "na"
+      },
+      {
+        "id": "design",
+        "state": "pending"
+      },
+      {
+        "id": "review",
+        "state": "pending"
+      },
+      {
+        "id": "plan",
+        "state": "done"
+      },
+      {
+        "id": "tasks",
+        "state": "done"
+      },
+      {
+        "id": "analyze",
+        "state": "na"
+      },
+      {
+        "id": "implement",
+        "state": "pending"
+      },
+      {
+        "id": "converge",
+        "state": "na"
+      },
+      {
+        "id": "test",
+        "state": "na"
+      }
+    ]
+  },
+  {
+    "id": "parity/007-tasks-all-done",
+    "store": "user-specs",
+    "title": "T",
+    "path": "user-specs/parity/007-tasks-all-done",
+    "branch": null,
+    "artifacts": [
+      {
+        "name": "spec.md",
+        "path": "user-specs/parity/007-tasks-all-done/spec.md"
+      },
+      {
+        "name": "plan.md",
+        "path": "user-specs/parity/007-tasks-all-done/plan.md"
+      },
+      {
+        "name": "tasks.md",
+        "path": "user-specs/parity/007-tasks-all-done/tasks.md"
+      }
+    ],
+    "taskProgress": {
+      "done": 4,
+      "total": 4
+    },
+    "phases": [
+      {
+        "id": "constitution",
+        "state": "done"
+      },
+      {
+        "id": "specify",
+        "state": "done"
+      },
+      {
+        "id": "clarify",
+        "state": "pending"
+      },
+      {
+        "id": "ui-design",
+        "state": "na"
+      },
+      {
+        "id": "design",
+        "state": "pending"
+      },
+      {
+        "id": "review",
+        "state": "pending"
+      },
+      {
+        "id": "plan",
+        "state": "done"
+      },
+      {
+        "id": "tasks",
+        "state": "done"
+      },
+      {
+        "id": "analyze",
+        "state": "na"
+      },
+      {
+        "id": "implement",
+        "state": "done"
+      },
+      {
+        "id": "converge",
+        "state": "na"
+      },
+      {
+        "id": "test",
+        "state": "na"
+      }
+    ]
+  },
+  {
+    "id": "parity/008-test-empty",
+    "store": "user-specs",
+    "title": "T",
+    "path": "user-specs/parity/008-test-empty",
+    "branch": null,
+    "artifacts": [
+      {
+        "name": "spec.md",
+        "path": "user-specs/parity/008-test-empty/spec.md"
+      },
+      {
+        "name": "test-results.md",
+        "path": "user-specs/parity/008-test-empty/test-results.md"
+      }
+    ],
+    "taskProgress": null,
+    "phases": [
+      {
+        "id": "constitution",
+        "state": "done"
+      },
+      {
+        "id": "specify",
+        "state": "done"
+      },
+      {
+        "id": "clarify",
+        "state": "pending"
+      },
+      {
+        "id": "ui-design",
+        "state": "na"
+      },
+      {
+        "id": "design",
+        "state": "pending"
+      },
+      {
+        "id": "review",
+        "state": "pending"
+      },
+      {
+        "id": "plan",
+        "state": "pending"
+      },
+      {
+        "id": "tasks",
+        "state": "na"
+      },
+      {
+        "id": "analyze",
+        "state": "na"
+      },
+      {
+        "id": "implement",
+        "state": "na"
+      },
+      {
+        "id": "converge",
+        "state": "na"
+      },
+      {
+        "id": "test",
+        "state": "na"
+      }
+    ]
+  },
+  {
+    "id": "parity/009-test-failed",
+    "store": "user-specs",
+    "title": "T",
+    "path": "user-specs/parity/009-test-failed",
+    "branch": null,
+    "artifacts": [
+      {
+        "name": "spec.md",
+        "path": "user-specs/parity/009-test-failed/spec.md"
+      },
+      {
+        "name": "test-results.md",
+        "path": "user-specs/parity/009-test-failed/test-results.md"
+      }
+    ],
+    "taskProgress": null,
+    "phases": [
+      {
+        "id": "constitution",
+        "state": "done"
+      },
+      {
+        "id": "specify",
+        "state": "done"
+      },
+      {
+        "id": "clarify",
+        "state": "pending"
+      },
+      {
+        "id": "ui-design",
+        "state": "na"
+      },
+      {
+        "id": "design",
+        "state": "pending"
+      },
+      {
+        "id": "review",
+        "state": "pending"
+      },
+      {
+        "id": "plan",
+        "state": "pending"
+      },
+      {
+        "id": "tasks",
+        "state": "na"
+      },
+      {
+        "id": "analyze",
+        "state": "na"
+      },
+      {
+        "id": "implement",
+        "state": "na"
+      },
+      {
+        "id": "converge",
+        "state": "na"
+      },
+      {
+        "id": "test",
+        "state": "pending"
+      }
+    ]
+  },
+  {
+    "id": "parity/010-test-passed",
+    "store": "user-specs",
+    "title": "T",
+    "path": "user-specs/parity/010-test-passed",
+    "branch": null,
+    "artifacts": [
+      {
+        "name": "spec.md",
+        "path": "user-specs/parity/010-test-passed/spec.md"
+      },
+      {
+        "name": "test-results.md",
+        "path": "user-specs/parity/010-test-passed/test-results.md"
+      }
+    ],
+    "taskProgress": null,
+    "phases": [
+      {
+        "id": "constitution",
+        "state": "done"
+      },
+      {
+        "id": "specify",
+        "state": "done"
+      },
+      {
+        "id": "clarify",
+        "state": "pending"
+      },
+      {
+        "id": "ui-design",
+        "state": "na"
+      },
+      {
+        "id": "design",
+        "state": "pending"
+      },
+      {
+        "id": "review",
+        "state": "pending"
+      },
+      {
+        "id": "plan",
+        "state": "pending"
+      },
+      {
+        "id": "tasks",
+        "state": "na"
+      },
+      {
+        "id": "analyze",
+        "state": "na"
+      },
+      {
+        "id": "implement",
+        "state": "na"
+      },
+      {
+        "id": "converge",
+        "state": "na"
+      },
+      {
+        "id": "test",
+        "state": "done"
+      }
+    ]
+  },
+  {
+    "id": "parity/011-artifact-order",
+    "store": "user-specs",
+    "title": "T",
+    "path": "user-specs/parity/011-artifact-order",
+    "branch": null,
+    "artifacts": [
+      {
+        "name": "spec.md",
+        "path": "user-specs/parity/011-artifact-order/spec.md"
+      },
+      {
+        "name": "plan.md",
+        "path": "user-specs/parity/011-artifact-order/plan.md"
+      },
+      {
+        "name": "tasks.md",
+        "path": "user-specs/parity/011-artifact-order/tasks.md"
+      },
+      {
+        "name": "research.md",
+        "path": "user-specs/parity/011-artifact-order/research.md"
+      },
+      {
+        "name": "data-model.md",
+        "path": "user-specs/parity/011-artifact-order/data-model.md"
+      },
+      {
+        "name": "quickstart.md",
+        "path": "user-specs/parity/011-artifact-order/quickstart.md"
+      },
+      {
+        "name": "design.md",
+        "path": "user-specs/parity/011-artifact-order/design.md"
+      },
+      {
+        "name": "test-results.md",
+        "path": "user-specs/parity/011-artifact-order/test-results.md"
+      },
+      {
+        "name": "zzz-extra.md",
+        "path": "user-specs/parity/011-artifact-order/zzz-extra.md"
+      }
+    ],
+    "taskProgress": {
+      "done": 1,
+      "total": 2
+    },
+    "phases": [
+      {
+        "id": "constitution",
+        "state": "done"
+      },
+      {
+        "id": "specify",
+        "state": "done"
+      },
+      {
+        "id": "clarify",
+        "state": "pending"
+      },
+      {
+        "id": "ui-design",
+        "state": "na"
+      },
+      {
+        "id": "design",
+        "state": "done"
+      },
+      {
+        "id": "review",
+        "state": "pending"
+      },
+      {
+        "id": "plan",
+        "state": "done"
+      },
+      {
+        "id": "tasks",
+        "state": "done"
+      },
+      {
+        "id": "analyze",
+        "state": "na"
+      },
+      {
+        "id": "implement",
+        "state": "pending"
+      },
+      {
+        "id": "converge",
+        "state": "na"
+      },
+      {
+        "id": "test",
+        "state": "done"
+      }
+    ]
+  },
+  {
+    "id": "parity/012-converge",
+    "store": "user-specs",
+    "title": "T",
+    "path": "user-specs/parity/012-converge",
+    "branch": null,
+    "artifacts": [
+      {
+        "name": "spec.md",
+        "path": "user-specs/parity/012-converge/spec.md"
+      }
+    ],
+    "taskProgress": null,
+    "phases": [
+      {
+        "id": "constitution",
+        "state": "done"
+      },
+      {
+        "id": "specify",
+        "state": "done"
+      },
+      {
+        "id": "clarify",
+        "state": "pending"
+      },
+      {
+        "id": "ui-design",
+        "state": "na"
+      },
+      {
+        "id": "design",
+        "state": "pending"
+      },
+      {
+        "id": "review",
+        "state": "pending"
+      },
+      {
+        "id": "plan",
+        "state": "pending"
+      },
+      {
+        "id": "tasks",
+        "state": "na"
+      },
+      {
+        "id": "analyze",
+        "state": "na"
+      },
+      {
+        "id": "implement",
+        "state": "na"
+      },
+      {
+        "id": "converge",
+        "state": "done"
+      },
+      {
+        "id": "test",
+        "state": "na"
+      }
+    ]
+  },
+  {
+    "id": "parity/014-draft-only",
+    "store": "user-specs",
+    "title": "Draft only",
+    "path": "user-specs/parity/014-draft-only",
+    "branch": "bos/testfixture-parity-draft",
+    "artifacts": [
+      {
+        "name": "spec.md",
+        "path": "user-specs/parity/014-draft-only/spec.md"
+      },
+      {
+        "name": "tasks.md",
+        "path": "user-specs/parity/014-draft-only/tasks.md"
+      }
+    ],
+    "taskProgress": {
+      "done": 3,
+      "total": 3
+    },
+    "phases": [
+      {
+        "id": "constitution",
+        "state": "done"
+      },
+      {
+        "id": "specify",
+        "state": "done"
+      },
+      {
+        "id": "clarify",
+        "state": "done"
+      },
+      {
+        "id": "ui-design",
+        "state": "na"
+      },
+      {
+        "id": "design",
+        "state": "pending"
+      },
+      {
+        "id": "review",
+        "state": "pending"
+      },
+      {
+        "id": "plan",
+        "state": "pending"
+      },
+      {
+        "id": "tasks",
+        "state": "done"
+      },
+      {
+        "id": "analyze",
+        "state": "na"
+      },
+      {
+        "id": "implement",
+        "state": "done"
+      },
+      {
+        "id": "converge",
+        "state": "na"
+      },
+      {
+        "id": "test",
+        "state": "na"
+      }
+    ]
+  },
+  {
+    "id": "parity/nested/013-deep",
+    "store": "user-specs",
+    "title": "Deep",
+    "path": "user-specs/parity/nested/013-deep",
+    "branch": null,
+    "artifacts": [
+      {
+        "name": "spec.md",
+        "path": "user-specs/parity/nested/013-deep/spec.md"
+      }
+    ],
+    "taskProgress": null,
+    "phases": [
+      {
+        "id": "constitution",
+        "state": "done"
+      },
+      {
+        "id": "specify",
+        "state": "done"
+      },
+      {
+        "id": "clarify",
+        "state": "pending"
+      },
+      {
+        "id": "ui-design",
+        "state": "na"
+      },
+      {
+        "id": "design",
+        "state": "pending"
+      },
+      {
+        "id": "review",
+        "state": "pending"
+      },
+      {
+        "id": "plan",
+        "state": "pending"
+      },
+      {
+        "id": "tasks",
+        "state": "na"
+      },
+      {
+        "id": "analyze",
+        "state": "na"
+      },
+      {
+        "id": "implement",
+        "state": "na"
+      },
+      {
+        "id": "converge",
+        "state": "na"
+      },
+      {
+        "id": "test",
+        "state": "na"
+      }
+    ]
+  }
+]

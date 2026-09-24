@@ -87,7 +87,7 @@ function resetBaseToReused() {
 
 test("promote: a corrupted user-apps mount aborts BEFORE the code ref moves — nothing is destroyed, nothing is promoted", async () => {
   resetBaseToReused();
-  const branch = "bos/promote-abort";
+  const branch = "bos/testfixture-promote-abort";
   const { userAppsDst } = await makeCandidate(branch);
   const baseTipBefore = git(env.repo, ["rev-parse", state.baseBranch]);
 
@@ -111,7 +111,7 @@ test("promote: a corrupted user-apps mount aborts BEFORE the code ref moves — 
 
 test("promote: a clean candidate merges code AND coupled content, advances base, tears down the preview", async () => {
   resetBaseToReused();
-  const branch = "bos/promote-success";
+  const branch = "bos/testfixture-promote-success";
   const { worktree, dataDir, userAppsDst, commit } = await makeCandidate(branch, { editFile: "success.txt", editContent: "shipped\n" });
   mkdirSync(join(userAppsDst, "items", "widget"), { recursive: true });
   writeFileSync(join(userAppsDst, "items", "widget", "app.json"), JSON.stringify({ id: "widget" }));

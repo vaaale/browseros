@@ -30,7 +30,7 @@ test("clearActiveFeatureBranch: a genuine (non-ENOENT) failure reading the Chats
   try {
     state.base = { role: "base", state: "ready", port: 1 };
     const warnings = [];
-    await clearActiveFeatureBranch("bos/gone", warnings);
+    await clearActiveFeatureBranch("bos/testfixture-gone", warnings);
     assert.equal(warnings.length, 1);
     assert.match(warnings[0], /activeFeatureBranch was not cleared on any conversation/);
   } finally {
@@ -43,7 +43,7 @@ test("clearActiveFeatureBranch: a malformed conversation JSON file is warned abo
   rmSync(chatsDir, { recursive: true, force: true });
   mkdirSync(chatsDir, { recursive: true });
   writeFileSync(join(chatsDir, "corrupt.json"), "{ not valid json");
-  writeFileSync(join(chatsDir, "valid.json"), JSON.stringify({ id: "valid", activeFeatureBranch: "bos/gone" }));
+  writeFileSync(join(chatsDir, "valid.json"), JSON.stringify({ id: "valid", activeFeatureBranch: "bos/testfixture-gone" }));
 
   const http = await import("node:http");
   const calls = [];
@@ -60,7 +60,7 @@ test("clearActiveFeatureBranch: a malformed conversation JSON file is warned abo
   try {
     state.base = { role: "base", state: "ready", port: server.address().port };
     const warnings = [];
-    await clearActiveFeatureBranch("bos/gone", warnings);
+    await clearActiveFeatureBranch("bos/testfixture-gone", warnings);
     assert.equal(warnings.length, 1);
     assert.match(warnings[0], /reading corrupt\.json to check its active branch failed/);
     assert.deepEqual(calls.map((c) => c.conversationId), ["valid"], "the malformed file must not block clearing the valid one");

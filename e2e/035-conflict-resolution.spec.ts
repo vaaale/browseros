@@ -245,7 +245,7 @@ test.describe("Git Conflict Resolution System (035)", () => {
       const esc = await escalate(page, repo.dir, {
         repoKind: "source",
         repoLabel: "BOS source",
-        featureBranchForDelegate: "bos/e2e-035-source-parity",
+        featureBranchForDelegate: "bos/testfixture-e2e-035-parity",
       });
       sessionId = esc.sessionId;
       const session = await getSession(page, sessionId);
@@ -254,7 +254,7 @@ test.describe("Git Conflict Resolution System (035)", () => {
       // the existing source escalation identical.
       expect(session.agentId).toBe("devops");
       expect(session.workContext.repoKind).toBe("source");
-      expect(session.featureBranch).toBe("bos/e2e-035-source-parity");
+      expect(session.featureBranch).toBe("bos/testfixture-e2e-035-parity");
 
       // The conversation still carries activeFeatureBranch for dev_delegate,
       // and now ALSO carries the session id the conflict tools read back.
@@ -263,7 +263,7 @@ test.describe("Git Conflict Resolution System (035)", () => {
       );
       if (convo.ok()) {
         const raw = await convo.text();
-        expect(raw).toContain("bos/e2e-035-source-parity");
+        expect(raw).toContain("bos/testfixture-e2e-035-parity");
         expect(raw).toContain(sessionId);
       }
     } finally {
@@ -399,6 +399,9 @@ test.describe("Git Conflict Resolution System (035)", () => {
       await expect(pane).toContainText("test-results.md");
       await expect(pane).toContainText(/bos\/pre-reconcile-/);
       await expect(page.getByTestId("conflict-abandon")).toBeVisible();
+      // …and the way out of an escalation that went to the wrong agent, which
+      // must not require abandoning the session.
+      await expect(page.getByTestId("conflict-retry")).toBeEnabled();
 
       // The 3-way view renders both sides and the empty add/add base.
       await page.getByTestId("conflict-file-row").first().click();

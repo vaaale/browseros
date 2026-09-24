@@ -57,7 +57,7 @@ function autoEscalateThenDoneHandler(outcome, { devopsConversationId = "conv-liv
 
 test("coupledConflicts: no such branch at all — null, no conflict", async () => {
   const store = makeSpecStore(env.dataDir + "/extra-specs-cc1", "s1", "master");
-  assert.equal(await coupledConflicts({ id: "s1", root: store, kind: "spec-store" }, "bos/never-created"), null);
+  assert.equal(await coupledConflicts({ id: "s1", root: store, kind: "spec-store" }, "bos/testfixture-never-created"), null);
 });
 
 test("coupledConflicts: a genuinely conflicting branch returns a description naming both sides", async () => {
@@ -65,8 +65,8 @@ test("coupledConflicts: a genuinely conflicting branch returns a description nam
   writeFileSync(store + "/f.md", "shared ancestor\n");
   git(store, ["add", "-A"]);
   git(store, ["commit", "-q", "-m", "shared"]);
-  git(store, ["branch", "bos/conflicting"]);
-  git(store, ["checkout", "-q", "bos/conflicting"]);
+  git(store, ["branch", "bos/testfixture-conflicting"]);
+  git(store, ["checkout", "-q", "bos/testfixture-conflicting"]);
   writeFileSync(store + "/f.md", "conflicting branch version\n");
   git(store, ["add", "-A"]);
   git(store, ["commit", "-q", "-m", "branch edit"]);
@@ -78,16 +78,16 @@ test("coupledConflicts: a genuinely conflicting branch returns a description nam
   git(store, ["add", "-A"]);
   git(store, ["commit", "-q", "-m", "master edit"]);
 
-  const conflict = await coupledConflicts({ id: "s2", root: store, kind: "spec-store" }, "bos/conflicting");
+  const conflict = await coupledConflicts({ id: "s2", root: store, kind: "spec-store" }, "bos/testfixture-conflicting");
   assert.ok(conflict, "must detect the conflict");
-  assert.match(conflict, /s2: branch bos\/conflicting conflicts with master/);
+  assert.match(conflict, /s2: branch bos\/testfixture-conflicting conflicts with master/);
 });
 
 test("resolveCoupledConflicts: no conflict at all — ok:true, no HTTP call", async () => {
   const store = makeSpecStore(env.dataDir + "/extra-specs-cc3", "s3", "master");
-  git(store, ["branch", "bos/clean"]);
+  git(store, ["branch", "bos/testfixture-clean"]);
   handler = () => { throw new Error("must not be called — there is no conflict to escalate"); };
-  const result = await resolveCoupledConflicts({ id: "s3", root: store, kind: "spec-store" }, "bos/clean", () => {});
+  const result = await resolveCoupledConflicts({ id: "s3", root: store, kind: "spec-store" }, "bos/testfixture-clean", () => {});
   assert.deepEqual(result, { ok: true });
 });
 
@@ -96,8 +96,8 @@ test("resolveCoupledConflicts: a conflict that resolves via the pipeline returns
   writeFileSync(store + "/f.md", "shared\n");
   git(store, ["add", "-A"]);
   git(store, ["commit", "-q", "-m", "shared"]);
-  git(store, ["branch", "bos/resolves"]);
-  git(store, ["checkout", "-q", "bos/resolves"]);
+  git(store, ["branch", "bos/testfixture-resolves"]);
+  git(store, ["checkout", "-q", "bos/testfixture-resolves"]);
   writeFileSync(store + "/f.md", "branch\n");
   git(store, ["add", "-A"]);
   git(store, ["commit", "-q", "-m", "b"]);
@@ -108,7 +108,7 @@ test("resolveCoupledConflicts: a conflict that resolves via the pipeline returns
 
   handler = autoEscalateThenDoneHandler({ status: "success", sessionId: "sess-42" }, { devopsConversationId: "conv-42", sessionId: "sess-42" });
   const escalations = [];
-  const result = await resolveCoupledConflicts({ id: "s4", root: store, kind: "spec-store" }, "bos/resolves", (conv, sess) => escalations.push([conv, sess]));
+  const result = await resolveCoupledConflicts({ id: "s4", root: store, kind: "spec-store" }, "bos/testfixture-resolves", (conv, sess) => escalations.push([conv, sess]));
   assert.equal(result.ok, true);
   assert.equal(result.sessionId, "sess-42");
   assert.deepEqual(escalations, [["conv-42", "sess-42"]]);
@@ -119,8 +119,8 @@ test("resolveCoupledConflicts: a conflict the pipeline could not resolve returns
   writeFileSync(store + "/f.md", "shared\n");
   git(store, ["add", "-A"]);
   git(store, ["commit", "-q", "-m", "shared"]);
-  git(store, ["branch", "bos/unresolved"]);
-  git(store, ["checkout", "-q", "bos/unresolved"]);
+  git(store, ["branch", "bos/testfixture-unresolved"]);
+  git(store, ["checkout", "-q", "bos/testfixture-unresolved"]);
   writeFileSync(store + "/f.md", "branch\n");
   git(store, ["add", "-A"]);
   git(store, ["commit", "-q", "-m", "b"]);
@@ -129,12 +129,12 @@ test("resolveCoupledConflicts: a conflict the pipeline could not resolve returns
   git(store, ["add", "-A"]);
   git(store, ["commit", "-q", "-m", "master edit"]);
 
-  handler = autoDoneHandler({ status: "failed", error: { message: "could not auto-resolve" }, rollbackTag: "bos/v-rollback", sessionId: "sess-99" });
-  const result = await resolveCoupledConflicts({ id: "s5", root: store, kind: "spec-store" }, "bos/unresolved", () => {});
+  handler = autoDoneHandler({ status: "failed", error: { message: "could not auto-resolve" }, rollbackTag: "bos/testfixture-v-rollback", sessionId: "sess-99" });
+  const result = await resolveCoupledConflicts({ id: "s5", root: store, kind: "spec-store" }, "bos/testfixture-unresolved", () => {});
   assert.equal(result.ok, false);
   assert.equal(result.sessionId, "sess-99");
   assert.match(result.message, /was not resolved/);
-  assert.match(result.message, /bos\/v-rollback/);
+  assert.match(result.message, /bos\/testfixture-v-rollback/);
 });
 
 test("resolveCoupledConflicts: the pipeline itself is unreachable — ok:false, promote must still stop here", async () => {
@@ -142,8 +142,8 @@ test("resolveCoupledConflicts: the pipeline itself is unreachable — ok:false, 
   writeFileSync(store + "/f.md", "shared\n");
   git(store, ["add", "-A"]);
   git(store, ["commit", "-q", "-m", "shared"]);
-  git(store, ["branch", "bos/unreachable"]);
-  git(store, ["checkout", "-q", "bos/unreachable"]);
+  git(store, ["branch", "bos/testfixture-unreachable"]);
+  git(store, ["checkout", "-q", "bos/testfixture-unreachable"]);
   writeFileSync(store + "/f.md", "branch\n");
   git(store, ["add", "-A"]);
   git(store, ["commit", "-q", "-m", "b"]);
@@ -153,7 +153,7 @@ test("resolveCoupledConflicts: the pipeline itself is unreachable — ok:false, 
   git(store, ["commit", "-q", "-m", "master edit"]);
 
   handler = () => ({ status: 500, json: { error: "base down" } });
-  const result = await resolveCoupledConflicts({ id: "s6", root: store, kind: "spec-store" }, "bos/unreachable", () => {});
+  const result = await resolveCoupledConflicts({ id: "s6", root: store, kind: "spec-store" }, "bos/testfixture-unreachable", () => {});
   assert.equal(result.ok, false);
   assert.match(result.message, /could not escalate the conflict/);
 });
@@ -163,7 +163,7 @@ test("promoteCoupled: a DETACHED-HEAD primary checkout merges via plumbing, neve
   const masterTip = git(store, ["rev-parse", "master"]);
   const repo = { id: "s7", root: store, kind: "spec-store" };
   const dst = join(env.dataDir, "extra-specs-cc7-mount");
-  await mountCoupled(repo, dst, "bos/plumbing");
+  await mountCoupled(repo, dst, "bos/testfixture-plumbing");
   writeFileSync(dst + "/plumbing-feature.md", "# added via plumbing\n");
   git(dst, ["add", "-A"]);
   git(dst, ["commit", "-q", "-m", "plumbing feature"]);
@@ -171,11 +171,11 @@ test("promoteCoupled: a DETACHED-HEAD primary checkout merges via plumbing, neve
   assert.throws(() => git(store, ["symbolic-ref", "--short", "HEAD"]), "precondition: HEAD really is detached");
 
   const warnings = [];
-  await promoteCoupled(repo, "bos/plumbing", dst, warnings, () => {});
+  await promoteCoupled(repo, "bos/testfixture-plumbing", dst, warnings, () => {});
 
   assert.deepEqual(warnings, []);
   assert.equal(git(store, ["rev-parse", "master"]) === masterTip, false, "master's ref must have advanced");
-  assert.throws(() => git(store, ["rev-parse", "--verify", "refs/heads/bos/plumbing"]), "the merged branch must be deleted");
+  assert.throws(() => git(store, ["rev-parse", "--verify", "refs/heads/bos/testfixture-plumbing"]), "the merged branch must be deleted");
   // Working tree (still checked out at the old detached commit) must be untouched by the plumbing merge.
   assert.equal(existsSync(store + "/plumbing-feature.md"), false, "plumbing merge must not touch the working tree");
   const recovered = store + "-recovered";
@@ -191,7 +191,7 @@ test("promoteCoupled: a merge conflict after code-promote escalates and, once re
   git(store, ["commit", "-q", "-m", "shared"]);
   const repo = { id: "s8", root: store, kind: "spec-store" };
   const dst = join(env.dataDir, "extra-specs-cc8-mount");
-  await mountCoupled(repo, dst, "bos/promote-conflict");
+  await mountCoupled(repo, dst, "bos/testfixture-promote-conflict");
   writeFileSync(dst + "/f.md", "branch\n");
   git(dst, ["add", "-A"]);
   git(dst, ["commit", "-q", "-m", "b"]);
@@ -204,10 +204,10 @@ test("promoteCoupled: a merge conflict after code-promote escalates and, once re
 
   handler = autoDoneHandler({ status: "success", sessionId: "sess-77" });
   const warnings = [];
-  await promoteCoupled(repo, "bos/promote-conflict", dst, warnings, () => {});
+  await promoteCoupled(repo, "bos/testfixture-promote-conflict", dst, warnings, () => {});
 
   assert.deepEqual(warnings, []);
-  assert.throws(() => git(store, ["rev-parse", "--verify", "refs/heads/bos/promote-conflict"]), "the branch must be deleted once resolved");
+  assert.throws(() => git(store, ["rev-parse", "--verify", "refs/heads/bos/testfixture-promote-conflict"]), "the branch must be deleted once resolved");
 });
 
 test("promoteCoupled: a merge conflict that the pipeline can't resolve is recorded as a warning, base left clean", async () => {
@@ -217,7 +217,7 @@ test("promoteCoupled: a merge conflict that the pipeline can't resolve is record
   git(store, ["commit", "-q", "-m", "shared"]);
   const repo = { id: "s9", root: store, kind: "spec-store" };
   const dst = join(env.dataDir, "extra-specs-cc9-mount");
-  await mountCoupled(repo, dst, "bos/promote-unresolved");
+  await mountCoupled(repo, dst, "bos/testfixture-promote-unresolved");
   writeFileSync(dst + "/f.md", "branch\n");
   git(dst, ["add", "-A"]);
   git(dst, ["commit", "-q", "-m", "b"]);
@@ -226,12 +226,12 @@ test("promoteCoupled: a merge conflict that the pipeline can't resolve is record
   git(store, ["commit", "-q", "-m", "master edit"]);
   const masterTipBefore = git(store, ["rev-parse", "master"]);
 
-  handler = autoDoneHandler({ status: "failed", error: { message: "still conflicted" }, rollbackTag: "bos/v-x" });
+  handler = autoDoneHandler({ status: "failed", error: { message: "still conflicted" }, rollbackTag: "bos/testfixture-v-x" });
   const warnings = [];
-  await promoteCoupled(repo, "bos/promote-unresolved", dst, warnings, () => {});
+  await promoteCoupled(repo, "bos/testfixture-promote-unresolved", dst, warnings, () => {});
 
   assert.equal(warnings.length, 1);
-  assert.match(warnings[0], /merge of bos\/promote-unresolved FAILED after code promote/);
+  assert.match(warnings[0], /merge of bos\/testfixture-promote-unresolved FAILED after code promote/);
   assert.equal(git(store, ["rev-parse", "master"]), masterTipBefore, "master must be untouched by the aborted merge");
   assert.equal(git(store, ["status", "--porcelain"]), "", "the working tree must be clean — merge --abort must have run");
 });

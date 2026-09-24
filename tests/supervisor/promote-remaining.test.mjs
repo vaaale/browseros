@@ -94,7 +94,7 @@ test.beforeEach(async () => {
 });
 
 test("promote: a dirty base checkout (beyond package-lock.json) aborts before anything else", async () => {
-  const branch = "bos/promote-dirty";
+  const branch = "bos/testfixture-promote-dirty";
   await makeCandidate(branch);
   const commit = git(env.repo, ["rev-parse", "HEAD"]);
   state.base = { role: "base", branch: state.baseBranch, reused: true, port: reservedBasePort, state: "ready", proc: null, commit };
@@ -109,7 +109,7 @@ test("promote: a dirty base checkout (beyond package-lock.json) aborts before an
 });
 
 test("promote: package-lock.json-only drift in base is discarded automatically, not treated as blocking dirt", async () => {
-  const branch = "bos/promote-lockfile-drift";
+  const branch = "bos/testfixture-promote-lockfile-drift";
   const { commit } = await makeCandidate(branch);
   const baseCommit = git(env.repo, ["rev-parse", "HEAD"]);
   state.base = { role: "base", branch: state.baseBranch, reused: true, port: reservedBasePort, state: "ready", proc: null, commit: baseCommit };
@@ -127,7 +127,7 @@ test("promote: package-lock.json-only drift in base is discarded automatically, 
 test("promote: a stopped/not-built candidate is built automatically before promoting", async () => {
   const { restore } = installFakeNpx();
   try {
-    const branch = "bos/promote-autobuild";
+    const branch = "bos/testfixture-promote-autobuild";
     git(env.repo, ["branch", branch]);
     const worktree = await addWorktreeForBranch(branch);
     writeFileSync(join(worktree, "package.json"), JSON.stringify({ name: "fake-bos", scripts: { build: 'node -e "process.exit(0)"' } }));
@@ -164,7 +164,7 @@ test("promote: 'dev' mode restarts base via startBaseDevProc after merging", asy
   git(env.repo, ["add", "-A"]);
   git(env.repo, ["commit", "-q", "-m", "add fake dev script"]);
 
-  const branch = "bos/promote-dev-mode";
+  const branch = "bos/testfixture-promote-dev-mode";
   const { commit } = await makeCandidate(branch);
   state.base = { role: "base", branch: state.baseBranch, dev: true, port: reservedBasePort, state: "ready", proc: null, commit: git(env.repo, ["rev-parse", "HEAD"]) };
   try {
@@ -187,7 +187,7 @@ test("promote: 'prod' mode rebuilds and restarts base via a real health-gated se
     git(env.repo, ["add", "-A"]);
     git(env.repo, ["commit", "-q", "-m", "fast build script"]);
 
-    const branch = "bos/promote-prod-mode";
+    const branch = "bos/testfixture-promote-prod-mode";
     const { commit } = await makeCandidate(branch);
     const basePort = await freePort();
     state.base = { role: "base", branch: state.baseBranch, worktree: env.repo, dataDir: env.dataDir, port: basePort, state: "ready", proc: null, commit: git(env.repo, ["rev-parse", "HEAD"]) };
@@ -213,7 +213,7 @@ test("promote: 'prod' mode — a rebuild failure leaves base DOWN and throws a c
   git(env.repo, ["add", "-A"]);
   git(env.repo, ["commit", "-q", "-m", "build always fails now"]);
 
-  const branch = "bos/promote-prod-rebuild-fails";
+  const branch = "bos/testfixture-promote-prod-fails";
   await makeCandidate(branch);
   const basePort = await freePort();
   state.base = { role: "base", branch: state.baseBranch, worktree: env.repo, dataDir: env.dataDir, port: basePort, state: "ready", proc: null, commit: git(env.repo, ["rev-parse", "HEAD"]) };

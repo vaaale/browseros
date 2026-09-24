@@ -19,6 +19,7 @@ interface ConversationFile {
   agentId?: string;
   group?: string;
   activeFeatureBranch?: string;
+  archived?: boolean;
   messages: unknown[];
   [key: string]: unknown;
 }
@@ -89,6 +90,48 @@ export async function setConversationActiveFeatureBranch(
     if (!existing) return; // nothing to patch — the conversation doesn't exist yet
     if (branch) existing.activeFeatureBranch = branch;
     else delete existing.activeFeatureBranch;
+    await vfs.writeText(pathFor(conversationId), JSON.stringify(existing, null, 2));
+  });
+}
+
+/**
+ * Read one conversation file's METADATA (everything except `messages`).
+ *
+ * Exists for features that need to know something about a conversation
+ * without loading its transcript — 031-self-healing's re-entrancy guard reads
+ * the `selfHeal` marker this way (design ADR-4), since the hook context only
+ * carries a conversationId.
+ */
+export async function getConversationMeta(conversationId: string): Promise<Record<string, unknown> | undefined> {
+  const file = await readFile(conversationId);
+  if (!file) return undefined;
+  const { messages: _messages, ...meta } = file;
+  void _messages;
+  return meta;
+}
+
+/**
+ * Merge `patch` into a conversation file's metadata, through the SAME
+ * per-conversation queue as `saveConversationMessages` — so a metadata write
+ * can never race the agent loop's transcript write and lose (see
+ * `setConversationActiveFeatureBranch` above for the incident that motivated
+ * routing every writer through this one critical section).
+ *
+ * `messages` is deliberately not patchable here: the loop is the only writer
+ * of the transcript.
+ */
+export async function patchConversationMeta(
+  conversationId: string,
+  patch: Record<string, unknown>,
+): Promise<void> {
+  await enqueuePerKey(conversationId, async () => {
+    const existing = await readFile(conversationId);
+    if (!existing) return; // nothing to patch — the conversation doesn't exist yet
+    for (const [key, value] of Object.entries(patch)) {
+      if (key === "messages" || key === "id") continue;
+      if (value === undefined) delete existing[key];
+      else existing[key] = value;
+    }
     await vfs.writeText(pathFor(conversationId), JSON.stringify(existing, null, 2));
   });
 }

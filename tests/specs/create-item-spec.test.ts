@@ -18,7 +18,7 @@ import { specTree } from "../../src/lib/specs/pipeline";
 
 // createItemSpec is branch-gated like every other spec write (038-user-apps-
 // branch-coupling): an item's spec lives in user-apps, a branch-coupled repo.
-const BRANCH = "bos/test-feature";
+const BRANCH = "bos/testfixture-test-feature";
 
 function git(cwd: string, args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();

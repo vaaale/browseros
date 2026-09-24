@@ -23,17 +23,17 @@ test("startJob: returns a job id immediately, before the runner resolves", async
   assert.ok(jobId.length > 0);
   assert.deepEqual(getJob(jobId), { status: "running" }, "must be running until the runner settles");
 
-  resolveRunner({ tag: "bos/v-test" });
+  resolveRunner({ tag: "bos/testfixture-v-test" });
   await nextTick();
 });
 
 test("startJob: a successful runner's resolved value becomes the job's result", async () => {
-  const jobId = startJob(async () => ({ tag: "bos/v-test", pushResults: [] }));
+  const jobId = startJob(async () => ({ tag: "bos/testfixture-v-test", pushResults: [] }));
   await nextTick();
 
   const job = getJob(jobId);
   assert.equal(job.status, "done");
-  assert.deepEqual(job.result, { tag: "bos/v-test", pushResults: [] });
+  assert.deepEqual(job.result, { tag: "bos/testfixture-v-test", pushResults: [] });
   assert.equal(typeof job.finishedAt, "number");
 });
 

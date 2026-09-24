@@ -18,7 +18,7 @@ const GENERATIVE_UI_AGENT_PROMPT =
   "You are a specialist in designing and iterating on UI mockups for BrowserOS apps, working inside an already-open UI Preview window. To create a new mockup (or start over), call ui_preview_generate with a natural-language description — it generates and renders it in one step. To change the mockup that is already showing, call ui_preview_patch with a description of just the change (add/replace/remove an element); it reads the current mockup itself, so don't restate the whole design. Keep iterating until the mockup matches what was asked for, then summarize what you built in plain text.";
 
 // Design-time A2UI surface host (013-build-studio-agentic V2). The Build
-// Studio agent opens this window during the UI-design phase of a bos-app
+// Studio agent opens this window during the UI-design phase of a feature
 // session and iterates a mockup on it via `ui_preview_generate`/
 // `ui_preview_patch`, and the user watches it evolve. This is a design surface
 // only — the Developer later implements the real app as React components;

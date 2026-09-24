@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   listSubAgents,
+  agentRootCollisions,
+  shadowedPackAgentReport,
   setAgentSystemPrompt,
   setAgentCapabilities,
   setAgentUseDefaultPrompt,
@@ -61,9 +63,22 @@ export async function GET(req: NextRequest) {
       deferredTools: a.deferredTools ?? [],
       systemPrompt: a.systemPrompt ?? "",
       useDefaultPrompt: a.useDefaultPrompt ?? true,
+      // 045 FR-002. This is a HAND-WRITTEN field whitelist: anything not named
+      // here is silently dropped, so grouping the picker by contributing root
+      // needs the field added explicitly — the same trap as readManifest and
+      // readProjectManifest.
+      sourceRoot: a.sourceRoot,
+      packId: a.packId,
     })),
     composed,
     catalog,
+    // Ids offered by more than one installed pack (FR-001a). Reported, never
+    // resolved silently by precedence: two packs both shipping an "architect"
+    // is a conflict the user has to see.
+    agentCollisions: await agentRootCollisions(),
+    // 046 FR-010: a pack's agent hidden by a local copy. Precedence working as
+    // designed, but also how a pack upgrade silently fails to take effect.
+    shadowedPackAgents: await shadowedPackAgentReport(),
   });
 }
 

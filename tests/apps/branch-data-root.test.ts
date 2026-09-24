@@ -45,7 +45,7 @@ test("inside a preview, a branch is still resolved via the Supervisor — never 
     // preview with bos/B active, that silently committed bos/B's work onto
     // bos/A. Asking the Supervisor is the only way to get the right clone, so
     // an unreachable Supervisor must fail loudly rather than resolve locally.
-    await expect(branchDataRoot("bos/some-feature")).rejects.toThrow(/Supervisor request failed/i);
+    await expect(branchDataRoot("bos/testfixture-some-feature")).rejects.toThrow(/Supervisor request failed/i);
   } finally {
     if (prevLabel === undefined) delete process.env.BOS_VERSION_LABEL;
     else process.env.BOS_VERSION_LABEL = prevLabel;
@@ -58,7 +58,7 @@ test("inside a preview, a branch is still resolved via the Supervisor — never 
 test("with no Supervisor, a branch resolves to the live root — the branch is recorded by the git checkout, not by path", async () => {
   const { dir, cleanup } = useTestDataDir("branch-data-root-standalone");
   try {
-    expect(await branchDataRoot("bos/some-feature")).toBe(dir);
+    expect(await branchDataRoot("bos/testfixture-some-feature")).toBe(dir);
   } finally {
     cleanup();
   }
@@ -71,7 +71,7 @@ test("a draft install carrying a branch is no longer refused, and lands under th
     // which made the assistant's whole build-an-app flow unusable from base.
     const res = await installItem(
       { name: "Widget", files: { "app/index.html": "<!doctype html><title>w</title>" } },
-      { draft: true, branch: "bos/some-feature" },
+      { draft: true, branch: "bos/testfixture-some-feature" },
     );
     expect(res.app?.name).toBe("Widget");
     expect(existsSync(join(dir, "user-apps", "items", "widget", "app", "index.html"))).toBe(true);
@@ -91,7 +91,7 @@ test("a branch install reports the branch and does NOT claim to be installed her
     // would wrongly tell the user to go find a preview.
     const local = await installItem(
       { name: "Local Widget", files: { "app/index.html": "<!doctype html><title>l</title>" } },
-      { draft: true, branch: "bos/some-feature" },
+      { draft: true, branch: "bos/testfixture-some-feature" },
     );
     expect(local.branch).toBeUndefined();
     expect(existsSync(join(dir, "system", "local-widget"))).toBe(true);
@@ -118,7 +118,7 @@ async function withStubSupervisor(clone: string, fn: () => Promise<void>): Promi
       if (req.url?.endsWith("/__supervisor/begin")) {
         res.writeHead(200, { "content-type": "application/json" });
         // Exactly the shape control.mjs's `begin` returns.
-        res.end(JSON.stringify({ ok: true, branch: "bos/some-feature", worktree: `${clone}-wt`, dataDir: clone }));
+        res.end(JSON.stringify({ ok: true, branch: "bos/testfixture-some-feature", worktree: `${clone}-wt`, dataDir: clone }));
         return;
       }
       res.writeHead(404).end("{}");
@@ -142,7 +142,7 @@ test("on base, a branch install lands entirely in the branch's clone — content
     // otherwise rather than writing a branch's work into the live directory.
     mkdir(join(clone, "user-apps"), { recursive: true });
     await withStubSupervisor(clone, async () => {
-      expect(await branchDataRoot("bos/some-feature")).toBe(clone);
+      expect(await branchDataRoot("bos/testfixture-some-feature")).toBe(clone);
 
       const res = await installItem(
         {
@@ -152,12 +152,12 @@ test("on base, a branch install lands entirely in the branch's clone — content
             "config/settings.json": "{}",
           },
         },
-        { draft: true, branch: "bos/some-feature" },
+        { draft: true, branch: "bos/testfixture-some-feature" },
       );
 
       // Reported as landing on the branch, so the caller does not register it
       // in a version that cannot serve it.
-      expect(res.branch).toBe("bos/some-feature");
+      expect(res.branch).toBe("bos/testfixture-some-feature");
 
       // Content, install symlink and seeded config all in the CLONE...
       expect(existsSync(join(clone, "user-apps", "items", "redirected", "app", "index.html"))).toBe(true);
@@ -191,9 +191,9 @@ test("a branch install validates a service facet but does not start it — the b
           id: "svc-item",
           files: { "services/service.json": JSON.stringify(manifest), "services/server.js": "// noop\n" },
         },
-        { draft: true, branch: "bos/some-feature" },
+        { draft: true, branch: "bos/testfixture-some-feature" },
       );
-      expect(res.branch).toBe("bos/some-feature");
+      expect(res.branch).toBe("bos/testfixture-some-feature");
       expect(res.service?.id).toBe("svc-item");
       // Validated from the clone, and no runtime state was written for it here:
       // registering it would run a preview's service against base's registry.
@@ -211,9 +211,9 @@ test("a branch whose clone has no user-apps mount is refused, not written live",
   try {
     mkdir(clone, { recursive: true }); // clone exists but user-apps is NOT mounted
     await withStubSupervisor(clone, async () => {
-      await expect(branchDataRoot("bos/some-feature")).rejects.toThrow(/not mounted/i);
+      await expect(branchDataRoot("bos/testfixture-some-feature")).rejects.toThrow(/not mounted/i);
       await expect(
-        installItem({ name: "Nope", files: { "app/index.html": "<!doctype html>" } }, { draft: true, branch: "bos/some-feature" }),
+        installItem({ name: "Nope", files: { "app/index.html": "<!doctype html>" } }, { draft: true, branch: "bos/testfixture-some-feature" }),
       ).rejects.toThrow(/not mounted/i);
       expect(existsSync(join(dir, "user-apps", "items", "nope"))).toBe(false);
     });
@@ -246,9 +246,9 @@ test("updating an ALREADY-INSTALLED item on a branch is not refused as a foreign
       // It is the same item, just its pre-branch copy.
       const res = await installItem(
         { name: "Workflows", id: "workflows", files: { "app/index.html": "<!doctype html><title>v2</title>" } },
-        { draft: true, branch: "bos/some-feature" },
+        { draft: true, branch: "bos/testfixture-some-feature" },
       );
-      expect(res.branch).toBe("bos/some-feature");
+      expect(res.branch).toBe("bos/testfixture-some-feature");
       expect(readFileSync(join(clone, "user-apps", "items", "workflows", "app", "index.html"), "utf8")).toContain("v2");
       // The clone's link is repointed at the clone's own copy, so the branch's
       // preview serves the branch's content rather than base's.
@@ -276,7 +276,7 @@ test("a genuinely different source for the same id is still refused", async () =
       await expect(
         installItem(
           { name: "Workflows", id: "workflows", files: { "app/index.html": "<!doctype html>" } },
-          { draft: true, branch: "bos/some-feature" },
+          { draft: true, branch: "bos/testfixture-some-feature" },
         ),
       ).rejects.toThrow(/already installed from a different source/i);
     });

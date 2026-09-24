@@ -10,6 +10,7 @@ import { loadVoiceConfig, saveVoiceConfig, redactVoiceConfig } from "@/lib/voice
 import type { VoiceConfig } from "@/lib/voice/types";
 import { regenerateHarnessConfigFiles } from "@/lib/devharness/generate-config";
 import { normalizeClaudeProvider, normalizeOpenCodeProvider, resolveHarnessSelection } from "@/lib/devharness/provider";
+import { flattenSelfHealConfig, readSelfHealConfig, patchSelfHealConfig } from "@/lib/self-heal/config";
 
 export interface ConfigRegistration {
   schema: ConfigSchema;
@@ -111,6 +112,17 @@ const REGISTRATIONS: ConfigRegistration[] = [
           type: "text",
           description: "Agent the git reconciliation pipeline escalates a merge conflict to (default: devops).",
         },
+        {
+          key: "defaultMethod",
+          label: "Default spec method",
+          type: "text",
+          // FR-008a: `data/` is a per-user volume under Bastion, so this is
+          // per-USER, not per-deployment. The wording says so because a
+          // deployment-wide reading would imply one user's change moves
+          // everyone's stores.
+          description:
+            "Method (spec framework) new stores use when they set none themselves — applies to your account only (default: spec-kit).",
+        },
       ],
     },
     load: async () => {
@@ -120,6 +132,9 @@ const REGISTRATIONS: ConfigRegistration[] = [
         // 035: which agent resolves git conflicts. Read on EVERY escalation
         // (reconcile.ts step 5), so a change takes effect with no reload.
         conflictAgent: (s.conflictAgent as string) || "devops",
+        // 045 FR-008: the last link in the binding chain
+        // (project.json -> spec-store.json -> here -> "spec-kit").
+        defaultMethod: (s.defaultMethod as string) || "spec-kit",
       };
     },
     save: async (patch) => {
@@ -567,10 +582,31 @@ const REGISTRATIONS: ConfigRegistration[] = [
   },
   {
     schema: {
-      namespace: "self-modification",
+      // 050: the Supervisor's version controls, moved OFF the Repositories
+      // page. They concern BrowserOS VERSIONS rather than repositories, and
+      // keeping both on one page is what made the old one hard to read.
+      // Relocated rather than removed — preview/promote/pin/discard is a real
+      // capability with nowhere else to live.
+      namespace: "supervisor-versions",
       title: "Versions",
       description:
-        "Live version control: preview, promote, and roll back BrowserOS versions via the Supervisor. Available when BrowserOS is served through `npm run supervisor`.",
+        "Live version control: preview, promote, pin and roll back BrowserOS versions via the Supervisor. Available when BrowserOS is served through `npm run supervisor`.",
+      order: 37,
+      customComponent: "supervisor-versions",
+      fields: [],
+    },
+    load: async () => ({}),
+    save: async () => {},
+  },
+  {
+    schema: {
+      namespace: "self-modification",
+      // 050 FR-010. The namespace stays `self-modification` — it is the key
+      // this tab's committer identity is stored under, and renaming it would
+      // orphan every existing setting to rename a heading.
+      title: "Repositories",
+      description:
+        "Every git repository BrowserOS knows about — its kind, its branch, and whether it has work that is not saved or pushed. Add your own to build something that is not BrowserOS itself. Also carries live version control: preview, promote and roll back BrowserOS versions via the Supervisor.",
       order: 36,
       customComponent: "self-modification",
       fields: [
@@ -599,6 +635,76 @@ const REGISTRATIONS: ConfigRegistration[] = [
     },
     save: async (patch) => {
       await patchNamespace("self-modification", patch);
+    },
+  },
+  {
+    schema: {
+      namespace: "selfHeal",
+      title: "Self Improvement",
+      description:
+        "The self-healing mechanism (031-self-healing): BrowserOS notices its own failures, has a Diagnostician investigate them against its own source, and — for a genuine gap — drives a TDD'd fix onto a preview you review. Nothing is ever promoted automatically.",
+      order: 34,
+      customComponent: "self-improvement",
+      // `customComponent` means Settings renders SelfImprovementTab instead of
+      // the generic ConfigForm, so these declarations produce no UI. They are
+      // still REQUIRED: /api/config's PATCH coerces incoming values against
+      // `fields` and silently DROPS anything undeclared — an empty array here
+      // would make every toggle in the tab a no-op on save (the same trap
+      // documented on the `build-studio` registration above). They also expose
+      // the namespace to the assistant's config_* tools.
+      fields: [
+        { key: "enabled", label: "Enable self-healing", type: "boolean", description: "Master switch. When off, no trigger fires, nothing is scheduled, and no tokens are spent." },
+        { key: "triggers.explicit", label: "Trigger: explicit report", type: "boolean", description: "A person or agent calls self_heal_request, or uses \"Report a problem\" in Build Studio → Self-Heal." },
+        { key: "triggers.hardError", label: "Trigger: hard error", type: "boolean", description: "One non-environmental tool error. Network/DNS/401/429/OOM/upstream-timeout failures are always filtered out." },
+        { key: "triggers.repeatedFailure", label: "Trigger: repeated failure", type: "boolean", description: "N consecutive failures of the same tool with the same error signature inside the window below." },
+        { key: "triggers.workflowTimeout", label: "Trigger: workflow timeout", type: "boolean", description: "A workflow run or long operation exceeds its configured timeout." },
+        { key: "triggers.logEvents", label: "Trigger: log events", type: "boolean", description: "An error-level log event from a BrowserOS-owned component (third-party components never trigger)." },
+        { key: "diagnostician.scheduled", label: "Run the Diagnostician on a schedule", type: "boolean", description: "Proactively review idle conversations for behavioral problems and diagnose any case still waiting." },
+        { key: "diagnostician.idleThresholdSec", label: "Idle threshold (seconds)", type: "number", description: "How long a conversation must be untouched before the scheduled review considers it. Also the tick interval." },
+        { key: "autonomousImplement", label: "Autonomous implement", type: "boolean", description: "Let a diagnosed core/app gap run the whole Build Studio pipeline unattended. Off = a diagnosed case waits for your go-ahead." },
+        { key: "tdd.required", label: "TDD required", type: "boolean", description: "Instruct the developer to write the failing test first, then implement." },
+        { key: "tdd.targetCoverage", label: "Coverage target (%)", type: "number", description: "Minimum line+branch coverage on the files a fix modifies." },
+        { key: "costCapPerDay", label: "Cost cap (tokens/day)", type: "number", description: "Total self-heal token budget per UTC day. Over it, new triggers are QUEUED, never dropped. A case already running finishes." },
+        { key: "dedupeWindowSec", label: "Dedupe window (seconds)", type: "number", description: "The same failure signature creates at most one case inside this window." },
+        { key: "explicitDedupeWindowSec", label: "Dedupe window, explicit reports (seconds)", type: "number", description: "Shorter on purpose: re-reporting the same problem yourself is usually deliberate." },
+        { key: "suspendedTimeoutDays", label: "Suspended timeout (days)", type: "number", description: "How long a fix waiting on your answer is held before it is abandoned and the pipeline slot freed." },
+        { key: "costQueueMax", label: "Queue size limit", type: "number", description: "Maximum queued-over-budget cases. The oldest is evicted (and announced) beyond this." },
+        { key: "costQueueTtlDays", label: "Queue TTL (days)", type: "number", description: "A case queued longer than this is evicted (and announced) regardless of position." },
+        { key: "repeatedFailure.count", label: "Repeated failure: count", type: "number", description: "How many consecutive same-signature failures trip the repeated-failure trigger." },
+        { key: "repeatedFailure.windowSec", label: "Repeated failure: window (seconds)", type: "number", description: "The rolling window those failures must fall inside." },
+        { key: "hardError.minCount", label: "Hard error: minimum count", type: "number", description: "How many non-environmental failures inside the repeated-failure window the hard-error trigger needs before it opens a case. 1 fires on a single failure; below the count the failure is logged, never a case." },
+        { key: "stuckDetector.enabled", label: "Detect stuck runs", type: "boolean", description: "Watch the Diagnostician and pipeline runs for a repeated tool call with no progress, or a run that exhausts its step budget, and flag the case. Deterministic — no extra model call. Stop/Start still work with this off." },
+        { key: "stuckDetector.repeatCalls", label: "Stuck after N identical calls", type: "number", description: "How many times the same tool call (ignoring ids, timestamps and numbers) must repeat with nothing in between before the run is flagged stuck." },
+      ],
+    },
+    load: async () => flattenSelfHealConfig(await readSelfHealConfig()),
+    save: async (patch) => {
+      await patchSelfHealConfig(patch);
+    },
+  },
+  {
+    schema: {
+      namespace: "agentRuns",
+      title: "Agent Runs",
+      description:
+        "Headless agent runs — the ones BrowserOS starts for itself (the scheduler, workflow steps, Telegram routing, delegation, and self-healing) rather than a chat you are watching. Each such run can leave a markdown transcript on disk so you can read back exactly what it did.",
+      order: 35,
+      fields: [
+        {
+          key: "transcriptions.enabled",
+          label: "Record run transcripts",
+          type: "boolean",
+          description:
+            "Write one markdown transcript per headless run to data/agent-transcripts/<agent>/<run>.md — the task, every tool call and result, and the final text. Off means no file is written and nothing is recorded (existing transcripts are kept). Live chat conversations are never transcribed here; they are already in Chats.",
+        },
+      ],
+    },
+    load: async () => {
+      const s = await readNamespace("agentRuns");
+      return { "transcriptions.enabled": s["transcriptions.enabled"] !== false };
+    },
+    save: async (patch) => {
+      await patchNamespace("agentRuns", patch);
     },
   },
   {
@@ -841,6 +947,14 @@ export async function getMaxFindResults(): Promise<number> {
   const v = await getConfigValue("tools", "maxFindResults");
   const n = typeof v === "number" ? v : 10;
   return clampMaxFindResults(n);
+}
+
+/** Is headless-run transcription on (031-self-healing FR-029/ADR-10)?
+ *  Defaults to TRUE: a run BOS started for itself is only auditable if it left
+ *  a transcript, so the observable default is "recorded". Read per call (never
+ *  cached) so flipping the switch takes effect on the very next run. */
+export async function transcriptEnabled(): Promise<boolean> {
+  return (await getConfigValue("agentRuns", "transcriptions.enabled")) !== false;
 }
 
 /** Resolve the current tools.maxAgentSteps (used by start-run and inner-loop delegation).

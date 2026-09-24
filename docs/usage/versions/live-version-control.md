@@ -13,6 +13,17 @@ behind a stable **Supervisor**, so you can **preview** a change, then **promote*
 
 ---
 
+> **Where this lives.** Settings → **Versions**. Git remotes, and adding or
+> removing repositories, moved to Settings → **[Repositories](../settings/repositories.md)** —
+> this page is only about which BUILD of BrowserOS you are running.
+>
+> **Deleting a branch no longer reloads BrowserOS.** It used to reload for every
+> discard, throwing you out of Settings; now only an action that replaces the
+> build this window is served by does — promote, pin, or discarding the preview
+> you are currently running.
+
+---
+
 ## The idea
 
 - A small, stable **Supervisor** owns the public address and routes your browser to
@@ -93,6 +104,10 @@ guaranteed escape hatch. From it you can Preview, go back to base, **Promote**,
     changes — commit, stash, or discard them, then retry.
   - A short interruption on the base port during the swap is expected (the build is
     done beforehand, so it's just a quick restart).
+  - After a successful promote, the conversation(s) whose **Active feature branch**
+    is the promoted branch are **auto‑archived** — they move into the Assistant
+    panel's Archived section, fully intact and restorable. See
+    [Archiving conversations](../assistant/archiving-conversations.md).
 - **Stop** — stop the preview server and return to base, but keep the worktree,
   isolated data clone, and feature branch so you can resume it later.
 - **Discard** — stop the preview, delete its worktree/data clone, and delete the

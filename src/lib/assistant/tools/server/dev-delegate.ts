@@ -15,7 +15,7 @@ import { delegateToAgent } from "./delegate-common";
 // this as "the delegate_to_developer tool," but the ACTUAL registered id —
 // already referenced by every seeded skill/AGENT.md — is `dev_delegate`
 // (subagents/tools.ts's `DELEGATE_TO_DEVELOPER = "dev_delegate"` constant,
-// e.g. seed/agents/build-studio/AGENT.md, data/skills/bos-app/SKILL.md).
+// e.g. seed/agents/build-studio/AGENT.md, data/skills/build-studio/SKILL.md).
 export function devDelegateTools(): Record<string, AssistantTool> {
   return {
     dev_delegate: serverTool(

@@ -1,22 +1,27 @@
 // Framework-free types for the Build Studio spec subsystem. Keep free of Node
 // and React imports so it is safe to use on both server and client.
 
-export type PhaseId =
-  | "constitution"
-  | "specify"
-  | "clarify"
-  | "plan"
-  | "tasks"
-  | "analyze"
-  | "implement"
-  | "converge"
-  | "test";
+/** A phase id. Free-form since 045: the compile-time union that used to live
+ *  here named spec-kit's nine phases, which meant every new framework needed a
+ *  code change to add one (FR-005/SC-003). Phase ids now come from the active
+ *  method descriptor. */
+export type PhaseId = string;
 
-export type PhaseState = "done" | "pending" | "na";
+/** `blocked` (045): a `requires` edge in the descriptor's phase DAG is
+ *  unsatisfied, so the phase is not merely un-started but unreachable. Kept
+ *  DISTINCT from `na`, which means "does not apply here at all".
+ *
+ *  `pending` is retained rather than renamed. 047 displays it as "Available",
+ *  but it does so through the descriptor's `stateLabels` — renaming the STATE
+ *  would make SC-001 parity inexpressible by construction (design.md §3.4). */
+export type PhaseState = "done" | "pending" | "blocked" | "na";
 
 export interface PipelinePhase {
   id: PhaseId;
   state: PhaseState;
+  /** Display text from the descriptor. The only field 045 adds to this shape,
+   *  and the only permitted addition under SC-001. */
+  label?: string;
 }
 
 export interface Task {
@@ -77,18 +82,63 @@ export interface SpecTreeNode {
    *  marketplace's display name — so the UI can show it without a second
    *  round-trip. Absent for non-item groups. */
   originLabel?: string;
+  /** Set on a "group" node whose store names a method that is not installed
+   *  (046/045 FR-016). The group still renders, carrying the method id, so the
+   *  cause is visible — a store that simply vanishes reads as data loss. */
+  methodMissing?: string;
+  /** 045 FR-008/FR-009 — the method this node RESOLVES to, on "group" and
+   *  "project" nodes.
+   *
+   *  Per node, not per app: the binding chain is project > store > global
+   *  default, so two groups in one tree legitimately differ. The UI previously
+   *  rendered a single app-level `activeMethodSummary()` — hardcoded to
+   *  user-specs — as every store's dropdown value, so binding any OTHER store
+   *  left its picker showing user-specs' method. Resolving per node server-side
+   *  keeps the displayed binding and the binding BOS actually applies the same
+   *  value by construction, rather than two reads that can drift. */
+  method?: string;
+  /** True when THIS node declares the binding above, false when it inherits.
+   *  An inherited binding must not be presented as a decision made here — the
+   *  user needs to know whether clearing it changes anything. */
+  methodBound?: boolean;
+  /** 049 FR-011 — set on a "group" node: where a workflow may be bound in this
+   *  store, and what a "project" IS here. Server-computed from the store's KIND
+   *  so the tree offers only actions that can take effect — the per-Project
+   *  picker was previously rendered in stores that never honour one. */
+  bindingScope?: "none" | "store" | "project";
+  projectUnit?: "none" | "folders" | "items";
+  /** 047 US4/FR-006 — set on a node that IS a declared section root. Three
+   *  sections with different meanings render in one tree, and `specs/` (current
+   *  truth) is not a peer of `changes/` (a proposal): without a visible
+   *  distinction a user edits current truth believing they are editing a
+   *  proposal, which is a correctness problem, not a cosmetic one. */
+  sectionKind?: "active" | "truth" | "archive";
+  /** Set alongside `sectionKind` when that section is frozen. Its units render a
+   *  terminal state rather than live phase state. */
+  terminal?: boolean;
   /** Set on draft nodes (020): the `bos/*` branch this feature/file lives on.
    *  Draft content is read-only from base; it lands via the feature's promote. */
   branch?: string;
+  /** Set on an item store's row: the feature branch its artifacts were actually
+   *  READ THROUGH. Not a draft graft — this is the live, writable coupled
+   *  worktree, the same place writes go, so it is deliberately NOT `branch`
+   *  (which means "read-only preview of someone else's draft").
+   *
+   *  It exists because nothing said so. A marketplace change branches user-apps
+   *  and only user-apps, every OTHER store showed a branch badge, and the one
+   *  store the work was actually happening in showed none — reading, correctly,
+   *  as "my branch went everywhere except where I wanted it". */
+  liveBranch?: string;
+  /** Set on an item store's row when the active branch does NOT couple
+   *  user-apps, carrying why. The row then shows base content: truthful, and
+   *  the alternative is an empty store or a failed tree. */
+  offBranch?: string;
   children?: SpecTreeNode[];
 }
 
-/** The known spec-kit artifact file names, in pipeline order. */
-export const ARTIFACT_FILES = [
-  "spec.md",
-  "plan.md",
-  "tasks.md",
-  "research.md",
-  "data-model.md",
-  "quickstart.md",
-] as const;
+// 045 T007 deleted ARTIFACT_FILES from here. It hardcoded spec-kit's artifact
+// names as THE artifact names, and its only consumer was byArtifactOrder.
+// Display order now comes from the active descriptor's `artifactOrder` — see
+// seed/method-packs/spec-kit/method.json, which reproduces this exact list including
+// its OMISSIONS: design.md and test-results.md were never in it, so both fall
+// to a `99 -> localeCompare` tail that 23 live features depend on.

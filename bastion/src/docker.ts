@@ -6,6 +6,7 @@ import path from "path";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import type { Config } from "./config";
+import * as logStore from "./log-store";
 
 const execAsync = promisify(execFile);
 
@@ -70,18 +71,28 @@ export async function reconcileNetworkAttachment(containerId: string, networkNam
   await network.connect({ Container: containerId });
 }
 
-export async function createBosContainer(username: string, cfg: Config): Promise<string> {
+export async function createBosContainer(
+  username: string,
+  cfg: Config,
+  onProgress?: (msg: string) => void,
+): Promise<string> {
   const name = containerName(username);
+  // The image is the one prerequisite a container cannot be created without,
+  // and this is the only place cfg.bosImage is ever used — so establishing it
+  // here covers every caller by construction rather than relying on each of
+  // them to remember. Long-running on a cold deployment; `onProgress` is how
+  // the caller surfaces that to the user (see ensureBosImage).
+  await ensureBosImage(username, cfg, onProgress);
   // Docker resolves bind mount sources against the HOST filesystem, not the
   // bastion container's filesystem. Use bosVolumeBaseHost (the host-side path,
   // self-discovered — see resolveOwnMountSource) for mounts, and cfg.volumeBase
   // (the bastion-internal path) for file ops. Every user is provisioned via
   // their own isolated clone — no direct/shared mount of the operator's own
   // checkout (024 FR-020).
-  const srcPath       = `${cfg.bosVolumeBaseHost}/${username}/src`;
-  const dataPath      = `${cfg.bosVolumeBaseHost}/${username}/data`;
-  const worktreesPath = `${cfg.bosVolumeBaseHost}/${username}/worktrees`;
-  const clonesPath    = `${cfg.bosVolumeBaseHost}/${username}/data-clones`;
+  const userPath      = `${cfg.bosVolumeBaseHost}/${username}`;
+  const srcPath       = `${userPath}/src`;
+  const dataPath      = `${userPath}/data`;
+  const worktreesPath = `${userPath}/worktrees`;
   const nmVol = volumeName(username);
 
   // Worktrees and data-clones must live outside /app (the src bind-mount) so
@@ -118,7 +129,17 @@ export async function createBosContainer(username: string, cfg: Config): Promise
     Env: [
       `BOS_DATA_DIR=/app/data`,
       `BOS_WORKTREES=/worktrees`,     // outside /app — not traversed by chownSrc
-      `BOS_DATA_CLONES=/data-clones`, // outside /app — not traversed by chownSrc
+      `BOS_DATA_CLONES=/bos/data-clones`,
+      // The SAME directory /app/data names, reached through the /bos bind so
+      // it shares a mount with the clone root. link(2) refuses to cross a
+      // mount even on one filesystem, so with `…/data -> /app/data` and
+      // `…/data-clones -> /data-clones` as two separate binds, `cp -al` failed
+      // with EXDEV on every file and every preview clone was a full copy of
+      // the user's data dir — which is how a production host filled 155 GB.
+      // Only the Supervisor's clone layer reads this; BOS still uses
+      // /app/data, so no stored absolute path (installItemLink's
+      // `data/system/<id>` symlinks in particular) has to change.
+      `BOS_CLONE_SOURCE=/bos/data`,
       `BOS_PUBLIC_PORT=8090`,   // bastion proxies to this port
       `BOS_PORT_BASE=3000`,     // base server internal port
       // 0 → the Supervisor builds base and serves it with `next start`.
@@ -142,7 +163,12 @@ export async function createBosContainer(username: string, cfg: Config): Promise
         `${dataPath}:/app/data`,
         // Supervisor ephemeral dirs — separate from /app so chownSrc is fast.
         `${worktreesPath}:/worktrees`,
-        `${clonesPath}:/data-clones`,
+        // The user's own directory, covering `data/` and `data-clones/` in ONE
+        // mount. This is what makes the DataFS hardlink farm possible at all
+        // (see BOS_CLONE_SOURCE above). /app/data stays exactly where it is,
+        // so nothing else has to be re-addressed; the clone root is now only
+        // reached as /bos/data-clones, the same host directory as before.
+        `${userPath}:/bos`,
       ],
       Mounts: [
         {
@@ -252,6 +278,125 @@ const BUILD_IGNORE_DIRS = new Set([
   "apps", "specs", "playwright-report", "test-results", "dist",
 ]);
 const BUILD_IGNORE_FILES = new Set([".env", ".env.local"]);
+
+/** Does this image tag exist in the local daemon? */
+export async function imageExists(tag: string): Promise<boolean> {
+  try {
+    await docker.getImage(tag).inspect();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// One in-flight build per tag, shared by EVERY caller — the admin portal's
+// explicit "Build image" action and the automatic build a container creation
+// triggers when the image is missing. Building the same tag twice at once
+// duplicates a job that takes minutes and races on the resulting tag, so
+// same-tag callers join the running build instead of starting a second one.
+const inFlightBuilds = new Map<string, Promise<void>>();
+
+/** True while ANY image build is running, whichever caller started it. */
+export function isBuildInProgress(): boolean {
+  return inFlightBuilds.size > 0;
+}
+
+/**
+ * buildImage, with concurrent same-tag callers coalesced onto one build.
+ * A joining caller does NOT receive `onEvent` progress (only the caller that
+ * actually started the build does) — it just awaits the same outcome.
+ */
+export function buildImageCoalesced(
+  repoPath: string,
+  dockerfile: string,
+  tag: string,
+  onEvent: (event: { line?: string; error?: string; status?: string }) => void,
+): Promise<void> {
+  const running = inFlightBuilds.get(tag);
+  if (running) return running;
+  const work = buildImage(repoPath, dockerfile, tag, onEvent).finally(() => {
+    inFlightBuilds.delete(tag);
+  });
+  inFlightBuilds.set(tag, work);
+  return work;
+}
+
+/**
+ * Guarantee `cfg.bosImage` exists before anything tries to create a container
+ * from it, building it from the deployment's source checkout if it doesn't.
+ *
+ * Without this, a freshly created user's first login died at
+ * `docker.createContainer` with the daemon's "No such image: <tag>" — the
+ * image is a deployment-wide prerequisite that nothing established
+ * automatically, so an operator had to notice the failure and press "Build
+ * image" in the admin portal by hand before ANY user could log in. Creating a
+ * user in the admin portal and logging in as them is a complete, self-
+ * contained flow; it must not depend on that out-of-band step.
+ *
+ * Called from createBosContainer, the single place `cfg.bosImage` is ever
+ * used, so every path that makes a container is covered by construction:
+ * first provision, re-provision, and stale-container self-heal alike.
+ */
+export async function ensureBosImage(
+  username: string,
+  cfg: Config,
+  onProgress?: (msg: string) => void,
+): Promise<void> {
+  if (await imageExists(cfg.bosImage)) return;
+
+  const report = (msg: string): void => {
+    logStore.append(username, `[image] ${msg}`);
+    onProgress?.(msg);
+  };
+
+  // A build already running for this tag (e.g. two users logging in for the
+  // first time at once, or an admin build racing a login) is joined rather
+  // than duplicated — but only the starter streams progress, so say which
+  // case this is instead of looking stalled.
+  const joining = isBuildInProgress();
+  report(
+    joining
+      ? `Image ${cfg.bosImage} is missing and a build is already running — waiting for it to finish…`
+      : `Image ${cfg.bosImage} not found — building it from ${cfg.bosRepoPath} now (this takes several minutes)…`,
+  );
+
+  // Only build lines worth reading are surfaced: Docker emits a torrent of
+  // layer chatter, and every line here also becomes a provisionLog update.
+  let lastStep = "";
+  try {
+    await buildImageCoalesced(cfg.bosRepoPath, "Dockerfile", cfg.bosImage, (event) => {
+      if (event.error) {
+        report(`build error: ${event.error}`);
+        return;
+      }
+      const line = event.line?.trim();
+      if (!line) return;
+      const step = /^(Step\s+\d+\/\d+)/.exec(line)?.[1];
+      if (step && step !== lastStep) {
+        lastStep = step;
+        report(`building ${cfg.bosImage} — ${line}`);
+      }
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    report(`build of ${cfg.bosImage} FAILED: ${msg}`);
+    throw new Error(
+      `Image "${cfg.bosImage}" is missing and could not be built automatically from ${cfg.bosRepoPath}: ${msg}`,
+      { cause: err },
+    );
+  }
+
+  // Trust the daemon, not the build's exit status: a build can report success
+  // while tagging something other than what we asked for (e.g. a changed
+  // bosImage that the Dockerfile does not produce), and failing here with a
+  // clear message beats failing at createContainer with "No such image".
+  if (!(await imageExists(cfg.bosImage))) {
+    const msg = `Build of "${cfg.bosImage}" reported success but the tag still does not exist`;
+    report(msg);
+    throw new Error(msg);
+  }
+  report(`Image ${cfg.bosImage} is ready.`);
+}
 
 export async function buildImage(
   repoPath: string,

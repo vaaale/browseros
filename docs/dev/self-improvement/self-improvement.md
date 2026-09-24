@@ -24,8 +24,9 @@ stage them into the sandbox workspace).
 
 **Seeded skills** live in `seed/skills/<id>/` (SKILL.md + optional `scripts/`,
 `references/`) and are reconciled into `data/skills/` on boot — see below.
-`develop-in-browseros`, `bos-app` and `build-studio` are the load-bearing ones;
-`build-studio`'s `references/target-*.md` carry the per-target build rules.
+`build-studio` (pipeline process), `bos-domain` (BOS's own facts) and `intent`
+(requirements capture) are the load-bearing ones; `bos-domain`'s
+`references/target-*.md` carry the per-target build rules.
 
 ---
 
@@ -78,6 +79,37 @@ around it — no record of which seed revision those copies came from was ever
 kept, so "untouched" is unprovable and guessing would overwrite real edits. To
 adopt the shipped version of a given id once, delete `data/skills/<id>/` (or
 `data/agents/<id>/`) and restart; it re-seeds stamped, and tracks from then on.
+
+### Retiring a skill needs an operator step, and the obvious rule is wrong
+
+Deleting a skill from `seed/` does **not** remove it from a deployment.
+`archiveDroppedSeedSkills` calls `decideSeedAction` with `inSeed: false`, but the
+`local` guard fires first and catches **unstamped** copies as well as genuinely
+edited ones — and on a deployment seeded before stamping existed, *every* copy is
+unstamped. A retired skill therefore stays in the index and stays loadable
+forever unless someone deletes it by hand.
+
+The intuitive clean-up rule — *"delete whatever still has a counterpart in
+`seed/`"* — is exactly backwards: once the retirement lands, the retired ids have
+no counterpart, so that rule spares precisely the ones that must go. State the
+clean-up as a list, never as a principle:
+
+- **Must delete** — the retired ids themselves. They exist in no `seed/` and no
+  marketplace, so nothing will ever remove or update them for you.
+- **Should delete** — everything still present in `seed/`. Nothing is lost
+  (they re-seed on boot) and they come back **stamped**, which is what makes
+  every future retirement archive correctly with no further intervention.
+- **Indifferent** — skills belonging to an installed item (e.g.
+  `okf-bundle-schema`, `okf-ingest-workflow`, `workflow-manager`).
+  `reconcileInstalledItemAssets` restores them from the item on boot.
+- **Must keep** — any skill with `created_by: seed` that is absent from today's
+  `seed/` and offered by no marketplace. `summarize-a-web-page` is the live
+  example: it carries its own `scripts/` and `references/`, and deleting it
+  destroys the only copy.
+
+In practice the simplest correct instruction is **delete everything under
+`data/skills/` except the "must keep" list, then restart** — which both completes
+the retirement and repairs the unstamped state in one pass.
 
 ---
 

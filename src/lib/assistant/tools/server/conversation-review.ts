@@ -13,6 +13,15 @@ import { paginateConversation, segmentIntoTurns, renderMessages, type AnyMessage
 // report unless every page was actually fetched. This is the same principle
 // behind every "stop reporting optimistic success" fix made this session
 // (web_view, buildstudio_artifact_open): the tool verifies, it doesn't trust.
+//
+// 031-self-healing (FR-008 / clarification Q8) changed the OUTPUT FORMAT only:
+// the report is now markdown (YAML frontmatter + narrative) rather than JSON,
+// matching Mode 2's `submit_diagnostics_report` so both of the reviewer's modes
+// produce the same kind of artifact. Non-destructive: these reports are
+// write-only human artifacts in /Documents/BOS Improvements/ — nothing in BOS
+// reads them programmatically. The page-count recompute gate above is
+// deliberately UNCHANGED; it is the integrity guarantee, not part of the
+// format.
 
 const CHATS_DIR = "/Documents/Chats";
 const REPORTS_DIR = "/Documents/BOS Improvements";
@@ -59,6 +68,152 @@ function collectDelegatedAgents(messages: AnyMessage[]): string[] {
     }
   }
   return Array.from(ids);
+}
+
+// ── Markdown rendering (031-self-healing FR-008 / Q8) ───────────────────────
+//
+// The agent still submits the same structured `report` object — that shape is
+// the contract the skill documents and the thing that keeps a review
+// comparable across conversations. Only the SAVED artifact changed: it is
+// rendered here into markdown, so the file a human opens reads like a document
+// instead of a JSON dump. Anything the agent included that this renderer
+// doesn't know about is appended verbatim under "Additional fields" rather
+// than dropped — losing part of a review to make the output tidy would be the
+// wrong trade.
+
+interface ReviewRenderInput {
+  reviewId: string;
+  conversationId: string;
+  conversationTitle: string;
+  reviewedAt: string;
+  totalPages: number;
+  report: Record<string, unknown>;
+}
+
+function yamlScalar(value: unknown): string {
+  return JSON.stringify(String(value ?? ""));
+}
+
+function asArray(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value) ? value.filter((v): v is Record<string, unknown> => !!v && typeof v === "object") : [];
+}
+
+function str(o: Record<string, unknown>, key: string): string {
+  const v = o[key];
+  return typeof v === "string" ? v : v === undefined || v === null ? "" : String(v);
+}
+
+function renderProposedChange(change: Record<string, unknown>, index: number): string[] {
+  const lines: string[] = [];
+  const id = str(change, "changeId") || `C${index + 1}`;
+  lines.push(`#### Proposed change ${id} — ${str(change, "artifactType") || "unknown artifact"}`);
+  lines.push("");
+  if (str(change, "targetPath")) lines.push(`- **Target**: \`${str(change, "targetPath")}\``);
+  if (str(change, "changeType")) lines.push(`- **Change type**: ${str(change, "changeType")}`);
+  lines.push(`- **Approved**: ${change.approved === null || change.approved === undefined ? "null (a human decides)" : String(change.approved)}`);
+  if (str(change, "rationale")) {
+    lines.push("");
+    lines.push(str(change, "rationale"));
+  }
+  const before = str(change, "before");
+  const after = str(change, "after");
+  if (before) {
+    lines.push("");
+    lines.push("**Before**");
+    lines.push("");
+    lines.push("```text");
+    lines.push(before);
+    lines.push("```");
+  }
+  if (after) {
+    lines.push("");
+    lines.push("**After**");
+    lines.push("");
+    lines.push("```text");
+    lines.push(after);
+    lines.push("```");
+  }
+  return lines;
+}
+
+export function renderReviewMarkdown(input: ReviewRenderInput): string {
+  const r = input.report;
+  const known = new Set(["summary", "primaryAgentId", "delegatedAgentIds", "findings", "newSkillProposals"]);
+  const frontmatter = [
+    "---",
+    `reviewId: ${yamlScalar(input.reviewId)}`,
+    `conversationId: ${yamlScalar(input.conversationId)}`,
+    `conversationTitle: ${yamlScalar(input.conversationTitle)}`,
+    `reviewedAt: ${input.reviewedAt}`,
+    `totalPages: ${input.totalPages}`,
+    "status: pending-approval",
+    `mode: behavioral-review`,
+    ...(str(r, "primaryAgentId") ? [`primaryAgentId: ${yamlScalar(str(r, "primaryAgentId"))}`] : []),
+    "---",
+  ];
+
+  const body: string[] = [`# Conversation review — ${input.conversationTitle}`, ""];
+  body.push(`Reviewed all ${input.totalPages} page(s) of \`${input.conversationId}\`.`, "");
+  if (str(r, "summary")) {
+    body.push("## Summary", "", str(r, "summary"), "");
+  }
+  const delegated = Array.isArray(r.delegatedAgentIds) ? r.delegatedAgentIds.map((a) => String(a)) : [];
+  if (str(r, "primaryAgentId") || delegated.length) {
+    body.push("## Agents involved", "");
+    if (str(r, "primaryAgentId")) body.push(`- **Primary**: ${str(r, "primaryAgentId")}`);
+    if (delegated.length) body.push(`- **Delegated to**: ${delegated.join(", ")}`);
+    body.push("");
+  }
+
+  const findings = asArray(r.findings);
+  body.push("## Findings", "");
+  if (findings.length === 0) {
+    body.push("No behavioral issues found — that is a valid outcome, not an incomplete review.", "");
+  } else {
+    for (const f of findings) {
+      const id = str(f, "id");
+      body.push(`### ${id ? `${id} — ` : ""}${str(f, "title") || "(untitled finding)"}`, "");
+      const meta = [
+        str(f, "severity") ? `**Severity**: ${str(f, "severity")}` : "",
+        str(f, "category") ? `**Category**: ${str(f, "category")}` : "",
+      ].filter(Boolean);
+      if (meta.length) body.push(meta.join(" · "), "");
+      if (str(f, "description")) body.push(str(f, "description"), "");
+      const evidence = asArray(f.evidence);
+      if (evidence.length) {
+        body.push("**Evidence**", "");
+        for (const e of evidence) {
+          body.push(`- page ${str(e, "page") || "?"} (${str(e, "role") || "?"}): ${str(e, "excerpt")}`);
+        }
+        body.push("");
+      }
+      if (str(f, "rootCause")) body.push("**Root cause**", "", str(f, "rootCause"), "");
+      const changes = asArray(f.proposedChanges);
+      changes.forEach((c, i) => {
+        body.push(...renderProposedChange(c, i), "");
+      });
+    }
+  }
+
+  const proposals = asArray(r.newSkillProposals);
+  if (proposals.length) {
+    body.push("## New skill proposals", "");
+    for (const p of proposals) {
+      body.push(`### ${str(p, "proposedId") || "(unnamed)"}`, "");
+      if (str(p, "rationale")) body.push(str(p, "rationale"), "");
+      if (str(p, "outline")) body.push("**Outline**", "", str(p, "outline"), "");
+    }
+  }
+
+  const extra = Object.keys(r).filter((k) => !known.has(k));
+  if (extra.length) {
+    body.push("## Additional fields", "");
+    body.push("```json");
+    body.push(JSON.stringify(Object.fromEntries(extra.map((k) => [k, r[k]])), null, 2));
+    body.push("```", "");
+  }
+
+  return `${frontmatter.join("\n")}\n\n${body.join("\n").trimEnd()}\n`;
 }
 
 export function conversationReviewTools(): Record<string, AssistantTool> {
@@ -122,7 +277,7 @@ export function conversationReviewTools(): Record<string, AssistantTool> {
 
     submit_review_report: serverTool(
       "submit_review_report",
-      'Finalize and save a conversation-behavior review report to /Documents/BOS Improvements/<reviewId>.json. REFUSES to save — and tells you exactly which pages are missing — unless `pagesReviewed` covers every page from conversation_overview\'s totalPages, independently recomputed here from the live conversation file (your own claim of the total is not trusted). This is a hard check, not a formality: it is the only thing preventing a review from stopping partway through a long conversation and reporting as if it were complete. See the agent-behavior-review skill for the `report` object\'s expected shape.',
+      'Finalize and save a conversation-behavior review report as markdown to /Documents/BOS Improvements/<reviewId>.md. REFUSES to save — and tells you exactly which pages are missing — unless `pagesReviewed` covers every page from conversation_overview\'s totalPages, independently recomputed here from the live conversation file (your own claim of the total is not trusted). This is a hard check, not a formality: it is the only thing preventing a review from stopping partway through a long conversation and reporting as if it were complete. See the agent-behavior-review skill for the `report` object\'s expected shape.',
       schema(
         {
           conversationId: p.str("The conversation id this review is for."),
@@ -157,18 +312,19 @@ export function conversationReviewTools(): Record<string, AssistantTool> {
         }
 
         const reportBody = typeof input.report === "object" && input.report ? (input.report as Record<string, unknown>) : {};
-        const record = {
-          reviewId,
-          conversationId,
-          conversationTitle: file.title ?? "(untitled)",
-          reviewedAt: new Date().toISOString(),
-          totalPages,
-          status: "pending-approval",
-          ...reportBody,
-        };
         await vfs.mkdir(REPORTS_DIR).catch(() => undefined);
-        const outPath = `${REPORTS_DIR}/${reviewId}.json`;
-        await vfs.writeText(outPath, JSON.stringify(record, null, 2));
+        const outPath = `${REPORTS_DIR}/${reviewId}.md`;
+        await vfs.writeText(
+          outPath,
+          renderReviewMarkdown({
+            reviewId,
+            conversationId,
+            conversationTitle: file.title ?? "(untitled)",
+            reviewedAt: new Date().toISOString(),
+            totalPages,
+            report: reportBody,
+          }),
+        );
         return `Saved review report to ${outPath} (all ${totalPages} page(s) covered).`;
       },
     ),

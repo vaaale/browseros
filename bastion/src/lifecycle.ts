@@ -93,7 +93,7 @@ function log(username: string, msg: string, cfg: Config): void {
  * preserved, so no user data is lost. Returns the new container ID.
  */
 async function recreateAndHeal(username: string, cfg: Config): Promise<string> {
-  const newId = await createBosContainer(username, cfg);
+  const newId = await createBosContainer(username, cfg, (msg) => log(username, msg, cfg));
   await startContainer(newId);
   updateState(username, { containerId: newId, status: "provisioning", provisionError: undefined, lastActive: Date.now() }, cfg);
   await waitForHealthy(username, STARTUP_TIMEOUT_MS);
@@ -193,7 +193,11 @@ async function _getOrProvision(username: string, cfg: Config): Promise<void> {
   updateState(username, { status: "provisioning", provisionError: undefined, lastActive: Date.now() }, cfg);
   try {
     log(username, "Cloning source repository…", cfg);
-    const containerId = await provisionUser(username, cfg);
+    // Progress reported through log() so a first-ever login on a deployment
+    // whose image hasn't been built yet shows the build happening on the
+    // status page, rather than sitting on "Cloning source repository…" for
+    // several minutes with no explanation.
+    const containerId = await provisionUser(username, cfg, (msg) => log(username, msg, cfg));
     log(username, "Container created — waiting for supervisor and Next.js to become healthy (npm install will run on first start)…", cfg);
     await waitForHealthy(username, STARTUP_TIMEOUT_MS);
     log(username, "Instance is ready!", cfg);
@@ -213,7 +217,9 @@ async function _getOrProvision(username: string, cfg: Config): Promise<void> {
  *  admin UI for spotting idle instances. */
 export function touchInstance(username: string): void {
   if (!instances.has(username) || !_cfg) return;
-  updateState(username, { lastActive: Date.now() }, _cfg);
+  // Coalesced: this runs on every proxied request and the value it records is
+  // decoration. See schedulePersist.
+  updateState(username, { lastActive: Date.now() }, _cfg, { coalesce: true });
 }
 
 /**
@@ -340,16 +346,74 @@ export async function reconcileOnStartup(cfg: Config): Promise<void> {
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
-function updateState(username: string, patch: Partial<InstanceState>, cfg: Config): void {
+function updateState(username: string, patch: Partial<InstanceState>, cfg: Config, opts: { coalesce?: boolean } = {}): void {
   const prev = instances.get(username) ?? { username, status: "unknown" as InstanceStatus, lastActive: 0 };
   instances.set(username, { ...prev, ...patch, username });
-  persistInstancesToDisk(cfg);
+  if (opts.coalesce) schedulePersist(cfg);
+  else persistInstancesToDisk(cfg);
 }
 
+// A cosmetic "last active" touch arrives on EVERY proxied request — every page,
+// every asset, every poll. Rewriting the whole registry that often is pointless
+// on its own, and it is how a disk-space problem reached the request path at
+// all. Meaningful transitions (provisioned, started, stopped, health) still
+// persist immediately; only the timestamp is coalesced, leading-edge so the
+// first touch after a quiet period is recorded at once.
+const PERSIST_COALESCE_MS = 5_000;
+let lastPersistAt = 0;
+let pendingPersist: NodeJS.Timeout | null = null;
+
+function schedulePersist(cfg: Config): void {
+  const since = Date.now() - lastPersistAt;
+  if (since >= PERSIST_COALESCE_MS) {
+    persistInstancesToDisk(cfg);
+    return;
+  }
+  if (pendingPersist) return;
+  pendingPersist = setTimeout(() => {
+    pendingPersist = null;
+    persistInstancesToDisk(cfg);
+  }, PERSIST_COALESCE_MS - since);
+  pendingPersist.unref?.();
+}
+
+/**
+ * Write the instance registry atomically: a temp file in the same directory,
+ * then `rename` onto the target.
+ *
+ * This used to be a bare `fs.writeFileSync`, whose `O_TRUNC` empties the file
+ * BEFORE the write is attempted. When the production host hit its disk quota,
+ * the truncate succeeded and the write did not, so `/data/instances.json` was
+ * left at zero bytes — and because the call sat under `routeToUser ->
+ * touchInstance`, the same failure threw out of the proxy middleware and
+ * served an "Unknown system error -122" stack trace to every user on every
+ * page. `rename` is atomic within a directory: the registry is either the old
+ * content or the new one, never a truncated middle.
+ *
+ * The failure is CONTAINED rather than propagated, deliberately: this file is
+ * a cache, rebuilt from `docker ps` by reconcileOnStartup on every boot, and
+ * its most frequent writer is a cosmetic timestamp in the request path.
+ * Nothing a user is doing should fail because the admin UI's "last active"
+ * column could not be updated. Contained is not silent — every failure is
+ * reported with its cause.
+ */
+let persistSeq = 0;
 function persistInstancesToDisk(cfg: Config): void {
   const file = path.join(cfg.dataDir, "instances.json");
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify([...instances.values()], null, 2));
+  const tmp = `${file}.tmp-${process.pid}-${++persistSeq}`;
+  lastPersistAt = Date.now();
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(tmp, JSON.stringify([...instances.values()], null, 2));
+    fs.renameSync(tmp, file);
+  } catch (err) {
+    console.error(`[bastion] could not persist the instance registry to ${file} — in-memory state is unaffected and reconcileOnStartup will rebuild it from Docker on the next boot:`, err);
+    try {
+      fs.rmSync(tmp, { force: true });
+    } catch (cleanupErr) {
+      console.error(`[bastion] and its staging file ${tmp} could not be removed either:`, cleanupErr);
+    }
+  }
 }
 
 function loadInstancesFromDisk(cfg: Config): void {

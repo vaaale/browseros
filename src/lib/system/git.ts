@@ -163,3 +163,65 @@ export async function stageAll(cwd: string = REPO): Promise<StageResult> {
   }
   return { staged, created };
 }
+
+/** Head SHA of a local branch, or undefined when the ref does not exist.
+ *  Read-only, so allowed under the Supervisor (the worktrees share one `.git`).
+ *  Used to stamp `fixCommit` on a self-heal case at completeFix time (031
+ *  FR-038). */
+export async function branchHeadSha(branch: string): Promise<string | undefined> {
+  try {
+    return await git(["rev-parse", "--verify", `refs/heads/${branch}`]);
+  } catch {
+    return undefined;
+  }
+}
+
+/** True when `sha` is an ancestor of `ref` (`git merge-base --is-ancestor`).
+ *  Read-only. False covers both "not an ancestor" and "unknown sha/ref" — the
+ *  callers (031 FR-038's boot reconcile) treat those the same: not provably
+ *  merged. */
+export async function isAncestorOf(sha: string, ref: string): Promise<boolean> {
+  try {
+    await git(["merge-base", "--is-ancestor", sha, ref]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** A branch this API is allowed to delete: `bos/<kebab>` and nothing else — no
+ *  extra path segments, no `..`, no leading dash. Deliberately broader than
+ *  FEATURE_BRANCH_RE (which caps at four segments) so a longer, legitimately
+ *  created feature branch is still removable, and deliberately exact-match so
+ *  a caller's name is never silently normalized onto a DIFFERENT branch. */
+const DELETABLE_BRANCH_RE = /^bos\/[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+/**
+ * Delete a local `bos/*` feature branch. Allowed under the Supervisor — unlike
+ * checkout/staging this never touches the live checkout's HEAD or index, and it
+ * is the only way to clean up the branches the Supervisor itself creates at
+ * delegate time (e2e runs otherwise leave a growing pile of real refs).
+ *
+ * Force-deletes (`-D`): feature branches are unmerged by definition. Refuses
+ * the current branch, and git itself refuses a branch checked out in any
+ * worktree — that error surfaces to the caller rather than being swallowed.
+ * Remote refs are left alone. Missing branch is a no-op (`existed: false`), so
+ * cleanup callers can delete the same name twice without special-casing.
+ */
+export async function deleteFeatureBranch(name: string): Promise<{ branch: string; existed: boolean }> {
+  const branch = name.trim();
+  if (!DELETABLE_BRANCH_RE.test(branch)) {
+    throw new Error(`Invalid branch name "${name}": only "bos/<kebab-name>" branches can be deleted.`);
+  }
+  if (branch === (await currentBranch())) {
+    throw new Error(`Refusing to delete "${branch}": it is the currently checked-out branch.`);
+  }
+  let existed = true;
+  try {
+    await git(["rev-parse", "--verify", `refs/heads/${branch}`]);
+  } catch {
+    existed = false;
+  }
+  if (existed) await git(["branch", "-D", branch]);
+  return { branch, existed };
+}

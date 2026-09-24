@@ -641,6 +641,111 @@ export async function relaunchAgent(session: ConflictSession, message: string): 
   }
 }
 
+export interface RetryOptions {
+  /** Re-point at this agent instead of the configured one. */
+  agentId?: string;
+  /** Seams, defaulted to the real implementations — same rationale as
+   *  `RecoveryDeps`: the retry's CONTRACT is which agent it re-points to and
+   *  whether it relaunches, and that has to be assertable without standing up
+   *  the settings store or the assistant run loop. */
+  resolveAgent?: () => Promise<string>;
+  relaunch?: (session: ConflictSession, message: string) => Promise<void>;
+}
+
+export interface RetryResult {
+  session: ConflictSession;
+  /** The agent the session (and its conversation) now runs as. */
+  agentId: string;
+  /** False when the session is parked on the user: the re-point is recorded
+   *  and takes effect when they answer, but nothing is launched now. */
+  relaunched: boolean;
+}
+
+/** Re-point a live session at the currently configured conflict-resolution
+ *  agent and start it again on the SAME conversation.
+ *
+ *  Why this exists: the agent is chosen at escalation time and written to both
+ *  the session and its conversation, and `AssistantChatV2` pins an existing
+ *  conversation to its stored `agentId`. So when the configured agent turns
+ *  out to be the wrong one — missing the `conflict_*` tools, or just broken —
+ *  the session it escalated to was a dead end: the tools bind to that ONE
+ *  conversation (`getConversationConflictSessionId`), a fresh chat can never
+ *  reach them, and the only exit left was abandoning the session and redoing
+ *  the whole operation. Correcting the setting has to be enough.
+ *
+ *  It doubles as the recovery for an ORPHANED session: `waitForSession` polls
+ *  from inside the request that started the reconciliation, so if that request
+ *  dies the session can sit in `working` with a dead run indefinitely, blocking
+ *  every later reconcile on the repo (S12) with no exit but rollback. Retrying
+ *  relaunches it. */
+export async function retrySession(id: string, opts: RetryOptions = {}): Promise<RetryResult> {
+  const resolveAgent = opts.resolveAgent ?? (async () => (await import("../conflict-agent")).conflictAgentId());
+  const relaunch = opts.relaunch ?? relaunchAgent;
+
+  const session = await getSession(id);
+  if (!session) throw new Error(`unknown conflict session "${id}"`);
+  if (isTerminalStatus(session.status)) {
+    throw new Error(
+      `conflict session ${id} is already ${session.status} — a settled session is not retryable. Re-run the operation to start a new one.`,
+    );
+  }
+
+  const agentId = opts.agentId?.trim() || (await resolveAgent());
+
+  // Cancel whatever is (nominally) still running first: two runs on one
+  // conversation would interleave into the same transcript.
+  if (session.runId) {
+    try {
+      const { runManager } = await import("@/lib/assistant/run-manager");
+      runManager().cancel(session.runId);
+    } catch {
+      // Already finished, or died with an earlier process — nothing to cancel.
+    }
+    session.runId = null;
+  }
+
+  // Both halves of the binding, re-asserted together: the conversation decides
+  // which agent the run (and the Assistant UI) uses, and `conflictSessionId` is
+  // what lets that run's `conflict_*` tools find this session.
+  await patchConversationAgent(session.conversationId, agentId, session.id);
+
+  session.agentId = agentId;
+  if (session.status === "working") session.lastWorkingAt = Date.now();
+  await persist(session);
+
+  gitLogger().info({
+    op: `${OP}.retry`,
+    repoPath: session.workContext.repoPath,
+    success: true,
+    error: undefined,
+  });
+
+  // Parked on the user (D3): the re-point is recorded, but relaunching now
+  // would be the agent talking to itself. `answerDecision` launches the new
+  // agent when they answer.
+  if (session.status === "awaiting-user") {
+    return { session: (await getSession(id))!, agentId, relaunched: false };
+  }
+
+  await relaunch(
+    session,
+    [
+      `Retrying conflict session \`${session.id}\` with the currently configured conflict-resolution agent.`,
+      `repo_path: ${session.workContext.repoPath}`,
+      "",
+      "A previous run on this conversation did not resolve it. Call `conflict_status` first to see exactly what is already resolved and what is still open, then continue from there. Do not redo work that is already recorded.",
+    ].join("\n"),
+  );
+  return { session: (await getSession(id))!, agentId, relaunched: true };
+}
+
+/** Dynamically imported for the same reason `relaunchAgent` is: the agent
+ *  conversation store is client-store-adjacent and pulls in the VFS. */
+async function patchConversationAgent(conversationId: string, agentId: string, sessionId: string): Promise<void> {
+  const { patchConversation } = await import("@/lib/agent/conversations-server");
+  await patchConversation(conversationId, { agentId, conflictSessionId: sessionId });
+}
+
 // ── Terminal transitions + operation completion (§5.3) ───────────────────────
 
 async function settle(session: ConflictSession, status: SessionStatus, result: SessionResult): Promise<ConflictSession> {

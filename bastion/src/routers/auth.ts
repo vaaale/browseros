@@ -1,9 +1,11 @@
 import { Router } from "express";
 import express from "express";
 import type { Config } from "../config";
-import type { AuthProvider } from "../auth/index";
+import type { AuthProvider, UserRecord } from "../auth/index";
 import { issueSession, clearSession, verifySession } from "../sessions";
 import { KeycloakProvider } from "../auth/keycloak";
+import { recordLoginAttempt } from "../audit-log";
+import type { LoginFailureReason } from "../audit-log";
 
 const parseBody = [express.json(), express.urlencoded({ extended: false })];
 
@@ -32,17 +34,36 @@ export function createAuthRouter(cfg: Config, provider: AuthProvider): Router {
   // NOTE: no GET / handler here — the proxy catch-all owns the root path.
 
   // ── Simple login ───────────────────────────────────────────────────────────
+  // Every outcome here is written to the audit log (audit-log.ts). The log
+  // distinguishes unknown_user from bad_password — which the HTTP RESPONSE
+  // deliberately does not, to avoid user enumeration — because that
+  // distinction is exactly what makes a credential-stuffing sweep legible
+  // after the fact. It never records the submitted password.
   router.post("/login", ...parseBody, async (req, res) => {
     const { username, password } = req.body as { username?: string; password?: string };
     if (!username || !password) {
+      recordLoginAttempt(req, { username, outcome: "failure", reason: "missing_credentials" });
       res.status(400).json({ error: "username and password required" });
       return;
     }
-    const record = await provider.authenticate(username, password).catch(() => null);
+    let record: UserRecord | null = null;
+    let threw = false;
+    try {
+      record = await provider.authenticate(username, password);
+    } catch {
+      threw = true;
+    }
     if (!record) {
+      let reason: LoginFailureReason = "provider_error";
+      if (!threw) {
+        const known = await provider.getUser(username).catch(() => null);
+        reason = known ? "bad_password" : "unknown_user";
+      }
+      recordLoginAttempt(req, { username, outcome: "failure", reason });
       res.status(401).json({ error: "Invalid credentials" });
       return;
     }
+    recordLoginAttempt(req, { username: record.username, outcome: "success", isAdmin: record.isAdmin });
     issueSession(res, record, cfg);
     res.json({ ok: true, username: record.username, isAdmin: record.isAdmin });
   });

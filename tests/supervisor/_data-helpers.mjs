@@ -37,6 +37,27 @@ async function agit(cwd, args) {
  * path relative to the REAL process.cwd() if a test file is ever run from
  * somewhere unexpected.
  */
+/**
+ * A preview-port pool private to THIS test process.
+ *
+ * `node --test <glob>` runs every file concurrently in its own process, and
+ * config.mjs's BASE_PORT defaults to 3000 for all of them — so two files that
+ * each start a real preview server were both handed 3001 and raced for it.
+ * That stayed latent only because the files happened to allocate different
+ * ports: proc.test.mjs binds BASE_PORT+1 as a deliberately "occupied" port,
+ * and preview-lifecycle.test.mjs only reached 3001 once restorePreviews
+ * stopped pre-allocating ports for restored previews. A test must not depend
+ * on which port another file happens to take.
+ *
+ * Derived from the pid so it needs no async probe (makeSupervisorEnv is called
+ * at module load, before any supervisor import, and must stay synchronous),
+ * and sits below Linux's ephemeral range (32768+) so it cannot collide with
+ * the kernel's own churn.
+ */
+function privatePortBase() {
+  return 20000 + (process.pid % 250) * 40;
+}
+
 export function makeSupervisorEnv(prefix = "supervisor-test-") {
   const repo = mkdtempSync(join(tmpdir(), `${prefix}repo-`));
   git(repo, ["init", "-q", "-b", "claude"]);
@@ -59,12 +80,22 @@ export function makeSupervisorEnv(prefix = "supervisor-test-") {
   process.env.BOS_CANONICAL_DATA = dataDir;
   process.env.BOS_WORKTREES = worktrees;
   process.env.BOS_DATA_CLONES = clones;
+  // Set BEFORE any tools/supervisor import — config.mjs freezes BASE_PORT at
+  // its first import and a later assignment has no effect.
+  //
+  // Only as a DEFAULT: several files (promote-safety, control, …) stand a
+  // fake base server on an ephemeral port and pin BOS_PORT_BASE to it before
+  // calling this helper, precisely so reconcile-client's hardcoded
+  // `127.0.0.1:BASE_PORT` reaches that server. Overwriting their choice here
+  // points the Supervisor at a port nobody is listening on.
+  process.env.BOS_PORT_BASE ??= String(privatePortBase());
 
   return {
     repo,
     dataDir,
     worktrees,
     clones,
+    portBase: Number(process.env.BOS_PORT_BASE),
     baseBranch: "claude",
     cleanup: () => {
       for (const dir of [repo, dataDir, worktrees, clones]) rmSync(dir, { recursive: true, force: true });

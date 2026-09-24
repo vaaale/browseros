@@ -58,10 +58,20 @@ test("built-in group ids are unique", () => {
 // ── ADR-1 / R3: the migration invariant ─────────────────────────────────────
 
 test("every capability's group id resolves to a live group", () => {
+  // Also the detector for a LEAKED FIXTURE, and that is how it earns its keep.
+  // `listCapabilities()` includes dynamically registered ones, which live on
+  // globalThis and outlive the test file that added them — every unit-test file
+  // shares a worker process. A fixture that unregisters its group but not its
+  // capabilities leaves exactly this: an id pointing at nothing.
+  //
+  // It caught service-tool-bridge.test.ts doing that, whose afterEach removed a
+  // HAND-KEPT list of names that had drifted from the ones its tests registered.
+  // If this fails naming a tool you do not recognise, look for the fixture that
+  // registered it rather than for a real capability defect.
   const unresolved = listCapabilities()
     .filter((c) => groupById(c.group) === undefined)
     .map((c) => `${c.id} -> ${c.group}`);
-  expect(unresolved, "capabilities pointing at a non-existent group").toEqual([]);
+  expect(unresolved, "capabilities pointing at a non-existent group — usually a fixture that did not clean up").toEqual([]);
 });
 
 test("groupById returns undefined for an unknown id — it never invents a group", () => {

@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { HEALTH_TIMEOUT_MS, BUILD_TIMEOUT_MS } from "./config.mjs";
 import { git, GIT_IDENTITY } from "./gitutil.mjs";
-import { specStoreReposFor, commitCoupled } from "./coupled-repos.mjs";
+import { mountedSpecStoresIn, commitCoupled } from "./coupled-repos.mjs";
 import { assertRepoIntegrity } from "./worktree.mjs";
 import { startProc, waitHealthy, stopProc } from "./proc.mjs";
 import { slog, getLogStore } from "./log.mjs";
@@ -67,7 +67,13 @@ export async function buildAndStart(v, ctx = {}) {
   // candidate builds. User-apps content is committed by installItem() as it
   // writes, plus a safety-net commit at promote time (see lib/promote.mjs)
   // — not duplicated here, matching the pre-refactor behavior.
-  for (const repo of await specStoreReposFor(v.worktree)) {
+  //
+  // Read from DISK, not from the branch's scope: this commits what is mounted,
+  // and committing is not what creates a branch (mountCoupled is). Asking for a
+  // scoped list here would make the commit set disagree with the mount set for
+  // any branch mounted under an older scope, and would log a scope decision for
+  // the base branch, which mounts nothing at all.
+  for (const repo of await mountedSpecStoresIn(v.worktree)) {
     await commitCoupled(repo, repo.dst, v.branch).catch((e) =>
       slog("warn", "build", `${repo.id}: commit failed for ${v.branch}: ${e?.message || e}`, { branch: v.branch, versionLabel: v.role }),
     );
@@ -111,11 +117,15 @@ export async function buildAndStart(v, ctx = {}) {
     return v.state;
   }
   // Safety gate: the worktree commit must never have leaked into the main checkout.
-  const liveCheckoutWasTouched = await assertRepoIntegrity(`build ${v.branch}`);
-  if (liveCheckoutWasTouched) {
+  const integrity = await assertRepoIntegrity(`build ${v.branch}`);
+  if (integrity.touched) {
     v.state = "failed";
     v.buildError =
-      "developer harness edited the live checkout instead of the isolated preview worktree; the live checkout was restored and this candidate was not built";
+      "developer harness edited the live checkout instead of the isolated preview worktree; the live checkout was restored and this candidate was not built" +
+      // Named, because the cause is usually a DIFFERENT run than this build:
+      // a contentOnly delegation writing a relative path while standing in the
+      // live checkout. Without the paths there is nothing to act on.
+      (integrity.dirty ? `. Restored: ${integrity.dirty}` : "");
     slog("error", "build", `build BLOCKED: ${v.branch}`, { branch: v.branch, versionLabel: v.role, err: { message: v.buildError } });
     return v.state;
   }
@@ -133,7 +143,15 @@ export async function buildAndStart(v, ctx = {}) {
   }
   startProc(v);
   v.state = (await waitHealthy(v.port, v)) ? "ready" : "failed";
-  if (v.state === "failed") v.buildError = `health check failed: no healthy /api/health on :${v.port} within ${HEALTH_TIMEOUT_MS}ms`;
+  // Only when nothing more specific was recorded. wireExitHandler already
+  // writes the real reason when the process DIES during the wait ("preview
+  // process exited before becoming healthy (exited with code 0)") — and this
+  // line used to overwrite it unconditionally, so a preview that died 0.7s
+  // after becoming ready was reported as a 120-second health-check timeout.
+  // The user reads this string; it has to be what happened.
+  if (v.state === "failed" && !v.buildError) {
+    v.buildError = `health check failed: no healthy /api/health on :${v.port} within ${HEALTH_TIMEOUT_MS}ms`;
+  }
   slog(v.state === "ready" ? "info" : "error", "build", `${v.branch} -> ${v.state}`, { ...lctx, buildLog: build.relPath, ...(v.buildError ? { err: { message: v.buildError } } : {}) });
   return v.state;
 }

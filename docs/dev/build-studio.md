@@ -49,6 +49,16 @@ Developer.
   of its own. The Supervisor's global **app-candidate** branch — a second, in-place branch
   scheme over the same repo, with its own per-item Activate/Promote/Discard row in this app
   and "Promote app"/"Discard app" buttons in `VersionControls.tsx` — is **retired**.
+- **An app CREATED on a branch is discovered through that branch.** `listItemStores(branch)`
+  scans `data/user-apps/items` **and** the branch's own clone
+  (`<previewDataDir>/user-apps/items`), unioned by id with base winning a collision;
+  `listStores`/`getStore`/`resolveOpStore` thread the branch through to it. Without this the
+  SET of items came from base while their CONTENT was read through the branch — so a new app,
+  which by construction exists only on the branch (every `app_spec_*` write is refused without
+  one), was written successfully and then never appeared in the sidebar. Off that branch it is
+  still correctly absent: it has not promoted, and base genuinely has no such app. The branch
+  lookup costs a Supervisor round trip, so both resolvers try base FIRST and only widen on a
+  miss.
 - **Branch-coupled drafts** (020) — feature work happens on `bos/*` branches shared
   with the BOS repo: the Supervisor mounts each store into the preview worktree as a
   git worktree on the feature branch; promote/discard of specs rides the code
@@ -69,9 +79,12 @@ Developer.
   — distinct from `readFileAt(path, branch)`, which reads a READ-ONLY draft branch (020,
   `git show`, no checkout); `/api/specs`'s GET route exposes the live path as a separate
   `liveBranch` query param so the two are never confused. `readFileAtRef`/`resolveStoreRoot`
-  (037) support cross-branch history browsing independent of either. The spec-kit engine
-  (templates/commands) stays in source and is read via `readTemplate`/`listTemplates`. It
-  cannot reach BOS source or secrets. **Agent tool calls no longer go through this file**
+  (037) support cross-branch history browsing independent of either. Each installed
+  method's engine (templates/commands) is mounted per pack at `/Methods/<id>/templates`
+  (045); `readTemplate`/`listTemplates` are GONE — they hardcoded BOS's own
+  `.specify/templates` as THE template root, which is what made spec-kit unswappable.
+  The `/Templates` alias is retired (046) — every reference resolves through `/Methods/<id>/templates`.
+  It cannot reach BOS source or secrets. **Agent tool calls no longer go through this file**
   — they use the generic `file_*` tools against the VFS mounts registered in
   `src/lib/specs/spec-mount.ts` (`SpecFS` from `src/os/fs/spec-fs.ts`, a SEPARATE
   implementation with the same branch-coupled routing, plus its OWN `writable` gate on
@@ -79,7 +92,7 @@ Developer.
   check at all, so the agent's `file_write` could write to `bos-system-specs` whenever a
   feature branch was active, despite the app's own `/api/specs` route already refusing
   it): `/Specs/user-specs` (writable, branch-coupled), `/Specs/bos-system-specs`
-  (**read-only**), `/Templates` (read-only), `/Docs` (writable, branch-coupled, backs
+  (**read-only**), `/Methods/<id>/templates` (read-only, one per method), `/Docs` (writable, branch-coupled, backs
   `docs/`).
 - **Spec model** — `src/lib/specs/types.ts` (framework-free) and
   `src/lib/specs/pipeline.ts` (recursively walks store → Project → arbitrary plain
@@ -97,20 +110,21 @@ Developer.
 - **Tools** — the dedicated `spec_*`/`docs_*` tool family (previously
   `src/lib/assistant/tools/server/specs.ts`) has been retired and folded into the
   generic `file_list`/`file_read`/`file_write`/`file_edit`/`file_patch`/`file_search`/
-  `file_glob` tools (`src/lib/assistant/tools/server/files.ts`), with branch-coupling
+  `file_grep`/`file_glob` tools (`src/lib/assistant/tools/server/files.ts`), with branch-coupling
   and store routing delegated to the VFS mounts (`src/lib/specs/spec-mount.ts`) instead
   of tool-layer special-casing — `specs.ts` is now an empty stub kept only as a
   breadcrumb. Build Studio reaches specs/docs/templates through these `file_*` tools at
-  `/Specs/<store>/...`, `/Docs/...`, `/Templates/...` like any other VFS path. Plus
+  `/Specs/<store>/...`, `/Docs/...`, `/Methods/<id>/templates/...` like any other VFS path. Plus
   `dev_delegate` (`src/lib/assistant/tools/server/dev-delegate.ts`), built
   per-run so it forwards the parent event stream (nested-agent UI) and guards
   nesting depth — see [Sub-agents & delegation](assistant/sub-agents-and-delegation.md).
 - **Agent** — seeded from `seed/agents/build-studio/AGENT.md` by
   `src/lib/agent/subagents/store.ts` (local; thin prompt; `tools` = `file_*` scoped to
-  `/Specs`/`/Templates`/`/Docs` + `dev_delegate` + the `buildstudio_*` viewer tools).
-  Back-filled additively on upgraded installs (only when the agent's `data/agents/<id>/`
-  file is missing — an existing file is never overwritten, so a stale local copy needs a
-  manual fix).
+  `/Specs`/`/Methods`/`/Docs` + `dev_delegate` + the `buildstudio_*` viewer tools).
+  Reconciled three ways on boot via a `.seed-rev` stamp (`subagents/store.ts`): an
+  untouched copy is updated in place, a locally edited one is left alone, and one
+  dropped from `seed/` is archived. A stale local copy does NOT need a manual fix
+  unless it was edited, in which case being left alone is the point.
 - **Skill** — the "Build Studio" driver skill seeded in `skills/store.ts` `SEED`
   (`SKILL.md` triage + a reference per spec-kit step). **This is the extension point**:
   add references or companion skills. An external integration (e.g. a future GitLab
@@ -188,11 +202,80 @@ have the `conflict_*` tools in its allowlist — the dropdown says so when it do
 
 Full architecture: [`features/git-conflict-resolution.md`](features/git-conflict-resolution.md).
 
+## Repositories (050)
+
+A store's **kind** decides its binding scope and what a Project means in it —
+see [repository-and-data-layout](./repository-and-data-layout.md#registered-repositories-050)
+for registration, the `root` vs `repoRoot` split, and the one-level bound on the
+repo walk-up.
+
+The user-facing page is [Settings → Repositories](../usage/settings/repositories.md).
+
+## Projects, and where a workflow may be bound (049)
+
+"A project" is a **different object in each kind of repository**, and so is the
+answer to "where does a method/workflow get chosen". These are two separate
+questions — collapsing them produced two wrong designs before it was noticed.
+
+| Repository kind | A project is | Bind at | Lifecycle |
+|---|---|---|---|
+| Marketplace store (`user-apps`) | an **item** | each item | create only |
+| BOS user specs (`user-specs`) | a **folder / module** | the **store** | create / rename / delete |
+| BOS system specs | — | nowhere (read-only) | none |
+| Arbitrary repo (`050`) | a **folder / module** | the **store** | create / rename / delete |
+
+`user-specs` holds refinements to ONE product, so one pipeline governs all of
+it. Its `037` folders remain — they are organisational grouping and
+feature-numbering scope — but they are **not** binding points. A `method` or
+`workflow` key in a `project.json` there is read, not honoured, and logged as
+ignored rather than silently dropped.
+
+### Creating one
+
+Three tools, and the tree's context menus, share one implementation
+(`src/lib/specs/lifecycle.ts`):
+
+- `create_project(store, name, workflow?)`
+- `rename_project(store, project, name)`
+- `delete_project(store, project, confirm?)` — returns the unit count and
+  refuses until confirmed, so an agent cannot skip the confirmation by not asking
+
+Right-click a store row for **New project**; right-click a project row for
+**Rename** / **Delete**.
+
+`workflow` names a framework's pipeline (`bmad`, `bmad:enterprise`, `openspec`)
+and is accepted **only** where binding is per-project. A bare method id means
+that method's default workflow, so every pre-049 `method:` binding still
+resolves. An unknown name is refused with the available list; an ambiguous one
+reports both providers.
+
+**The workflow must be chosen at creation**, because it decides the primary
+artifact's NAME — `spec.md` under spec-kit, `product-brief.md` under BMAD.
+Binding afterwards leaves the first artifact written under the old marker, where
+the new method does not discover it.
+
+### Not supported, and why
+
+Renaming a marketplace item is an install-identity change: the id is the
+`data/system/<id>` symlink, the marketplace manifest entry and the app
+registration. Deleting one is an uninstall plus a repository change. Both are
+refused with that reason rather than approximated.
+
 ## Conventions
 
-- spec-kit's ENGINE is vendored under `.specify/templates` (templates, command prompts) +
-  `.specify/scripts` and stays in BOS source; the **constitution** is spec CONTENT and lives
-  in the system store at `bos-system-specs/.specify/memory/constitution.md`.
+- A spec framework is a **method descriptor** (045), not code: phases, sections, leaf
+  markers, artifact order and state labels are all data, and BOS ships spec-kit as one
+  descriptor in exactly the shape a marketplace pack uses — there is no `builtin` branch
+  in the pipeline. See [`method-packs.md`](method-packs.md) for the authoring reference.
+  spec-kit's own engine lives in its pack at `seed/method-packs/spec-kit/templates`,
+  mounted at `/Methods/spec-kit/templates` — `.specify/` was deleted from the source
+  tree by 046; another pack's engine lives inside its installed item.
+  The **constitution** is spec CONTENT and lives where the active descriptor says — for
+  spec-kit, in the system store at `bos-system-specs/.specify/memory/constitution.md`,
+  read cross-store for every store (`constitutionRoot: "system"`).
+- Phase ids/labels/states come from the descriptor and are rendered by the client as
+  received. There is no `PHASE_ORDER` or `PHASE_LABEL` in `src/apps/build-studio/` any
+  more, and no compile-time union of phase names in `src/lib/specs/types.ts`.
 - `implement` is ALWAYS a delegation to the Developer (Claude) — Build Studio never edits
   `src/`.
 - Specs are repo content under `specs/`, versioned with BOS (distinct from installed-app

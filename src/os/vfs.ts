@@ -64,6 +64,30 @@ export function registerMount(vfsPrefix: string, backend: FSBackend): void {
   else mounts.push({ vfsPrefix: prefix, backend });
 }
 
+/** Remove a mount, so its paths fall back to default VFS behaviour.
+ *
+ *  Until 045 the table was append-and-replace only — never spliced — because
+ *  mounts were registered once at startup and nothing was ever uninstalled.
+ *  A method pack mounts its templates at install and must un-mount them at
+ *  uninstall (045 FR-012/FR-016); without removal an uninstalled pack's
+ *  templates stay resolvable, which reads as "the pack is still installed".
+ *
+ *  Returns whether a mount was actually removed — an uninstall path that
+ *  silently no-ops on an already-absent mount and one that never registered
+ *  the mount in the first place are different bugs, and the caller cannot
+ *  tell them apart from a void return. Removing an absent prefix is not an
+ *  error (uninstall must stay idempotent).
+ *
+ *  Deliberately NOT in scope: mount lifecycle events and refcounting. Two
+ *  packs cannot share a prefix — each mounts under its own pack id. */
+export function unregisterMount(vfsPrefix: string): boolean {
+  const prefix = normalizeMountPrefix(vfsPrefix);
+  const idx = mounts.findIndex((m) => m.vfsPrefix === prefix);
+  if (idx < 0) return false;
+  mounts.splice(idx, 1);
+  return true;
+}
+
 /** Resolve a normalized VFS path to a mounted backend + backend-relative path. */
 function findMount(norm: string): { backend: FSBackend; rel: string } | null {
   const res = resolveMountPath(norm, mounts.map((m) => m.vfsPrefix));
@@ -88,7 +112,7 @@ async function exists(real: string): Promise<boolean> {
   }
 }
 
-// Register the system mounts (Specs/Docs/Templates) exactly once, before any
+// Register the system mounts (Specs/Docs/Methods) exactly once, before any
 // VFS op touches them. Dynamic import keeps the low-level VFS free of a static
 // dependency on the spec layer (and avoids an import cycle).
 let systemMountsReady = false;
@@ -100,7 +124,7 @@ async function ensureSpecMount(): Promise<void> {
     await mod.ensureSystemMounts();
   } catch {
     // If the spec layer fails to load, unmounted VFS behaviour still works;
-    // /Specs, /Docs, /Templates then fall through to local stub dirs.
+    // /Specs, /Docs, /Methods then fall through to local stub dirs.
     systemMountsReady = false;
   }
 }
@@ -119,13 +143,16 @@ async function ensureVfs(): Promise<void> {
   for (const dir of ["Documents", "Pictures", "Desktop"]) {
     await fs.mkdir(path.join(root, dir), { recursive: true });
   }
-  // Mount-point stubs: real directories so "Specs"/"Docs"/"Templates" appear
+  // Mount-point stubs: real directories so "Specs"/"Docs"/"Methods" appear
   // when listing "/" even though reads/writes under them route to the
   // registered backends (SpecFS / DocsFS / ReadonlyFS). /Specs itself is NOT a
   // mount (only /Specs/user-specs and /Specs/bos-system-specs are), so it needs
   // its own stub children too — otherwise listing /Specs falls through to this
   // plain (would-be-empty) directory instead of resolving into either mount.
-  for (const dir of ["Specs", "Docs", "Templates", "Specs/user-specs", "Specs/bos-system-specs"]) {
+  // 046: "Methods" replaces "Templates" — /Methods itself is not a mount (only
+  // /Methods/<id>/templates is), so like /Specs it needs its own stub to be
+  // listable at all.
+  for (const dir of ["Specs", "Docs", "Methods", "Specs/user-specs", "Specs/bos-system-specs"]) {
     await fs.mkdir(path.join(root, dir), { recursive: true });
   }
   const welcome = path.join(root, "Documents", "welcome.txt");
@@ -146,8 +173,17 @@ export async function list(vfsPath: string): Promise<VfsEntry[]> {
     // Present canonical full VFS paths regardless of the backend's own rooting.
     return entries.map((e) => ({ ...e, path: path.posix.join(norm, e.name) }));
   }
+  // A mount's ANCESTORS are not themselves mounts and need not exist on disk, so
+  // listing one found nothing: `/Methods` looked empty while
+  // `/Methods/<pack>/templates` was mounted and readable. Browsing is how an
+  // agent finds a mount it was not told about, so the intermediate segments are
+  // synthesised from the mount table.
+  const synthetic = mountedChildrenOf(norm);
   const real = resolveSafe(vfsPath);
-  const names = await fs.readdir(real);
+  const names = await fs.readdir(real).catch((err) => {
+    if (synthetic.length) return [] as string[];
+    throw err;
+  });
   const entries = await Promise.all(
     names.map(async (name): Promise<VfsEntry> => {
       const childReal = path.join(real, name);
@@ -161,9 +197,34 @@ export async function list(vfsPath: string): Promise<VfsEntry[]> {
       };
     }),
   );
+  // Union, de-duplicated — a real directory may also contain mount points.
+  const seen = new Set(entries.map((e) => e.name));
+  for (const e of synthetic) if (!seen.has(e.name)) entries.push(e);
   return entries.sort((a, b) =>
     a.type === b.type ? a.name.localeCompare(b.name) : a.type === "dir" ? -1 : 1,
   );
+}
+
+/** The immediate child segments of `dir` implied by the mount table.
+ *
+ *  `/Methods` is not a mount; `/Methods/<pack>/templates` is. Without this the
+ *  parent lists as empty (or ENOENT), so an agent browsing for installed methods
+ *  finds nothing and reasonably concludes none exist. */
+function mountedChildrenOf(dir: string): VfsEntry[] {
+  const prefix = dir === "/" ? "/" : `${dir}/`;
+  const names = new Set<string>();
+  for (const m of mounts) {
+    if (m.vfsPrefix === dir || !m.vfsPrefix.startsWith(prefix)) continue;
+    const child = m.vfsPrefix.slice(prefix.length).split("/")[0];
+    if (child) names.add(child);
+  }
+  return [...names].map((name) => ({
+    name,
+    path: path.posix.join(dir, name),
+    type: "dir" as const,
+    size: 0,
+    modified: 0,
+  }));
 }
 
 export async function stat(vfsPath: string): Promise<VfsEntry> {
@@ -214,7 +275,7 @@ export async function writeBuffer(vfsPath: string, data: Buffer): Promise<void> 
  * Stream a file's bytes without buffering the whole thing in memory — for large
  * files (e.g. a WebDAV mount service's GET). `FSBackend` has no streaming
  * surface (027-vfs-specfs never needed one; its stores are small text/config
- * files), so a mounted path (`/Specs`, `/Docs`, `/Templates`) falls back to a
+ * files), so a mounted path (`/Specs`, `/Docs`, `/Methods/**`) falls back to a
  * buffered read wrapped in a one-shot stream — fine for those, which are never
  * huge. The common, large-file case (plain `/Documents`, etc., unmounted) gets
  * a real `fs.createReadStream`.

@@ -31,9 +31,9 @@ function toDisplayName(slug: string): string {
   return slug.split(/[-_]/).map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
 }
 
-async function readManifestRaw(id: string): Promise<MarketplaceManifest | null> {
+async function readManifestRaw(id: string, dir?: string): Promise<MarketplaceManifest | null> {
   try {
-    const raw = await fs.readFile(path.join(cloneDir(id), MANIFEST_FILE), "utf8");
+    const raw = await fs.readFile(path.join(dir ?? cloneDir(id), MANIFEST_FILE), "utf8");
     return validateManifest(JSON.parse(raw));
   } catch {
     return null;
@@ -44,9 +44,14 @@ async function readManifestRaw(id: string): Promise<MarketplaceManifest | null> 
  *  (local `user-apps` or the marketplace it was cloned from). Falls back to a
  *  title-cased version of the item id if the source manifest is unreadable —
  *  e.g. the marketplace it came from was since removed while the item stays
- *  installed. Never throws. */
-export async function getItemDisplayName(item: InstalledItem): Promise<string> {
-  const manifest = await readManifestRaw(item.marketplaceId ?? LOCAL_MARKETPLACE_ID);
+ *  installed. Never throws.
+ *
+ *  `manifestDir` overrides WHICH checkout's manifest is read, for an item found
+ *  in a branch-coupled clone rather than in `data/user-apps` (item-stores.ts).
+ *  Base's manifest has never heard of an app created on a branch, so without
+ *  this the name silently degrades to the title-cased id. */
+export async function getItemDisplayName(item: InstalledItem, manifestDir?: string): Promise<string> {
+  const manifest = await readManifestRaw(item.marketplaceId ?? LOCAL_MARKETPLACE_ID, manifestDir);
   const entry = manifest?.items.find((i) => i.id === item.id);
   return entry?.name?.trim() || toDisplayName(item.id);
 }

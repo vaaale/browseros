@@ -55,11 +55,22 @@ chown user:user /home/user
 # backend can write to /workspace and /Documents inside the BOS container.
 # Runtime config changes are handled via sudo bos-vfs-link from the "user" process.
 if [ -n "$BOS_DATA_DIR" ]; then
+  # The VFS ROOT itself, not just the leaves below it: `mkdir -p .../vfs/<dir>`
+  # runs as root here, and the `chown -R /app/data` above has already been and
+  # gone (and is skipped entirely once /app/data's own owner matches BOS_UID),
+  # so without this the vfs/ directory stays root-owned forever and ensureVfs()
+  # in src/os/vfs.ts dies with EACCES creating Pictures/Desktop inside it.
+  # Unconditional, so it also repairs containers provisioned before this fix.
+  mkdir -p "$BOS_DATA_DIR/vfs"
+  chown user:user "$BOS_DATA_DIR" "$BOS_DATA_DIR/vfs"
   for _dir in workspace Documents; do
     _target="$BOS_DATA_DIR/vfs/$_dir"
     _link="/$_dir"
-    mkdir -p "$_target" 2>/dev/null || true
-    chown -R user:user "$_target" 2>/dev/null || true
+    # No `|| true` on these two: a data mount BOS cannot write to is a fatal
+    # misconfiguration, and swallowing it is what hid this bug in the first
+    # place — the container came up "healthy" with a broken VFS.
+    mkdir -p "$_target"
+    chown -R user:user "$_target"
     # Only create/update if the path doesn't already exist as a non-symlink.
     if [ ! -e "$_link" ] || [ -L "$_link" ]; then
       ln -sfn "$_target" "$_link" 2>/dev/null || true

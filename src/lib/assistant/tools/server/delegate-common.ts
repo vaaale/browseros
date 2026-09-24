@@ -51,12 +51,16 @@ export async function delegateToAgent(
     let effectiveTask = task;
     if (contentOnly && specPath) {
       try {
-        const { store } = await resolveStoreRoot(specPath);
-        // Item-owned stores (marketplace items) reject an explicit branch
-        // context outright (resolveInStore's own guard) — only directory-
-        // scanned stores (bos-system-specs/user-specs) route through the
-        // active feature branch's mounted worktree.
-        const abs = await resolveAbsolutePath(specPath, store.owner === "item" ? undefined : featureBranch ? { branch: featureBranch } : undefined);
+        // Both halves take the branch. Item-owned stores were excluded here on
+        // the since-outdated belief that they "reject an explicit branch
+        // context" — they route through it like every other writable store
+        // (branchItemStoreRoot), and excluding them produced a base path for an
+        // item whose only copy is on the branch. The lookup itself failed first:
+        // `Unknown spec store "item-<id>"`, which is what a real session hit at
+        // `implement` and then spent three turns working around by hand-writing
+        // a host path into the task body.
+        await resolveStoreRoot(specPath, featureBranch);
+        const abs = await resolveAbsolutePath(specPath, featureBranch ? { branch: featureBranch } : undefined);
         effectiveTask = `${task}\n\n---\nSPEC: Before implementing, read the spec (and any sibling plan.md/design.md/tasks.md/mockup.html in the same directory) at: ${abs}`;
       } catch (e) {
         return `Error: ${toolName}: specPath "${specPath}" could not be resolved: ${(e as Error).message}`;
@@ -68,6 +72,14 @@ export async function delegateToAgent(
       contentOnly,
       featureBranch,
       interactive: true,
+      // 031-self-healing scope-add (ADR-11): a `type: "claude"` delegation is a
+      // SEPARATE top-level run with its own spawned CLI child, and the local
+      // runner does not forward `tool_progress` to its caller's onEvent — so
+      // the delegating run's abort cannot reach this child on its own.
+      // Recording the parentage is what makes Stop on the parent (e.g. a
+      // self-heal build-studio run) also kill this Developer process instead of
+      // orphaning it mid-edit.
+      parentRunId: ctx.runId,
     });
     if (result.error && !result.output) return `Error: ${toolName}: ${result.error}`;
     const output = result.output || result.error || "";
@@ -75,7 +87,11 @@ export async function delegateToAgent(
     return (
       summary +
       encodeNested({
-        events: (result.toolCalls ?? []).map((t) => ({ tool: t.tool, input: t.input })),
+        // 045 US2 (S1): the claude/OpenCode harness is starts-only — it never
+        // emits a per-tool tool_result (the CLI reports its final text once). So
+        // the child entries carry `status: "done"` and NO per-child result; the
+        // card renders them as done cards with no per-child Output.
+        events: (result.toolCalls ?? []).map((t) => ({ tool: t.tool, input: t.input, status: "done" as const })),
         output,
       })
     );

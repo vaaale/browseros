@@ -20,6 +20,30 @@ Detects what the host filesystem supports and which isolation methods are viable
 
 The chosen method is persisted to `data/config/datafs.json` (`{ method }`).
 
+### The probe tests the PAIR, not the data dir
+
+Every capability is measured **from a file in `dataDir()` to a path under
+`dataClonesDir()`** (`src/os/data-dir.ts`, mirroring the Supervisor's `CLONES`),
+and the clone root that was measured is reported back as `caps.cloneRoot`.
+
+This is not a detail. `link(2)` refuses to cross a **mount**, even when both
+paths are on the same filesystem, and the bastion gives each container the two
+directories as two separate bind mounts:
+
+```
+bind …/<user>/data        -> /app/data
+bind …/<user>/data-clones -> /data-clones
+```
+
+The probe used to create both its scratch file and its link inside `dataDir()`,
+which always succeeds, so it reported `hardlink: true` on a deployment where
+`cp -al` failed with `Invalid cross-device link` on every single file. The clone
+layer then fell back to `cp -a` and each "free" clone silently became a full
+copy of the data dir. See `tests/datafs/probe-clone-root.test.ts`.
+
+**A capability probe has to perform the capability**, against the exact pair of
+paths the operation will use.
+
 ---
 
 ## Clone (`src/lib/datafs/clone.ts` + the Supervisor)
@@ -33,9 +57,97 @@ The actual preview clone is provisioned by the Supervisor's `provisionClone(targ
 | `copy` | `cp -a` | plain recursive copy (universal) |
 | `auto` / `hardlink` | `cp -al` | hardlink farm (shared inodes) |
 
-Any failure falls back to a full `cp -a`. **Hardlink isolation is safe because all
-BOS writes are atomic** (`writeFileAtomic` = temp + rename → a new inode, so the
-canonical file is never mutated in place).
+**Hardlink isolation is safe because all BOS writes are atomic**
+(`writeFileAtomic` = temp + rename → a new inode, so the canonical file is never
+mutated in place).
+
+### The method is verified before it is used, and reported after
+
+`provisionClone(target)` returns **`{ method, target, degradedFrom?, reason? }`**
+— the method *actually used*, which is not always the one configured:
+
+1. `auto` resolves by **performing one link (or one block clone) into the clone
+   target's own parent directory**, cached per directory. A method that cannot
+   work there is never chosen.
+2. An **explicitly configured** method that the same probe rejects is logged at
+   **error** level and returned as `degradedFrom`, because the substitute costs a
+   full copy of the data dir *per branch*.
+3. A failure *after* a successful probe still falls back to `cp -a`, but loudly,
+   and the caller is told.
+
+`_provisionPreview` carries any degradation onto the preview as `cloneWarning`,
+which `/__supervisor/begin` returns alongside `baseWarning`.
+
+`cp` is run through `runCp()`, which keeps only the head of stderr and drains the
+rest. `execFile`'s 8 MB `maxBuffer` used to overflow on the one-error-per-file
+flood that a cross-mount `cp -al` produces, so the rejection read
+`stderr maxBuffer length exceeded` and destroyed the line that said
+`Invalid cross-device link` — a diagnostic that failed under exactly the
+conditions it existed to diagnose.
+
+### The clone source: making the hardlink farm possible at all
+
+`link(2)` refuses to cross a **mount**, even when both paths are on one
+filesystem. Two directories therefore share "link-ability" only if one mount
+covers both — and in the bastion the data dir and the clone root were two
+separate binds of two sibling host directories, so `cp -al` failed with EXDEV
+on every file and every clone was a full copy.
+
+`BOS_CLONE_SOURCE` names the **single-mount view of the canonical data dir**:
+the same directory `BOS_DATA_DIR` names, reached through a path that shares a
+mount with the clone root. The bastion binds the user's own directory once at
+`/bos` and sets:
+
+```
+BOS_CLONE_SOURCE=/bos/data          # same dir as /app/data, one mount with ↓
+BOS_DATA_CLONES=/bos/data-clones
+BOS_DATA_DIR=/app/data              # unchanged
+```
+
+`BOS_DATA_DIR` deliberately does **not** move: `installItemLink` writes
+`data/system/<id>` as an ABSOLUTE symlink, so re-addressing the data dir would
+break every installed item in every existing container.
+
+Unset — the standalone layout — it is exactly `CANONICAL_DATA` and nothing
+changes. It is read only by the Supervisor's clone layer
+(`cloneSource()` in `tools/supervisor/lib/worktree.mjs`); it is **not** a second
+data dir, and anything it points at must be the very same directory.
+See `tests/supervisor/clone-source-view.test.mjs` and
+`tests/bastion/clone-single-mount.test.ts`.
+
+### A directory at the clone path is not a clone
+
+`provisionClone` returns `{ method: "existing" }` only for a clone carrying
+**`.bos-clone-complete`**, written inside the staging dir as the last step
+before the atomic rename.
+
+The staging dance keeps a half-finished *copy* from ever appearing at the
+target; it cannot stop something else creating that path. Production had
+`/data-clones/bos/<branch>` holding just `events/`, `user-apps/` and `vfs/` —
+what `mountCoupled` and a running preview write — after the real clone was
+deleted from under the in-memory preview record. The old existence check called
+that "already provisioned", so the preview ran against a data dir with no
+config, no agents and no installed items, permanently and silently.
+
+A marker-less directory is **not** simply rebuilt — every clone predating the
+marker is in that state, and rebuilding would discard a live preview's data.
+It is compared against the clone source's top-level entries: carrying all of
+them means complete, so it is **adopted** (marker written, content untouched);
+missing entries means stub, and it is rebuilt. See
+`tests/supervisor/clone-completeness.test.mjs`.
+
+### Clones are reclaimed when their branch goes away
+
+`reconcileDataClones()` (`tools/supervisor/lib/worktree.mjs`, run at boot right
+after `reconcileWorktrees()`) removes:
+
+- `<CLONES>/bos/<name>` when no `bos/<name>` branch (nor any `bos/<name>/…`) exists
+- `*.provisioning` staging dirs, which are only ever debris from an interrupted copy
+
+A clone can hold data the preview itself wrote, so a clone whose branch still
+exists is never touched, and anything outside the `bos/<branch>` layout is left
+alone. Before this existed, `discardPreview` was the *only* thing that removed a
+clone — deleting an abandoned branch by hand left its clone on disk forever.
 
 ---
 

@@ -34,7 +34,7 @@ the same way.
 | `assistant` | local | the default main‑chat **personality** |
 | `default_agent` | template | shared prompt prepended to agents with "include default prompt" on |
 | `researcher` | local | web research + summaries |
-| `build-studio` | local | authors specs with spec-kit; delegates implementation |
+| `build-studio` | local | authors specs under the store's active method; delegates implementation |
 | `architect` | local | writes `design.md` for a spec, grounded in BOS's own subsystems |
 | `architect-reviewer` | local | independent second pass on a design, verified against real source |
 | `ui-designer` | local | turns a spec into a visual mockup inside the spec directory |
@@ -86,14 +86,21 @@ There are now two distinct entry points into `runSubAgent(agent, task, opts)`
   `type:"local"` EPHEMERAL agent (supplied inline, never persisted) gets a gate built
   from its in-memory object — `gateFromAgent(agent)`, not `gateFor(id)` (a `getAgent(id)`
   lookup is undefined for it). It honors its declared `deferredTools` (so `find_tools` can
-  discover them — see the onEvent note below for how the gate reaches the discovery tool),
-  and any frontend-execution VFS tool it declares (`file_read` / `file_write` / `file_list` /
-  `file_mkdir` / `file_delete` / `file_rename`) is bridged to a direct server-side VFS call
-  (`subagents/ephemeral-tools.ts`) so it is genuinely usable headlessly — there is no browser
-  to dispatch a frontend tool to. A NAMED agent takes the exact pre-patch path (unbridged
-  tools, server-only allowlist, empty deferred set): its gate and `find_tools` are
-  byte-identical to pre-patch — the change is scoped to the ephemeral branch
-  (design.md §9.8 risk #1, the highest blast-radius surface).
+  discover them — see the onEvent note below for how the gate reaches the discovery tool).
+  A NAMED agent gets `gateFor(id)` and an empty deferred set (headless = fully visible,
+  no discovery round-trip). `headlessGate` filters both down to **server-executable**
+  tools, because `awaitFrontendResult` is hard-wired to `{kind:"timeout"}` here.
+
+  **There is no frontend-VFS bridge any more.** ADR-12 added one —
+  `bridgeEphemeralFrontendTools` — because `file_read`/`file_write`/… were
+  frontend-execution tools that a headless run had no browser to dispatch to. It was
+  keyed on `agent.ephemeral`, which left the identical hole open for every headless
+  NAMED agent: Build Studio could not create a file at all, while `find_tools` (reading
+  the persisted `AGENT.md`, not the enforced gate) kept advertising `file_write` — one
+  production run burned 2.3 hours and 69 tool calls on it (EHS-0026). All eleven
+  `file_*` tools are ordinary server tools now, so the allowlist filter simply keeps
+  them for named and ephemeral agents alike and no bridge is needed.
+  See [file tools](../file-tools/file-tools.md).
 
 Three delegation **kinds** share the same `runInnerLoop` primitive and only
 differ in how their gate/system-prompt are resolved
@@ -113,11 +120,23 @@ differ in how their gate/system-prompt are resolved
   collision is logged (`assistant.surface-agents`) and the surface agent is
   dropped, never silently merged with a same-named persisted agent.
 
-`onEvent` streams `{ tool, input }` events live in both paths (used by
-`/api/subagents/delegate` for headless callers; forwarded as nested
-tool-call/tool-result events for the chat path — see
-[Actions & tools](actions-and-tools.md)'s `nested-events.ts`/`NestedEventList`
-rendering). The headless (`runLocalHeadless`) path additionally emits enriched
+`onEvent` streams the inner run's tool activity live in both paths (used by
+`/api/subagents/delegate` for headless callers). For the chat path the inner
+loop (`inner-loop.ts`) reshapes it into nested progress entries forwarded over
+the delegating call's OWN `tool_progress` channel (no new run-event type,
+FR-007): each nested `tool_call` start as the legacy `{ tool, input }` shape —
+now also carrying the inner `callId` — and, since 045 US2, each nested
+`tool_result`/`tool_cancelled` as a typed entry (`{ tool, type, callId,
+result? }`), so a running delegation streams its nested completions
+individually and the card matches each result to its start by inner `callId`,
+not by tool name. The terminal result of the LOCAL path encodes the same
+per-child data — `result?`/`status?`/`nested?` on the widened `NestedEvent`
+(ADR-3 / B1) — so the done delegation's child-card tree also rebuilds after a
+reload; the claude/OpenCode harness stays starts-only (it reports its final
+text once, never per-tool results) and encodes `status: "done"` with no
+per-child result. (See [Actions & tools](actions-and-tools.md)'s
+`nested-events.ts` and the `ToolCardSections.tsx` rendering.)
+The headless (`runLocalHeadless`) path additionally emits enriched
 events so a consuming service can log the full agent-execution stream —
 `{ type:"tool_result", name, result, ok }` (ok/error forwarded from the loop's
 in-band `Error: …` convention, not re-derived), `{ type:"reasoning_delta", delta }`,

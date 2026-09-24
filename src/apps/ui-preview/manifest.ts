@@ -9,7 +9,7 @@ const manifest: AppManifest = {
   order: 56,
   singleton: true,
   builtin: true,
-  // Launched by the Build Studio agent during a bos-app design session, not a
+  // Launched by the Build Studio agent during a UI design session, not a
   // primary desktop/dock entry point.
   hidden: true,
 };

@@ -71,7 +71,7 @@ async function newSession(repo: string, overrides: Record<string, unknown> = {})
     },
     featureBranch: "feature",
     baseBranch: "main",
-    rollbackTag: "bos/pre-reconcile-test",
+    rollbackTag: "bos/testfixture-pre-reconcile-test",
     conversationId: "c-test",
     agentId: "devops",
     snapshot,
@@ -264,7 +264,7 @@ test("abandoning rolls the working tree back to the rollback tag (FR-011/FR-017)
   const repo = makeRepo();
   try {
     const s = await store();
-    git(repo.dir, ["tag", "-a", "bos/pre-reconcile-test", "-m", "anchor"]);
+    git(repo.dir, ["tag", "-a", "bos/testfixture-pre-reconcile-test", "-m", "anchor"]);
     const before = git(repo.dir, ["rev-parse", "HEAD"]);
     const session = await newSession(repo.dir);
     // Simulate a half-done resolution left in the tree.
@@ -459,6 +459,114 @@ test("the boot sweep re-launches `working`, restores `awaiting-user`, and skips 
     // one is skipped entirely.
     expect(emitted.sort()).toEqual([parked.id, working.id].sort());
     expect(emitted).not.toContain(terminal.id);
+  } finally {
+    repo.cleanup();
+    data.cleanup();
+  }
+});
+
+/** The conversation file the escalation would have created. Written through
+ *  the VFS (not raw fs) so it lands wherever `conversations-server` reads it
+ *  from, canonical-data redirection included. */
+async function writeConversation(id: string, fields: Record<string, unknown> = {}) {
+  const vfs = await import("../../src/os/vfs");
+  await vfs.mkdir("/Documents/Chats").catch(() => undefined);
+  await vfs.writeText(
+    `/Documents/Chats/${id}.json`,
+    JSON.stringify({ id, title: "Conflict", createdAt: Date.now(), messages: [], ...fields }, null, 2),
+  );
+}
+
+async function readConversation(id: string): Promise<Record<string, unknown>> {
+  const vfs = await import("../../src/os/vfs");
+  return JSON.parse(await vfs.readText(`/Documents/Chats/${id}.json`)) as Record<string, unknown>;
+}
+
+test("retry re-points a `working` session at the configured agent and relaunches it", async () => {
+  const data = useTempDataDir();
+  const repo = makeRepo();
+  try {
+    const s = await store();
+    // The escalation went to the wrong agent, and (as an older escalation
+    // could) left the conversation without its session tag.
+    await writeConversation("c-retry", { agentId: "wrong-agent" });
+    const session = await newSession(repo.dir, { conversationId: "c-retry", agentId: "wrong-agent" });
+
+    const relaunched: string[] = [];
+    const result = await s.retrySession(session.id, {
+      resolveAgent: async () => "right-agent",
+      relaunch: async (sess, message) => {
+        relaunched.push(sess.id);
+        // The resume prompt must point the agent at its own recorded state.
+        expect(message).toContain("conflict_status");
+      },
+    });
+
+    expect(result.agentId).toBe("right-agent");
+    expect(result.relaunched).toBe(true);
+    expect(relaunched).toEqual([session.id]);
+    expect(result.session.agentId).toBe("right-agent");
+    expect(result.session.status).toBe("working");
+
+    // BOTH halves of the binding are re-asserted: the conversation decides
+    // which agent actually runs, and `conflictSessionId` is what lets that
+    // run's conflict_* tools find this session at all.
+    const conv = await readConversation("c-retry");
+    expect(conv.agentId).toBe("right-agent");
+    expect(conv.conflictSessionId).toBe(session.id);
+
+    // Durable, not just warm-index deep: a restart must see the new agent.
+    delete (globalThis as unknown as Record<string, unknown>).__bosConflictSessions;
+    expect((await s.getSession(session.id))!.agentId).toBe("right-agent");
+  } finally {
+    repo.cleanup();
+    data.cleanup();
+  }
+});
+
+test("retry on a parked session re-points without relaunching (D3)", async () => {
+  const data = useTempDataDir();
+  const repo = makeRepo();
+  try {
+    const s = await store();
+    await writeConversation("c-parked", { agentId: "wrong-agent" });
+    const session = await newSession(repo.dir, { conversationId: "c-parked", agentId: "wrong-agent" });
+    await s.askDecision(session.id, { question: "which side?", path: "notes.md" });
+
+    let relaunches = 0;
+    const result = await s.retrySession(session.id, {
+      resolveAgent: async () => "right-agent",
+      relaunch: async () => {
+        relaunches += 1;
+      },
+    });
+
+    // Parked on the USER: relaunching here would be the agent talking to
+    // itself. The re-point is recorded and takes effect when they answer.
+    expect(result.relaunched).toBe(false);
+    expect(relaunches).toBe(0);
+    expect(result.agentId).toBe("right-agent");
+    expect(result.session.status).toBe("awaiting-user");
+    expect(result.session.pendingDecision?.question).toBe("which side?");
+    expect((await readConversation("c-parked")).agentId).toBe("right-agent");
+  } finally {
+    repo.cleanup();
+    data.cleanup();
+  }
+});
+
+test("retry refuses on a settled session", async () => {
+  const data = useTempDataDir();
+  const repo = makeRepo();
+  try {
+    const s = await store();
+    await writeConversation("c-done");
+    const session = await newSession(repo.dir, { conversationId: "c-done" });
+    await s.abandonSession(session.id);
+
+    await expect(
+      s.retrySession(session.id, { resolveAgent: async () => "right-agent", relaunch: async () => {} }),
+    ).rejects.toThrow(/already abandoned/);
   } finally {
     repo.cleanup();
     data.cleanup();

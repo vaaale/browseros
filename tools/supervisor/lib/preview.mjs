@@ -3,7 +3,7 @@ import path from "node:path";
 import { clonePath, FEATURE_BRANCH_PREFIX, APPS_REPO, REPO, CANONICAL_DATA } from "./config.mjs";
 import { git, refExists, mutate, isFeatureBranch, requireFeatureBranch } from "./gitutil.mjs";
 import { addWorktreeForBranch, provisionClone } from "./worktree.mjs";
-import { mountCoupled, discardCoupled, coupledReposFor, specStoreReposFor, listSpecStores } from "./coupled-repos.mjs";
+import { mountCoupled, discardCoupled, coupledReposFor, listSpecStores, clearCoupledBranchScope } from "./coupled-repos.mjs";
 import { buildAndStart } from "./build.mjs";
 import { startProc, stopProc, waitHealthy, allocPreviewPort } from "./proc.mjs";
 import { state, previews, previewProvisioning } from "./state.mjs";
@@ -39,7 +39,7 @@ async function linkUserAppsIntoWorktree(wt, dataDir) {
 }
 
 async function mountAllCoupled(worktree, dataDir, branch, logComponent) {
-  for (const repo of await coupledReposFor(worktree, dataDir)) {
+  for (const repo of await coupledReposFor(worktree, dataDir, branch)) {
     await mountCoupled(repo, repo.dst, branch).catch((e) =>
       slog("warn", logComponent, `${repo.id} mount failed for ${branch}: ${e?.message || e}`, { branch }),
     );
@@ -49,32 +49,39 @@ async function mountAllCoupled(worktree, dataDir, branch, logComponent) {
   );
 }
 
-// On startup, scan git for bos/* feature branches and re-provision their
-// worktrees. Runtime state is intentionally not persisted: restored previews
-// are treated as not-built and can be rebuilt or resumed explicitly.
+/** A preview that has been DISCOVERED but not materialized: no worktree, no
+ *  data clone, no port. `provisioned: false` is the load-bearing field —
+ *  every consumer that needs a real working directory must go through
+ *  provisionPreview() rather than reading `previews.get()` directly. */
+function dormantPreview(branch) {
+  return { role: "preview", branch, worktree: null, dataDir: null, port: null, state: "not-built", proc: null, commit: undefined, provisioned: false, restored: true };
+}
+
+// On startup, scan git for bos/* feature branches and REGISTER them. Runtime
+// state is intentionally not persisted: restored previews are treated as
+// not-built and can be rebuilt or resumed explicitly.
+//
+// Registration is deliberately free. This used to provision each discovered
+// branch eagerly — `addWorktreeForBranch` (a full source tree + a ~1.1 GB
+// node_modules copy) plus `provisionClone` (a full copy of the canonical data
+// dir) — for previews this very comment describes as not-built, i.e. ones
+// nobody has asked for. On a production box with 21 abandoned `bos/*`
+// branches and an 8.5 GB data dir, one Supervisor restart tried to copy
+// ~200 GB and filled a 155 GB disk mid-copy, taking every user's instance
+// down with it. The cost belongs on first USE, which is what
+// provisionPreview() is for; see tests/supervisor/preview-restore-lazy.test.mjs.
 export async function restorePreviews() {
   const raw = await git(["branch", "--list", `${FEATURE_BRANCH_PREFIX}*`, "--format=%(refname:short)"]).catch(() => "");
   const branches = raw.split("\n").map((s) => s.trim()).filter((s) => s && s !== "HEAD");
   if (!branches.length) return;
+  let registered = 0;
   for (const branch of branches) {
     if (!isFeatureBranch(branch, state.baseBranch)) continue;
-    if (previews.has(branch)) continue; // already provisioned during this run
-    try {
-      const wt = await addWorktreeForBranch(branch);
-      const clone = clonePath(branch);
-      await provisionClone(clone);
-      await mountAllCoupled(wt, clone, branch, "restore");
-      const port = await allocPreviewPort();
-      let commit;
-      try { commit = await git(["rev-parse", "HEAD"], wt); } catch { commit = undefined; }
-      const p = { role: "preview", branch, worktree: wt, dataDir: clone, port, state: "not-built", proc: null, commit };
-      previews.set(branch, p);
-      log(`restored preview ${branch} (not-built) on port ${port}`);
-    } catch (e) {
-      slog("warn", "restore", `failed to restore preview ${branch}: ${e.message || e}`, {});
-    }
+    if (previews.has(branch)) continue; // already registered/provisioned during this run
+    previews.set(branch, dormantPreview(branch));
+    registered++;
   }
-  if (previews.size) log(`restored ${previews.size} preview(s) from git branches`);
+  if (registered) log(`registered ${registered} restorable preview(s) from git branches (each provisioned on first use)`);
 }
 
 // Provision a PREVIEW for `branch`: branch-named worktree + data clone + a
@@ -93,7 +100,10 @@ export async function restorePreviews() {
 export async function provisionPreview(branch) {
   requireFeatureBranch(branch, state.baseBranch);
   const existing = previews.get(branch);
-  if (existing) return existing;
+  // A DORMANT record (registered by restorePreviews, never materialized) is
+  // deliberately not a hit: it has no worktree and no data clone, so handing
+  // it back would give the caller a preview it cannot build, serve, or diff.
+  if (existing?.provisioned) return existing;
   const inFlight = previewProvisioning.get(branch);
   if (inFlight) return inFlight;
   const work = _provisionPreview(branch);
@@ -133,32 +143,75 @@ export async function firstSourceRemote() {
 // bare, unauthenticated `git fetch` against a private remote fails
 // immediately with "could not read Username for '<host>'", and an expired
 // token fails with "Authentication failed" until something refreshes it.
+// BEST-EFFORT, and that is the point. Starting a branch from an up-to-date base
+// makes the eventual promote easier; it is not a correctness requirement, and
+// git reports any divergence at merge time regardless.
+//
+// It used to throw, which made an unreachable remote — or, as observed, an
+// expired OAuth token — block work that touches no network at all: creating a
+// FOLDER in a spec store needs the branch's worktree, creating the branch
+// triggered this fetch, and the user got "No usable OAuth credential for
+// provider gitlab" from an operation that was entirely local. Being offline, or
+// between token refreshes, must not make BOS unusable.
+//
+// Returns the failure so the caller can carry it back rather than dropping it: a
+// branch quietly started from a stale base is a surprise worth naming.
 export async function pullBaseBeforeNewBranch() {
   const remote = await firstSourceRemote();
-  if (!remote) return;
-  await fetchOriginWithAuth(CANONICAL_DATA, git, remote, ["fetch", remote.name, state.baseBranch], REPO);
-  await git(["merge", "--ff-only", `${remote.name}/${state.baseBranch}`]);
+  if (!remote) return null;
+  try {
+    await fetchOriginWithAuth(CANONICAL_DATA, git, remote, ["fetch", remote.name, state.baseBranch], REPO);
+    await git(["merge", "--ff-only", `${remote.name}/${state.baseBranch}`]);
+    return null;
+  } catch (e) {
+    const msg = e?.message || String(e);
+    slog("warn", "begin", `could not refresh ${state.baseBranch} from ${remote.name}; branching from the LOCAL base instead: ${msg}`);
+    return msg;
+  }
 }
 
 async function _provisionPreview(branch) {
   const existing = previews.get(branch);
-  if (existing) return existing;
+  if (existing?.provisioned) return existing;
+  let baseWarning = null;
   if (!(await refExists(REPO, `refs/heads/${branch}`))) {
-    await pullBaseBeforeNewBranch();
+    baseWarning = await pullBaseBeforeNewBranch();
     const from = state.base?.commit || (await git(["rev-parse", "HEAD"]));
     await git(["branch", branch, from]);
   }
   const wt = await addWorktreeForBranch(branch);
   const clone = clonePath(branch);
-  await provisionClone(clone);
-  for (const repo of await coupledReposFor(wt, clone)) {
-    if (repo.kind === "user-apps") await mountCoupled(repo, repo.dst, branch);
+  // Carried, not just logged. A clone that silently fell back from the
+  // configured isolation method costs a full copy of the data dir per branch
+  // — the failure that filled a production disk — and the caller asking for
+  // this preview is the one positioned to notice it happening repeatedly.
+  const cloneResult = await provisionClone(clone);
+  const cloneWarning = cloneResult?.degradedFrom
+    ? `data isolation degraded from "${cloneResult.degradedFrom}" to "${cloneResult.method}" (each clone is a full copy): ${cloneResult.reason}`
+    : null;
+  if (existing?.restored) {
+    // Materializing a preview that restorePreviews DISCOVERED at startup.
+    // Mount every coupled repo, which is exactly what the old eager restore
+    // did inline — moving the work to first use must not quietly drop the
+    // spec-store mounts a restored preview used to come back with.
+    await mountAllCoupled(wt, clone, branch, "restore");
+  } else {
+    for (const repo of await coupledReposFor(wt, clone, branch)) {
+      if (repo.kind === "user-apps") await mountCoupled(repo, repo.dst, branch);
+    }
+    await linkUserAppsIntoWorktree(wt, clone);
   }
-  await linkUserAppsIntoWorktree(wt, clone);
   const port = await allocPreviewPort();
   let commit;
   try { commit = await git(["rev-parse", "HEAD"], wt); } catch { commit = undefined; }
-  const p = { role: "preview", branch, worktree: wt, dataDir: clone, port, state: "not-built", proc: null, commit };
+  // Carried on the preview, not just logged: whoever asked for this branch is
+  // the one who needs to know it started from a stale base.
+  const fields = { role: "preview", branch, worktree: wt, dataDir: clone, port, state: "not-built", proc: null, commit, provisioned: true, ...(baseWarning ? { baseWarning } : {}), ...(cloneWarning ? { cloneWarning } : {}) };
+  // Mutate the registered record IN PLACE when there is one. publicState, a
+  // pin lookup and previewChanges can all be holding the dormant object;
+  // replacing it in the map would leave them reading a permanently
+  // unprovisioned twin.
+  const p = existing ? Object.assign(existing, fields) : fields;
   previews.set(branch, p);
   log(`preview ${branch} provisioned on port ${port}`);
   return p;
@@ -189,16 +242,18 @@ export async function discardPreview(branch) {
   if (!p) {
     for (const s of await listSpecStores()) await discardCoupled(s, branch, null, warnings);
     await discardCoupled({ id: "user-apps", root: APPS_REPO, kind: "user-apps" }, branch, null, warnings);
+    await clearCoupledBranchScope(branch, warnings);
     log(`discarded preview ${branch} (branch deleted)${warnings.length ? ` — warnings: ${warnings.join("; ")}` : ""}`);
     return { warnings };
   }
   await stopProc(p);
-  for (const repo of await coupledReposFor(p.worktree, p.dataDir)) {
+  for (const repo of await coupledReposFor(p.worktree, p.dataDir, branch)) {
     await discardCoupled(repo, branch, repo.dst, warnings);
   }
   await mutate(`remove preview worktree ${p.worktree}`, () => git(["worktree", "remove", "--force", p.worktree]), warnings);
   await mutate(`remove data clone ${p.dataDir}`, () => fs.rm(p.dataDir, { recursive: true, force: true }), warnings);
   await mutate(`delete branch ${p.branch}`, () => git(["branch", "-D", p.branch]), warnings);
+  await clearCoupledBranchScope(p.branch, warnings);
   log(`discarded preview ${p.branch} (branch deleted)${warnings.length ? ` — warnings: ${warnings.join("; ")}` : ""}`);
   return { warnings };
 }
@@ -213,11 +268,18 @@ export async function beginPreview(branch) {
   // logging it as a warning and returning success regardless is exactly the
   // kind of fall-through that turned a real "GitLab auth failed" into a
   // caller-facing "may be busy, retry" guess.
+  //
+  // SCOPED (`coupledReposFor`), because it was not. This is the call that
+  // MOUNTS, and mountCoupled's `worktree add -b` is what CREATES the branch —
+  // so while `coupledReposFor` was scoped and every other caller threaded
+  // through it, this one still enumerated every store on disk and kept making
+  // `bos/*` in the user's unrelated repositories. Scoping the list and leaving
+  // its unscoped twin in reach fixed the description of the bug, not the bug.
   const mountErrors = {};
-  for (const repo of await specStoreReposFor(p.worktree)) {
+  for (const repo of await coupledReposFor(p.worktree, p.dataDir, branch)) {
     await mountCoupled(repo, repo.dst, branch).catch((e) => {
       const msg = e?.message || String(e);
-      slog("warn", "begin", `spec mount failed for ${branch}: ${msg}`, { branch });
+      slog("warn", "begin", `${repo.id} mount failed for ${branch}: ${msg}`, { branch });
       mountErrors[repo.id] = msg;
     });
   }
@@ -225,7 +287,10 @@ export async function beginPreview(branch) {
 }
 
 export async function buildPreview(branch, ctx = {}) {
-  const p = previews.get(requireFeatureBranch(branch, state.baseBranch)) || (await provisionPreview(branch));
+  // Always through provisionPreview: it returns an already-materialized
+  // preview instantly, and materializes a dormant one. Reading `previews`
+  // directly here would hand buildAndStart a record with `worktree: null`.
+  const p = await provisionPreview(requireFeatureBranch(branch, state.baseBranch));
   return await buildAndStart(p, ctx);
 }
 
@@ -254,6 +319,10 @@ export async function activate(branch, ctx = {}) {
 export async function resumePreview(branch) {
   const p = previews.get(requireFeatureBranch(branch, state.baseBranch));
   if (!p) throw new Error(`no preview to resume for ${branch}`);
+  // A registered-but-never-materialized preview has no port and no build
+  // output to resume FROM; startProc would be a no-op on `port: null`.
+  // Provisioning + building is what it actually needs.
+  if (!p.provisioned) return await buildPreview(branch).then(() => p);
   if (p.state === "ready" && p.proc) return p;
   startProc(p);
   p.state = "building";
@@ -273,6 +342,11 @@ export async function resumePreview(branch) {
 // reflected rather than the value captured at registration.
 export async function liveBranch(v) {
   if (!v) return undefined;
+  // A dormant preview has no working dir to read HEAD from. Its branch is the
+  // only thing known about it, and it is authoritative — falling through to
+  // `git(args, null)` would run in the Supervisor's own cwd and report the
+  // BASE branch, making every unprovisioned preview look like base.
+  if (!v.worktree) return v.branch || undefined;
   let b;
   try {
     b = await git(["rev-parse", "--abbrev-ref", "HEAD"], v.worktree);
@@ -296,7 +370,15 @@ export async function liveBranch(v) {
 export async function previewChanges(branch) {
   const p = branch ? previews.get(branch) : null;
   if (!p) return { ok: true, candidate: null };
-  const raw = await git(["diff", "--name-status", `${state.baseBranch}...HEAD`], p.worktree).catch(() => "");
+  // A dormant preview has no worktree, but the question — what does this
+  // branch change against base? — is answerable from the branch REF in the
+  // main checkout, and identically so: the worktree is checked out on that
+  // branch, and the agent's edits are committed there (buildAndStart), so
+  // `base...HEAD` in the worktree and `base...<branch>` in REPO name the same
+  // commit. Answering `candidate: null` instead would be a wrong answer
+  // dressed as "nothing changed".
+  const range = `${state.baseBranch}...${p.provisioned ? "HEAD" : p.branch}`;
+  const raw = await git(["diff", "--name-status", range], p.provisioned ? p.worktree : undefined).catch(() => "");
   const files = raw
     ? raw.split("\n").filter(Boolean).map((l) => {
         const tab = l.indexOf("\t");

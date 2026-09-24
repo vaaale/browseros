@@ -87,4 +87,6 @@ next-env.d.ts
 # tools/copy-vad-assets.mjs (regenerated on predev/prebuild)
 /public/vad/
 
+graphify-out
+
 foo.*

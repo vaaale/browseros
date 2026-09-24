@@ -23,7 +23,8 @@ import {
 } from "./git-ops";
 import { startAssistantRun } from "@/lib/assistant/start-run";
 import { runManager } from "@/lib/assistant/run-manager";
-import { getConfigValue } from "@/lib/config/registry";
+import { patchConversation } from "@/lib/agent/conversations-server";
+import { conflictAgentId } from "./conflict-agent";
 import {
   captureSnapshot,
   createSession,
@@ -53,7 +54,6 @@ import { isTerminalStatus, type ConflictSession, type RepoKind, type SessionComp
 // mergeBranch's, parametrized over an arbitrary `sourceRef` instead.
 
 const CHATS_DIR = "/Documents/Chats";
-const DEVOPS_AGENT_ID = "devops";
 const DEFAULT_MAX_ESCALATION_WAIT_MS = 25 * 60 * 1000; // 25 minutes
 // How often the escalation re-checks its session. The session store is
 // in-process, so this is a Map read plus (at most) one small file read.
@@ -206,26 +206,13 @@ async function createDevOpsConversation(
  *  park→rewake boundary, because `saveConversationMessages` preserves
  *  top-level fields when the loop rewrites the transcript. */
 async function tagConversationWithSession(conversationId: string, sessionId: string): Promise<void> {
-  const file = `${CHATS_DIR}/${conversationId}.json`;
   try {
-    const raw = await vfs.readText(file);
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    parsed.conflictSessionId = sessionId;
-    await vfs.writeText(file, JSON.stringify(parsed, null, 2));
+    await patchConversation(conversationId, { conflictSessionId: sessionId });
   } catch (e) {
     // Without the tag the agent's tools cannot find their session at all —
     // this is a hard failure, not a cosmetic one.
     throw makeError("CONVERSATION_TAG_FAILED", `could not tag conversation ${conversationId} with the conflict session: ${(e as Error).message}`);
   }
-}
-
-/** The agent id used for conflict resolution, read fresh on EVERY escalation
- *  (FR-025) so a change in Settings → Build Studio takes effect with no
- *  reload. Defaults to `devops` — the pre-035 hard-coded value, which is what
- *  keeps the source-repo path byte-identical (FR-023). */
-async function conflictAgentId(): Promise<string> {
-  const configured = await getConfigValue("build-studio", "conflictAgent").catch(() => undefined);
-  return typeof configured === "string" && configured.trim() ? configured.trim() : DEVOPS_AGENT_ID;
 }
 
 /** Build the per-repo working context (design §7.1). This is the ONLY thing

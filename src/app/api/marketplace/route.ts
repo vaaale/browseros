@@ -33,7 +33,7 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  let body: { op?: string; url?: string; id?: string; itemId?: string };
+  let body: { op?: string; url?: string; id?: string; itemId?: string; modules?: string[] };
   try {
     body = await req.json();
   } catch {
@@ -61,7 +61,11 @@ export async function POST(req: NextRequest) {
         if (!body.id || !body.itemId) {
           return NextResponse.json({ error: "id and itemId are required" }, { status: 400 });
         }
-        return NextResponse.json({ installed: await installMarketplaceItem(body.id, body.itemId) });
+        // 048 FR-006: `modules` is the user's module selection for a method
+        // pack. Absent for every other item kind.
+        return NextResponse.json({
+          installed: await installMarketplaceItem(body.id, body.itemId, Array.isArray(body.modules) ? body.modules : undefined),
+        });
       case "install-skill":
         if (!body.id || !body.itemId) {
           return NextResponse.json({ error: "id and itemId are required" }, { status: 400 });

@@ -103,12 +103,33 @@ async function ensureUserStore(dir: string): Promise<void> {
   // customized `label` is worth preserving; the rest is this store's fixed
   // identity, same principle as the system store's "single source of truth"
   // manifest above.
-  const existingLabel = await fs
+  const existing = await fs
     .readFile(path.join(dir, STORE_MANIFEST), "utf8")
-    .then((raw) => (JSON.parse(raw) as Partial<StoreManifest>).label)
-    .catch(() => undefined);
-  const label = typeof existingLabel === "string" && existingLabel.trim() ? existingLabel.trim() : USER_MANIFEST.label;
-  await writeManifest(dir, { ...USER_MANIFEST, label });
+    .then((raw) => JSON.parse(raw) as Partial<StoreManifest>)
+    .catch(() => ({} as Partial<StoreManifest>));
+  const label = typeof existing.label === "string" && existing.label.trim() ? existing.label.trim() : USER_MANIFEST.label;
+  // PRESERVE BY DEFAULT, enforce only the three fields that ARE this store's
+  // identity. Everything else in the manifest is user data.
+  //
+  // This was an allowlist — `label`, then `label` and `method` — and the
+  // allowlist shape is what keeps failing. 045 FR-008 added `method` here
+  // because a method assigned through the picker "would survive exactly until
+  // the next restart and then silently revert to spec-kit". 049 then made
+  // `workflow` the field that SUPERSEDES `method` for exactly this binding
+  // (`resolveMethod` reads `store.workflow ?? store.method`) and did not add it
+  // here — so a store bound to a WORKFLOW, which is how 051's forks are bound,
+  // reverted on the next boot with no message. The same bug, via the field that
+  // replaced the one it was fixed for.
+  //
+  // Spreading `existing` first ends the pattern: a new binding field is
+  // preserved because nobody has to remember to preserve it.
+  await writeManifest(dir, {
+    ...existing,
+    label,
+    owner: USER_MANIFEST.owner,
+    writable: USER_MANIFEST.writable,
+    requiresPromote: USER_MANIFEST.requiresPromote,
+  });
   // Always commit — a pre-existing (non-fresh) repo may still have just received
   // migrated content, which must be committed by the seed rather than left for
   // the SpecFS startup sweep. commitAll no-ops when the tree is clean.
@@ -120,6 +141,38 @@ async function ensureUserStore(dir: string): Promise<void> {
 // .specify) are skipped separately below.
 const STORE_ROOT_KEEP = new Set([STORE_MANIFEST, "overview.md", "discrepancies.md"]);
 
+/** Does this store's METHOD define the store root's layout?
+ *
+ *  The 033 migration below assumes a store root holds feature folders and
+ *  nothing else, so anything else found there must be pre-Project content to be
+ *  rescued. That is true for spec-kit and BMAD, whose only section is `rel: ""`.
+ *  It is false for OpenSpec, which declares `changes/` and `specs/` AT the store
+ *  root — migrating those renames the user's two trees into `user/` and commits
+ *  it, emptying the store on the boot after adoption (047 US1).
+ *
+ *  Read straight off disk rather than through methodFor(): this runs inside
+ *  ensureStores(), which resolving a method would re-enter.
+ *
+ *  A DECLARED BUT UNREGISTERED method also returns true. Not knowing a store's
+ *  layout is the strongest possible reason not to rearrange it — the migration
+ *  is a destructive rename, and refusing to run costs nothing a later boot
+ *  cannot do once the pack is installed. */
+async function methodOwnsStoreRoot(dir: string): Promise<boolean> {
+  let methodId: string | undefined;
+  try {
+    const raw = await fs.readFile(path.join(dir, STORE_MANIFEST), "utf8");
+    const m = JSON.parse(raw) as { method?: unknown };
+    methodId = typeof m.method === "string" && m.method.trim() ? m.method.trim() : undefined;
+  } catch {
+    return false; // no manifest, no binding — ordinary pre-Project content
+  }
+  if (!methodId) return false;
+  const { getMethod } = await import("./method/registry");
+  const descriptor = getMethod(methodId);
+  if (!descriptor) return true; // bound to something we cannot interpret: do not touch
+  return descriptor.sections.some((s) => s.rel !== "");
+}
+
 /** Coarse, one-time migration (033-project-layer): wrap every existing
  *  top-level entry of a store into ONE default Project, so pre-Project
  *  content (a flat NNN-feature layout, or even older un-numbered feature
@@ -128,6 +181,7 @@ const STORE_ROOT_KEEP = new Set([STORE_MANIFEST, "overview.md", "discrepancies.m
  *  under `projectId`, there's nothing left to move and this is a no-op. A
  *  finer-grained reorganization is explicitly deferred to later. */
 async function migrateToDefaultProject(dir: string, projectId: string, projectLabel: string): Promise<boolean> {
+  if (await methodOwnsStoreRoot(dir)) return false;
   const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => [] as import("fs").Dirent[]);
   // Already reorganized into one or more real Projects (any top-level dir
   // owning a project.json) — nothing left to migrate, regardless of what

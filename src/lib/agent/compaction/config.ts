@@ -45,7 +45,14 @@ export const COMPACTION_DEFAULTS: CompactionConfig = {
   keepToolResults: 2,
   keepTailTurns: 3,
   tailBudgetFraction: 0.2,
-  unrecoverableTools: [],
+  // A skill's body cannot be recovered from a summary: summarize.ts asks the
+  // summarizer to preserve app/agent/skill *ids*, not their content, so without
+  // this an agent keeps "I loaded skill X" and loses X's actual instructions
+  // mid-session — the failure looks like the agent ignoring its own skill.
+  // `skill_read_file` is deliberately NOT here (044 FR-008a): reference reads are
+  // large and numerous (target-marketplace-item.md alone is 31KB) and pinning
+  // them would consume most of a long session's context.
+  unrecoverableTools: ["skill_load"],
   lockStalenessMs: 600_000,
   blockSize: 5,
   maxRetainedBlocks: 8,

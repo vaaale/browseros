@@ -520,7 +520,7 @@ Apps System, depending only on the Core OS Layer the same way Apps does.)*
 6. Apps          — built-in + installed app management (moderate)
 6b. Services/Plugins — worker-thread daemons + agent-run hook pipeline (moderate)
 7. Agent         — capabilities, memory, skills, sub-agents (evolving)
-8. Specs         — spec-kit pipeline (evolving)
+8. Specs         — pluggable spec-method pipeline (045: spec-kit is one descriptor among others)
 10. API Routes   — thin delegates to above (moderate)
 11. UI Shell     — Desktop, Windows, Dock (moderate)
 12. Deployment   — bastion, Docker (stable)

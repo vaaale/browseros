@@ -12,32 +12,20 @@ If you're running as the `architect` agent, its `AGENT.md` already told you what
 
 ## Phase 0 — Discovery (don't re-derive what's already mapped)
 
-BOS already maintains its own subsystem map — don't rediscover it from scratch with `ls -R`/generic dependency scans the way you would on an unfamiliar codebase. Read `docs/dev/architecture-overview.md` (subsystem inventory + dependency graph + stability ratings) and `docs/dev/extending-bos.md` (concrete "add X" recipes) first. Then use `bos_source_search`/`bos_source_read` to verify the SPECIFIC area you're designing for against the actual current code — docs drift; the source is truth when they disagree.
+Load `bos-domain` (`skill_load`) first — it holds BOS's own subsystem map, the three implementation shapes and BOS's real containers. Then verify the SPECIFIC area you are designing for against the actual current code with `bos_source_search`/`bos_source_read`. Docs drift; the source is truth when they disagree.
 
 ## Phase 1 — Classify (this is the load-bearing step)
 
-Every BOS app/feature/service is one of exactly three shapes — note that "app" and "service" are FACETS of the third shape, not separate shapes; most non-trivial marketplace items have both. Read the Build Studio skill's target references (`skill_read_file` on `build-studio`'s `references/target-bos-core.md`, `target-builtin-app.md`, `target-marketplace-item.md`) and classify against them:
+Classify the feature as `bos-core`, `builtin-app` or `marketplace-item` **before** sketching any diagram or module. The three shapes, the anatomy of each, and the two classification mistakes to guard against are facts about BOS and live in `bos-domain` — read it there (`skill_read_file` on `bos-domain`'s `references/target-*.md`), then read the matching target reference in full before acting on the result.
 
-| Shape | What it is | Where it lives |
-|---|---|---|
-| `bos-core` | Part of BOS itself — Settings, desktop, API routes, server logic that isn't a self-contained app/service | `src/` |
-| `builtin-app` | A first-class window app compiled into BOS | `src/apps/<id>/` |
-| `marketplace-item` | A self-contained, installable item, not a BOS-source change — an app facet (`app/`, an iframe UI), a service facet (`services/`, an independent worker-thread daemon on its own port, outside Next.js entirely), or both together | `data/user-apps/items/<id>/` |
-
-**The one mistake to actively guard against:** concluding "this needs to change BOS source" because of a technical limitation of Next.js/the App Router (can't handle a non-standard HTTP verb, can't run continuously, needs a raw protocol) — without checking whether a `marketplace-item`'s service facet sidesteps the limitation entirely by never running inside Next.js in the first place. This happened for real once (a WebDAV mount feature wrongly concluded it needed `src/middleware.ts`); the correct answer was an independent worker-thread service, zero `src/` changes. Treat "Next.js can't do X" as a reason to check `target-marketplace-item.md`, never as a conclusion on its own.
-
-**A second mistake to avoid:** don't split one feature into a "marketplace-app part" and a "marketplace-service part" as if they need separate classifications or separate delegations. If a design needs both a UI and a background daemon, it's one `marketplace-item` with two facets — design and install them together.
-
-If built-in vs. marketplace is the live question (not core-vs-item), use the decision checklist in `docs/dev/guides/apps.md` §1: direct OS state / internal APIs / thin wrapper around a BOS subsystem → built-in; self-contained tool with its own lifecycle → marketplace.
-
-State the classification and rationale explicitly, in that exact vocabulary — it needs to drop straight into a spec's `App Target` field without translation.
+What belongs to *you* rather than to `bos-domain` is the discipline: classify first, state the classification and its rationale explicitly, and do not proceed to design until it is settled. A wrong classification invalidates everything downstream, which is why this is the load-bearing step and not a formality.
 
 ## Phase 2 — Architecture design, at BOS's real levels
 
 Match the ceremony to the feature's actual size — a one-file Settings tweak doesn't need three C4 diagrams; a new service with a companion app does.
 
 - **Context** — how a user or the assistant encounters this (a window, a Settings entry, a background service, a new tool).
-- **Container** — BOS's actual containers: the Next.js app process; the Supervisor and its preview worktrees; a worker-thread service process (`ServiceManager.ts`); a marketplace item's own git repo (`data/user-apps/` or a registered marketplace clone); the VFS/GitFS stores; Bastion, if this is multi-user/deployment-relevant. Never substitute a generic container ("the API," "the database") that has no BOS counterpart.
+- **Container** — use BOS's actual containers, enumerated in `bos-domain`. Never substitute a generic one ("the API," "the database") that has no BOS counterpart.
 - **Component** — real files/modules this adds or touches, following the anatomy in the matching target reference (e.g. `manifest.ts`+`index.tsx` for a built-in app; `service.json`+entry script for a service).
 
 Use Mermaid for Context/Container diagrams when the shape is non-trivial enough to benefit from one.

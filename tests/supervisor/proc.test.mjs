@@ -22,6 +22,13 @@ import { installFakeNpx } from "./_server-helpers.mjs";
 // long enough for a REAL freshly-spawned node process to come up (a couple
 // retry cycles), or the "becomes healthy" tests below are racy under load.
 process.env.BOS_HEALTH_TIMEOUT_MS = "5000";
+// This file BINDS BASE_PORT+1 for real (the "occupied port" fixture below), so
+// it must not share a port pool with any other test file — `node --test
+// <glob>` runs them concurrently and config.mjs's default base is 3000 for
+// every process. Must be set before the proc.mjs import: config.mjs freezes
+// BASE_PORT at first import. Same pid-derived, below-ephemeral scheme as
+// _data-helpers.mjs's makeSupervisorEnv, offset so the two never overlap.
+process.env.BOS_PORT_BASE = String(20000 + (process.pid % 250) * 40 + 20);
 
 const {
   probeOnce,
@@ -74,21 +81,19 @@ test("probeOnce: a raw TCP-only listener (connects, never answers HTTP) still co
 });
 
 test("allocPreviewPort: skips ports already tracked by state.base/previews and anything foreign already listening", async () => {
-  const base = await freePort();
-  process.env.BOS_PORT_BASE = String(base);
-  process.env.BOS_PORT_POOL_SIZE = "4";
   // Re-import with a fresh module registry isn't possible for config.mjs
-  // (frozen per process) — this test instead drives allocPreviewPort's own
-  // used-port bookkeeping directly against the ALREADY-frozen BASE_PORT/
-  // POOL_SIZE from this file's first import, using ports it actually
-  // computes from those (BASE_PORT+1..+POOL_SIZE).
+  // (frozen per process), so this test drives allocPreviewPort's own
+  // used-port bookkeeping against the ALREADY-frozen BASE_PORT/POOL_SIZE from
+  // this file's first import, using ports it computes from those
+  // (BASE_PORT+1..+POOL_SIZE). Assigning BOS_PORT_BASE here would do nothing;
+  // this file's private pool is set at the top, before that import.
   const { BASE_PORT, POOL_SIZE } = await import("../../tools/supervisor/lib/config.mjs");
   const occupied = net.createServer();
   await new Promise((resolve) => occupied.listen(BASE_PORT + 1, "127.0.0.1", resolve));
   try {
     state.base = { port: BASE_PORT + 2 };
     previews.clear();
-    previews.set("bos/x", { port: BASE_PORT + 3 });
+    previews.set("bos/testfixture-x", { port: BASE_PORT + 3 });
     const allocated = await allocPreviewPort();
     assert.equal(allocated, BASE_PORT + 4, `expected the first free slot after skipping +1(occupied)/+2(base)/+3(preview), within pool size ${POOL_SIZE}`);
   } finally {
@@ -134,14 +139,14 @@ function fakeChildProcess() {
 }
 
 test("wireExitHandler: an unexpected exit from a READY version marks it stopped", () => {
-  const v = { role: "preview", branch: "bos/x", state: "ready", proc: fakeChildProcess() };
+  const v = { role: "preview", branch: "bos/testfixture-x", state: "ready", proc: fakeChildProcess() };
   wireExitHandler(v);
   v.proc.emit("exit", 1, null);
   assert.equal(v.state, "stopped");
 });
 
 test("wireExitHandler: an unexpected exit from a BUILDING version marks it failed with a buildError naming the exit", () => {
-  const v = { role: "preview", branch: "bos/x", state: "building", proc: fakeChildProcess() };
+  const v = { role: "preview", branch: "bos/testfixture-x", state: "building", proc: fakeChildProcess() };
   wireExitHandler(v);
   v.proc.emit("exit", null, "SIGSEGV");
   assert.equal(v.state, "failed");
@@ -149,7 +154,7 @@ test("wireExitHandler: an unexpected exit from a BUILDING version marks it faile
 });
 
 test("wireExitHandler: an EXPECTED exit (Stop/promote) never triggers base-restart or a state flip away from what the caller already set", () => {
-  const v = { role: "preview", branch: "bos/x", state: "ready", expectingExit: true, proc: fakeChildProcess() };
+  const v = { role: "preview", branch: "bos/testfixture-x", state: "ready", expectingExit: true, proc: fakeChildProcess() };
   wireExitHandler(v);
   v.proc.emit("exit", 0, null);
   assert.equal(v.state, "stopped", "state bookkeeping still applies — only the base-restart trigger is suppressed for expected exits");
@@ -214,7 +219,7 @@ test("startProc + waitHealthy + stopProc: a real spawned server (via fake npx) b
   try {
     const port = await freePort();
     const worktree = mkdtempSync(join(tmpdir(), "proc-startproc-wt-"));
-    const v = { role: "preview", branch: "bos/x", worktree, dataDir: worktree, port, state: "building", proc: null };
+    const v = { role: "preview", branch: "bos/testfixture-x", worktree, dataDir: worktree, port, state: "building", proc: null };
     startProc(v);
     try {
       const healthy = await waitHealthy(port, v);
@@ -238,7 +243,7 @@ test("waitHealthy: an unhealthy server (never answers /api/health) times out and
   try {
     const port = await freePort();
     const worktree = mkdtempSync(join(tmpdir(), "proc-unhealthy-wt-"));
-    const v = { role: "preview", branch: "bos/x", worktree, dataDir: worktree, port, state: "building", proc: null };
+    const v = { role: "preview", branch: "bos/testfixture-x", worktree, dataDir: worktree, port, state: "building", proc: null };
     const origEnv = process.env.FAKE_SERVER_UNHEALTHY;
     process.env.FAKE_SERVER_UNHEALTHY = "1";
     try {

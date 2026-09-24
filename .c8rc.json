@@ -1,15 +1,17 @@
 {
   "include": [
-    "src/os/vfs.ts",
-    "src/os/mount-table.ts",
-    "src/os/path-jail.ts",
-    "src/os/fs/**/*.ts"
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "bastion/src/**/*.ts",
+    "tools/supervisor/**/*.mjs"
   ],
   "exclude": [
     "**/*.test.ts",
-    "**/*.d.ts"
+    "**/*.d.ts",
+    "src/apps/_*.generated.ts"
   ],
+  "extension": [".ts", ".tsx", ".mjs"],
   "all": true,
-  "reporter": ["text", "html", "json-summary"],
+  "reporter": ["text-summary", "html", "json-summary", "lcovonly"],
   "reports-dir": "coverage"
 }

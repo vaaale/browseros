@@ -5,6 +5,8 @@ import { FileText } from "lucide-react";
 import { useLogContextMenu } from "@/components/logging/useLogContextMenu";
 import { useOSStore } from "@/store/os-provider";
 import { supervisorPost, promoteAndWait, promoteIssues, type SupState, type Branches } from "@/lib/supervisor/client";
+import { notifySelfHealBranchSettled } from "@/lib/self-heal/branch-settled-client";
+import { archiveConversationsForBranch } from "@/lib/agent/conversations";
 import { ConflictSessionBadge } from "@/components/gitops/ConflictSessionBadge";
 
 interface LogRecord {
@@ -255,8 +257,11 @@ export function VersionControls() {
     if (!window.confirm(`Discard ${selectedBranch}? This destroys its worktree and deletes the branch — any uncommitted work is lost.`)) return;
     setErr(null);
     const r = await post("discard", { branch: selectedBranch });
-    if (r.ok) window.location.reload();
-    else {
+    if (r.ok) {
+      // FR-038: best-effort notice — the boot reconcile is the guarantee.
+      notifySelfHealBranchSettled(selectedBranch, "discarded");
+      window.location.reload();
+    } else {
       setErr(r.error || "Discard failed.");
       await load();
     }
@@ -278,6 +283,13 @@ export function VersionControls() {
       setPromoting(false);
     });
     if (r.ok) {
+      // FR-038: best-effort notice — the boot reconcile is the guarantee.
+      notifySelfHealBranchSettled(selectedBranch, "promoted");
+      // 038: the promoted feature's conversation(s) tidy themselves into the
+      // Archived section. AWAITED before the reload (ADR-7): the helper is
+      // async, so fire-and-forget would let the reload preempt it before any
+      // PATCH is even dispatched; it never throws, so it can't fail the promote.
+      await archiveConversationsForBranch(selectedBranch);
       const issues = promoteIssues(r);
       if (issues) {
         window.alert(`Promoted ${selectedBranch}, but with issues:\n\n${issues.join("\n")}`);

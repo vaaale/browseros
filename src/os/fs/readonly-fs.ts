@@ -5,7 +5,7 @@ import type { VfsEntry } from "../types";
 
 // A read-only FSBackend wrapping LocalFS: reads pass straight through, every
 // write op refuses. Used for VFS mounts that expose BOS-owned reference
-// material (e.g. /Templates) where agents must never be able to write.
+// material (e.g. a method pack's /Methods/<id>/templates) where agents must never be able to write.
 export class ReadonlyFS implements FSBackend {
   private readonly inner: LocalFS;
 

@@ -14,8 +14,15 @@ function decl(name: string, description: string, properties: Record<string, unkn
 export const FRONTEND_TOOL_DECLARATIONS: ToolDeclaration[] = [
   decl(
     "bos_app_launch",
-    "Open an application window. Use bos_app_list to discover available app ids.",
-    { appId: str("The app id, e.g. files, browser, settings, chat") },
+    "Open an application window. Use bos_app_list to discover available app ids. `params` is passed straight through to the app as its launch parameters, which is how you open a window ALREADY POINTED AT something — e.g. `{appId:\"editor\", params:{file:\"/Documents/report.md\"}}` opens the Editor on that file, `{appId:\"browser\", params:{url:\"https://…\"}}` opens the browser at that URL, `{appId:\"build-studio\", params:{pane:\"self-heal\", caseId:\"0001\"}}` opens Build Studio on one Healing Case. Which keys an app understands is the app's own contract (see its manifest/component); unknown keys are ignored.",
+    {
+      appId: str("The app id, e.g. files, browser, settings, chat"),
+      params: {
+        type: "object",
+        description:
+          "Optional launch parameters handed to the app on open (e.g. {file: \"/Documents/x.md\"} for the Editor, {url: \"https://…\"} for the browser). Omit to open the app on its default view.",
+      },
+    },
     ["appId"],
   ),
   decl("bos_app_list", "List installed applications and their ids."),
@@ -56,31 +63,14 @@ export const FRONTEND_TOOL_DECLARATIONS: ToolDeclaration[] = [
       muted: { type: "boolean", description: "Video only: start with audio muted. Required for autoplay to be allowed." },
     },
   ),
-  decl(
-    "file_list",
-    "List entries in the USER'S virtual file system (their Documents, Pictures, Desktop, etc.). This is sandboxed user data — it does NOT contain BrowserOS's own source code, apps, or Settings pages. To change BrowserOS itself, delegate to the developer sub-agent (see the 'Modify BrowserOS' skill); do not hunt for source here.",
-    { path: str('Directory path, defaults to "/"') },
-  ),
-  decl(
-    "file_read",
-    "Read a text file from the user's virtual file system (sandboxed user data, NOT BrowserOS source code).",
-    { path: str("File path") },
-    ["path"],
-  ),
-  decl(
-    "file_write",
-    "Create or overwrite a text file in the user's virtual file system (sandboxed user data, NOT BrowserOS source code). To modify BrowserOS itself, delegate to the developer sub-agent instead.",
-    { path: str("File path"), content: str("File contents") },
-    ["path", "content"],
-  ),
-  decl("file_mkdir", "Create a directory in the virtual file system.", { path: str("Directory path") }, ["path"]),
-  decl("file_delete", "Delete a file or folder from the virtual file system.", { path: str("Path to delete") }, ["path"]),
-  decl(
-    "file_rename",
-    "Rename or move a file or folder within the virtual file system.",
-    { path: str("Current path"), to: str("New path") },
-    ["path", "to"],
-  ),
+  // NOTE: file_list/file_read/file_write/file_mkdir/file_delete/file_rename are
+  // NOT here. They are server tools — src/lib/assistant/tools/server/files.ts,
+  // alongside file_edit/file_patch/file_search. They lived here until the VFS
+  // CRUD tools were moved server-side; the browser handler was only ever a
+  // fetch to /api/fs, and being frontend-execution made them uncallable in any
+  // headless run. Do not re-add them here: two declarations of one tool is a
+  // shadowing bug waiting on registry spread order.
+  // See docs/dev/file-tools/file-tools.md.
   decl(
     "app_install",
     "Install a BrowserOS app from a single self-contained index.html document, then add it to the dock and open it. Use this AFTER delegating the build to a Claude developer sub-agent (development tasks must not be hand-written). Pass the HTML the sub-agent produced.",
@@ -118,18 +108,24 @@ export const FRONTEND_TOOL_DECLARATIONS: ToolDeclaration[] = [
   ),
   decl(
     "ui_preview_open",
-    "Open (or focus, if already open) the UI Preview window, where you render live UI mockups during a bos-app design session. Open it at the start of the UI-design phase and keep it open for the rest of the session; then use ui_preview_generate to create a mockup and ui_preview_patch to iterate on it.",
+    "Open (or focus, if already open) the UI Preview window, where you render live UI mockups during a UI design session. Open it at the start of the UI-design phase and keep it open for the rest of the session; then use ui_preview_generate to create a mockup and ui_preview_patch to iterate on it.",
   ),
   decl(
     "dev_branch_request",
-    "Set up the active feature branch required to modify BrowserOS itself (its source under src/). Call this BEFORE delegating a BOS source change to the developer when no active feature branch is set; it proposes a name from the task (or from suggestedBranch when provided), lets the user confirm/edit, then creates and activates the bos/<kebab-name> branch on this conversation. Returns a message; only delegate to the developer once a branch is active.",
+    "Set up the active feature branch required to modify BrowserOS itself (its source under src/). Call this BEFORE delegating a source change to the developer when no active feature branch is set; it proposes a name from the task (or from suggestedBranch when provided), lets the user confirm/edit, then creates and activates the bos/<kebab-name> branch on this conversation. Returns a message; only delegate to the developer once a branch is active.\n\nSTATE THE SCOPE. It decides which repositories get the branch, and you already know it — you determined what kind of change this is in order to load the right skills. Getting it wrong creates branches in the user's unrelated projects:\n• `bos-core` — changing BrowserOS itself. Branches BOS's source and user-specs.\n• `marketplace-item` + `scopeId: <item id>` — changing or creating a marketplace app. Branches BOS's source and user-apps.\n• `repository` + `scopeId: <repo id>` — work in one registered repository. Branches that repository ONLY.\nOmitting scope branches BOS's own repositories and never the user's.",
     {
-      task: str("The BOS source change you want the developer to make"),
+      task: str("The source change you want the developer to make"),
+      scope: str(
+        "What this change IS: 'bos-core', 'marketplace-item' or 'repository'. Decides which repositories get the branch.",
+      ),
+      scopeId: str(
+        "Required for 'marketplace-item' (the item id, e.g. 'agentic-text-editor') and for 'repository' (the registered repository's id, e.g. 'police-mcp'). Omit for 'bos-core'. For an app that does not exist YET, pass the id it will get — the app's name in lowercase-kebab ('Follow the Money' -> 'follow-the-money') — rather than nothing: until the branch names an item, no row in Build Studio can show that it is the one being worked on.",
+      ),
       suggestedBranch: str(
         "Branch slug from the spec's Feature Branch field (without the bos/ prefix, e.g. '001-my-feature'). When provided, pre-fills the branch name input for the user to confirm.",
       ),
     },
-    ["task"],
+    ["task", "scope"],
   ),
 ];
 
@@ -144,10 +140,14 @@ export const FRONTEND_TOOL_DECLARATIONS: ToolDeclaration[] = [
  * kernel — it is only ever what an individual HANDLER touches.
  *
  * Hence this is an explicit per-tool allowlist rather than a blanket flag:
- * these three read state and return it (a store read, two stateless fetches
- * through `fsClient.scoped()`, which builds a fresh client per call). Every
- * mutating handler — file_write, file_delete, bos_window_close, the ui_preview
- * family — is deliberately absent: two concurrent writes to one path, or two
- * window mutations in one frame, are exactly the races this guards against.
+ * `bos_app_list` reads store state and returns it. Every mutating handler —
+ * bos_window_close, app_install, the ui_preview family — is deliberately
+ * absent: two window mutations in one frame are exactly the race this guards
+ * against.
+ *
+ * The VFS readers (file_read/file_list) used to be listed here too; they are
+ * server tools now and carry their own `parallel()` marking in
+ * tools/server/files.ts. The rule they encode is unchanged — readers
+ * concurrent, writers sequential.
  */
-export const PARALLEL_SAFE_FRONTEND_TOOLS = new Set(["file_read", "file_list", "bos_app_list"]);
+export const PARALLEL_SAFE_FRONTEND_TOOLS = new Set(["bos_app_list"]);

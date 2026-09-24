@@ -94,13 +94,15 @@ export async function setPluginOrder(orderedIds: string[]): Promise<void> {
   await writePluginsConfig(config);
 }
 
-/** Initialize the default plugins (compaction + memory) if not already present. */
+/** Initialize the default plugins (compaction + memory + self-heal triggers) if
+ *  not already present. */
 export async function ensureDefaultPlugins(): Promise<void> {
   const config = await readPluginsConfig();
 
   const defaults = [
     { id: "bos-compaction", name: "Context Compaction", initPath: "@/plugins/compaction/init" },
     { id: "bos-memory", name: "Memory System", initPath: "@/plugins/memory/init" },
+    { id: "bos-self-heal", name: "Self-Healing Triggers", initPath: "@/plugins/self-heal/init" },
   ];
 
   let changed = false;

@@ -116,9 +116,13 @@ test.describe("Assistant card collapse", () => {
     // The final answer is always shown.
     await expect(page.getByText(TOOL_ANSWER)).toBeVisible();
 
-    // The tool card header toggles its body (stays mounted but hidden when closed).
+    // The tool card header toggles its body (stays mounted but hidden when
+    // closed). The body probe is the Input section's root (in the body, not the
+    // header): since the header now shows the primary argument as a human
+    // summary detail (045 FR-012), DOCREF_9931 also appears in the header and
+    // is visible even when the card body is closed.
     const header = page.getByRole("button", { name: /docs_read/ });
-    await expectToggles(page, header, page.getByText(DOCREF), "hidden");
+    await expectToggles(page, header, page.getByTestId("tool-card-input"), "hidden");
 
     await request.post("/api/fs", { data: { op: "delete", path: toolPath } });
   });

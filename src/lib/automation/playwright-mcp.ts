@@ -2,11 +2,13 @@ import "server-only";
 import type { McpServerConfig } from "@/lib/mcp/types";
 import { getRegistration } from "@/lib/config/registry";
 import { detectPlaywright } from "@/lib/playwright/probe";
+import { hostPath } from "@/os/vfs";
 
 // Builds a *managed* Playwright MCP server from the `browser-automation` config
 // (specs/004-browser-automation/spec.md). It is not persisted to
-// data/mcp-servers.json — it is derived per request and appended to the agent's
-// MCP servers in runtime.ts, so policy changes apply with no restart.
+// data/mcp-servers.json — it is derived per call, so policy changes apply with
+// no restart. Consumed by the stateful session layer (browser-session.ts),
+// which the browser_* registry tools drive.
 
 export interface BrowserAutomationConfig {
   enabled: boolean;
@@ -19,6 +21,25 @@ export interface BrowserAutomationConfig {
   consentPolicy: string;
 }
 
+/** VFS folder where the browser writes screenshots and other output files —
+ *  chosen so everything the browser produces is visible in the Files app and
+ *  addressable by the file_* tools, instead of dying in a temp dir. */
+export const SCREENSHOTS_VFS_DIR = "/Screenshots";
+
+export interface BrowserAutomationStatus {
+  /** Master switch (Settings → Browser Automation). */
+  enabled: boolean;
+  /** A Chromium build is installed (probe). */
+  browser: boolean;
+  /** Human-readable explanation when `server` is null despite `enabled`. */
+  reason?: string;
+  /** Ready-to-connect server config, or null when disabled/unavailable. */
+  server: McpServerConfig | null;
+  /** Host path of SCREENSHOTS_VFS_DIR (passed as --output-dir). */
+  outputHostDir: string;
+  outputVfsDir: string;
+}
+
 function toOriginList(raw: string): string {
   // Playwright MCP expects a semicolon-separated origin list (no spaces).
   return (raw || "")
@@ -29,22 +50,31 @@ function toOriginList(raw: string): string {
 }
 
 /**
- * Resolve the Playwright MCP server config, or null when automation is disabled
- * or no browser is available (graceful degrade — the agent simply gets no
- * browser tools rather than failing).
+ * Resolve the browser-automation state: the master switch, the browser probe,
+ * and (when both pass) the ready-to-connect Playwright MCP server config.
+ * Callers that only need go/no-go read `server`; the session layer also uses
+ * the output dirs and the reason for actionable error messages.
  */
-export async function getBrowserAutomationServer(): Promise<McpServerConfig | null> {
+export async function getBrowserAutomationStatus(): Promise<BrowserAutomationStatus> {
+  const outputVfsDir = SCREENSHOTS_VFS_DIR;
+  const outputHostDir = hostPath(outputVfsDir);
+  const base = { outputHostDir, outputVfsDir };
+
   const reg = getRegistration("browser-automation");
-  if (!reg) return null;
+  if (!reg) {
+    return { ...base, enabled: false, browser: false, server: null, reason: "browser-automation config namespace is not registered" };
+  }
   const cfg = (await reg.load()) as unknown as BrowserAutomationConfig;
-  if (!cfg.enabled) return null;
-
-  // Probe-and-degrade: no browser → no automation tools.
   const caps = detectPlaywright();
-  if (!caps.browser) return null;
+  if (!cfg.enabled) return { ...base, enabled: false, browser: caps.browser, server: null };
+  // Probe-and-degrade: no browser → no automation tools, with the probe's
+  // install hint carried through so the agent can tell the user what to do.
+  if (!caps.browser) return { ...base, enabled: true, browser: false, server: null, reason: caps.reason };
 
-  const base = (cfg.command || "npx @playwright/mcp").trim();
-  const args: string[] = [];
+  // The user-configured launcher is a command LINE (whitespace-split, as
+  // documented in Settings); everything BOS appends goes into args as discrete
+  // values, so paths with spaces (--output-dir, --executable-path) are safe.
+  const [command, ...args] = (cfg.command || "npx @playwright/mcp").trim().split(/\s+/);
   if (cfg.headless) args.push("--headless");
   if (cfg.isolated) args.push("--isolated");
   // The user container has no CAP_SYS_ADMIN and no seccomp override for
@@ -56,14 +86,31 @@ export async function getBrowserAutomationServer(): Promise<McpServerConfig | nu
   // Reuse the installed Playwright Chromium (the MCP server otherwise wants a
   // separate chrome-for-testing build). The probe resolves the bundled binary.
   if (caps.chromiumExecutable) args.push("--executable-path", caps.chromiumExecutable);
+  // Screenshots/output land in the VFS, not a temp dir (see SCREENSHOTS_VFS_DIR).
+  // Setting --output-dir alone flips the server into file-output mode, where
+  // even page SNAPSHOTS are written to .yml files instead of returned inline —
+  // useless to the model. Pin stdout mode: snapshots stay in the tool result,
+  // screenshots are still saved to the output dir.
+  args.push("--output-dir", outputHostDir, "--output-mode", "stdout");
 
   const allowed = toOriginList(cfg.allowedOrigins);
   if (allowed) args.push("--allowed-origins", allowed);
   const blocked = toOriginList(cfg.blockedOrigins);
   if (blocked) args.push("--blocked-origins", blocked);
 
-  // The endpoint is split on whitespace into command+argv by the stdio
-  // transport, so no argument value may contain spaces (origin lists use ";").
-  const endpoint = [base, ...args].join(" ");
-  return { name: "browser-automation", endpoint, transport: "stdio" };
+  return {
+    ...base,
+    enabled: true,
+    browser: true,
+    server: { name: "browser-automation", transport: "stdio", command, args },
+  };
+}
+
+/**
+ * The Playwright MCP server config, or null when automation is disabled or no
+ * browser is available (graceful degrade). Kept for the legacy CopilotKit
+ * runtime path (agent/runtime.ts); new code should use the session layer.
+ */
+export async function getBrowserAutomationServer(): Promise<McpServerConfig | null> {
+  return (await getBrowserAutomationStatus()).server;
 }

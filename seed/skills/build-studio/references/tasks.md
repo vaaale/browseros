@@ -1,3 +1,0 @@
-Step: tasks. Read `/Templates/commands/tasks.md` and `/Templates/tasks-template.md` with `file_read` (always). Read the spec and plan with `file_read` for `bos-core`/`builtin-app`/`n/a`, or `app_spec_read` for `marketplace-item`. Write tasks.md — `/Specs/<store>/<id>/tasks.md` via `file_write`, or `item-<id>/tasks.md` via `app_spec_write` for `marketplace-item`: tasks grouped by user story, dependency-ordered, [P] for parallelizable, with exact file paths.
-
-You write tasks.md. Nothing else — listing a task like "create services/service.json" is a task DESCRIPTION for the Developer to execute later during `implement`; it is not an instruction to create that file yourself now.

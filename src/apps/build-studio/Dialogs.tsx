@@ -80,6 +80,8 @@ export function PromptDialog({
   confirmLabel = "Create",
   busy = false,
   error,
+  choices,
+  choiceLabel,
   onConfirm,
   onCancel,
 }: {
@@ -91,10 +93,16 @@ export function PromptDialog({
   confirmLabel?: string;
   busy?: boolean;
   error?: string;
-  onConfirm: (value: string) => void;
+  /** An optional single-choice list above the input. Generic on purpose: the
+   *  dialog does not know what a choice MEANS, only that the caller needs one
+   *  alongside the name. The first entry is preselected. */
+  choices?: Array<{ id: string; label: string; hint?: string }>;
+  choiceLabel?: string;
+  onConfirm: (value: string, choiceId?: string) => void;
   onCancel: () => void;
 }) {
   const [value, setValue] = useState(initialValue);
+  const [choice, setChoice] = useState(() => choices?.[0]?.id ?? "");
   const inputRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     // Deferred a tick: this dialog mounts via a portal in direct response to
@@ -111,12 +119,34 @@ export function PromptDialog({
   }, []);
   const submit = () => {
     if (!value.trim() || busy) return;
-    onConfirm(value.trim());
+    if (choices?.length && !choice) return;
+    onConfirm(value.trim(), choices?.length ? choice : undefined);
   };
   return (
     <Overlay onDismiss={onCancel}>
       <h3 className="mb-1.5 text-sm font-semibold text-white/90">{title}</h3>
       {message && <p className="mb-2 text-xs text-white/60">{message}</p>}
+      {!!choices?.length && (
+        <div className="mb-3">
+          {choiceLabel && <div className="mb-1 text-[11px] uppercase tracking-wide text-white/40">{choiceLabel}</div>}
+          <div className="max-h-52 space-y-0.5 overflow-auto">
+            {choices.map((c) => (
+              <label
+                key={c.id}
+                className={`flex cursor-pointer items-start gap-2 rounded px-2 py-1.5 text-xs ${
+                  choice === c.id ? "bg-white/10 text-white/85" : "text-white/60 hover:bg-white/5"
+                }`}
+              >
+                <input type="radio" className="mt-0.5" checked={choice === c.id} disabled={busy} onChange={() => setChoice(c.id)} />
+                <span className="min-w-0">
+                  <span className="block">{c.label}</span>
+                  {c.hint && <span className="block text-[10px] leading-snug text-white/35">{c.hint}</span>}
+                </span>
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="mb-1 flex items-center rounded border border-white/10 bg-black/30 px-2 py-1.5 focus-within:border-white/25">
         {prefix && <span className="shrink-0 text-xs text-white/40">{prefix}</span>}
         <input
@@ -155,6 +185,10 @@ export interface MenuItem {
   onSelect: () => void;
   danger?: boolean;
   disabled?: boolean;
+  /** Why this item is disabled. A greyed-out action with no reason is its own
+   *  small mystery — the user cannot tell "not allowed here" from "broken", and
+   *  the one thing they need (pick a branch) is not guessable from the label. */
+  hint?: string;
   /** Renders a submenu instead of being directly selectable (e.g. "Push feature branch" -> one item per remote). */
   submenu?: MenuItem[];
 }
@@ -164,6 +198,10 @@ export interface MenuItem {
 export function ContextMenu({ x, y, items, onClose }: { x: number; y: number; items: MenuItem[]; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
   const [openSubmenu, setOpenSubmenu] = useState<number | null>(null);
+  // Once per menu, not once per item: several disabled actions usually share
+  // ONE cause ("no feature branch"), and repeating it under each of them reads
+  // like several different problems.
+  const hints = [...new Set(items.filter((i) => i.disabled && i.hint).map((i) => i.hint as string))];
 
   useEffect(() => {
     const onDocEvent = (e: Event) => {
@@ -231,6 +269,11 @@ export function ContextMenu({ x, y, items, onClose }: { x: number; y: number; it
             </div>
           )}
         </div>
+      ))}
+      {hints.map((h) => (
+        <p key={h} className="mt-1 border-t border-white/10 px-3 pb-0.5 pt-1.5 text-[10px] leading-snug text-white/40">
+          {h}
+        </p>
       ))}
     </div>,
     document.body,

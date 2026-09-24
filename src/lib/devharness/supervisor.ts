@@ -97,6 +97,13 @@ export async function supervisorBeginOrThrow(
   // spec stores need it, and they raise their own, specific error (spec-fs's
   // branchItemStoreRoot) rather than breaking every other caller of begin.
   const dataDir = typeof begun.dataDir === "string" ? begun.dataDir : "";
+  // The branch was created, but from a LOCAL base because the remote could not
+  // be refreshed (offline, or an expired credential). Not fatal — a local edit
+  // must not require the network — but not silent either: the branch starts
+  // behind, and the surprise is owed to whoever asked for it.
+  if (typeof begun.baseWarning === "string" && begun.baseWarning) {
+    logger().warn("devharness.supervisor", "branch created from a stale local base", { branch, cause: begun.baseWarning });
+  }
   return { worktree, dataDir, mountErrors: begun.mountErrors as Record<string, string> | undefined };
 }
 

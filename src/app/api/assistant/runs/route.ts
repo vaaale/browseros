@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { startAssistantRun } from "@/lib/assistant/start-run";
 import { ActiveRunError, runManager, type SurfaceAgentEntry } from "@/lib/assistant/run-manager";
+import { getConversationMeta } from "@/lib/assistant/conversation-store";
 import type { ToolDeclaration } from "@/lib/assistant/tools";
 import type { Attachment } from "@/lib/assistant/messages";
 import { registerVoiceModeHook } from "@/lib/voice/voice-hook";
@@ -56,6 +57,17 @@ export async function POST(req: NextRequest) {
     // A message is required UNLESS attachments are present (image-only turns ok).
     if (!conversationId || !agentId || (!message.trim() && !attachments?.length)) {
       return NextResponse.json({ error: "conversationId, agentId and message (or attachments) are required" }, { status: 400 });
+    }
+    // 038-conversation-archive FR-009: an archived conversation is read-only.
+    // This route is the single send funnel (textarea, Enter, edit-resubmit,
+    // voice all converge on sendMessage → here), so this one server-side check
+    // is the authoritative gate — the client's locked composer is UX only.
+    const meta = await getConversationMeta(conversationId);
+    if (meta?.archived === true) {
+      return NextResponse.json(
+        { error: "Conversation is archived and read-only — unarchive it to continue." },
+        { status: 409 },
+      );
     }
     const run = await startAssistantRun({
       conversationId,

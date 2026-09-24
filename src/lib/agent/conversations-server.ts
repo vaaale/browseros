@@ -67,6 +67,42 @@ export async function getConversationConflictSessionId(
   }
 }
 
+/** Conversation-scoped fields a server tool reads back off the persisted file.
+ *  `agentId` is what the chat actually RUNS as (`AssistantChatV2` resolves it
+ *  from the conversation, not from the agent picker), and `conflictSessionId`
+ *  is what binds the `conflict_*` tools to their session. */
+export interface ConversationPatch {
+  agentId?: string;
+  conflictSessionId?: string;
+}
+
+/** Patch those fields on a conversation, preserving everything else in the
+ *  file (messages included).
+ *
+ *  Loud on failure, deliberately: a conversation that didn't get its
+ *  `conflictSessionId` is one whose `conflict_*` tools cannot find their
+ *  session at all, and a conversation left on the previous `agentId` keeps
+ *  running the agent the caller is trying to replace. Neither is a cosmetic
+ *  miss, so neither may be swallowed. */
+export async function patchConversation(conversationId: string, patch: ConversationPatch): Promise<void> {
+  const id = conversationId?.trim();
+  if (!id) throw new Error("patchConversation: conversationId is required");
+  const file = `${CHATS_DIR}/${id}.json`;
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(await vfs.readText(file)) as Record<string, unknown>;
+  } catch (e) {
+    throw new Error(`could not read conversation ${id}: ${(e as Error).message}`);
+  }
+  if (patch.agentId) parsed.agentId = patch.agentId;
+  if (patch.conflictSessionId) parsed.conflictSessionId = patch.conflictSessionId;
+  try {
+    await vfs.writeText(file, JSON.stringify(parsed, null, 2));
+  } catch (e) {
+    throw new Error(`could not write conversation ${id}: ${(e as Error).message}`);
+  }
+}
+
 /** Every distinct `activeFeatureBranch` currently DECLARED across all
  *  conversations, regardless of whether a real git branch exists for it yet.
  *  Under the Supervisor, `dev_branch_request` only records the name on the

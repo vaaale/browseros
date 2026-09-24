@@ -1,9 +1,15 @@
 # Settings → Browser Automation
 
-**Browser automation** lets the **assistant** drive a *real* browser to automate
-web tasks — navigate, fill forms, click through flows, extract data, take
-screenshots. It's delivered through a managed **Playwright MCP** server whose tools
-appear to the assistant (and sub‑agents and workflows) like any other tools.
+**Browser automation** lets the **assistant** drive a *real*, **stateful** browser
+to automate web tasks — navigate, fill forms, click through flows, extract data,
+take screenshots. The assistant gets a family of `browser_*` tools
+(`browser_navigate`, `browser_click`, `browser_type`, `browser_take_screenshot`, …)
+that all operate on **one live browser per conversation**: what one tool call
+navigates to, the next call can click.
+
+Screenshots (and other files the browser saves) land in your **Files app under
+`/Screenshots`** — ready to use in documents — and are also shown to the
+assistant so it can see the page it captured.
 
 > This is a **higher trust tier** than the [Browser app](../apps/browser.md): the
 > Browser app lets *you view* pages through a guarded proxy; automation lets the
@@ -13,7 +19,8 @@ appear to the assistant (and sub‑agents and workflows) like any other tools.
 
 ## Fields
 
-- **Enabled** — master switch. Off ⇒ the assistant has no browser‑automation tools.
+- **Enabled** — master switch. Off ⇒ every browser tool answers with "browser
+  automation is off" and points here.
 - **Allowed origins** — origins the browser may visit (comma/space/semicolon
   separated).
 - **Blocked origins** — origins to always block.
@@ -26,7 +33,17 @@ appear to the assistant (and sub‑agents and workflows) like any other tools.
 - **MCP command** — the command used to launch the Playwright MCP server (default
   `npx @playwright/mcp`).
 
-Changing these reconfigures the managed server (no restart needed).
+Changing these reconfigures the managed browser (no restart needed); the next
+browser session starts with the new policy.
+
+## Sessions
+
+The browser stays alive between tool calls (that's what makes multi‑step flows
+and logins work) and is cleaned up automatically:
+
+- after **15 minutes idle**, the browser is closed;
+- the assistant can end it explicitly with `browser_close`;
+- all browsers close when BOS shuts down.
 
 ---
 
@@ -51,7 +68,9 @@ Changing these reconfigures the managed server (no restart needed).
 
 ## Requirements
 
-Needs the `@playwright/mcp` package and an installed Chromium
-(`npx playwright install chromium`). If no browser is available, the automation
-tools simply don't appear (graceful degrade) — never a hard error. BOS reuses the
-same Chromium the test suite installs, so there's no extra download.
+Needs the `@playwright/mcp` package and a browser: either the Playwright
+Chromium (`npx playwright install chromium`) or a system Google Chrome /
+Chromium at its standard location (`npx playwright install chrome` — what the
+BOS Docker image ships). If neither is found, the browser tools answer with the
+install hint instead of failing silently. BOS reuses whichever browser is
+already there, so there's normally no extra download.

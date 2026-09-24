@@ -16,5 +16,5 @@ test("rejects invalid ids (injection / traversal surface)", () => {
 });
 
 test("flat-encodes a slashed branch reversibly", () => {
-  assert.equal(encodeBranchDir("bos/my-change"), "bos__my-change");
+  assert.equal(encodeBranchDir("bos/testfixture-my-change"), "bos__testfixture-my-change");
 });

@@ -116,7 +116,7 @@ export function a2uiRenderTools(): Record<string, AssistantTool> {
   return {
     a2ui_render: serverTool(
       "a2ui_render",
-      "Generate a validated A2UI v0.9 operations envelope for the UI Preview app from a natural-language description. Call during the design-UI phase of a bos-app session, then pass the returned envelope's surfaceId/operations straight to ui_preview_render (do not hand-edit it). Use intent='update' with the SAME surfaceId to revise a surface already rendered in this conversation — describe what already exists and what should change, since this tool does not see prior renders itself.",
+      "Generate a validated A2UI v0.9 operations envelope for the UI Preview app from a natural-language description. Call while designing a feature's UI, then pass the returned envelope's surfaceId/operations straight to ui_preview_render (do not hand-edit it). Use intent='update' with the SAME surfaceId to revise a surface already rendered in this conversation — describe what already exists and what should change, since this tool does not see prior renders itself.",
       schema(
         {
           intent: p.str("'create' for a new surface (default) or 'update' to revise one."),

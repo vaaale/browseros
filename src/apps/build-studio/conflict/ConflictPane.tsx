@@ -7,7 +7,12 @@ import { ConflictStatusHeader } from "./ConflictStatusHeader";
 import { ConflictFileList } from "./ConflictFileList";
 import { ConflictFileView } from "./ConflictFileView";
 import type { DecisionOptionId } from "./ConflictDecisionCard";
-import { abandonConflictSession, answerConflictDecision, useConflictSession } from "./useConflictSession";
+import {
+  abandonConflictSession,
+  answerConflictDecision,
+  retryConflictSession,
+  useConflictSession,
+} from "./useConflictSession";
 
 // 035-spec-promote-conflict-escalation — the conflict-resolution pane (D1/D5).
 //
@@ -70,6 +75,25 @@ export function ConflictPane({ sessionId, onSettled }: Props) {
     [session, refresh],
   );
 
+  const retry = useCallback(async () => {
+    if (!session) return;
+    setBusy(true);
+    try {
+      const { agentId, relaunched } = await retryConflictSession(session.id);
+      setToast(
+        relaunched
+          ? `Restarted with "${agentId}".`
+          : `Now set to "${agentId}" — it picks up when you answer the open decision.`,
+      );
+    } catch (e) {
+      setToast(`Could not retry: ${(e as Error).message}`);
+    } finally {
+      setBusy(false);
+      await refresh();
+      setTimeout(() => setToast(null), 3200);
+    }
+  }, [session, refresh]);
+
   const abandon = useCallback(async () => {
     if (!session) return;
     setConfirmAbandon(false);
@@ -110,6 +134,7 @@ export function ConflictPane({ sessionId, onSettled }: Props) {
         session={session}
         selected={selected}
         onSelect={setSelected}
+        onRetry={retry}
         onAbandon={() => setConfirmAbandon(true)}
         busy={busy}
       />

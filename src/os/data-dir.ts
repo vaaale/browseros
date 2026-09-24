@@ -15,3 +15,18 @@ export function dataDir(): string {
   const override = process.env.BOS_DATA_DIR;
   return override && override.trim() ? override.trim() : path.join(process.cwd(), "data");
 }
+
+// Root under which the Supervisor writes a previewed candidate's isolated data
+// clone (`<root>/<branch>/…`). Mirrors tools/supervisor/lib/config.mjs's
+// CLONES — same env var, same default — because the two processes must agree
+// on where clones live.
+//
+// This is a SEPARATE path from dataDir() on purpose, and in the bastion
+// deployment the two are separate bind mounts. That is why the DataFS
+// capability probe has to test the pair rather than the data dir alone: a
+// hardlink cannot cross a mount, so "can this filesystem hardlink?" is not the
+// question the clone layer needs answered.
+export function dataClonesDir(): string {
+  const override = process.env.BOS_DATA_CLONES;
+  return override && override.trim() ? override.trim() : path.join(process.cwd(), "bos-data-clones");
+}

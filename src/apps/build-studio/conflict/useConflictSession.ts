@@ -123,6 +123,23 @@ export async function answerConflictDecision(
   return data.session;
 }
 
+/** Re-point the session at the agent currently configured in
+ *  `Settings → Build Studio → Conflict agent` and start it again on the same
+ *  conversation. The way out of an escalation that went to the wrong agent —
+ *  and of a session left `working` by a run that died — without rolling back. */
+export async function retryConflictSession(
+  sessionId: string,
+): Promise<{ session: ConflictSession; agentId: string; relaunched: boolean }> {
+  return json<{ session: ConflictSession; agentId: string; relaunched: boolean }>(
+    `/api/gitops/sessions?id=${encodeURIComponent(sessionId)}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "retry" }),
+    },
+  );
+}
+
 export async function abandonConflictSession(sessionId: string): Promise<ConflictSession> {
   const data = await json<{ session: ConflictSession }>(`/api/gitops/sessions?id=${encodeURIComponent(sessionId)}`, {
     method: "PATCH",

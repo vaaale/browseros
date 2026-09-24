@@ -70,7 +70,11 @@ async function isValidGitRepo(dir: string): Promise<boolean> {
 
 /** Provision a brand-new user: create dirs, clone src, create nm volume, create+start container.
  *  Idempotent and self-healing — safe to re-run after a partial/interrupted attempt. */
-export async function provisionUser(username: string, cfg: Config): Promise<string> {
+export async function provisionUser(
+  username: string,
+  cfg: Config,
+  onProgress?: (msg: string) => void,
+): Promise<string> {
   assertValidUsername(username);
 
   const data = dataDir(username, cfg);
@@ -98,7 +102,7 @@ export async function provisionUser(username: string, cfg: Config): Promise<stri
   }
 
   await createNmVolume(username);
-  const containerId = await createBosContainer(username, cfg);
+  const containerId = await createBosContainer(username, cfg, onProgress);
   await startContainer(containerId);
   return containerId;
 }

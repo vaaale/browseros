@@ -58,7 +58,7 @@ test("os/fs/spec-fs.ts: writeRoot throws instead of self-provisioning a competin
     const repoRoot = join(dir, "specs", "user-specs");
     const worktreesBase = join(dir, "specs", ".worktrees");
     await ensureRepo(repoRoot);
-    const branch = "bos/split-brain-a";
+    const branch = "bos/testfixture-split-brain-a";
 
     // Supervisor is "up" and returns a real worktree dir, but it has NO
     // specs/user-specs subdirectory at all (the coupled mount never
@@ -91,7 +91,7 @@ test("os/fs/spec-fs.ts: a pre-existing self-provisioned worktree is cleared (not
     const repoRoot = join(dir, "specs", "user-specs");
     const worktreesBase = join(dir, "specs", ".worktrees");
     await ensureRepo(repoRoot);
-    const branch = "bos/split-brain-b";
+    const branch = "bos/testfixture-split-brain-b";
 
     // Simulate the corrupted state found live: a self-provisioned worktree
     // already has this branch checked out, fully committed.
@@ -130,7 +130,7 @@ test("os/fs/spec-fs.ts: writeText succeeds against a properly mounted Supervisor
     const repoRoot = join(dir, "specs", "user-specs");
     const worktreesBase = join(dir, "specs", ".worktrees");
     await ensureRepo(repoRoot);
-    const branch = "bos/split-brain-c";
+    const branch = "bos/testfixture-split-brain-c";
 
     // A properly mounted Supervisor worktree: specs/user-specs is a real
     // worktree of the same repo, checked out on `branch`.
@@ -155,7 +155,7 @@ test("dev/spec-fs.ts (Build Studio's own path): a write with an explicit branch 
   const { dir, cleanup } = useTestDataDir("split-brain-dev-spec-fs");
   try {
     await ensureStores();
-    const branch = "bos/split-brain-d";
+    const branch = "bos/testfixture-split-brain-d";
 
     // A Supervisor worktree where a DIFFERENT store mounted fine (so
     // `specs/` itself exists) but user-specs specifically never did — the

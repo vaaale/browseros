@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { GitRemotesTab } from "./versions/GitRemotesTab";
-import { supervisorPost, promoteAndWait, promoteIssues, type Ver, type SupState, type Branches } from "@/lib/supervisor/client";
+import { supervisorPost, promoteAndWait, promoteIssues, replacesServedBuild, type Ver, type SupState, type Branches } from "@/lib/supervisor/client";
+import { notifySelfHealBranchSettled } from "@/lib/self-heal/branch-settled-client";
+import { archiveConversationsForBranch } from "@/lib/agent/conversations";
 import { ConflictSessionBadge } from "@/components/gitops/ConflictSessionBadge";
 
 function VersionRow({ v }: { v: Ver | null }) {
@@ -120,9 +121,23 @@ export function VersionsTab() {
       if (j.sessionId) setConflictSessionId(j.sessionId);
       setMsg(j.ok === false ? `Error: ${j.error}` : "Done.");
       if (j.ok !== false && !j.sessionId && (path === "pin" || path === "stop" || path === "discard" || path === "promote")) {
+        // FR-038: tell the self-heal spine the branch is settled, so any
+        // preview-ready case linked to it closes. Best-effort — the boot
+        // reconcile is the guarantee.
+        if (path === "promote" || path === "discard") {
+          notifySelfHealBranchSettled(String(body?.branch ?? ""), path === "promote" ? "promoted" : "discarded");
+        }
+        // 038: promote (not discard) tidies the feature's conversation(s) into
+        // the Archived section. AWAITED before the reload (ADR-7): the helper
+        // is async, so fire-and-forget would let the reload preempt it before
+        // any PATCH is dispatched; it never throws, so it can't fail the promote.
+        if (path === "promote") await archiveConversationsForBranch(String(body?.branch ?? ""));
         const issues = path === "promote" ? promoteIssues(j) : null;
         if (issues) window.alert(`Promoted, but with issues:\n\n${issues.join("\n")}`);
-        window.location.reload();
+
+        // Reload ONLY when THIS WINDOW's own build is being replaced — see
+        // replacesServedBuild for why deleting a branch no longer does.
+        if (replacesServedBuild(path, String(body?.branch ?? ""), state?.serving)) window.location.reload();
       }
       await load();
     } finally {
@@ -242,8 +257,9 @@ export function VersionsTab() {
           conversationId={escalatedPreview?.devopsConversationId}
         />
       )}
-      <hr className="border-white/10" />
-      <GitRemotesTab />
+      {/* 050: remotes moved to Settings -> Repositories, alongside the
+          repositories they configure. This tab is now only the
+          Supervisor's version controls. */}
     </div>
   );
 }

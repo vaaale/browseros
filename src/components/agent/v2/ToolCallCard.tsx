@@ -1,14 +1,23 @@
 "use client";
 
 import { memo, useEffect, useMemo } from "react";
-import { ChevronDown, ChevronRight, Wrench, Loader2, Ban } from "lucide-react";
-import { parseMcpUi } from "@/lib/mcp/ui";
-import { parseNested, type NestedEvent } from "@/lib/agent/nested-events";
+import { Ban, ChevronDown, ChevronRight, Wrench } from "lucide-react";
 import { registerCard, toggleCard, useCardOpen, useCardScope } from "@/lib/agent/card-collapse";
+import { summarizeToolCall, type ChildCardData } from "./ToolCardSummary";
+import { toggleSection, useSectionOpen } from "./ToolCardSectionState";
+import { InputSection, OutputSection } from "./ToolCardSections";
 
-// v2 collapsible tool-call card. Same look/behavior as the CopilotKit-era
-// EventCard, but driven by plain data (v2 has STABLE callIds and streams
-// nested progress as run events — no delegation-store side channel needed).
+// 045 US3 — a SINGLE recursive tool-call card, rendered identically at every
+// nesting depth (FR-011). A collapsed header (action summary + status dot,
+// FR-012) expands to two INDEPENDENTLY collapsible sections — Input (FR-013) and
+// Output (FR-014) — and a delegation's Output is a list of CHILD ToolCallCards
+// (the same component, recursed; FR-006/FR-016 for the live in-flight case).
+//
+// Collapse-state model (ADR-2 option B): a TOP-LEVEL card's header uses the shared
+// card-collapse accordion (scoped, also shared with the reasoning cards) exactly as
+// before; a NESTED child's header uses the card-local section state so multiple
+// cards (parent + children) can be open at once (the mockup's binding contract).
+// The Input/Output sections ALWAYS use the card-local state.
 
 export interface ToolCardData {
   callId: string;
@@ -20,131 +29,76 @@ export interface ToolCardData {
   progress?: unknown[];
 }
 
-function pretty(value: unknown): string {
-  if (value === undefined || value === null) return "";
-  if (typeof value === "string") {
-    try {
-      return JSON.stringify(JSON.parse(value), null, 2);
-    } catch {
-      return value;
-    }
-  }
-  return JSON.stringify(value, null, 2);
+function StatusDot({ status }: { status: ToolCardData["status"] }) {
+  if (status === "cancelled") return <Ban size={12} className="shrink-0 text-white/40" />;
+  return <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${status === "running" ? "animate-pulse bg-amber-400" : "bg-emerald-400"}`} />;
 }
 
-function toNestedEvents(progress: unknown[]): NestedEvent[] {
-  return progress
-    .map((p) => p as { tool?: string; input?: unknown; type?: string; stepId?: string })
-    .map((p) => ({ tool: p.tool ?? p.type ?? "event", input: p.input ?? p.stepId }))
-    .filter((e) => e.tool !== "event" || e.input != null);
-}
-
-function NestedEventList({ events, output, running }: { events: NestedEvent[]; output: string; running?: boolean }) {
-  return (
-    <div className="mt-1 border-t border-white/10 pt-1">
-      <div className="ml-2 border-l border-white/10 pl-2">
-        {events.map((e, i) => (
-          <div key={i} className="my-0.5 flex items-center gap-1.5 text-[11px] text-white/55">
-            <span className="h-1 w-1 rounded-full bg-emerald-400/70" />
-            <span className="font-mono">{e.tool}</span>
-            {e.input != null ? (
-              <span className="min-w-0 flex-1 whitespace-pre-wrap break-words text-white/35">{pretty(e.input)}</span>
-            ) : null}
-          </div>
-        ))}
-        {running && (
-          <div className="my-0.5 flex items-center gap-1.5 text-[11px] text-white/40">
-            <Loader2 size={10} className="animate-spin" /> running…
-          </div>
-        )}
-      </div>
-      {output && <pre className="mt-1 whitespace-pre-wrap break-words text-[11px] text-white/70">{output}</pre>}
-    </div>
-  );
-}
-
-export const ToolCallCard = memo(function ToolCallCard({ call }: { call: ToolCardData }) {
-  const cardId = `tool:${call.callId}`;
+export const ToolCallCard = memo(function ToolCallCard({ call, nested = false }: { call: ToolCardData; nested?: boolean }) {
   const scope = useCardScope();
-  const open = useCardOpen(scope, cardId);
+  const cardId = `tool:${call.callId}`;
   const busy = call.status === "running";
   const cancelled = call.status === "cancelled";
 
-  useEffect(() => {
-    registerCard(scope, cardId);
-  }, [scope, cardId]);
+  // Header open state: top-level cards use the shared accordion (unchanged);
+  // nested children use card-local state (independent, so parent + children can
+  // be open together — the mockup's recursive contract).
+  const sharedOpen = useCardOpen(scope, cardId);
+  const localHeaderOpen = useSectionOpen(call.callId, "header");
+  const open = nested ? localHeaderOpen : sharedOpen;
 
-  // pretty() re-parses/re-serializes JSON — memoize so it isn't redone on every
-  // render of an unrelated re-render (e.g. a sibling card's status changing).
-  const argText = useMemo(() => pretty(call.args), [call.args]);
-  const showArgs = argText && argText !== "{}";
+  useEffect(() => {
+    if (!nested) registerCard(scope, cardId);
+  }, [nested, scope, cardId]);
+
+  const onToggle = () => {
+    if (nested) toggleSection(call.callId, "header");
+    else toggleCard(scope, cardId);
+  };
+
+  const summary = useMemo(() => summarizeToolCall(call.name, call.args), [call.name, call.args]);
   const resultText = call.result ?? "";
-  const mcpUi = call.status === "done" ? parseMcpUi(resultText) : null;
-  const nested = call.status === "done" ? parseNested(resultText) : null;
-  const liveNested = busy && call.progress?.length ? toNestedEvents(call.progress) : null;
+  const progress = call.progress ?? [];
+  // Empty/null result → no Output section (spec edge case); the recursion holds
+  // for every other state.
+  const showOutput = busy || resultText !== "";
+
+  const renderChild = (child: ChildCardData) => <ToolCallCard call={child} nested />;
 
   return (
-    <div className="my-1 rounded-lg border border-white/10 bg-black/30 text-xs" data-testid="tool-card" data-tool={call.name}>
+    <div
+      className={`${nested ? "my-0.5" : "my-1"} rounded-lg border border-white/10 bg-black/30 text-xs`}
+      data-testid="tool-card"
+      data-tool={call.name}
+      data-status={call.status}
+    >
       <button
         type="button"
-        onPointerDown={() => toggleCard(scope, cardId)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            toggleCard(scope, cardId);
-          }
-        }}
+        onClick={onToggle}
+        aria-label={call.name}
         aria-expanded={open}
-        className="flex w-full cursor-pointer select-none items-center gap-2 px-2 py-1.5 text-left"
+        className={`flex w-full cursor-pointer select-none items-center gap-2 rounded-t-lg px-2 text-left ${nested ? "py-1" : "py-1.5"} hover:bg-white/[0.02]`}
       >
         {open ? <ChevronDown size={12} className="shrink-0 text-white/40" /> : <ChevronRight size={12} className="shrink-0 text-white/40" />}
-        {cancelled ? (
-          <Ban size={12} className="shrink-0 text-white/40" />
-        ) : (
-          <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${busy ? "animate-pulse bg-amber-400" : "bg-emerald-400"}`} />
-        )}
+        <StatusDot status={call.status} />
         <Wrench size={12} className="shrink-0 text-white/50" />
-        <span className="truncate font-mono font-medium text-white/85">{call.name}</span>
-        <span className="ml-auto shrink-0 text-white/40">{cancelled ? "cancelled" : busy ? "running" : "done"}</span>
+        <span className="min-w-0 truncate font-medium text-white/85">
+          {summary.title}
+          {summary.detail && <span className="font-normal text-white/45"> · {summary.detail}</span>}
+        </span>
+        <span className={`ml-auto shrink-0 ${cancelled ? "text-white/35" : busy ? "text-amber-400/80" : "text-white/40"}`}>
+          {cancelled ? "cancelled" : busy ? "running" : "done"}
+        </span>
       </button>
 
       <div className={`grid transition-[grid-template-rows] duration-200 ease-out ${open ? "grid-rows-[1fr]" : "grid-rows-[0fr]"}`}>
         <div className={`min-h-0 overflow-hidden transition-opacity duration-150 ease-out ${open ? "opacity-100" : "invisible opacity-0"}`}>
-          <div className="max-h-64 overflow-auto overscroll-contain px-2 pb-2">
-            {showArgs && (
-              <section>
-                <div className="mb-0.5 text-[10px] font-medium uppercase tracking-wide text-white/35">Request</div>
-                <pre className="overflow-x-auto whitespace-pre-wrap break-words text-[11px] text-white/55">{argText}</pre>
-              </section>
-            )}
-            {liveNested ? (
-              <section className={showArgs ? "mt-1" : undefined}>
-                <div className="mb-0.5 text-[10px] font-medium uppercase tracking-wide text-white/35">Response</div>
-                <NestedEventList events={liveNested} output="" running />
-              </section>
-            ) : nested ? (
-              <section className={showArgs ? "mt-1" : undefined}>
-                <div className="mb-0.5 text-[10px] font-medium uppercase tracking-wide text-white/35">Response</div>
-                <NestedEventList events={nested.events} output={nested.output} />
-              </section>
-            ) : mcpUi ? (
-              <section className={showArgs ? "mt-1" : undefined}>
-                <div className="mb-0.5 text-[10px] font-medium uppercase tracking-wide text-white/35">Response</div>
-                <iframe
-                  {...(mcpUi.html ? { srcDoc: mcpUi.html } : { src: mcpUi.url })}
-                  sandbox="allow-scripts allow-forms allow-popups"
-                  className="mt-1 h-72 w-full rounded-md border border-white/10 bg-white"
-                  title="MCP app"
-                />
-              </section>
+          <div className="space-y-1 px-2 pb-2">
+            <InputSection callId={call.callId} name={call.name} args={call.args} />
+            {showOutput ? (
+              <OutputSection callId={call.callId} status={call.status} result={resultText} progress={progress} renderChild={renderChild} />
             ) : (
-              call.status !== "running" &&
-              resultText && (
-                <section className={showArgs ? "mt-1" : undefined}>
-                  <div className="mb-0.5 text-[10px] font-medium uppercase tracking-wide text-white/35">Response</div>
-                  <pre className="overflow-x-auto whitespace-pre-wrap break-words text-[11px] text-white/70">{resultText}</pre>
-                </section>
-              )
+              <div className="pl-4 text-[11px] italic text-white/30">No output</div>
             )}
           </div>
         </div>

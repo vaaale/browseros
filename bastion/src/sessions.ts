@@ -55,15 +55,36 @@ export function shouldRefreshSession(payload: SessionPayload): boolean {
   return now - payload.iat >= SESSION_TTL_SECONDS * SESSION_REFRESH_AFTER;
 }
 
-export function verifySession(req: Request, cfg: Config): SessionPayload | null {
-  const token = (req.cookies as Record<string, string | undefined>)[COOKIE_NAME];
+/** Verify a raw session token (a cookie's value). The transport-independent
+ *  core of verifySession, split out because the WebSocket upgrade path has no
+ *  cookie-parser (or Express `Request`) in front of it at all — `server.on(
+ *  "upgrade")` fires outside the middleware chain — and must still reach the
+ *  exact same verdict from a raw `Cookie` header. */
+export function verifySessionToken(token: string | undefined, cfg: Config): SessionPayload | null {
   if (!token) return null;
   try {
-    const payload = jwt.verify(token, cfg.jwtSecret) as SessionPayload;
-    return payload;
+    return jwt.verify(token, cfg.jwtSecret) as SessionPayload;
   } catch {
     return null;
   }
+}
+
+/** Pull the session token out of a raw `Cookie` request header. Only the one
+ *  cookie we care about is extracted — this is deliberately not a general
+ *  cookie parser, and never a substitute for cookie-parser on the HTTP path. */
+export function sessionTokenFromCookieHeader(header: string | undefined): string | undefined {
+  if (!header) return undefined;
+  for (const part of header.split(";")) {
+    const sep = part.indexOf("=");
+    if (sep === -1) continue;
+    if (part.slice(0, sep).trim() !== COOKIE_NAME) continue;
+    return decodeURIComponent(part.slice(sep + 1).trim());
+  }
+  return undefined;
+}
+
+export function verifySession(req: Request, cfg: Config): SessionPayload | null {
+  return verifySessionToken((req.cookies as Record<string, string | undefined>)[COOKIE_NAME], cfg);
 }
 
 export function clearSession(res: Response): void {

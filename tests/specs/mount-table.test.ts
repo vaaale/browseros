@@ -62,3 +62,26 @@ test("a shorter prefix seen AFTER the longest match is skipped, not swapped in",
   assert.equal(r?.prefix, "/Documents/Specs");
   assert.equal(r?.rel, "x");
 });
+
+test("a mount's ANCESTOR directory lists its mounted children", async () => {
+  // `/Methods` is not a mount; `/Methods/<pack>/templates` is. Listing the
+  // parent found nothing, so an agent browsing for installed methods saw an
+  // empty directory and reasonably concluded none were installed — it checked
+  // three times before giving up and reading skills to infer them instead.
+  const { registerMount, unregisterMount, list } = await import("../../src/os/vfs");
+  const { LocalFS } = await import("../../src/os/fs/local-fs");
+  // A PRIVATE prefix, not /Methods: the real mount table is a module global and
+  // the built-in pack registers /Methods/spec-kit/templates, so asserting over
+  // /Methods would depend on ambient state and pass or fail by test order.
+  const backend = new LocalFS(path.join(process.cwd(), "seed"));
+  registerMount("/MountAncestorTest/alpha/templates", backend);
+  registerMount("/MountAncestorTest/beta/templates", backend);
+  try {
+    const names = (await list("/MountAncestorTest")).map((e) => e.name).sort();
+    assert.deepEqual(names, ["alpha", "beta"], "both are discoverable by browsing the ancestor");
+    assert.deepEqual((await list("/MountAncestorTest/alpha")).map((e) => e.name), ["templates"]);
+  } finally {
+    unregisterMount("/MountAncestorTest/alpha/templates");
+    unregisterMount("/MountAncestorTest/beta/templates");
+  }
+});

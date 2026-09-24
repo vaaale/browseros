@@ -59,6 +59,7 @@ delegate
 | `/api/agent/provider/test` | POST | Test provider connection |
 | `/api/assistant/agent` | GET, PATCH, POST | Agents + composed instructions; set active; create |
 | `/api/assistant/feature-branches` | GET, POST | List/create validated `bos/<kebab-name>` feature branches for Assistant conversations |
+| `/api/assistant/conversations/[id]/archive` | PATCH | Set/clear a conversation's `archived` flag (queue‑serialized metadata patch); archived conversations are hidden from default lists and read‑only (runs POST returns 409) until unarchived |
 | `/api/assistant/title` | POST | Background conversation title (isolated, sanitized) |
 | `/api/assistant/reflect` | POST | Self‑improvement review pass |
 | `/api/subagents` | GET, POST, DELETE | Sub‑agent registry |

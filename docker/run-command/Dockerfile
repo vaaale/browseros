@@ -41,13 +41,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ENV VIRTUAL_ENV=/opt/venv
 RUN python3 -m venv "$VIRTUAL_ENV"
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
+# `uv` + `ruamel.yaml` are for METHOD PACKS (048 FR-025) — BMAD v6 shells out to
+# uv, and one of its scripts needs ruamel.yaml. uv installs nothing; it pins an
+# interpreter, and is carried so BMAD's 75 files run verbatim instead of being
+# rewritten. Kept in step with the root Dockerfile, which states these two
+# package sets must match so the local backend and the Docker-backend sandbox
+# behave identically.
 RUN pip install --no-cache-dir \
     ipython \
     "markitdown[all]" \
     Pillow \
     python-pptx \
     python-docx \
-    jq
+    jq \
+    uv \
+    ruamel.yaml
 
 RUN echo "Skipping chmod"
 #RUN chmod -R a+rwX "$VIRTUAL_ENV"

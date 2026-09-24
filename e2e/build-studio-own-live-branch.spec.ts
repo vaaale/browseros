@@ -16,8 +16,8 @@ import { test, expect, type Page } from "./fixtures";
 // depend on any real Supervisor-provisioned worktree or draft branch
 // existing on the dev server this runs against.
 
-const OWN_BRANCH = "bos/e2e-own-live-branch-work";
-const FOREIGN_BRANCH = "bos/e2e-someone-elses-branch";
+const OWN_BRANCH = "bos/testfixture-e2e-own-work";
+const FOREIGN_BRANCH = "bos/testfixture-e2e-someone-branch";
 
 function tree() {
   return {

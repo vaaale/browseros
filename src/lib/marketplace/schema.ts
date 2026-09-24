@@ -72,6 +72,22 @@ export interface MarketplaceItem {
   integration?: MarketplaceItemBosPlugin;
   /** Voice engine plugin (registers a TTS engine via the bos-plugin loader). */
   voiceEngine?: MarketplaceItemBosPlugin;
+  /** 045 FR-012: a spec-framework pack — `method/method.json` plus templates
+   *  and, usually, the agents that framework's process assumes. */
+  method?: MarketplaceItemMethod;
+}
+
+export interface MarketplaceItemMethod {
+  /** Descriptor id, e.g. "openspec". Matches method.json's own `id`. */
+  id: string;
+  version: string;
+  /** Descriptor schema version, so a catalog can be filtered before install
+   *  rather than failing at registration. */
+  schemaVersion?: number;
+  /** Selectable modules, surfaced at install so the user picks before anything
+   *  registers (048 FR-006). Summary only — the full ModuleSpec lives in the
+   *  pack's method.json; this is what the CATALOG needs to render a choice. */
+  modules?: Array<{ id: string; label?: string; default?: boolean; requiresConfig?: boolean }>;
 }
 
 export interface MarketplaceManifest {
@@ -93,7 +109,11 @@ export interface RegisteredMarketplace {
 
 const ID_RE = /^[a-zA-Z0-9._-]+$/;
 
-function relPathOk(p: unknown): p is string {
+/** True iff `p` is a non-empty repo-relative path that cannot escape the repo.
+ *  Exported because it is the ONE path-containment policy for untrusted
+ *  marketplace paths — the client's plugin converters reuse it rather than
+ *  re-deriving it. */
+export function relPathOk(p: unknown): p is string {
   if (typeof p !== "string" || !p.trim()) return false;
   const norm = p.replace(/\\/g, "/");
   // No absolute paths, no traversal, no leading slash — must stay inside the repo.
@@ -175,7 +195,37 @@ export function validateManifest(raw: unknown): MarketplaceManifest {
     const integration = parseBosPlugin(o.integration, "integration");
     const voiceEngine = parseBosPlugin(o.voiceEngine, "voiceEngine");
 
-    if (!app && !spec && !skill && !serverPlugin && !services && !integration && !voiceEngine)
+    let method: MarketplaceItemMethod | undefined;
+    if (o.method && typeof o.method === "object") {
+      const m = o.method as Record<string, unknown>;
+      if (typeof m.id !== "string" || !m.id) throw new Error(`item ${o.id}: method.id is required`);
+      // RECONSTRUCTED, not spread — so every field must be named here or it is
+      // silently dropped. That matters more than usual: BOS REWRITES this
+      // manifest (034, merge-not-regenerate), so a field the parser does not
+      // know about is not merely invisible at runtime, it is DELETED FROM DISK
+      // on the next repair. `modules` was lost exactly that way, taking the
+      // install-time module prompt with it — silently, because an absent
+      // `modules` just means "no choice to offer".
+      method = {
+        id: m.id,
+        version: typeof m.version === "string" ? m.version : "0.0.0",
+        ...(typeof m.schemaVersion === "number" ? { schemaVersion: m.schemaVersion } : {}),
+        ...(Array.isArray(m.modules)
+          ? {
+              modules: (m.modules as Record<string, unknown>[])
+                .filter((x) => x && typeof x.id === "string")
+                .map((x) => ({
+                  id: x.id as string,
+                  ...(typeof x.label === "string" ? { label: x.label } : {}),
+                  ...(typeof x.default === "boolean" ? { default: x.default } : {}),
+                  ...(typeof x.requiresConfig === "boolean" ? { requiresConfig: x.requiresConfig } : {}),
+                })),
+            }
+          : {}),
+      };
+    }
+
+    if (!app && !spec && !skill && !serverPlugin && !services && !integration && !voiceEngine && !method)
       throw new Error(`item ${o.id}: must expose at least one facet`);
     return {
       id: o.id as string,
@@ -189,6 +239,7 @@ export function validateManifest(raw: unknown): MarketplaceManifest {
       services,
       integration,
       voiceEngine,
+      method,
     };
   });
 

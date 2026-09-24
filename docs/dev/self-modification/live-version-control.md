@@ -130,10 +130,56 @@ everyone else stays on `base`.
      (now‑merged) feature branch, delete that branch, drop the preview's data clone.
   There is **no `rollback`** action (a tag is left on every promote as a durable
   anchor for a future rollback feature).
-- Boot: `reconcileWorktrees()` prunes the Supervisor's leftover worktrees from a
-  previous run (their processes died with it), then `restorePreviews()` scans
-  `bos/*` branches and recreates branch-owned preview records as `not-built`.
-  Runtime state is reconstructed, not persisted.
+- Boot runs four reclamation passes in this order, and each depends on the one
+  before it:
+
+  | pass | driven by | reclaims |
+  |---|---|---|
+  | `reconcileWorktrees()` | `git worktree list` | registered worktrees, **safety-committing** a dirty one first |
+  | `reconcileFeatureBranches()` | `git branch --merged` | `bos/*` branches with nothing base lacks, not checked out, not a live preview |
+  | `reconcileWorktreeDirs()` | the directory | worktree dirs git has disowned, whose branch is gone |
+  | `reconcileDataClones()` | the directory | clones whose branch is gone, and `*.provisioning` debris |
+
+  The safety commit in the first pass is what makes in-flight work *unmerged*,
+  and therefore untouchable by the second. The two **directory-driven** sweeps
+  run last so a branch reclaimed above loses its worktree and its clone in the
+  same boot rather than leaving debris for the next one.
+
+  Registration-driven and directory-driven are both needed. `git worktree list`
+  stops reporting a directory the moment `<repo>/.git/worktrees/<name>` goes
+  away — a re-clone of `src/`, a pruned registration — so the first pass cannot
+  see it at all; seventeen such directories, each a full source tree plus a
+  node_modules copy, survived every manual cleanup on a production box. The
+  directory sweep answers "is there a branch for this?" instead of "does git
+  admit to it?".
+
+  Then `restorePreviews()` scans
+  `bos/*` branches and **registers** each as a branch-owned preview record in
+  state `not-built`. Runtime state is reconstructed, not persisted.
+
+  **Registration is free; provisioning happens on first use.** A restored record
+  carries `provisioned: false` and has no worktree, data clone or port until
+  something actually asks for the preview, at which point `provisionPreview()`
+  materializes it in place. This used to be eager — every `bos/*` branch got a
+  full worktree (source tree + a ~1.1 GB `node_modules` copy) and a full data
+  clone on every Supervisor start, for previews nobody had asked for. With 21
+  abandoned branches and an 8.5 GB data dir, one restart tried to copy ~200 GB
+  and filled a 155 GB production disk mid-copy.
+
+  Consequences worth knowing when touching this code:
+
+  - **Never read `previews.get(branch)` when you need a working directory.** A
+    dormant record is in the map with `worktree: null`. Go through
+    `provisionPreview()`, which returns an already-materialized preview
+    instantly and materializes a dormant one. `buildPreview` and the `/build`
+    route were both `previews.get(...) || provisionPreview(...)`, which
+    short-circuits on exactly the record that needs provisioning.
+  - `liveBranch()` and `previewChanges()` answer for a dormant preview without
+    provisioning it — from the branch ref rather than a worktree.
+  - Materializing a *restored* record mounts every coupled repo, which is what
+    the old eager restore did inline.
+
+  See `tests/supervisor/preview-restore-lazy.test.mjs`.
 
 ### App content (GitFS, no extra port)
 

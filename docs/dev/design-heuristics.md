@@ -53,6 +53,54 @@ Use `writeFileAtomic` (temp + rename). It's the contract that makes the DataFS
 **hardlink** isolation safe (a write creates a new inode; the shared canonical file
 is never mutated). A non‑atomic write breaks preview isolation and crash‑safety.
 
+`writeFileSync` opens with `O_TRUNC`: it empties the file *before* attempting the
+write, so a write that then fails leaves **zero bytes**, not the old content. The
+bastion's instance registry was found at 0 bytes after the host hit its disk quota
+for exactly this reason. This applies to the bastion's own `/data` too, which has
+no `writeFileAtomic` to reach for — write the temp file and `rename` it by hand.
+
+## Probe a capability by performing it, against the real pair of paths
+
+A probe that tests something *adjacent* to the operation reports on the wrong
+thing, and the report is then trusted. DataFS asked "can this filesystem
+hardlink?" by linking a file to its own sibling inside `data/` — always true —
+when the operation is a link from `data/` into the **clone root**, a different
+bind mount in the bastion, where `link(2)` returns `EXDEV` on every file. The
+answer was "hardlink isolation available" on a deployment where it was
+impossible, and the clone layer silently degraded to a full copy per branch until
+a production disk filled.
+
+Related: a **fallback that hides a failure** is the second half of that bug.
+`provisionClone` now returns the method it *actually* used, and an explicitly
+configured method that cannot work is an error, not a warning nobody reads.
+
+## A test running inside BOS can modify BOS
+
+BOS is a product that runs its own test suite. A self-modifying agent typing
+`npm run test:unit` is a NORMAL thing here, and that process inherits the live
+deployment's coordinates — `BOS_SUPERVISOR_URL`, `BOS_SPECS_ROOT`,
+`BOS_CANONICAL_DATA`, `BOS_REPO`. Anything in `src/` that resolves a path or an
+endpoint from the ambient environment will therefore, in a unit test, resolve
+the **running deployment**.
+
+This has now happened three times: ~50 stray projects in a live spec store, 8
+corrupt conversation fixtures in a real data dir, and 18 fixture-named `bos/*`
+branches — each with a full copy of an 8.5 GB data dir — created through the
+live Supervisor's `/__supervisor/begin`. Every one of them was invisible on a
+developer machine, where nothing is listening and the ambient vars are unset.
+
+`tests/_no-live-deployment.cjs` and `tests/services/_test-env.ts` are the two
+enforcement points. When you add an env var that names something live, add it
+to one of them in the same change.
+
+## Discovery must not provision
+
+Scanning for things (branches, items, stores) is cheap and runs at boot; building
+them is not. `restorePreviews()` used to materialize a worktree + data clone for
+every `bos/*` branch it found, for previews its own comment called "not-built" —
+~200 GB of copying per restart on a box with 21 abandoned branches. Register what
+you discover; pay on first use.
+
 ## `data/` schema must be backward-compatible
 
 The Supervisor shares one canonical `data/` across versions and **promote is

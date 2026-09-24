@@ -4,7 +4,8 @@
 
 ```
 seed/spec-store/                 Shipped bundle that seeds the system spec store (018)
-.specify/templates/              spec-kit ENGINE (templates + command prompts) — stays in source
+seed/method-packs/<id>/          METHOD PACK: descriptor (method.json) + templates + agents/ + skills/
+                                 spec-kit ships as one; `.specify/` is gone (046)
 data/specs/  (BOS_SPECS_ROOT)    External spec stores — GITIGNORED, not tracked; seeded at
                                  runtime. Relocated from <cwd>/specs to <dataDir>/specs by 027
                                  so user specs live in the per-user data volume (survive a VFS
@@ -111,7 +112,7 @@ data/                           ALL runtime state (gitignored) — see below
 
 | Path | Contents |
 |---|---|
-| `data/vfs/` | The user VFS (Documents, Pictures, Desktop). Chat history at `data/vfs/Documents/Chats/<id>.json` — each file carries `agentId` (the sole partition key), `title`, `createdAt`, optional `activeFeatureBranch`, and the message array. Old files with a `group` field are migrated to `agentId` on first read. Active conversation per agent is tracked in `localStorage` as `bos.activeConversation.<agentId>`. Workflows at `data/vfs/Workflows/`. |
+| `data/vfs/` | The user VFS (Documents, Pictures, Desktop). Chat history at `data/vfs/Documents/Chats/<id>.json` — each file carries `agentId` (the sole partition key), `title`, `createdAt`, optional `activeFeatureBranch`, optional `archived` (missing = `false`; hidden from default lists + read‑only until unarchived), and the message array. Old files with a `group` field are migrated to `agentId` on first read. Active conversation per agent is tracked in `localStorage` as `bos.activeConversation.<agentId>`. Workflows at `data/vfs/Workflows/`. |
 | `data/specs/` | External spec stores (`BOS_SPECS_ROOT`, 027), each organized into Projects (037-project-layer, `<store>/<project-id>/...` — pure organizational folders, no git-activation of their own). `bos-system-specs/` (**read-only, unconditionally**, seeded from `seed/spec-store/`) + `user-specs/` (writable only on a real `bos/*` feature branch — the same one used for BOS's own source; backs the `Documents/Specs` SpecFS mount). `.worktrees/<storeId>/<branch>` holds `os/fs/spec-fs.ts`'s self-provisioned 020 feature-branch worktrees (used when the Supervisor isn't running). |
 | `data/settings.json` | OS settings (wallpaper, accent, theme). |
 | `data/config/<ns>.json` | Generic per‑namespace config (e.g. `dev-harness`, `browser-automation`, `datafs`, `assistant`, `build-studio`). `plugins.json` holds the hook-pipeline's active set + order + per-plugin config. |
@@ -171,6 +172,162 @@ slot shows up as its own entry in Settings → Versions. See
 [Service Daemons](./apps/services.md).
 
 ---
+
+## Registered repositories (050)
+
+A spec store is discovered by **scanning `BOS_SPECS_ROOT`** for a directory —
+symlinks included — carrying a `spec-store.json`. There is **no registry file**,
+deliberately: a second list beside the scan that already answers "which
+repositories exist" is the shape of every "my repo vanished" report. Registering
+writes exactly what the scan reads:
+
+```
+clone or git init  ->  ensure the method's store root  ->  write spec-store.json  ->  symlink
+```
+
+Removing the symlink is a complete deregistration. Every step is inspectable on
+disk.
+
+### A store root may live INSIDE its repo
+
+`SpecStore` separates two paths, and they are not always the same directory:
+
+| Field | Is | Used for |
+|---|---|---|
+| `root` | what spec-fs jails writes to | reads/writes, path containment |
+| `repoRoot` | the git repo that versions it | history, `git show <ref>:<path>`, branch state |
+
+Three shapes, one rule — **`repoRoot` is the nearest ancestor holding `.git`**:
+
+| Store | `root` | `repoRoot` |
+|---|---|---|
+| `user-specs` | the repo itself | the same directory |
+| an item | `user-apps/items/<id>/spec` | the shared `user-apps` repo |
+| a project | `<repo>/openspec` | `<repo>` |
+
+**The walk up is bounded to one level** (`MAX_REPO_WALK_UP`). Unbounded, it
+adopts any unversioned directory into whatever repo sits above it — and under
+the data dir that is **BOS's own checkout**, which would then version a user's
+specs and accept git writes against it. A method-declared store root is one path
+segment, so one level covers every real case. Raise it only when a method
+declares a deeper offset; make the declaration the reason.
+
+### Where a method puts its specs
+
+`MethodDescriptor.storeRoot` — one segment, relative to the repo root:
+
+| Method | `storeRoot` |
+|---|---|
+| spec-kit | `specs` |
+| BMAD | `docs` |
+| OpenSpec | `openspec` |
+
+BOS does not invent a location. A framework's own CLI must keep working on the
+same checkout, so specs go where that framework looks for them. **This bounds
+the spec store, not BOS** — ordinary development writes go anywhere in the repo,
+because driving a pipeline over an application you cannot edit is pointless.
+Conflating the two is a mistake worth naming: they are different write paths
+with different rules, and only the first is jailed.
+
+### Kind
+
+`spec-store.json` carries `kind` — `system` / `user-specs` / `marketplace` /
+`arbitrary`. **Recorded, not inferred**, so it survives a restart and travels
+with the repository rather than being guessed from where a directory sits.
+
+An **absent** `kind` keeps today's behaviour exactly (a directory-scanned store
+is `user-specs`), so no existing store changes meaning and there is no migration.
+
+Kind decides binding scope and what a Project is — see `src/lib/specs/store-kind.ts`
+and 049's table. **Kind and ownership are different axes**: only
+`bos-system-specs` is BOS-owned and read-only; every other kind, arbitrary repos
+included, is the user's and writable on a branch.
+
+### "The store IS one project" is about BINDING, not nesting
+
+050's table reads *the repo **is** one project* for `user-specs` and for an
+arbitrary repo. That is the **binding scope** column's companion: one workflow
+governs the whole repository. It does not remove the 037 Project folders — the
+directories under a store (`build-studio/`, `assistant/`, …) still exist, still
+scope feature numbering, and are still created and renamed through
+`lifecycle.ts`.
+
+So Build Studio calls them **folders**, not Projects, in everything a user
+reads. A repository the user added IS their project; offering "New project"
+inside it described the model's unit and said nothing true to the person looking
+at it. The server ops keep the `*-project` names — that is the unit's name in the
+model, not a word for the UI.
+
+### Store discovery exists twice, and must agree
+
+`src/lib/specs/stores.ts` decides what BOS treats as a store.
+`tools/supervisor/lib/coupled-repos.mjs` decides what gets **mounted as a
+worktree** for a feature branch. They are separate processes — the Supervisor is
+plain ESM with no TS build — so the rule is written twice, and the two copies
+must stay identical: a store BOS will happily write to, but the Supervisor never
+mounts, has nowhere to put the write.
+
+They drifted, silently, in two ways that each make a store unwritable on a branch:
+
+- **`Dirent.isDirectory()` is false for a symlink.** `readdir` does not follow
+  links, and a store is routinely a symlink into a repo kept outside the data
+  dir. In such a deployment the Supervisor mounted *nothing at all*.
+- **`.git` was required INSIDE the store root.** That skips any store that is a
+  *subdirectory* of its repo — exactly the shape 050 gave registered
+  repositories, whose specs live at `<repo>/specs` or `<repo>/openspec`.
+
+Both are fixed, and `tests/specs/symlinked-store-discovery.test.ts` pins the
+agreement by running the Supervisor's own `listSpecStores()` in a child process
+(its `SPECS_ROOT` is read at module load, so it has to be a real process) and
+comparing the result to `listStores()` on one fixture.
+
+**A mount is the store's REPO, not the store.** For most stores they are the same
+directory. For a registered repository they are not, so the mount is the whole
+project and `resolveInStore` descends by
+`path.relative(store.repoRoot, store.root)` to reach the store inside it. The
+offset is derived from what BOS already resolved rather than reported by the
+Supervisor — one less thing the two sides have to agree about.
+
+### Every write needs a feature branch — creating a folder included
+
+`prepareWrite` (`src/lib/dev/spec-fs.ts`) has no exemptions. A Project manifest
+used to be one, so that making an empty folder did not require picking a branch.
+That was defensible while every store was BOS's own and became wrong the moment
+050 admitted the user's repositories, where the write is a commit on their
+branch. It also produced a half-made thing: the folder landed on the default
+branch, and every attempt to put content in it was then refused.
+
+The refusal is a `BranchRequiredError` carrying `code: "branch_required"`
+(`src/lib/specs/error-codes.ts`, framework-free so the client can import it).
+The message is written for an AGENT — it names `dev_branch_request`, its
+argument, and the retry, because a sub-agent that hits this mid-run cannot guess
+the recovery. The code is what lets Build Studio recognise the case and address
+a person instead, without matching on prose.
+
+### Refusals
+
+Registration refuses rather than warns, because both cases put two jails over
+one worktree and diverge silently:
+
+- **Duplicate** — by resolved path, and by remote URL normalised across
+  `git@host:owner/repo.git` / `https://host/owner/repo`.
+- **Nested** — in either direction, relative to an already-registered repo.
+
+A failed registration rolls back in reverse and leaves nothing: partial
+registration is worse than failure, because it looks like success *and* blocks
+the retry.
+
+### One writable marketplace
+
+`user-apps` only. `LOCAL_MARKETPLACE_ID` is singular through
+`marketplace/client.ts` (18 call sites), `item-stores.ts` scans one directory by
+design, and — the real cost — `user-apps` is **branch-coupled** (038): `spec-fs`
+resolves `<previewDataDir>/user-apps` so an item's spec travels with its app's
+code onto a feature branch. A second writable marketplace needs that same
+coupling, which is Supervisor worktree machinery rather than a loop over a list.
+
+Deferred until *sharing* is the need. Organising a large collection does not
+justify it.
 
 ## Environment variables
 

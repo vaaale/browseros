@@ -1,9 +1,34 @@
 import { test, expect } from "./fixtures";
+import { join } from "path";
+import { mkdirSync, writeFileSync, symlinkSync, rmSync } from "fs";
+
+// 048 T002 — an item with a `spec/` facet, so the "grouped under User Apps"
+// assertion below has something to assert on regardless of what the deployment
+// has installed. Namespaced `e2e-` and removed in afterAll.
+const ITEM_ID = "e2e-fixture-spec-item";
+const dataDir = () => process.env.BOS_DATA_DIR?.trim() || join(process.cwd(), "data");
+
+function writeSpecItem(): void {
+  const p = join(dataDir(), "user-apps", "items", ITEM_ID);
+  mkdirSync(join(p, "spec"), { recursive: true });
+  writeFileSync(join(p, "spec", "spec.md"), "# E2E fixture item\n\nBundled by build-studio.spec.ts.\n");
+  mkdirSync(join(dataDir(), "system"), { recursive: true });
+  rmSync(join(dataDir(), "system", ITEM_ID), { force: true });
+  symlinkSync(p, join(dataDir(), "system", ITEM_ID));
+}
+
+function purgeSpecItem(): void {
+  rmSync(join(dataDir(), "system", ITEM_ID), { force: true });
+  rmSync(join(dataDir(), "user-apps", "items", ITEM_ID), { recursive: true, force: true });
+}
 
 // Deterministic smoke test for the Build Studio app. Asserts the window opens and
 // the spec tree renders the in-repo 001-build-studio feature. Never asserts on
 // (nondeterministic) assistant/LLM output.
 test.describe("Build Studio", () => {
+  test.beforeAll(() => writeSpecItem());
+  test.afterAll(() => purgeSpecItem());
+
   test("opens from the dock and shows the spec tree", async ({ page }) => {
     await page.getByTestId("dock-build-studio").click();
     const win = page.getByTestId("window-build-studio");
@@ -46,16 +71,17 @@ test.describe("Build Studio", () => {
     const tree = win.getByTestId("build-studio-tree");
     await expect(tree.locator('[data-node-type="project"], [data-node-type="feature"]').first()).toBeVisible({ timeout: 20000 });
 
-    // Whether any marketplace item is installed depends on the environment's
-    // data (not something this test creates) — skip gracefully rather than
-    // asserting on it, but if one IS present, its store must be grouped under
-    // "User Apps" (not its own top-level category) and its files must offer
-    // the same context menu as any other spec file, not none at all.
+    // 048 T002 converted this off a skip. It used to bail with
+    // `test.skip(true, "no marketplace item installed in this environment")`
+    // whenever the deployment happened to have no item with a spec facet —
+    // which meant it asserted NOTHING on a clean install, and a test that
+    // passes by skipping is not coverage. It is also the pre-seeded-data
+    // dependency docs/dev/testing.md prohibits.
+    //
+    // The fixture is created in beforeAll and removed in afterAll, so the
+    // assertion below always runs and never depends on ambient state.
     const itemFeature = tree.locator('[data-node-type="feature"][data-key^="item-"]').first();
-    if ((await itemFeature.count()) === 0) {
-      test.skip(true, "no marketplace item installed in this environment");
-      return;
-    }
+    await expect(itemFeature, "the bundled item fixture must be present").toBeVisible({ timeout: 20000 });
 
     await expect(tree.getByText("User Apps", { exact: true })).toBeVisible();
     await itemFeature.scrollIntoViewIfNeeded();

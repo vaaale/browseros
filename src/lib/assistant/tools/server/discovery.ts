@@ -6,7 +6,7 @@ import { buildIndex, search } from "@/lib/agent/discovery-search";
 import { resolveGroup } from "@/lib/agent/tool-groups";
 import { getEffectiveGroups } from "@/lib/agent/tool-group-overrides";
 import { scoreAgent } from "@/lib/agent/discovery-score";
-import { listSubAgents } from "@/lib/agent/subagents/store";
+import { listDelegatableAgents } from "@/lib/agent/subagents/store";
 import { getMaxFindResults } from "@/lib/config/registry";
 import { gateFor, gateFromAgent } from "../../gate";
 import { getInRunAgent } from "@/lib/agent/subagents/in-run-agents";
@@ -220,7 +220,10 @@ export function discoveryTools(lookup: (id: string) => AssistantTool | undefined
         // currently-registered surface agents (FR-010) — read per-call from
         // the run, never baked into any process-wide cache.
         const run = runManager().get(ctx.runId);
-        const persisted = (await listSubAgents()).map((a) => ({
+        // 048 FR-001b — find_agents exists so the model can locate a
+        // specialist to delegate to. Filtering out delegate-only agents
+        // would hide exactly the specialists a pack contributes.
+        const persisted = (await listDelegatableAgents()).map((a) => ({
           id: a.id,
           name: a.name,
           type: a.type as string,

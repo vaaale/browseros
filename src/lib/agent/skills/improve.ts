@@ -35,6 +35,11 @@ export async function proposeSkillFromConversation(transcript: string): Promise<
 export async function nudgeSkillScore(idOrName: string, delta: number): Promise<Skill | null> {
   const skill = await getSkill(idOrName);
   if (!skill) return null;
+  // An item-installed (symlinked) skill is read-only; its score lives in
+  // frontmatter we cannot write. Guarded HERE, not left to saveSkill's throw:
+  // this runs off a thumbs-up, which must never surface an error for a skill
+  // that simply isn't optimisable.
+  if (skill.readOnly) return skill;
   const score = Math.max(0, Math.min(10, (skill.score ?? 1) + delta));
   if (score === skill.score) return skill;
   return saveSkill({
@@ -58,6 +63,10 @@ export async function improveSkill(idOrName: string, feedback: string): Promise<
   if (!(await hasCredentials())) return null;
   const skill = await getSkill(idOrName);
   if (!skill) return null;
+  // Read-only skills can't be rewritten in place — and this must be decided
+  // BEFORE the model call below, not discovered as saveSkill's throw inside a
+  // catch that reports it as "no improvement".
+  if (skill.readOnly) return null;
   try {
     const prompt = `SKILL "${skill.name}"\nCurrent description: ${skill.description}\nCurrent instructions:\n${skill.content}\n\nFEEDBACK:\n${feedback}`;
     const text = await complete({ system: IMPROVE_SYSTEM, prompt });

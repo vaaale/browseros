@@ -118,6 +118,10 @@ this — `setWebhook` disables `getUpdates`, and vice-versa.
   - `allowed_updates` (optional): comma-separated list from the
     [Update spec](https://core.telegram.org/bots/api#update). Empty means
     default (skips `channel_post`, `edited_channel_post`, and a few others).
+- If Telegram accepts the call but **refuses the registration** (unreachable
+  URL, bad certificate, …), enabling fails with the provider's own error
+  description (fetched via `getWebhookInfo`) instead of silently pretending
+  the webhook is live.
 - Disable to switch back to polling — BOS calls `deleteWebhook` and the
   scheduler picks up updates again on the next tick.
 
@@ -214,6 +218,13 @@ Behaviour notes:
   Notifications).
 - Each chat has its own **rolling context** capped at the last 20 turns. Old
   chats are LRU-evicted once a bot exceeds 100 tracked chats.
+- Replies are sent with `parse_mode: MarkdownV2`. The agent is instructed to
+  format with Telegram's MarkdownV2 syntax (`*bold*`, `_italic_`,
+  `~strikethrough~`, `` `code` ``, `[links](url)`), and BOS sanitizes the text
+  server-side before sending: well-formed formatting spans are preserved so
+  they render, while every reserved character outside them (and any malformed
+  markdown, like an unpaired `*`) is backslash-escaped — so a reply is never
+  rejected by Telegram over stray punctuation like `-` or `.`.
 - The **Notifications inbox** still fires — nothing else in BOS changes just
   because routing is on. You can watch the exchange in real time or scroll
   back later.

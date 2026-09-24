@@ -1,7 +1,7 @@
 import "server-only";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { promises as fs } from "node:fs";
+import { promises as fs, type Dirent } from "node:fs";
 import path from "node:path";
 import { dataDir } from "@/os/data-dir";
 import { itemLinkPath, getInstalledItem } from "@/system/items/installed";
@@ -10,13 +10,13 @@ import { commitAll } from "@/lib/gitfs/store";
 import { userSpecRoot } from "@/lib/specs/spec-mount";
 import { installItemApp } from "@/lib/apps/store";
 import { logger } from "@/lib/logging/server-logger";
-import { saveSkill, type SkillAsset } from "@/lib/agent/skills/store";
 import { parseFrontmatter, asString } from "@/lib/agent/subagents/markdown";
 import { installService } from "@/system/marketplace/install/serviceInstaller";
 import type { AppManifest } from "@/os/types";
 import {
   validateManifest,
   validateMarketplaceUrl,
+  relPathOk,
   type MarketplaceManifest,
   type MarketplaceItem,
   type MarketplaceItemApp,
@@ -67,11 +67,13 @@ async function isAnthropicPlugin(dir: string): Promise<boolean> {
   return pathExists(path.join(dir, ANTHROPIC_MARKETPLACE_JSON));
 }
 
-/** Extract a single-line field value from YAML frontmatter (--- ... ---). */
+/** Extract a single-line field value from YAML frontmatter (--- ... ---).
+ *  Surrounding quotes are stripped — YAML `description: "Foo."` means Foo. */
 function extractFrontmatter(content: string, field: string): string | undefined {
   const fm = content.match(/^---\n([\s\S]*?)\n---/)?.[1];
   if (!fm) return undefined;
-  return fm.match(new RegExp(`^${field}:\\s*(.+)$`, "m"))?.[1]?.trim();
+  const value = fm.match(new RegExp(`^${field}:\\s*(.+)$`, "m"))?.[1]?.trim();
+  return value?.replace(/^(["'])(.*)\1$/, "$2");
 }
 
 /** Read the Claude skills_index.json + plugin.json and write a synthesized marketplace.json. */
@@ -118,10 +120,14 @@ async function convertClaudePlugin(dir: string): Promise<MarketplaceManifest> {
 }
 
 /**
- * Anthropic agent-skills format: .claude-plugin/marketplace.json with
- * { name, metadata: { version }, plugins: [{ skills: ["./skills/name", ...] }] }.
- * Flattens all plugin skill paths, reads each SKILL.md for its description,
- * and writes a synthesized marketplace.json.
+ * Anthropic / Claude Code plugin-marketplace format: .claude-plugin/
+ * marketplace.json with { name, metadata?: { version }, plugins: [...] }.
+ * A plugin entry may list its skills explicitly (`skills: ["./skills/name"]`),
+ * but in that format `skills` is OPTIONAL — omitted means "auto-discover every
+ * <source>/skills/<name>/SKILL.md" (the common case: obra/superpowers ships 15
+ * skills and no `skills` array). Versions live on the plugin entry when there
+ * is no top-level metadata. Flattens all plugins' skills, reads each SKILL.md
+ * for its description, and writes a synthesized marketplace.json.
  */
 async function convertAnthropicPlugin(dir: string): Promise<MarketplaceManifest> {
   const raw = await fs.readFile(path.join(dir, ANTHROPIC_MARKETPLACE_JSON), "utf8");
@@ -131,27 +137,62 @@ async function convertAnthropicPlugin(dir: string): Promise<MarketplaceManifest>
   const id = rawId.replace(/[^a-zA-Z0-9._-]/g, "-");
   const name = toDisplayName(rawId);
   const metaObj = meta.metadata && typeof meta.metadata === "object" ? meta.metadata as Record<string, unknown> : {};
-  const version = typeof metaObj.version === "string" ? metaObj.version : "0.0.0";
+  const plugins = Array.isArray(meta.plugins) ? (meta.plugins as Array<Record<string, unknown>>) : [];
+  const firstPluginVersion = plugins.map((p) => p.version).find((v) => typeof v === "string") as string | undefined;
+  const version = typeof metaObj.version === "string" ? metaObj.version : firstPluginVersion ?? "0.0.0";
 
   // Flatten skill paths from all plugins, dedup by id.
   const seen = new Set<string>();
-  const skillPaths: Array<{ id: string; relPath: string }> = [];
-  const plugins = Array.isArray(meta.plugins) ? (meta.plugins as Array<Record<string, unknown>>) : [];
+  const skillPaths: Array<{ id: string; relPath: string; version: string }> = [];
+  const push = (relPath: string, skillVersion: string) => {
+    const skillId = path.basename(relPath);
+    if (seen.has(skillId)) return;
+    seen.add(skillId);
+    skillPaths.push({ id: skillId, relPath, version: skillVersion });
+  };
   for (const plugin of plugins) {
-    const skills = Array.isArray(plugin.skills) ? (plugin.skills as unknown[]) : [];
-    for (const ref of skills) {
-      if (typeof ref !== "string") continue;
-      const relPath = ref.replace(/^\.\//, ""); // "./skills/foo" → "skills/foo"
-      const skillId = path.basename(relPath);
-      if (!seen.has(skillId)) {
-        seen.add(skillId);
-        skillPaths.push({ id: skillId, relPath });
+    const pluginVersion = typeof plugin.version === "string" ? plugin.version : version;
+
+    if (Array.isArray(plugin.skills)) {
+      // Explicit list — the publisher curated it, so it is authoritative even
+      // when more skill folders exist on disk.
+      for (const ref of plugin.skills as unknown[]) {
+        if (typeof ref !== "string") continue;
+        push(ref.replace(/^\.\//, ""), pluginVersion); // "./skills/foo" → "skills/foo"
       }
+      continue;
+    }
+
+    // No `skills` array → auto-discover from <source>/skills/*/SKILL.md.
+    // Only a local relative source can be scanned; an object source points at
+    // another repo entirely, and a traversal source must never leave the clone.
+    if (typeof plugin.source !== "string") {
+      if (plugin.source != null)
+        logger().debug(COMPONENT, "skipping plugin with non-local source", { plugin: plugin.name });
+      continue;
+    }
+    const rel = plugin.source.replace(/^\.\//, "").replace(/\/+$/, ""); // "./" → "", "./plugins/x/" → "plugins/x"
+    if (rel !== "" && !relPathOk(rel)) {
+      logger().warn(COMPONENT, "skipping plugin with unsafe source path", { plugin: plugin.name, source: plugin.source });
+      continue;
+    }
+    const skillsRoot = rel ? `${rel}/skills` : "skills";
+    let entries: Dirent[];
+    try {
+      entries = await fs.readdir(path.join(dir, skillsRoot), { withFileTypes: true });
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") continue; // plugin ships no skills — fine
+      throw err;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      if (!(await pathExists(path.join(dir, skillsRoot, entry.name, "SKILL.md")))) continue;
+      push(`${skillsRoot}/${entry.name}`, pluginVersion);
     }
   }
 
   const items: MarketplaceManifest["items"] = await Promise.all(
-    skillPaths.map(async ({ id: skillId, relPath }) => {
+    skillPaths.map(async ({ id: skillId, relPath, version: skillVersion }) => {
       let description = "";
       try {
         const skillMd = await fs.readFile(path.join(dir, relPath, "SKILL.md"), "utf8");
@@ -161,7 +202,7 @@ async function convertAnthropicPlugin(dir: string): Promise<MarketplaceManifest>
         id: skillId,
         name: toDisplayName(skillId),
         description,
-        skill: { path: relPath, version },
+        skill: { path: relPath, version: skillVersion },
       };
     }),
   );
@@ -170,43 +211,6 @@ async function convertAnthropicPlugin(dir: string): Promise<MarketplaceManifest>
   await fs.writeFile(path.join(dir, MANIFEST), JSON.stringify(manifest, null, 2));
   logger().debug(COMPONENT, "synthesized marketplace.json from Anthropic skills plugin", { id, skills: items.length });
   return manifest;
-}
-
-/**
- * Recursively walk a skill folder and collect assets into scripts[] and references[].
- * SKILL.md at the root is excluded (handled separately as content).
- * Files under scripts/ go into scripts; everything else into references.
- */
-async function walkSkillDir(
-  skillDir: string,
-  scripts: SkillAsset[],
-  references: SkillAsset[],
-): Promise<void> {
-  async function walk(dir: string, relBase: string): Promise<void> {
-    const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
-    for (const entry of entries) {
-      const entryName = entry.name.toString();
-      const relPath = relBase ? `${relBase}/${entryName}` : entryName;
-      const fullPath = path.join(dir, entryName);
-      if (entry.isDirectory()) {
-        await walk(fullPath, relPath);
-      } else if (entry.isFile()) {
-        if (!relBase && entryName === "SKILL.md") continue; // handled as content
-        try {
-          const content = await fs.readFile(fullPath, "utf8");
-          const asset: SkillAsset = { name: relPath, content };
-          if (relPath.startsWith("scripts/")) {
-            scripts.push(asset);
-          } else {
-            references.push(asset);
-          }
-        } catch {
-          // skip binary / unreadable files
-        }
-      }
-    }
-  }
-  await walk(skillDir, "");
 }
 
 async function git(args: string[], cwd?: string): Promise<void> {
@@ -256,7 +260,18 @@ async function readJsonSafe(filePath: string): Promise<Record<string, unknown> |
  *  least one facet, so an entry that has lost them all describes nothing and is
  *  the only case in which a declared entry may be pruned. */
 function hasAnyFacet(item: MarketplaceItem): boolean {
-  return Boolean(item.app || item.spec || item.skill || item.serverPlugin || item.services || item.integration || item.voiceEngine);
+  // `method` belongs here: 045 FR-012a made it an INSTALLABLE facet — the
+  // Marketplace's Install button is gated on `item.method` — so an entry
+  // carrying only a method describes something real.
+  //
+  // Omitting it did exactly what the comment above warns about. A method-ONLY
+  // pack (the first one being OpenSpec; BMAD survived because it also declares
+  // an `integration`) was judged to describe nothing, PRUNED from the user's own
+  // repo, and then re-added as a stub synthesised from the disk scan — losing
+  // its name, description, tags and the whole `method` block, and COMMITTED.
+  // The scanner does not emit `method`, which is precisely why its silence must
+  // not be treated as evidence that a declared entry is stale.
+  return Boolean(item.app || item.spec || item.skill || item.serverPlugin || item.services || item.integration || item.voiceEngine || item.method);
 }
 
 /**
@@ -827,9 +842,16 @@ export async function adoptSpec(marketplaceId: string, itemId: string): Promise<
 }
 
 /**
- * Install an item's skill: read the entire skill folder from the marketplace clone
- * and save it into BOS's skill store. SKILL.md becomes the skill content; files
- * under scripts/ become script assets; everything else becomes reference assets.
+ * Install a skill-facet item through the ONE item mechanism (035): the item
+ * link `data/system/<itemId>` points at the skill folder itself (a skill item
+ * has no `items/<id>/` directory — superpowers-style, SKILL.md sits at the
+ * folder root), and `data/skills/<itemId>` is a relative symlink through it.
+ * Nothing is copied, and the skill is read-only in the store.
+ *
+ * The previous COPY (`saveSkill` with no item link) is the exact defect this
+ * replaced: "✓ installed" came from data/skills/ while uninstall-item required
+ * data/system/<id>, so a skill item was green yet threw `not installed` on
+ * uninstall — see tests/services/skill-symlink-install.test.ts.
  */
 export async function installSkill(marketplaceId: string, itemId: string): Promise<{ skillId: string }> {
   const manifest = await readManifest(marketplaceId);
@@ -840,27 +862,26 @@ export async function installSkill(marketplaceId: string, itemId: string): Promi
   if (!(await pathExists(skillDir))) {
     throw new Error(`Skill folder missing in marketplace clone: ${item.skill.path}`);
   }
-  const skillMdPath = path.join(skillDir, "SKILL.md");
-  if (!(await pathExists(skillMdPath))) {
+  if (!(await pathExists(path.join(skillDir, "SKILL.md")))) {
     throw new Error(`Skill folder has no SKILL.md: ${item.skill.path}`);
   }
 
-  const content = await fs.readFile(skillMdPath, "utf8");
-  const scripts: SkillAsset[] = [];
-  const references: SkillAsset[] = [];
-  await walkSkillDir(skillDir, scripts, references);
+  const { installItemLink } = await import("@/system/marketplace/install/symlinkManager");
+  const { installSkillFacetLink } = await import("@/system/marketplace/install/bundledAssets");
+  await installItemLink(skillDir, item.id);
+  try {
+    await installSkillFacetLink(item.id);
+  } catch (err) {
+    // A half-installed item (link but no skill) would be green in the item
+    // scan yet absent from the skill list — the two-sources-of-truth split
+    // this function exists to end. Roll the link back and report why.
+    const { uninstallItemLink } = await import("@/system/marketplace/install/symlinkManager");
+    await uninstallItemLink(item.id);
+    throw err;
+  }
 
-  const saved = await saveSkill({
-    name: item.name,
-    description: item.description,
-    content,
-    scripts: scripts.length > 0 ? scripts : undefined,
-    references: references.length > 0 ? references : undefined,
-    createdBy: "user",
-  });
-
-  logger().info(COMPONENT, "skill installed", { marketplaceId, itemId, skillId: saved.id });
-  return { skillId: saved.id };
+  logger().info(COMPONENT, "skill installed", { marketplaceId, itemId, skillId: item.id });
+  return { skillId: item.id };
 }
 
 /**
@@ -874,11 +895,17 @@ export async function installSkill(marketplaceId: string, itemId: string): Promi
 export async function installMarketplaceItem(
   marketplaceId: string,
   itemId: string,
+  /** 048 FR-006 — a method pack's selected modules. Ignored for other items. */
+  modules?: string[],
 ): Promise<{ app?: AppManifest; serviceId?: string; pluginId?: string }> {
   const manifest = await readManifest(marketplaceId);
   const item = findItem(manifest, itemId);
-  if (!item.app && !item.services && !item.integration && !item.voiceEngine) {
-    throw new Error(`Item "${itemId}" has nothing installable (no app, services, integration, or voiceEngine).`);
+  // 045 FR-012: `method` counts as installable. Without it a method-only pack
+  // is refused SERVER-SIDE even when the UI issues the op — the Install button
+  // appears to do nothing, with the error surfacing as "has nothing
+  // installable", which points at the pack rather than at this check.
+  if (!item.app && !item.services && !item.integration && !item.voiceEngine && !item.method) {
+    throw new Error(`Item "${itemId}" has nothing installable (no app, services, integration, voiceEngine, or method).`);
   }
 
   // BOS plugin facets (integration + voiceEngine) — install first so the plugin
@@ -887,6 +914,65 @@ export async function installMarketplaceItem(
   const pluginFacet = item.integration ?? item.voiceEngine;
   if (pluginFacet) {
     ({ pluginId } = await installBosPlugin(marketplaceId, itemId));
+  }
+
+  // 045 FR-012/FR-013a: method facet. Registers descriptor + agent root +
+  // template mount, and REFUSES a plugin-bearing pack from a non-local origin
+  // without a per-pack opt-in. Done before the app/service facets so a refusal
+  // stops the whole install rather than leaving half an item registered.
+  if (item.method) {
+    // 035: installing IS the symlink, and NOTHING ELSE creates one for a
+    // method-only pack. The app branch below links iframe apps, services copy
+    // the directory, and a plugin facet has its own path — which is why BMAD
+    // (carrying an `integration`) installed correctly and the first method-ONLY
+    // pack did not. Idempotent for the same source, so it is safe after a
+    // plugin facet has already linked the item.
+    if (!item.services) {
+      const { installItemLink } = await import("@/system/marketplace/install/symlinkManager");
+      await installItemLink(itemDirFor(marketplaceId, item), item.id);
+    }
+
+    const { installMethodPack } = await import("@/lib/specs/method/install");
+    const { getInstalledItem } = await import("@/system/items/installed");
+    const installed = await getInstalledItem(itemId);
+    // Previously `if (installed) { … }`, which SILENTLY did nothing when the
+    // item was not linked — so the whole install reported success, the UI showed
+    // a confirmation toast, and no pack was registered. A facet that cannot be
+    // installed is an error, not a no-op.
+    if (!installed) {
+      throw new Error(
+        `Installed "${itemId}" but its item link is not resolvable, so the method pack could not be registered. ` +
+          `Expected a linked item directory for "${itemId}".`,
+      );
+    }
+    const descriptor = await installMethodPack({
+      itemId,
+      itemPath: installed.itemPath,
+      facets: { plugin: installed.facets.plugin },
+      origin: installed.origin,
+    });
+    // Record the selection, then RE-REGISTER so the roots reflect it. The first
+    // install used the descriptor's own defaults, because the selection has to
+    // be validated against a descriptor that is already loaded.
+    if (modules) {
+      const { selectModules } = await import("@/lib/specs/method/modules");
+      const { dropped } = await selectModules(descriptor, modules);
+      if (dropped.length) {
+        // The pack no longer offers these. Not fatal — the install proceeds with
+        // what it does offer — but the user asked for something they are not
+        // getting, and a stale selection they cannot see is what made reinstall
+        // impossible before this was a drop rather than a throw.
+        console.warn(
+          `[marketplace] "${itemId}" no longer offers module(s) ${dropped.join(", ")} — installed without them.`,
+        );
+      }
+      await installMethodPack({
+        itemId,
+        itemPath: installed.itemPath,
+        facets: { plugin: installed.facets.plugin },
+        origin: installed.origin,
+      });
+    }
   }
 
   // Service facet: copies the full item directory into user-apps/<id>/.
@@ -1032,6 +1118,17 @@ export async function uninstallBosPlugin(pluginId: string): Promise<void> {
 export async function uninstallMarketplaceItem(itemId: string): Promise<void> {
   const item = await getInstalledItem(itemId);
   if (!item) throw new Error(`"${itemId}" is not installed.`);
+
+  // 045 FR-012/FR-016: unregister the descriptor, agent root and template
+  // mount. Runs FIRST so nothing resolves the pack while its files are being
+  // removed. Stores still bound to it then render "method not installed" —
+  // they must never silently fall back to spec-kit and reinterpret content
+  // authored under another framework.
+  if (item.facets.method) {
+    const { uninstallMethodPack, readMethodManifest } = await import("@/lib/specs/method/install");
+    const packId = await readMethodManifest(item.itemPath).then((m) => m.id).catch(() => itemId);
+    await uninstallMethodPack(packId);
+  }
 
   if (item.facets.plugin) await uninstallBosPlugin(itemId);
   if (item.facets.service) {

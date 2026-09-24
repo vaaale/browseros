@@ -138,34 +138,34 @@ test("addWorktreeForBranch: creates a fresh worktree checked out on a new branch
   mkdirSync(join(env.repo, "node_modules"), { recursive: true });
   writeFileSync(join(env.repo, "node_modules", ".keep"), "");
 
-  git(env.repo, ["branch", "bos/feature-one"]);
-  const wt = await addWorktreeForBranch("bos/feature-one");
+  git(env.repo, ["branch", "bos/testfixture-feature-one"]);
+  const wt = await addWorktreeForBranch("bos/testfixture-feature-one");
 
-  assert.equal(git(wt, ["rev-parse", "--abbrev-ref", "HEAD"]), "bos/feature-one");
+  assert.equal(git(wt, ["rev-parse", "--abbrev-ref", "HEAD"]), "bos/testfixture-feature-one");
   assert.equal(existsSync(join(wt, "node_modules", ".keep")), true);
 });
 
 test("addWorktreeForBranch: reuses an already-healthy worktree instead of recreating it", async () => {
-  git(env.repo, ["branch", "bos/feature-reuse"]);
-  const wt1 = await addWorktreeForBranch("bos/feature-reuse");
+  git(env.repo, ["branch", "bos/testfixture-feature-reuse"]);
+  const wt1 = await addWorktreeForBranch("bos/testfixture-feature-reuse");
   await writeMarker(wt1, "MARKER", "first provision\n");
 
-  const wt2 = await addWorktreeForBranch("bos/feature-reuse");
+  const wt2 = await addWorktreeForBranch("bos/testfixture-feature-reuse");
   assert.equal(wt2, wt1);
   assert.equal(await readMarker(wt2, "MARKER"), "first provision\n", "a healthy worktree must be reused, not torn down and recreated");
 });
 
 test("addWorktreeForBranch: an unhealthy worktree (node_modules missing) is torn down and recreated, not silently reused", async () => {
-  git(env.repo, ["branch", "bos/feature-stale"]);
-  const wt = await addWorktreeForBranch("bos/feature-stale");
+  git(env.repo, ["branch", "bos/testfixture-feature-stale"]);
+  const wt = await addWorktreeForBranch("bos/testfixture-feature-stale");
   await writeMarker(wt, "MARKER", "will be discarded\n");
 
   // Simulate an interrupted/corrupted prior hydration: node_modules missing
   // is exactly what isHealthyWorktree treats as unhealthy.
   await import("node:fs").then((fs) => fs.rmSync(join(wt, "node_modules"), { recursive: true, force: true }));
-  assert.equal(await isHealthyWorktree(wt, "bos/feature-stale"), false, "missing node_modules must be reported as unhealthy");
+  assert.equal(await isHealthyWorktree(wt, "bos/testfixture-feature-stale"), false, "missing node_modules must be reported as unhealthy");
 
-  const recreated = await addWorktreeForBranch("bos/feature-stale");
+  const recreated = await addWorktreeForBranch("bos/testfixture-feature-stale");
   assert.equal(await readMarker(recreated, "MARKER"), null, "an unhealthy worktree must be torn down, not silently reused");
   assert.equal(existsSync(join(recreated, "node_modules")), true, "the recreated worktree must be freshly hydrated");
 });

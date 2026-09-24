@@ -56,7 +56,7 @@ test("writes land in the active branch's Supervisor-mounted worktree, not the ca
     const restoreSupervisor = stubSupervisor(worktree);
     try {
       const docsFs = new DocsFS();
-      await withFeatureScope({ branch: "bos/docs-test" }, async () => {
+      await withFeatureScope({ branch: "bos/testfixture-docs-test" }, async () => {
         await docsFs.mkdir("usage/NewSection");
         await docsFs.writeText("usage/NewSection/page.md", "# Hi\n");
         await docsFs.writeBuffer("usage/NewSection/blob.bin", Buffer.from([1, 2, 3]));
@@ -89,7 +89,7 @@ test("reads resolve through the active branch's Supervisor worktree when one is 
     const restoreSupervisor = stubSupervisor(worktree);
     try {
       const docsFs = new DocsFS();
-      await withFeatureScope({ branch: "bos/docs-test" }, async () => {
+      await withFeatureScope({ branch: "bos/testfixture-docs-test" }, async () => {
         expect(await docsFs.readText("usage/branch-only.md")).toContain("Branch-only page");
       });
     } finally {
@@ -106,7 +106,7 @@ test("reads fall back to the canonical checkout when the Supervisor's begin call
     const restoreSupervisor = stubSupervisor("/unused", { fail: true });
     try {
       const docsFs = new DocsFS();
-      await withFeatureScope({ branch: "bos/docs-test" }, async () => {
+      await withFeatureScope({ branch: "bos/testfixture-docs-test" }, async () => {
         // introduction.md is a real page in this repo's own docs/usage/ — the
         // fallback resolves to CANONICAL_DOCS_ROOT, so this is safe to read.
         expect(await docsFs.exists("usage/introduction.md")).toBe(true);

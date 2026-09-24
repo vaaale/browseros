@@ -9,8 +9,34 @@ import { ensureStoresOnce } from "@/lib/specs/seed";
 import { supervisorEnabled, supervisorBeginOrThrow } from "@/lib/devharness/supervisor";
 import { logger } from "@/lib/logging/server-logger";
 import { searchTerms, lineMatchesTerms } from "./text-search";
+import { BRANCH_REQUIRED } from "@/lib/specs/error-codes";
 
 const COMPONENT = "dev-spec-fs";
+
+/** A write was attempted against a writable store with no feature branch active.
+ *
+ *  A CLASS rather than a bare `Error` because this failure has two audiences
+ *  with irreconcilable needs, and for a while only one of them was served.
+ *
+ *  The message below is written for an AGENT, deliberately: a sub-agent that
+ *  hits this mid-run has no way to guess the recovery, and the observed failure
+ *  was one stalling while it searched its tool list for something that would
+ *  create a branch. So it names the tool, the argument, and the retry.
+ *
+ *  A HUMAN in Build Studio was shown that same text — instructions for a tool
+ *  they do not have, about a step the branch dropdown in front of them already
+ *  performs. `code` lets the UI recognise this case and say what a person can
+ *  actually act on, without parsing the prose. */
+export class BranchRequiredError extends Error {
+  readonly code = BRANCH_REQUIRED;
+  constructor(readonly storeId: string) {
+    super(
+      `Store "${storeId}" needs an active feature branch before it can be edited. ` +
+        `Call dev_branch_request (task = a one-line description of this work), wait for the user to confirm the branch name, then retry this exact write. ` +
+        `Do not look for another tool and do not skip the write.`,
+    );
+  }
+}
 
 // Multi-root spec filesystem (018-external-spec-store). A spec-fs path is
 // `<storeId>/<relPath>`: the first segment selects a discovered spec store and
@@ -84,13 +110,49 @@ async function branchSpecsRoot(branch: string, storeId?: string): Promise<string
     }
   }
   const { worktree, mountErrors } = await supervisorBeginOrThrow(branch);
-  const specsDir = path.join(worktree, "specs");
+  const mount = path.join(worktree, "specs", storeId);
   try {
-    await fs.access(path.join(specsDir, storeId));
-    return specsDir;
+    await fs.access(mount);
+    return mount;
   } catch {
     const cause = mountErrors?.[storeId] ?? "mount did not complete for an unknown reason";
     throw new Error(`Store "${storeId}" is not mounted on branch "${branch}": ${cause}`);
+  }
+}
+
+// A store's root inside its branch mount is `store.repoOffset`, recorded at
+// DISCOVERY (stores.ts) — never derived here.
+//
+// It was briefly derived as `path.relative(store.repoRoot, store.root)`, which
+// is wrong for any store reached by SYMLINK: `root` is then the link
+// (`data/specs/<id>`) while `repoRoot` is the real path, so the relative path
+// between them walks out of the data dir and back — `../../specs/police-mcp`.
+// Joined onto a mount sitting at the same depth it cancelled out exactly, so a
+// spec write landed at the repository ROOT: right content, wrong place, no
+// error. Found by 050 T017's diff, which is the only thing that would have.
+
+/** `branch` does not couple `user-apps`, so item-owned stores are not part of
+ *  this branch's work at all.
+ *
+ *  A DISTINCT type, because this is the one case that is not a failure. Since
+ *  branch coupling became scoped (a `bos-core` branch takes BOS's source and
+ *  user-specs; a `repository` branch takes only that repository), a branch that
+ *  never touches marketplace items legitimately has no user-apps mount — and
+ *  the tree read it unconditionally, so opening Build Studio on a bos-core
+ *  branch failed to load the ENTIRE sidebar over one store that was never
+ *  supposed to be there.
+ *
+ *  Callers that can sensibly fall back to base catch THIS and nothing else, so
+ *  a genuine mount failure (EACCES, a half-provisioned worktree) still travels
+ *  as the error it is instead of being read as "no item specs here". */
+export class UserAppsNotCoupled extends Error {
+  constructor(
+    readonly branch: string,
+    readonly storeId: string,
+    readonly cause_: string,
+  ) {
+    super(`user-apps is not coupled to branch "${branch}" (${cause_}); item store "${storeId}" is not on it.`);
+    this.name = "UserAppsNotCoupled";
   }
 }
 
@@ -118,7 +180,7 @@ async function branchItemStoreRoot(branch: string, storeId: string): Promise<str
     // The real errno (ENOENT = never mounted, EACCES = a permissions problem
     // needing a different fix) is preserved rather than flattened away.
     logger().warn(COMPONENT, "user-apps mount missing for branch", { branch, storeId, userApps, err: String(err) });
-    throw new Error(`user-apps is not mounted on branch "${branch}" (${(err as NodeJS.ErrnoException)?.code ?? "unknown"}); cannot edit item store "${storeId}" there.`);
+    throw new UserAppsNotCoupled(branch, storeId, (err as NodeJS.ErrnoException)?.code ?? "unknown");
   }
   const root = path.join(userApps, "items", storeId.slice(ITEM_STORE_PREFIX.length), "spec");
   logger().debug(COMPONENT, "resolved item store on branch", { branch, storeId, root });
@@ -152,7 +214,12 @@ function projectIdOf(rel: string): string | undefined {
 async function resolveInStore(p: string, ctx?: SpecCtx): Promise<{ store: SpecStore; rel: string; abs: string; root: string }> {
   await ensureStoresOnce();
   const { storeId, rel } = splitStorePath(p);
-  const store = await getStore(storeId);
+  // Base first, and only then the branch. A branch-widened lookup asks the
+  // Supervisor where that branch's data clone is (an HTTP round trip), and
+  // every read of every installed store would pay for it — so the cost lands
+  // only on the case that needs it: an app created ON the branch, which appears
+  // in no base listing at all and would otherwise be "Unknown spec store".
+  const store = (await getStore(storeId)) ?? (ctx?.branch ? await getStore(storeId, ctx.branch) : undefined);
   if (!store) throw new Error(`Unknown spec store "${storeId}". Prefix paths with a store id (e.g. "bos-system-specs/...").`);
   // An item-owned store (item-stores.ts) routes to the branch-coupled
   // `user-apps` worktree, NOT to `<codeWorktree>/specs/<id>` — user-apps is a
@@ -176,9 +243,12 @@ async function resolveInStore(p: string, ctx?: SpecCtx): Promise<{ store: SpecSt
     // branchSpecsRoot throws (with the real cause) rather than returning
     // null when a storeId is passed — see its doc comment. The null check
     // below is unreachable in practice; it's here only to narrow the type.
-    const wtSpecs = await branchSpecsRoot(ctx.branch, store.id);
-    if (!wtSpecs) throw new Error(`Store "${store.id}" is not mounted on branch "${ctx.branch}"`);
-    root = path.join(wtSpecs, store.id);
+    const mount = await branchSpecsRoot(ctx.branch, store.id);
+    if (!mount) throw new Error(`Store "${store.id}" is not mounted on branch "${ctx.branch}"`);
+    // The mount is the store's REPO. For a store that IS its repo the offset is
+    // empty and this is a no-op; for a registered repository it descends into
+    // the folder the method chose (`specs/`, `openspec/`, `docs/`).
+    root = path.join(mount, store.repoOffset);
   }
   const abs = path.resolve(root, rel);
   if (abs !== root && !abs.startsWith(root + path.sep)) {
@@ -198,28 +268,39 @@ export async function resolveAbsolutePath(p: string, ctx?: SpecCtx): Promise<str
 }
 
 /** Resolve a store-prefixed path to its store + relative path WITHOUT any
- *  session/branch routing — for callers that need the store's own repo root
+ *  session/branch ROUTING — for callers that need the store's own repo root
  *  regardless of which Project session (if any) is active, e.g. history
  *  browsing (037-project-layer), which reads the store's FULL git history
- *  across every branch, not just the currently active worktree. */
-export async function resolveStoreRoot(p: string): Promise<{ store: SpecStore; rel: string }> {
+ *  across every branch, not just the currently active worktree.
+ *
+ *  `branch` widens DISCOVERY only, and the distinction matters: not routing the
+ *  root is the point of this function, but an app created on a feature branch
+ *  has no base record to be found at all, so without it the store simply does
+ *  not exist. A live delegation died on exactly that —
+ *  `specPath: "item-follow-the-money"` -> `Unknown spec store` — at the
+ *  `implement` step of the app the same session had just written. */
+export async function resolveStoreRoot(p: string, branch?: string): Promise<{ store: SpecStore; rel: string }> {
   await ensureStoresOnce();
   const { storeId, rel } = splitStorePath(p);
-  const store = await getStore(storeId);
+  const store = (await getStore(storeId)) ?? (branch ? await getStore(storeId, branch) : undefined);
   if (!store) throw new Error(`Unknown spec store "${storeId}". Prefix paths with a store id (e.g. "bos-system-specs/...").`);
   return { store, rel };
 }
 
-/** The active stores as top-level entries (a bare listDir("") lists them). */
-export async function listStoreEntries(): Promise<SpecEntry[]> {
+/** The active stores as top-level entries (a bare listDir("") lists them).
+ *
+ *  Branch-aware, because an app created on a feature branch is a store that
+ *  exists only there — listing the roots without it showed every store EXCEPT
+ *  the one just created, which reads as "it was not created". */
+export async function listStoreEntries(ctx?: SpecCtx): Promise<SpecEntry[]> {
   await ensureStoresOnce();
-  const stores = await listStores();
+  const stores = await listStores(ctx?.branch);
   return stores.map((s) => ({ name: s.id, path: s.id, type: "dir" as const, size: 0 }));
 }
 
 export async function listDir(p = "", ctx?: SpecCtx): Promise<SpecEntry[]> {
   const { storeId } = splitStorePath(p);
-  if (!storeId) return listStoreEntries();
+  if (!storeId) return listStoreEntries(ctx);
   const { store, rel, abs } = await resolveInStore(p, ctx);
   const names = await fs.readdir(abs, { withFileTypes: true }).catch(() => [] as import("fs").Dirent[]);
   const out: SpecEntry[] = [];
@@ -271,36 +352,31 @@ export async function readFile(p: string, ctx?: SpecCtx): Promise<string> {
  *  write live.
  *
  *  Directory-scanned stores additionally require a path inside a Project
- *  (Projects are pure organizational folders). Writing a Project's OWN
- *  manifest (`createProject()` in projects.ts) is exempt — a structural
- *  bootstrap action, not content, and requiring a branch just to create an
- *  empty folder to later put branch-gated content into would be pure
- *  friction. Item stores have no Projects, so only the branch rule applies. */
+ *  (Projects are pure organizational folders). Item stores have no Projects, so
+ *  only the branch rule applies.
+ *
+ *  The Project manifest USED to be exempt from the branch rule, on the grounds
+ *  that requiring a branch to create an empty folder is friction. It is not
+ *  exempt any more, for two reasons the exemption could not survive:
+ *
+ *    - 050 opened these stores to the USER'S OWN repositories, where every
+ *      write is a commit on their branch. "Creating a folder" there meant
+ *      committing to whatever branch was checked out — usually `main` — which
+ *      is exactly what 050 FR-013 promises never happens. The spec gives every
+ *      writable kind the SAME contract ("arbitrary repos included ... writable
+ *      on a branch"), so an exemption for one write is an exemption for all.
+ *    - It produced a half-made thing. The folder landed on the default branch
+ *      and then every attempt to put anything IN it was refused for want of a
+ *      branch, so the friction the exemption avoided arrived one step later,
+ *      with a stray commit already made. */
 async function prepareWrite(store: SpecStore, rel: string, ctx?: SpecCtx): Promise<void> {
   if (!store.writable) {
     throw new Error(`Spec store "${store.id}" is read-only (${store.owner}); it cannot be edited here.`);
   }
-  if (store.owner !== "item") {
-    const projectId = projectIdOf(rel);
-    if (!projectId) {
-      throw new Error(`Cannot write directly to the root of store "${store.id}" — writes must target a file inside a Project.`);
-    }
-    if (rel === `${projectId}/${PROJECT_MANIFEST}`) return; // creating the Project itself
+  if (store.owner !== "item" && !projectIdOf(rel)) {
+    throw new Error(`Cannot write directly to the root of store "${store.id}" — writes must target a file inside a Project.`);
   }
-  if (!ctx?.branch) {
-    // Names the RECOVERY, not just the condition. A sub-agent that hits this
-    // mid-run has no way to guess what to do otherwise: the observed failure
-    // was an agent stalling while it searched its tool list for something that
-    // would create a branch. Any agent whose tools include dev_branch_request
-    // (routed to the user through the parent run — inner-loop.ts) can now
-    // self-recover; one without it at least reports something its caller can
-    // act on instead of spinning.
-    throw new Error(
-      `Store "${store.id}" needs an active feature branch before it can be edited. ` +
-        `Call dev_branch_request (task = a one-line description of this work), wait for the user to confirm the branch name, then retry this exact write. ` +
-        `Do not look for another tool and do not skip the write.`,
-    );
-  }
+  if (!ctx?.branch) throw new BranchRequiredError(store.id);
 }
 
 /** A store-relative path re-expressed relative to the store's GIT REPO root
@@ -403,32 +479,13 @@ export async function patchFile(p: string, hunks: SpecHunk[], ctx?: SpecCtx): Pr
   return `${store.id}/${rel}`;
 }
 
-// The spec-kit ENGINE (templates + command prompts) stays in the BOS source tree
-// at `.specify/templates` — it is not spec content, so it does not move into a
-// store. Expose it READ-ONLY so Build Studio can still build artifact bodies from
-// the templates without reaching arbitrary source.
-const TEMPLATES_ROOT = path.join(process.cwd(), ".specify", "templates");
-
-function resolveTemplate(rel: string): string {
-  const norm = path.posix.normalize((rel ?? "").replace(/\\/g, "/")).replace(/^\/+/, "");
-  const abs = path.resolve(TEMPLATES_ROOT, norm);
-  if (abs !== TEMPLATES_ROOT && !abs.startsWith(TEMPLATES_ROOT + path.sep)) {
-    throw new Error(`Path escapes the templates root: ${rel}`);
-  }
-  return abs;
-}
-
-export async function readTemplate(rel: string): Promise<string> {
-  return fs.readFile(resolveTemplate(rel), "utf8");
-}
-
-export async function listTemplates(rel = ""): Promise<SpecEntry[]> {
-  const abs = resolveTemplate(rel);
-  const names = await fs.readdir(abs, { withFileTypes: true }).catch(() => [] as import("fs").Dirent[]);
-  return names
-    .filter((d) => !d.name.startsWith("."))
-    .map((d) => ({ name: d.name, path: path.posix.join(rel, d.name), type: d.isDirectory() ? "dir" : "file", size: 0 }));
-}
+// 045 FR-011 removed TEMPLATES_ROOT / resolveTemplate / readTemplate /
+// listTemplates from here. They hardcoded BOS's own `.specify/templates` as
+// THE template root, which is exactly the assumption that made spec-kit
+// unswappable — an installed pack had nowhere to put its own templates.
+// Templates are now mounted per pack at /Methods/<id>/templates
+// (spec-mount.ts) and reached through the ordinary VFS. All four had zero
+// callers repo-wide at the time of removal.
 
 export interface SearchHit {
   path: string;
@@ -482,8 +539,17 @@ export async function search(query: string, opts?: { dir?: string; caseSensitive
     const { store, rel, abs } = await resolveInStore(opts.dir, opts.branch ? { branch: opts.branch } : undefined);
     await walk(abs, path.posix.join(store.id, rel));
   } else {
-    for (const store of await listStores()) {
-      const root = branchRoot ? path.join(branchRoot, store.id) : store.root;
+    // Through the branch: a search that cannot see a store cannot report a hit
+    // in it, and the store a user is most likely searching is the one they are
+    // working on right now.
+    for (const store of await listStores(opts?.branch)) {
+      // Same descent as resolveInStore: the branch mount is the store's REPO, so
+      // a store that lives in a subdirectory of it must be searched THERE.
+      // Without the offset this walked a registered project's whole source tree
+      // and reported code files as spec hits.
+      const root = branchRoot
+        ? path.join(branchRoot, store.id, store.repoOffset)
+        : store.root;
       await walk(root, store.id);
     }
   }

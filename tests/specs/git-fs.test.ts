@@ -75,13 +75,13 @@ test("ensureWorktree() reuses an already-provisioned worktree instead of re-addi
     initRepo(repo);
     const worktreePath = join(dir, "wt");
 
-    const first = await ensureWorktree(repo, worktreePath, "bos/feature");
+    const first = await ensureWorktree(repo, worktreePath, "bos/testfixture-feature");
     expect(existsSync(join(first, ".git"))).toBe(true);
 
     // Second call must short-circuit on the existing worktree, not attempt
     // `git worktree add` again (which would fail — the branch is already
     // checked out there).
-    const second = await ensureWorktree(repo, worktreePath, "bos/feature");
+    const second = await ensureWorktree(repo, worktreePath, "bos/testfixture-feature");
     expect(second).toBe(worktreePath);
   } finally {
     cleanup();
@@ -93,12 +93,12 @@ test("ensureWorktree() checks out an EXISTING local branch rather than creating 
   try {
     const repo = join(dir, "repo");
     initRepo(repo);
-    sysGit(repo, ["branch", "bos/already-exists"]);
+    sysGit(repo, ["branch", "bos/testfixture-already-exists"]);
 
     const worktreePath = join(dir, "wt");
-    await ensureWorktree(repo, worktreePath, "bos/already-exists");
+    await ensureWorktree(repo, worktreePath, "bos/testfixture-already-exists");
 
-    expect(sysGit(worktreePath, ["symbolic-ref", "--short", "HEAD"])).toBe("bos/already-exists");
+    expect(sysGit(worktreePath, ["symbolic-ref", "--short", "HEAD"])).toBe("bos/testfixture-already-exists");
   } finally {
     cleanup();
   }

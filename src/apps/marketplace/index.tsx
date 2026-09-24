@@ -23,6 +23,9 @@ interface Item {
   voiceEngine?: { version: string; engineId?: string };
   integration?: { version: string };
   serverPlugin?: { version: string };
+  /** 045 FR-012: a spec-framework pack. An item can be method-ONLY, so it has
+   *  to count as installable or no Install button renders. */
+  method?: { id: string; version: string; modules?: { id: string; label?: string; default?: boolean; requiresConfig?: boolean }[] };
 }
 
 /** Does this item ship a BOS plugin (voice engine, integration or server plugin)?
@@ -163,6 +166,44 @@ export default function MarketplaceApp() {
    *  action (it forks a copy for editing, not a running install). */
   const installItem = useCallback(
     async (marketplaceId: string, item: Item) => {
+      // 045 FR-013 — a method pack carrying a `plugin/` facet is SERVER CODE.
+      // "Install a spec framework" reads far lighter to a user than "run this
+      // author's code in my BOS process", and the catalog row looks identical
+      // either way. Confirm before installing, naming what actually happens.
+      //
+      // Distinct from FR-013a's origin gate, which the SERVER enforces and
+      // which no UI can satisfy: that one refuses outright without a recorded
+      // per-pack opt-in. This is informed consent for the case the gate
+      // permits — a pack from the user's own user-apps.
+      // 048 T012 / FR-006 — module selection, mirroring BMAD's own installer:
+      // BMM is selected by default and needs config; BMB and CIS are not. Asked
+      // BEFORE the code warning, so a user who declines the modules never sees
+      // a trust prompt for an install they were not going to do.
+      let modules: string[] | undefined;
+      const declared = item.method?.modules ?? [];
+      if (declared.length > 0) {
+        const defaults = declared.filter((m) => m.default !== false).map((m) => m.id);
+        const answer = window.prompt(
+          `"${item.name}" ships ${declared.length} modules. Which do you want?\n\n` +
+            declared
+              .map((m) => `  ${m.id}${m.label ? ` — ${m.label}` : ""}${m.requiresConfig ? "  (needs configuration)" : ""}`)
+              .join("\n") +
+            `\n\nComma-separated. You can change this later by reinstalling.`,
+          defaults.join(", "),
+        );
+        if (answer === null) return; // cancelled
+        modules = answer.split(",").map((s) => s.trim()).filter(Boolean);
+      }
+
+      if (item.method && hasPluginFacet(item)) {
+        const ok = window.confirm(
+          `"${item.name}" is a spec-method pack that also ships a plugin — server-side code that runs inside your BOS process, ` +
+            `not just templates and prompts.\n\n` +
+            `It can do anything your BOS can do. Install it only if you trust its source.\n\n` +
+            `Install "${item.name}"?`,
+        );
+        if (!ok) return;
+      }
       setBusy(true);
       setError(null);
       setNotice(null);
@@ -170,22 +211,32 @@ export default function MarketplaceApp() {
       try {
         // ONE op covers every non-skill facet — installMarketplaceItem installs the
         // app, the service and the plugin, in that dependency order.
-        if (item.app || item.services || hasPluginFacet(item)) {
-          const d = await rawOp({ op: "install-item", id: marketplaceId, itemId: item.id });
+        // `item.method` must be in this condition too, or no install op is
+        // ever issued for a method-only pack even once the button renders.
+        if (item.app || item.services || item.method || hasPluginFacet(item)) {
+          const d = await rawOp({ op: "install-item", id: marketplaceId, itemId: item.id, ...(modules ? { modules } : {}) });
           const installed = d.installed as { app?: AppManifest; serviceId?: string; pluginId?: string } | undefined;
           if (installed?.app) registerApp(installed.app);
           if (item.app) installedKinds.push("app");
           if (item.services) installedKinds.push("service");
           if (installed?.pluginId) installedKinds.push("plugin");
+          if (item.method) installedKinds.push("method");
         }
         if (item.skill) {
           await rawOp({ op: "install-skill", id: marketplaceId, itemId: item.id });
           installedKinds.push("skill");
         }
         await refresh();
+        // Point at where the thing ACTUALLY is. A method pack has no desktop
+        // icon and is neither a plugin nor a service, so the generic sentence
+        // sent the user to two screens that could never show it — which reads
+        // as a failed install rather than a wrong message.
+        const onlyMethod = installedKinds.length === 1 && installedKinds[0] === "method";
         setNotice(
           `Installed "${item.name}"${installedKinds.length > 1 ? ` (${installedKinds.join(" + ")})` : ""} — ` +
-            "find it on your desktop, or manage it in Settings → Plugins → Services.",
+            (onlyMethod
+              ? "pick it from the Method dropdown on a store or project in Build Studio."
+              : "find it on your desktop, or manage it in Settings → Plugins → Services."),
         );
       } catch (e) {
         setError((e as Error).message);
@@ -380,10 +431,14 @@ export default function MarketplaceApp() {
                 // App ids ARE item ids (one item = one <marketplace>/items/<id>/ folder).
                 const isAppInstalled = !!item.app && installedApps.some((a) => a.id === item.id);
                 const isServiceInstalled = !!item.services && installedServiceIds.has(item.id);
-                const hasInstallableFacet = !!(item.app || item.skill || item.services) || hasPluginFacet(item);
+                // 045 FR-012a: without `item.method` here NO Install button
+                // renders at all for a method-only pack — the item appears in
+                // the catalog and simply cannot be installed, with nothing
+                // explaining why.
+                const hasInstallableFacet = !!(item.app || item.skill || item.services || item.method) || hasPluginFacet(item);
                 const allFacetsInstalled =
                   (!item.app || isAppInstalled) && (!item.skill || isSkillInstalled) && (!item.services || isServiceInstalled) &&
-                  (!hasPluginFacet(item) || isPluginInstalled);
+                  (!hasPluginFacet(item) || isPluginInstalled) && (!item.method || installedItemIds.has(item.id));
                 const installed = hasInstallableFacet && allFacetsInstalled;
 
                 return (

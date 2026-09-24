@@ -62,16 +62,16 @@ async function makeFakeBase(responder) {
 
 test("clearActiveFeatureBranch: only conversations matching the branch get a clear PATCH; others are untouched", async () => {
   rmSync(chatsDir, { recursive: true, force: true });
-  writeConversation("match-1", { activeFeatureBranch: "bos/gone" });
-  writeConversation("match-2", { activeFeatureBranch: "bos/gone" });
-  writeConversation("no-match", { activeFeatureBranch: "bos/still-active" });
+  writeConversation("match-1", { activeFeatureBranch: "bos/testfixture-gone" });
+  writeConversation("match-2", { activeFeatureBranch: "bos/testfixture-gone" });
+  writeConversation("no-match", { activeFeatureBranch: "bos/testfixture-still-active" });
   writeConversation("unset", {});
 
   const fake = await makeFakeBase(() => ({ status: 200, json: { ok: true } }));
   try {
     state.base = { role: "base", state: "ready", port: fake.port };
     const warnings = [];
-    await clearActiveFeatureBranch("bos/gone", warnings);
+    await clearActiveFeatureBranch("bos/testfixture-gone", warnings);
 
     assert.deepEqual(warnings, []);
     const patched = fake.calls.filter((c) => c.method === "PATCH").map((c) => c.body.conversationId).sort();
@@ -85,13 +85,13 @@ test("clearActiveFeatureBranch: only conversations matching the branch get a cle
 
 test("clearActiveFeatureBranch: no matching conversations means no HTTP calls at all", async () => {
   rmSync(chatsDir, { recursive: true, force: true });
-  writeConversation("irrelevant", { activeFeatureBranch: "bos/something-else" });
+  writeConversation("irrelevant", { activeFeatureBranch: "bos/testfixture-something-else" });
 
   const fake = await makeFakeBase(() => ({ status: 200, json: { ok: true } }));
   try {
     state.base = { role: "base", state: "ready", port: fake.port };
     const warnings = [];
-    await clearActiveFeatureBranch("bos/gone", warnings);
+    await clearActiveFeatureBranch("bos/testfixture-gone", warnings);
     assert.deepEqual(fake.calls, []);
     assert.deepEqual(warnings, []);
   } finally {
@@ -102,24 +102,24 @@ test("clearActiveFeatureBranch: no matching conversations means no HTTP calls at
 
 test("clearActiveFeatureBranch: base not ready — records a warning, makes no HTTP call, never throws", async () => {
   rmSync(chatsDir, { recursive: true, force: true });
-  writeConversation("stuck", { activeFeatureBranch: "bos/gone" });
+  writeConversation("stuck", { activeFeatureBranch: "bos/testfixture-gone" });
 
   state.base = null; // no base at all
   const warnings = [];
-  await clearActiveFeatureBranch("bos/gone", warnings);
+  await clearActiveFeatureBranch("bos/testfixture-gone", warnings);
 
   assert.equal(warnings.length, 1);
   assert.match(warnings[0], /base is not ready/i);
-  assert.equal(readConversation("stuck").activeFeatureBranch, "bos/gone", "must be untouched — the clear could not be safely performed");
+  assert.equal(readConversation("stuck").activeFeatureBranch, "bos/testfixture-gone", "must be untouched — the clear could not be safely performed");
 });
 
 test("clearActiveFeatureBranch: base API call fails (network error) — recorded as a warning, not thrown", async () => {
   rmSync(chatsDir, { recursive: true, force: true });
-  writeConversation("errors-out", { activeFeatureBranch: "bos/gone" });
+  writeConversation("errors-out", { activeFeatureBranch: "bos/testfixture-gone" });
 
   state.base = { role: "base", state: "ready", port: 1 }; // port 1 is always refused — deterministic connection failure
   const warnings = [];
-  await clearActiveFeatureBranch("bos/gone", warnings);
+  await clearActiveFeatureBranch("bos/testfixture-gone", warnings);
 
   assert.equal(warnings.length, 1);
   assert.match(warnings[0], /clearing activeFeatureBranch on conversation errors-out via base API failed/);
@@ -128,14 +128,14 @@ test("clearActiveFeatureBranch: base API call fails (network error) — recorded
 
 test("clearActiveFeatureBranch: base responds ok:false — recorded as a warning, not thrown, and other matches still get their own attempt", async () => {
   rmSync(chatsDir, { recursive: true, force: true });
-  writeConversation("rejected", { activeFeatureBranch: "bos/gone" });
-  writeConversation("accepted", { activeFeatureBranch: "bos/gone" });
+  writeConversation("rejected", { activeFeatureBranch: "bos/testfixture-gone" });
+  writeConversation("accepted", { activeFeatureBranch: "bos/testfixture-gone" });
 
   const fake = await makeFakeBase((body) => (body.conversationId === "rejected" ? { status: 400, json: { ok: false, error: "boom" } } : { status: 200, json: { ok: true } }));
   try {
     state.base = { role: "base", state: "ready", port: fake.port };
     const warnings = [];
-    await clearActiveFeatureBranch("bos/gone", warnings);
+    await clearActiveFeatureBranch("bos/testfixture-gone", warnings);
 
     assert.equal(warnings.length, 1);
     assert.match(warnings[0], /rejected/);
@@ -152,7 +152,7 @@ test("clearActiveFeatureBranch: no Chats directory at all — silent no-op, no w
   rmSync(chatsDir, { recursive: true, force: true });
   state.base = { role: "base", state: "ready", port: 1 };
   const warnings = [];
-  await clearActiveFeatureBranch("bos/gone", warnings);
+  await clearActiveFeatureBranch("bos/testfixture-gone", warnings);
   assert.deepEqual(warnings, []);
   state.base = null;
 });
