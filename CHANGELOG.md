@@ -1,5 +1,45 @@
 # Changelog
 
+## 2026-09-24
+
+### Highlights
+
+- **BrowserOS can help fix itself.** When something in BOS's own source breaks, a Diagnostician investigates, and if it's a real gap a fix is built on a preview and handed to you — you decide, BOS never installs it for you. Everything lives in Build Studio → Self-Heal; automatic triggers are opt-in per Settings → Self Improvement.
+- **The spec methodology is now pluggable.** A spec framework is data — a descriptor of phases, sections, and artifacts. spec-kit ships as the default method pack, OpenSpec and BMAD are supported, and a pack can be customized by overlaying single files (keeping upstream improvements) or forked into a named workflow bound per store or Project.
+- **The assistant drives a real browser.** Browser automation was rebuilt around one live, stateful browser per conversation with first-class `browser_*` tools; screenshots land in `/Screenshots` and the assistant can see them. Off by default, with origin allowlists, an isolated profile, and a consent policy.
+- **File tools work everywhere now.** All eleven `file_*` tools moved to the server, so scheduled jobs and other headless runs can read and write files without a browser attached.
+- **Conversations can be archived** — hidden without deleting anything, read-only until unarchived, shared live across every app that lists conversations.
+
+### Added
+
+- **Self-healing** — case list, consent cards, and preview status under Build Studio → Self-Heal; explicit reporting by you or the assistant; opt-in hard-error / repeated-failure / workflow-timeout / log-event triggers with non-BOS failures (network, API keys, rate limits, OOM) filtered out before anything is spent.
+- **Method packs** — spec-kit seeded as a pack under `seed/method-packs/`, OpenSpec and BMAD descriptors supported, overlay and fork customization, and a `methods_*` tool family in its own group. `.specify/` is gone from the source tree.
+- **Stateful browser automation** — a family of `browser_*` tools over one managed browser per conversation, screenshots into the VFS and into the model's vision, policy reconfiguration without restart.
+- **Conversation archiving** — collapsed Archived section per agent, server-enforced read-only state, one-click unarchive.
+- A **Repositories settings tab** listing every git repository BOS manages — kind, writability, workflow binding, and unsaved/unpushed state at a glance.
+- **Live tool cards** — parallel tools complete independently, delegations stream nested results as they finish, and every card is a recursive tree with structured Input rows, typed Output rendering, raw-JSON toggle, and copy buttons.
+- **Bastion login audit log** — every credential check appended as a JSON line to `/data/audit/login.log`.
+- **Build Studio "New app" flow** — name the app and pick its method first, then a branch is suggested; apps created on a feature branch are discoverable on it with a branch badge.
+
+### Changed
+
+- **All `file_*` tools are server tools** — file work no longer requires an attached browser and is available to headless and scheduled runs.
+- **Claude Code plugin marketplaces** — skills are auto-discovered from a plugin's `skills/` directory when the manifest has no `skills[]` array, with version and display-name fallbacks.
+- **Marketplace item skills install by symlink** — read-only in the editor, updated with their item, removed by uninstalling it.
+- **Telegram** — bot auto-replies, correct server-side MarkdownV2 escaping, validated webhook registration.
+- **Method tool renames** — `workflow_list` → `methods_list`; the whole family moved to the `methods_*` prefix.
+- **Supervisor hardening** — promote guards against data loss, disowned worktree directories are reclaimed, data clones require a provisioning completion marker and use hardlinks.
+- **The unit suite is fenced off from live deployments** — ambient Supervisor paths are sandboxed so `npm run test:unit` inside a running BOS can no longer create real branches, worktrees, or data clones; fixture branches must be named `bos/testfixture-*`, enforced by a test.
+- **Coverage** now spans `src/`, `bastion/`, and the Supervisor in one lcov-reporting c8 run.
+
+### Fixed
+
+- An installed marketplace item could terminate the BrowserOS process.
+- A WebSocket authentication security issue.
+- A bug in automatic git conflict resolution.
+- Auto-provisioning of data clones.
+- The Event Viewer config panel not scrolling.
+
 ## 2026-09-07
 
 ### Highlights

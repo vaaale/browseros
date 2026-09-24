@@ -1,3 +1,118 @@
+# BrowserOS v2.7 Release Notes
+
+## Overview
+
+This release teaches BrowserOS to help fix itself, and stops hardcoding how you build things. **Self-healing** lets BOS notice that something in its own source is broken, investigate, build a fix on a preview, and hand it to you — never installing anything on its own. **Method packs** turn the spec methodology into data: spec-kit ships as the default pack, and OpenSpec or BMAD can drive the same pipeline without touching BOS's source. **Browser automation** was rebuilt around a real, stateful browser the assistant drives per conversation, with screenshots it can actually see. All **file tools moved to the server**, so scheduled and headless runs can finally work with your files. Plus **conversation archiving**, live streaming **tool cards**, a **Repositories** settings tab, and a substantial production-hardening pass across the bastion, the Supervisor, and the test suite.
+
+---
+
+## New Features
+
+### Self-Healing
+
+BrowserOS can notice when something in *itself* is broken, work out what, and build you a fix. The loop: something fails → a Diagnostician investigates BOS's own source → if it's a real gap, a fix is built on a preview → you get told → **you decide**. BOS never installs a fix for you.
+
+- **Build Studio → Self-Heal** — the one place everything lives: the case list, each case's conclusion, consent cards, preview status, and run actions.
+- **Report a problem yourself** — describe what you tried, what you expected, and what happened; the Diagnostician reads BrowserOS's real source to distinguish a genuine gap from a usage error. The assistant can file a report on your behalf ("that looks like a BOS bug, report it").
+- **Automatic triggers are opt-in** — out of the box only the explicit trigger is on. In Settings → Self Improvement you can enable hard-error, repeated-failure, workflow-timeout, and log-event triggers. Failures that are clearly not BOS's fault (network, expired API keys, rate limits, OOM) are filtered out before anything is spent.
+
+**Documentation:** [docs/usage/self-healing.md](docs/usage/self-healing.md)
+
+### Method Packs — Pluggable Spec Frameworks
+
+The spec pipeline is no longer hardcoded to GitHub spec-kit. A framework is now **data** — a descriptor declaring its phases, sections, leaf markers, and artifact order — and BOS evaluates every framework through the same code.
+
+- **spec-kit ships as the default pack** (`seed/method-packs/spec-kit/`), in exactly the shape a marketplace pack uses; `.specify/` is gone from the source tree. **OpenSpec** and **BMAD** are supported as alternative methods.
+- **Customize by overlay or fork** — shadow a single file of an installed pack (a prompt, a template) and keep receiving upstream improvements, or fork a new named workflow with its own structure and bind it per store or per Project.
+- **The method tools live in their own group** — the family is now `methods_*` (`workflow_list` became `methods_list`), and structural edits go through one function behind both the Build Studio canvas and the agent's `workflow_edit`.
+- **Build Studio picks the method up front** — the "New app" flow asks for the app's name and its method first, then suggests the branch. Apps created on a feature branch are discoverable on it and carry a branch badge.
+
+**Documentation:** [docs/dev/method-packs.md](docs/dev/method-packs.md)
+
+### Browser Automation, Rebuilt
+
+The assistant can now drive a *real*, stateful browser — navigate, fill forms, click through flows, extract data, take screenshots — through a family of first-class `browser_*` tools that all operate on **one live browser per conversation**: what one call navigates to, the next can click.
+
+- **Screenshots land in your Files app under `/Screenshots`** and are also shown to the assistant, so it can see the page it captured.
+- **Off by default, policy-controlled** — allowed/blocked origins, headless mode, an isolated profile with no access to your real cookies, a downloads switch, and a consent policy from "no prompt within allowlist" to "ask before each use". Changing settings reconfigures the managed browser without a restart.
+
+**Documentation:** [docs/usage/settings/browser-automation.md](docs/usage/settings/browser-automation.md)
+
+### Conversation Archiving
+
+Archive the threads you're done with — nothing is deleted, and everything can come back.
+
+- **Archived section** at the bottom of each agent's conversation list, collapsed by default with a count badge; archive state is shared across every app that lists conversations, live.
+- **Archived conversations are read-only**, enforced by the server — with an "Unarchive to continue" button right in the banner.
+
+**Documentation:** [docs/usage/assistant/archiving-conversations.md](docs/usage/assistant/archiving-conversations.md)
+
+### Repositories Settings Tab
+
+**Settings → Repositories** shows everything BrowserOS knows as a git repository — the spec stores, BrowserOS's own source, your marketplace, and any project you add — answering at a glance what kind of repository each one is (which decides what you can do in it) and whether it has unsaved or unpushed work.
+
+**Documentation:** [docs/usage/settings/repositories.md](docs/usage/settings/repositories.md)
+
+### Live, Readable Tool Cards
+
+- **Each tool completes on its own** — when the assistant runs several tools in parallel, every card flips to done the moment *that* tool finishes, not when the slowest one does.
+- **Delegations stream live** — a sub-agent's tool results appear in the delegation's card as each completes, with an "n of m nested" counter, instead of one dump at the end.
+- **A recursive, human-readable tree** — a one-line action summary as the header; inside, Input as structured key–value rows (with a raw-JSON toggle) and Output rendered as its natural type (Markdown, highlighted JSON or code, with copy buttons). A delegation's output is the sub-agent's own cards, one level in — drill as deep as the delegation went.
+
+---
+
+## Improvements
+
+- **All eleven `file_*` tools are now server tools** — file work no longer needs an attached browser, so scheduled jobs, Telegram-triggered runs, and other headless runs can read and write your files.
+- **Claude Code plugin marketplaces work without a manifest `skills[]` array** — skills are auto-discovered from the plugin's `skills/` directory (e.g. `obra/superpowers`), with sensible version and display-name fallbacks.
+- **Marketplace item skills install by symlink** — they show a read-only badge, update together with their item, and are removed by uninstalling it; to customize one, duplicate it under a new name.
+- **Telegram** — the bot can auto-reply to incoming messages, MarkdownV2 escaping is done correctly on the server, and webhook registration is validated instead of assumed.
+- **Bastion login audit log** — every credential check is appended as a JSON line to `/data/audit/login.log` (simple provider only), with outcome, reason, IP, and user agent.
+- **Supervisor hardening** — promote now guards against data loss, worktree directories git has disowned are reclaimed, and a directory is only trusted as a data clone once its provisioning completion marker exists. Data clones use hardlinks.
+- **The unit suite can no longer touch a live deployment** — running `npm run test:unit` inside a running BOS used to create *real* feature branches, worktrees, and data clones through the Supervisor; every ambient path is now sandboxed, and test fixture branches are enforced to the `bos/testfixture-*` namespace.
+- **One coverage report over all of BOS** — `npm run test:coverage` now spans `src/`, `bastion/`, and the Supervisor with lcov output for CI.
+
+---
+
+## Bug Fixes
+
+- An installed marketplace item can no longer terminate the BrowserOS process.
+- Fixed a WebSocket authentication security issue.
+- Fixed a bug in automatic git conflict resolution.
+- Fixed auto-provisioning of data clones.
+- Fixed the Event Viewer config panel not scrolling.
+
+---
+
+## Breaking Changes
+
+- **Method tool renames** — `workflow_list` is now `methods_list`, and the whole method-tool family moved to the `methods_*` prefix in its own tool group. Skills or scripts that referenced the old names need updating.
+- `.specify/` no longer exists in the source tree — its templates, scripts, and process agents now live in the spec-kit method pack. Anything that pointed at `.specify/...` paths directly should go through the method-pack layer instead.
+
+---
+
+## Migration Guide
+
+### For Users
+
+- **Nothing required.** Existing specs keep working — spec-kit remains the default method, now served from the pack layer.
+- **Optional:** enable Browser Automation in Settings (off by default), and turn on the self-healing triggers you're comfortable with in Settings → Self Improvement (only the explicit trigger is on out of the box).
+
+### For Bastion Admins
+
+- **Pull the latest image** — this release includes the promote data-loss guard and the data-clone provisioning fixes.
+- **Login audit log** — credential checks now append to `/data/audit/login.log` on the `bastion-data` volume; tail it with `docker compose exec bastion tail -f /data/audit/login.log`.
+
+---
+
+## Support
+
+- **Documentation** — [docs/](docs/)
+- **Issue Reports** — GitHub Issues
+- **Architecture Guide** — [docs/dev/architecture-overview.md](docs/dev/architecture-overview.md)
+
+---
+
 # BrowserOS v2.6 Release Notes
 
 ## Overview
